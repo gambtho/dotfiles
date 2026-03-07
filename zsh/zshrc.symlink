@@ -56,3 +56,4 @@ zsh-defer load_custom
 [[ ! -f ~/.p10k.zsh ]] || source ~/.p10k.zsh
 . /home/tng/.asdf/asdf.sh
 source <(kubectl completion zsh)
+
