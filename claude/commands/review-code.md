@@ -2,7 +2,7 @@
 name: review-code
 description: Review code changes since a specified commit for quality, idiomacy, patterns, and unnecessary complexity
 argument-hint: "[commit ref — defaults to HEAD~1]"
-allowed-tools: Bash(git log:*), Bash(git diff:*), Bash(git rev-parse:*), Bash(git show:*), Bash(git status:*), Bash(git remote:*), Bash(git branch:*), Read, Glob, Grep, Task
+allowed-tools: Bash(git log:*), Bash(git diff:*), Bash(git rev-parse:*), Bash(git show:*), Bash(git status:*), Bash(git remote:*), Bash(git branch:*), Read, Glob, Grep, Task, Agent, Skill
 ---
 
 # Code Review Since Commit
@@ -161,7 +161,22 @@ This is a critical section — compare the changes against the actual patterns f
 - **API patterns**: Do new endpoints/functions follow the same request/response patterns, parameter conventions, etc.?
 - **Logging patterns**: Does new logging match the existing format, levels, and structured fields?
 
-### 3d: Unnecessary Complexity
+### 3d: Duplication Detection
+
+Actively search the existing codebase for functionality that overlaps with newly added code:
+
+- **Utility functions**: For any new helper or utility function, search the codebase (using Grep/Glob) for existing functions that do the same or substantially similar thing. Check common locations: `utils/`, `helpers/`, `lib/`, `common/`, `shared/`, and language-specific equivalents.
+- **Standard library / framework builtins**: Flag cases where new code reimplements something available in the language's standard library or the project's existing framework (e.g. writing a custom `debounce` when lodash is already a dependency, hand-rolling a retry loop when the HTTP client supports retries, reimplementing `os.path.join` behavior manually).
+- **Near-duplicate logic**: Look for existing code blocks that perform the same transformation, validation, API call pattern, or data processing — even if variable names differ. Pay attention to similar control flow structures in the same module or neighboring files.
+- **Constants and configuration**: Check if newly defined constants, magic numbers, or config values already exist elsewhere under different names.
+- **Type definitions**: For new types, interfaces, or structs, search for existing types that represent the same concept or have substantially overlapping fields.
+
+For each duplication found:
+- Reference the existing code location (`file_path:line_number`)
+- Explain what it already provides
+- Suggest whether to reuse the existing code, consolidate into a shared abstraction, or justify why the duplication is warranted
+
+### 3e: Unnecessary Complexity
 
 Flag any of these anti-patterns:
 
@@ -177,6 +192,52 @@ Flag any of these anti-patterns:
 - **Premature optimization**: Caching, memoization, or performance tricks without evidence they're needed
 
 When flagging complexity, always suggest the simpler alternative.
+
+### 3f: Comment Quality
+
+Flag comments that add no value beyond what the code already communicates:
+
+- **Tautological comments**: Comments that restate the code in English (`// increment counter` above `counter++`, `// set name` above `self.name = name`, `# loop through items` above `for item in items`)
+- **Obvious type/parameter comments**: Docstrings or JSDoc that merely repeat the type signature without adding context (`@param name string - the name`, `Returns: bool — returns a boolean`)
+- **Noise comments**: Section dividers, `// end of function`, `// constructor`, file-header boilerplate that restates the filename, or auto-generated comments that weren't cleaned up
+- **Stale comments**: Comments that no longer match the code they describe — the code was changed but the comment wasn't updated
+- **Commented-out code**: Dead code left behind in comments without explanation (note: `TODO`/`FIXME` with issue references are fine)
+- **Journal comments**: Comments tracking what changed and when, which belong in git history, not in the source (`// Added 2024-01-15`, `// Modified by John`)
+
+Comments that ARE valuable and should NOT be flagged:
+- **Why comments**: Explaining non-obvious intent, business rules, or constraints (`// We retry 3x here because the upstream API is flaky during deployments`)
+- **Warning comments**: Flagging gotchas, edge cases, or non-obvious consequences (`// ORDER MATTERS: auth middleware must run before rate limiting`)
+- **Context comments**: Linking to external resources, specs, or tickets that explain the reasoning
+- **Complexity comments**: Explaining algorithms, workarounds, or domain-specific logic that isn't self-evident
+
+For each flagged comment, suggest either removal or a rewrite that adds genuine value.
+
+---
+
+## Phase 3.5: Leverage Available Agents & Skills
+
+After completing your own analysis in Phase 3, dispatch specialized agents in parallel to deepen the review. Use the Agent tool to launch these — they run concurrently and return findings you should incorporate into the final report.
+
+**Launch these agents in parallel on the changed files:**
+
+| Agent | subagent_type | Purpose |
+|-------|---------------|---------|
+| Silent failure hunter | `pr-review-toolkit:silent-failure-hunter` | Finds swallowed errors, empty catch blocks, fallbacks that hide failures |
+| Comment analyzer | `pr-review-toolkit:comment-analyzer` | Validates comment accuracy and identifies comment rot |
+| Type design analyzer | `pr-review-toolkit:type-design-analyzer` | Reviews new types/interfaces for encapsulation and invariant quality |
+| Code reviewer | `feature-dev:code-reviewer` | Catches bugs, logic errors, and security issues with confidence filtering |
+
+For each agent, provide:
+- The list of changed files and their paths
+- The base commit and branch context
+- A brief description of what the changes do (from your Phase 3 analysis)
+
+**Important:**
+- Only dispatch agents that are relevant to the changes (e.g. skip type-design-analyzer if no new types were introduced, skip silent-failure-hunter if there's no error handling code)
+- Launch all relevant agents in a single parallel call — do not wait for one before starting another
+- Merge agent findings into the appropriate sections of your Phase 4 report (Critical, Improvements, etc.), crediting the agent source
+- If an agent finds something you missed, include it. If an agent flags something you already covered, deduplicate — keep the more detailed version.
+- If agents are unavailable or fail, proceed with your own analysis — agent findings are supplementary, not required
 
 ---
 
@@ -208,8 +269,14 @@ Present the review in the following format:
 ### Improvements
 {Issues related to code quality, idiomacy, or pattern violations that should be fixed. Each with file:line reference and a concrete suggestion.}
 
+### Duplication
+{New code that duplicates existing functionality in the codebase, standard library, or project dependencies. Each with a reference to the existing code and a recommendation to reuse or consolidate.}
+
 ### Simplifications
 {Places where complexity can be reduced. Each with a concrete simpler alternative.}
+
+### Noisy Comments
+{Comments that restate the code, are stale, or add no value. Each with a suggestion to remove or rewrite.}
 
 ### Nits
 {Minor style or convention issues. Keep this section short — only include things a linter wouldn't catch.}

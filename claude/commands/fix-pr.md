@@ -2,7 +2,7 @@
 name: fix-pr
 description: Analyze a PR's open comments and failing CI checks, then produce a detailed implementation plan to resolve all issues
 argument-hint: "<PR URL or number>"
-allowed-tools: Bash(gh pr view:*), Bash(gh pr diff:*), Bash(gh pr checks:*), Bash(gh pr checkout:*), Bash(gh api:*), Bash(gh issue view:*), Bash(gh repo view:*), Bash(gh auth:*), Bash(gh run view:*), Bash(gh run list:*), Bash(git log:*), Bash(git rev-parse:*), Bash(git remote:*), Bash(git status:*), Bash(git fetch:*), Bash(git diff:*), Bash(git show:*), Bash(ls:*), Bash(date:*), Bash(wc:*), Bash(cat:*), Bash(mkdir:*), Bash(echo:*), Read, Glob, Grep, Write, Task
+allowed-tools: Bash(gh pr view:*), Bash(gh pr diff:*), Bash(gh pr checks:*), Bash(gh pr checkout:*), Bash(gh api:*), Bash(gh issue view:*), Bash(gh repo view:*), Bash(gh auth:*), Bash(gh run view:*), Bash(gh run list:*), Bash(git log:*), Bash(git rev-parse:*), Bash(git remote:*), Bash(git status:*), Bash(git fetch:*), Bash(git diff:*), Bash(git show:*), Bash(ls:*), Bash(date:*), Bash(wc:*), Bash(cat:*), Bash(mkdir:*), Bash(echo:*), Read, Glob, Grep, Write, Task, Agent, Skill
 ---
 
 # Fix PR — Implementation Plan Generator
@@ -272,7 +272,30 @@ Identify connections:
 - Do any comments request changes that would affect other parts of the diff?
 - Are there comments that are already addressed by subsequent commits but not yet resolved?
 
-### 4c: Assess Scope and Dependencies
+### 4c: Leverage Specialized Agents
+
+While performing your own analysis, dispatch specialized agents in parallel to surface issues that reviewers and CI may have missed. These findings enrich the plan with preemptive fixes.
+
+**Launch these agents in parallel on the PR's changed files:**
+
+| Agent | subagent_type | Purpose |
+|-------|---------------|---------|
+| Silent failure hunter | `pr-review-toolkit:silent-failure-hunter` | Finds swallowed errors, empty catch blocks, fallbacks that hide failures |
+| Code reviewer | `feature-dev:code-reviewer` | Catches bugs, logic errors, and security issues with confidence filtering |
+| Code explorer | `feature-dev:code-explorer` | Traces execution paths and maps dependencies to understand impact of changes |
+
+For each agent, provide:
+- The list of changed files and their paths
+- The PR diff and description
+- Context about what the PR is trying to accomplish
+
+**Important:**
+- Only dispatch agents relevant to the changes (e.g. skip silent-failure-hunter if there's no error handling code)
+- Launch all relevant agents in a single parallel call
+- Incorporate agent findings into the plan as additional issues (clearly marked as "Proactive — not flagged by reviewers") in the Detailed Plan section
+- If agents are unavailable or fail, proceed without them — agent findings are supplementary
+
+### 4d: Assess Scope and Dependencies
 
 For each issue, determine:
 1. **Which files need to be modified** — be specific about file paths

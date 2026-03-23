@@ -2,7 +2,7 @@
 name: review-prs
 description: Review open PRs with no human comments — learns from past reviews and accumulates knowledge across runs
 argument-hint: "[number of PRs to review, default 10]"
-allowed-tools: Bash(gh pr list:*), Bash(gh pr view:*), Bash(gh pr diff:*), Bash(gh pr checkout:*), Bash(gh api:*), Bash(gh issue view:*), Bash(gh repo view:*), Bash(gh auth:*), Bash(git worktree:*), Bash(git log:*), Bash(git rev-parse:*), Bash(git remote:*), Bash(git status:*), Bash(git fetch:*), Bash(rm -rf /tmp/pr-reviews-*), Bash(mkdir:*), Bash(ls:*), Bash(date:*), Bash(wc:*), Bash(cat:*), Bash(mv:*), Bash(for:*), Bash(echo:*), Bash(cd:*), Read, Glob, Grep, Write, Task
+allowed-tools: Bash(gh pr list:*), Bash(gh pr view:*), Bash(gh pr diff:*), Bash(gh pr checkout:*), Bash(gh api:*), Bash(gh issue view:*), Bash(gh repo view:*), Bash(gh auth:*), Bash(git worktree:*), Bash(git log:*), Bash(git rev-parse:*), Bash(git remote:*), Bash(git status:*), Bash(git fetch:*), Bash(rm -rf /tmp/pr-reviews-*), Bash(mkdir:*), Bash(ls:*), Bash(date:*), Bash(wc:*), Bash(cat:*), Bash(mv:*), Bash(for:*), Bash(echo:*), Bash(cd:*), Read, Glob, Grep, Write, Task, Agent, Skill
 ---
 
 # PR Review Pipeline
@@ -375,6 +375,25 @@ For each PR, provide the agent with:
 - New functionality has test coverage
 - Tests are meaningful (not just testing implementation details)
 - Edge cases covered in tests
+
+### Specialized Agent Augmentation (Medium/Large PRs only)
+
+For PRs in the **Medium**, **Large**, or **Very Large** size categories, each review agent should also dispatch specialized sub-agents in parallel to deepen the analysis. These run alongside the agent's own review and their findings are merged into the agent's output.
+
+| Sub-agent | subagent_type | When to use |
+|-----------|---------------|-------------|
+| Silent failure hunter | `pr-review-toolkit:silent-failure-hunter` | PR touches error handling, catch blocks, or fallback logic |
+| Comment analyzer | `pr-review-toolkit:comment-analyzer` | PR adds or modifies comments/docstrings |
+| Type design analyzer | `pr-review-toolkit:type-design-analyzer` | PR introduces new types, interfaces, or structs |
+| Code reviewer | `feature-dev:code-reviewer` | Always — catches bugs and security issues with confidence filtering |
+
+**Instructions for review agents:**
+- Only dispatch sub-agents relevant to the PR's changes — skip those that don't apply
+- Launch all relevant sub-agents in a single parallel call to minimize wall-clock time
+- Merge sub-agent findings into your own findings list, using the same `[Severity|Confidence]` format
+- Deduplicate — if a sub-agent and your own analysis flag the same issue, keep the more detailed version
+- If sub-agents are unavailable or fail, proceed with your own analysis alone
+- Do NOT dispatch sub-agents for **Lockfile-only** or **Small** PRs — the overhead isn't worth it
 
 ### Agent Output Format
 
