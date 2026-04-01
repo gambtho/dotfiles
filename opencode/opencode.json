@@ -1,0 +1,30 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "anthropic/claude-sonnet-4-5",
+  "permission": {
+    "edit": "ask",
+    "bash": {
+      "*": "ask",
+      "gh *": "allow",
+      "git diff *": "allow",
+      "git log *": "allow",
+      "git show *": "allow",
+      "git status *": "allow",
+      "git rev-parse *": "allow",
+      "git remote *": "allow",
+      "git worktree *": "allow",
+      "git fetch *": "allow",
+      "grep *": "allow",
+      "mkdir *": "allow",
+      "ls *": "allow",
+      "rm -rf /tmp/pr-reviews-*": "allow"
+    },
+    "external_directory": {
+      "~/.config/opencode/*": "allow",
+      "/tmp/pr-reviews-*": "allow"
+    }
+  },
+  "plugin": [
+    "superpowers@git+https://github.com/obra/superpowers.git"
+  ]
+}

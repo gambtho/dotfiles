@@ -57,3 +57,13 @@ zsh-defer load_custom
 . /home/tng/.asdf/asdf.sh
 source <(kubectl completion zsh)
 
+
+# bun completions
+[ -s "/home/tng/.bun/_bun" ] && source "/home/tng/.bun/_bun"
+
+# bun
+export BUN_INSTALL="$HOME/.bun"
+export PATH="$BUN_INSTALL/bin:$PATH"
+
+# opencode
+export PATH=/home/tng/.opencode/bin:$PATH
