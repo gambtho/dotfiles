@@ -54,8 +54,12 @@ zsh-defer load_custom
 
 # To customize prompt, run `p10k configure` or edit ~/.p10k.zsh.
 [[ ! -f ~/.p10k.zsh ]] || source ~/.p10k.zsh
-. /home/tng/.asdf/asdf.sh
-source <(kubectl completion zsh)
+# Load asdf if available (check both user-specific and common locations)
+if [[ -f "$HOME/.asdf/asdf.sh" ]]; then
+  . "$HOME/.asdf/asdf.sh"
+elif [[ -f "/home/tng/.asdf/asdf.sh" ]]; then
+  . /home/tng/.asdf/asdf.sh
+fi
 
 
 # bun completions
@@ -67,3 +71,12 @@ export PATH="$BUN_INSTALL/bin:$PATH"
 
 # opencode
 export PATH=/home/tng/.opencode/bin:$PATH
+
+# Load kubectl completions if kubectl is available
+if command -v kubectl &> /dev/null; then
+  source <(kubectl completion zsh)
+fi
+
+# Added by flyctl installer
+export FLYCTL_INSTALL="/home/tng/.fly"
+export PATH="$FLYCTL_INSTALL/bin:$PATH"

@@ -40,6 +40,9 @@
     }
   },
   "plugin": [
-    "superpowers@git+https://github.com/obra/superpowers.git"
+    "superpowers@git+https://github.com/obra/superpowers.git",
+    "opencode-handoff",
+    "opencode-agent-memory",
+    "@tarquinen/opencode-dcp@latest"
   ]
 }
