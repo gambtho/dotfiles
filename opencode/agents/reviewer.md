@@ -1,7 +1,7 @@
 ---
 description: Thorough code reviewer for spec compliance and quality analysis. Use for reviewing completed implementation work.
 mode: subagent
-model: anthropic/claude-sonnet-4-5
+model: claude-sonnet-4-5
 hidden: true
 permission:
   edit: deny
