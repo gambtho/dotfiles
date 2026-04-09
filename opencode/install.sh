@@ -91,6 +91,17 @@ main() {
     link_dir "$DOTFILES_ROOT/opencode/commands" "$HOME/.config/opencode/commands" "commands"
     link_dir "$DOTFILES_ROOT/opencode/agents" "$HOME/.config/opencode/agents" "agents"
     link_file "$DOTFILES_ROOT/opencode/opencode.json" "$HOME/.config/opencode/opencode.json" "config"
+
+    # Link each skill from dotfiles into the skills directory
+    if [ -d "$DOTFILES_ROOT/opencode/skills" ]; then
+        mkdir -p "$HOME/.config/opencode/skills"
+        for skill_dir in "$DOTFILES_ROOT/opencode/skills"/*/; do
+            [ -d "$skill_dir" ] || continue
+            local skill_name
+            skill_name=$(basename "$skill_dir")
+            link_dir "$DOTFILES_ROOT/opencode/skills/$skill_name" "$HOME/.config/opencode/skills/$skill_name" "skill: $skill_name"
+        done
+    fi
 }
 
 main "$@"
