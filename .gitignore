@@ -5,5 +5,6 @@ git/git_updated
 .idea
 tmp/
 cache/
+docs/
 macos/brewfile.lock.json
 git/gitconfig.local.symlink
