@@ -1,119 +1,95 @@
-# Dotfiles
+# dotfiles
 
-Your dotfiles personalize your system. These are mine, forked from [holman/dotfiles](https://github.com/holman/dotfiles.git).  
-Originally used on macOS, these dotfiles now also support Ubuntu, MacOs, and Windows/WSL.
+Personal dotfiles for Linux, macOS, and WSL. Built around zsh + Prezto + Powerlevel10k + mise.
 
-## Overview
+## Quick Start
 
-These dotfiles automate the setup of a personalized development environment. They include:
-- A `script/bootstrap` command to install prerequisites.
-- Development setups for multiple programming languages using **Mise**, as defined in `lang.sh`.
-- Easy customization via `zshrc.symlink`, `gitconfig.local`, and other topical configurations.
-
-## Table of Contents
-1. [Installation](#installation)
-   - [Windows](#windows)
-   - [Ubuntu/WSL/macOS](#ubuntu-wsl-macos)
-2. [Usage](#usage)
-   - [dot-update](#dot-update)
-   - [Customization](#customization)
-3. [Components](#components)
-4. [Development Tools Setup](#development-tools-setup)
-5. [Troubleshooting](#troubleshooting)
-6. [Notes and Links](#notes-and-links)
-
-## Installation
-
-### Windows
-1. Click the boxstarter icon to install prerequisites:  
-  [![Boxstarter](misc/boxstarter.png)](https://boxstarter.org/package/nr/url?https://raw.githubusercontent.com/gambtho/dotfiles/refs/heads/main/win/boxstarter.ps1)  
-  - After this, continue with the WSL setup below.
-
-### Ubuntu/WSL/macOS
-1. Clone the repository and use the setup scripts:
-   ```sh
-   git clone https://github.com/gambtho/dotfiles.git ~/.dotfiles
-   cd ~/.dotfiles
-   script/bootstrap
-   reload!
-   dot-update
-   ```
-
-2. What `script/bootstrap` Does:
-- Symlinks configuration files from `.dotfiles` to your home directory.
-- Installs necessary tools and dependencies using [Mise](https://github.com/jdx/mise) and other platform-specific tools.
-
-3. Customize Git settings by editing `git/gitconfig.local.symlink`.  
-   - An example file is provided at `./git/gitconfig.local.symlink.example`.
-   - Current version assumes use of a gpg key, and windows git credential manager
-   - You should copy and modify it to include your Git configuration, such as:
-     ```ini
-     [user]
-         name = Your Name
-         email = your.email@example.com
-     [commit]
-         gpgsign = true
-     ```
-
----
-
-## Usage
-
-### dot-update
-This script ensures all installed tools, configurations, and dependencies stay up to date.  
-Here's an example of `dot-update` running:  
-![dot-update](./misc/dot-update.png)
-
----
-
-## Components
-
-### File Organization
-The structure is organized by topics:
-- **bin/**: Contains scripts added to your `$PATH`.
-- **linux/aptfile** or **mac/brewfile**: Lists applications to install during setup.
-- **topic/\*.zsh**: Configuration files automatically loaded into your shell.
-- **topic/path.zsh**: Defines `$PATH` or similar variables and is loaded first.
-- **topic/install.sh**: Executes during the setup process to install tools or configurations.
-- **topic/\*.symlink**: Files symlinked to `$HOME` for use by your shell or applications.
-
----
-
-## Development Tools Setup
-
-Using **Mise**, the setup supports multiple programming languages. The versions are defined in `mise/mise.local.toml.symlink`. Current languages (modify in `mise/lang.sh`):
-
-<img src="./misc/go.svg" alt="Go" width="120"/>  
-  
-<img src="./misc/python.svg" alt="Python" height="120" width="120"/>  
-
-<img src="./misc/java.svg" alt="Java"  height="120" width="120"/>  
-  
-<img src="./misc/node.svg" alt="Node.js"  height="120" width="120"/>  
- 
-<img src="./misc/ruby.svg" alt="Ruby" height="120" width="120"/>  
-
----
-
-## Notes and Links
-
-Additional useful tools and configurations:
-- [zsh-bench (Zsh benchmarking)](https://github.com/romkatv/zsh-bench)
-- [Faster Zsh](https://htr3n.github.io/2018/07/faster-zsh/)
-- [Speeding Up Zsh](https://blog.jonlu.ca/posts/speeding-up-zsh)
-
-```
-##### timer for troubleshooting
-timer=$(($(gdate +%s%N)/1000000))
-now=$(($(gdate +%s%N)/1000000))
-elapsed=$(($now-$timer))
-echo $elapsed":" $plugin
-### or unncomment and run zprof
-zmodload zsh/zprof
-# zprof at end of file
+```bash
+git clone https://github.com/tng/dotfiles.git ~/.dotfiles
+cd ~/.dotfiles
+bin/bootstrap
 ```
 
+`bin/bootstrap` will:
+1. Install OS prerequisites (Homebrew on macOS / apt + zsh + mise on Linux)
+2. Set up `.gitconfig.local` from template (prompts for name and email)
+3. Prompt for profile selection (`personal` or `work`)
+4. Symlink all dotfiles and `config/` directories
 
+After bootstrap, run `bin/install` (or `bin/dot-update`) to install packages and language runtimes.
 
+## Structure
 
+```
+~/.dotfiles/
+  bin/            # Scripts: bootstrap, install, dot-update, relink, helpers
+  core/           # Always loaded: shell (zsh/prezto/p10k), git, path, env
+  languages/      # Runtime tooling: go, ruby, python, rust, mise
+  tools/          # Tool configs: docker, kubernetes
+  platforms/      # OS-specific: linux/, macos/, windows/
+  work/           # Work context: only sourced when work profile is active
+  ai/             # AI tools: opencode/, claude/, copilot/
+  profiles/       # Machine profiles: personal.zsh, work.zsh
+  config/         # XDG config files, symlinked to ~/.config/<name>
+  archived/       # Dead code — never sourced, kept for reference
+```
 
+## Profile System
+
+Create `~/.dotfiles-profile` (not git-tracked) to select which profile is active:
+
+```bash
+echo "personal" > ~/.dotfiles-profile   # or "work"
+```
+
+`bin/bootstrap` prompts for this on first run. The `work` profile sources `work/*.zsh`,
+which contains Microsoft/AKS-specific aliases and tooling. All `work/*.zsh` files also
+self-guard with `[[ -z "$WORK_PROFILE" ]] && return` to prevent accidental loading.
+
+## Routine Updates
+
+```bash
+bin/dot-update    # update packages, language runtimes, neovim plugins
+```
+
+## After Pulling a Restructure
+
+If you pull changes that moved `.symlink` files to new directories, run:
+
+```bash
+bin/relink
+```
+
+This removes dead symlinks (pointing to paths that no longer exist) and re-creates all
+symlinks from the current repo layout.
+
+## Neovim
+
+Neovim config lives in `config/nvim/init.lua` (based on [kickstart.nvim](https://github.com/nvim-lua/kickstart.nvim)),
+symlinked to `~/.config/nvim`. Plugins are bootstrapped via lazy.nvim on first launch.
+
+## Runtime Manager
+
+All language runtimes are managed by [mise](https://mise.jdx.dev/). Versions are defined
+in `languages/mise/mise.local.toml.symlink` (symlinked to `~/.mise.local.toml`).
+
+## Key Symlinks
+
+| `$HOME` symlink | Source |
+|---|---|
+| `~/.zshrc` | `core/shell/zshrc.symlink` |
+| `~/.gitconfig` | `core/git/gitconfig.symlink` |
+| `~/.gitconfig.local` | `core/git/gitconfig.local.symlink` (machine-local, gitignored) |
+| `~/.mise.local.toml` | `languages/mise/mise.local.toml.symlink` |
+| `~/.config/nvim` | `config/nvim/` |
+
+## Archived
+
+`archived/` contains old configs no longer in active use:
+
+- `zshrc-saw`, `zpreztorc-saw`, `p10k.zsh-saw` — SAW (Secure Admin Workstation) configs
+- `vim-install.sh` — amix/vimrc setup (replaced by kickstart.nvim)
+- `aks-mknetrc`, `aks-install-cron.sh` — goms.io PAT token refresh cron (that team is gone)
+- `aks-localrc.symlink`, `aks-env.zsh` — goms.io GOPRIVATE/GOPROXY settings
+- `localrc` — ssh-agent + goms.io environment
+- `script-bootstrap`, `script-install` — old install scripts (replaced by `bin/bootstrap` and `bin/install`)
