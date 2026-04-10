@@ -59,8 +59,6 @@
     "superpowers@git+https://github.com/obra/superpowers.git",
     "opencode-handoff",
     "opencode-agent-memory",
-    "@tarquinen/opencode-dcp@latest",
-    "opencode-usage",
-    "opencode-codegraph"
+    "@tarquinen/opencode-dcp@latest"
   ]
 }
