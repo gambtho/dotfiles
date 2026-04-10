@@ -1,3 +1,6 @@
+# Guard: only load when work profile is active
+[[ -z "$WORK_PROFILE" ]] && return
+
 # microsoft
 alias idweb='kinit THGAMBLE@NORTHAMERICA.CORP.MICROSOFT.COM && open -a safari https://idweb/'
 
