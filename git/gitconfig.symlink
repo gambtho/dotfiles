@@ -36,5 +36,3 @@
 	rebase = false
 [init]
 	defaultBranch = main
-[coderabbit]
-	machineId = cli/88a5603524da45bab49fe31f49f3549e

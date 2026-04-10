@@ -57,20 +57,18 @@ zsh-defer load_custom
 # Load asdf if available (check both user-specific and common locations)
 if [[ -f "$HOME/.asdf/asdf.sh" ]]; then
   . "$HOME/.asdf/asdf.sh"
-elif [[ -f "/home/tng/.asdf/asdf.sh" ]]; then
-  . /home/tng/.asdf/asdf.sh
 fi
 
 
 # bun completions
-[ -s "/home/tng/.bun/_bun" ] && source "/home/tng/.bun/_bun"
+[ -s "$HOME/.bun/_bun" ] && source "$HOME/.bun/_bun"
 
 # bun
 export BUN_INSTALL="$HOME/.bun"
 export PATH="$BUN_INSTALL/bin:$PATH"
 
 # opencode
-export PATH=/home/tng/.opencode/bin:$PATH
+export PATH=$HOME/.opencode/bin:$PATH
 
 # Load kubectl completions if kubectl is available
 if command -v kubectl &> /dev/null; then
@@ -78,5 +76,5 @@ if command -v kubectl &> /dev/null; then
 fi
 
 # Added by flyctl installer
-export FLYCTL_INSTALL="/home/tng/.fly"
+export FLYCTL_INSTALL="$HOME/.fly"
 export PATH="$FLYCTL_INSTALL/bin:$PATH"
