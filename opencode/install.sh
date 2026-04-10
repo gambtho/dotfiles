@@ -46,6 +46,11 @@ link_dir() {
         rm -rf "$dst"
     fi
 
+    if [[ "$check_only" == true ]]; then
+        log_info "[dry-run] Would link $src -> $dst"
+        return
+    fi
+
     ln -s "$src" "$dst"
     log_success "Linked $src to $dst"
 }
@@ -69,20 +74,39 @@ link_file() {
         mv "$dst" "${dst}.backup"
     fi
 
+    if [[ "$check_only" == true ]]; then
+        log_info "[dry-run] Would link $src -> $dst"
+        return
+    fi
+
     ln -s "$src" "$dst"
     log_success "Linked $src to $dst"
 }
 
 main() {
-    if command_exists opencode; then
-        log_info "OpenCode is already installed."
-        update_opencode
-    else
-        if command_exists npm; then
-            install_opencode
+    check_only=false
+    if [[ "${1:-}" == "--check" ]]; then
+        check_only=true
+        log_info "Dry-run mode: showing what would be linked/installed"
+    fi
+
+    if [[ "$check_only" == true ]]; then
+        if command_exists opencode; then
+            log_info "[dry-run] OpenCode is installed, would update"
         else
-            log_warning "npm not found. Install Node.js/npm first, then re-run."
-            return 1
+            log_info "[dry-run] OpenCode not installed, would install via npm"
+        fi
+    else
+        if command_exists opencode; then
+            log_info "OpenCode is already installed."
+            update_opencode
+        else
+            if command_exists npm; then
+                install_opencode
+            else
+                log_warning "npm not found. Install Node.js/npm first, then re-run."
+                return 1
+            fi
         fi
     fi
 
@@ -101,6 +125,22 @@ main() {
             skill_name=$(basename "$skill_dir")
             link_dir "$DOTFILES_ROOT/opencode/skills/$skill_name" "$HOME/.config/opencode/skills/$skill_name" "skill: $skill_name"
         done
+    fi
+
+    # Link DCP config if it exists
+    if [ -f "$DOTFILES_ROOT/opencode/dcp.jsonc" ]; then
+        link_file "$DOTFILES_ROOT/opencode/dcp.jsonc" "$HOME/.config/opencode/dcp.jsonc" "DCP config"
+    fi
+
+    # Install plugin dependencies
+    if [ -f "$DOTFILES_ROOT/opencode/.opencode/package.json" ]; then
+        if [[ "$check_only" == true ]]; then
+            log_info "[dry-run] Would run npm install in .opencode/"
+        else
+            log_info "Installing plugin dependencies..."
+            (cd "$DOTFILES_ROOT/opencode/.opencode" && npm install --silent)
+            log_success "Plugin dependencies installed."
+        fi
     fi
 }
 
