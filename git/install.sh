@@ -34,7 +34,7 @@ main() {
       log_info "update script to install latest git for mac"
       ;;
     *)
-      touch "MARKER_FILE"
+      touch "$MARKER_FILE"
       log_warning "Unsupported operating system."
       ;;
   esac
