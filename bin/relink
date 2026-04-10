@@ -1,0 +1,104 @@
+#!/usr/bin/env bash
+# bin/relink — Remove stale dotfile symlinks and re-create them from current repo layout.
+#
+# Run this after pulling a restructure branch that moved .symlink files to new
+# directories. It will:
+#   1. Find all $HOME dotfile symlinks that point into ~/.dotfiles/
+#   2. Remove any that point to paths that no longer exist (dead symlinks)
+#   3. Re-create all symlinks from *.symlink files found in the repo (excluding archived/)
+#   4. Re-create config/ directory symlinks to ~/.config/<name>
+
+set -e
+
+source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
+
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+DOTFILES_ROOT=$(pwd -P)
+
+log_info "Relinking dotfiles from $DOTFILES_ROOT"
+
+# ── Step 1: Remove dead symlinks in $HOME pointing into this dotfiles repo ────
+
+log_info "Scanning $HOME for stale dotfiles symlinks..."
+
+removed=0
+while IFS= read -r -d '' link; do
+  target=$(readlink "$link")
+  # Only touch symlinks that point into this dotfiles repo
+  if [[ "$target" != "$DOTFILES_ROOT/"* ]]; then
+    continue
+  fi
+  # If the target no longer exists, remove the symlink
+  if [ ! -e "$link" ]; then
+    log_warning "Removing dead symlink: $link -> $target"
+    rm "$link"
+    (( removed++ )) || true
+  fi
+done < <(find "$HOME" -maxdepth 1 -type l -print0)
+
+if [ "$removed" -eq 0 ]; then
+  log_info "No dead symlinks found."
+else
+  log_success "Removed $removed dead symlink(s)."
+fi
+
+# ── Step 2: Re-create symlinks from *.symlink files ───────────────────────────
+
+log_info "Creating symlinks for *.symlink files..."
+
+link_file() {
+  local src=$1 dst=$2
+
+  if [ -L "$dst" ]; then
+    current=$(readlink "$dst")
+    if [ "$current" = "$src" ]; then
+      log_info "Already linked: $dst"
+      return
+    fi
+    log_warning "Relinking: $dst (was $current)"
+    rm "$dst"
+  elif [ -e "$dst" ]; then
+    log_warning "Skipping $dst — exists as a real file (not a symlink). Remove manually to relink."
+    return
+  fi
+
+  ln -s "$src" "$dst"
+  log_success "Linked: $dst -> $src"
+}
+
+while IFS= read -r -d '' src; do
+  dst="$HOME/.$(basename "${src%.*}")"
+  link_file "$src" "$dst"
+done < <(find -H "$DOTFILES_ROOT" \
+  -not -path '*/archived/*' \
+  -not -path '*/.git/*' \
+  -name '*.symlink' -print0)
+
+# ── Step 3: Re-create config/ directory symlinks ──────────────────────────────
+
+if [ -d "$DOTFILES_ROOT/config" ]; then
+  mkdir -p "$HOME/.config"
+  for config_dir in "$DOTFILES_ROOT/config"/*/; do
+    [ -d "$config_dir" ] || continue
+    config_name=$(basename "$config_dir")
+    dst="$HOME/.config/$config_name"
+
+    if [ -L "$dst" ]; then
+      current=$(readlink "$dst")
+      if [ "$current" = "$config_dir" ]; then
+        log_info "Already linked: $dst"
+        continue
+      fi
+      log_warning "Relinking: $dst (was $current)"
+      rm "$dst"
+    elif [ -e "$dst" ]; then
+      log_warning "Skipping $dst — exists as a real directory. Remove manually to relink."
+      continue
+    fi
+
+    ln -s "$config_dir" "$dst"
+    log_success "Linked: $dst -> $config_dir"
+  done
+fi
+
+log_success "Relink complete."
