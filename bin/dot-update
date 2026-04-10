@@ -1,10 +1,7 @@
 #!/usr/bin/env bash
-# `dot` handles installation, updates, things like that. Run it periodically
+# `dot-update` handles installation, updates, things like that. Run it periodically
 # to make sure you're on the latest and greatest.
 
 set -e
 
-export ZSH=$HOME/.dotfiles
-
-# echo "› running $ZSH/script/install"
-$ZSH/script/install
+"$(dirname "$0")/install"

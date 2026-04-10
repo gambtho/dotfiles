@@ -1,0 +1,150 @@
+#!/usr/bin/env bash
+
+set -e
+
+source "$(dirname "$0")/common.sh"
+
+cd "$(dirname "$0")/.."
+DOTFILES_ROOT=$(pwd -P)
+
+# Determine active profile
+PROFILE="personal"
+if [[ -f "$HOME/.dotfiles-profile" ]]; then
+  PROFILE=$(cat "$HOME/.dotfiles-profile")
+fi
+
+log_info "Running install for profile: $PROFILE"
+
+# ── Phase 1: OS packages ──────────────────────────────────────────────────────
+
+update_homebrew() {
+  log_info "Updating Homebrew packages..."
+  brew update
+  brew upgrade
+  brew cleanup
+  brew bundle --file="$DOTFILES_ROOT/platforms/macos/brewfile"
+  brew bundle dump --all --force --file="$DOTFILES_ROOT/tmp/brewfile"
+}
+
+install_apt_packages() {
+  local apt_file=$1
+  log_info "Updating APT packages from $apt_file..."
+  {
+    sudo apt update > /dev/null 2>&1
+    sudo apt install -y $(cat "$DOTFILES_ROOT/platforms/linux/$apt_file") > /dev/null 2>&1
+  } || log_warning "Error during apt install. Continuing..."
+
+  {
+    sudo apt upgrade -y > /dev/null 2>&1
+  } || log_warning "Error during apt upgrade. Continuing..."
+
+  sudo apt autoremove -y > /dev/null 2>&1
+  sudo apt autoclean -y > /dev/null 2>&1
+}
+
+check_unsaved_apt_packages() {
+  local apt_file=$1
+  mkdir -p "$DOTFILES_ROOT/tmp"
+  apt-mark showmanual | sort -u > "$DOTFILES_ROOT/tmp/$apt_file"
+  local apt_diff
+  set +e
+  apt_diff=$(comm -23 "$DOTFILES_ROOT/tmp/$apt_file" "$DOTFILES_ROOT/platforms/linux/$apt_file")
+  set -e
+  if [ -n "$apt_diff" ]; then
+    log_warning "Unsaved packages: $apt_diff"
+  else
+    log_success "All packages are up to date."
+  fi
+}
+
+# ── Phase 2: Runtime tools ────────────────────────────────────────────────────
+
+install_languages() {
+  log_info "Installing language runtimes via mise..."
+  bash "$DOTFILES_ROOT/languages/mise/lang.sh"
+}
+
+# ── Phase 3: Shell setup ──────────────────────────────────────────────────────
+
+setup_shell() {
+  bash "$DOTFILES_ROOT/core/shell/install.sh"
+}
+
+# ── Phase 4: Git setup ────────────────────────────────────────────────────────
+
+setup_git() {
+  bash "$DOTFILES_ROOT/core/git/install.sh"
+}
+
+# ── Phase 5: Neovim ───────────────────────────────────────────────────────────
+
+setup_neovim() {
+  if ! command_exists nvim; then
+    log_warning "neovim not installed. Skipping neovim plugin bootstrap."
+    return
+  fi
+  log_info "Bootstrapping neovim plugins..."
+  nvim --headless "+Lazy! sync" +qa 2>/dev/null || true
+  log_success "Neovim plugins synced."
+}
+
+# ── Phase 6: Fonts ────────────────────────────────────────────────────────────
+
+setup_fonts() {
+  if [ -f "$DOTFILES_ROOT/fonts/install.sh" ]; then
+    bash "$DOTFILES_ROOT/fonts/install.sh"
+  fi
+}
+
+# ── Phase 7: Work tools (if work profile) ────────────────────────────────────
+
+setup_work() {
+  if [[ "$PROFILE" == "work" ]]; then
+    log_info "Running work profile install..."
+    if [ -f "$DOTFILES_ROOT/work/install.sh" ]; then
+      bash "$DOTFILES_ROOT/work/install.sh"
+    fi
+  fi
+}
+
+# ── Phase 8: Platform-specific extras ────────────────────────────────────────
+
+setup_flatpak() {
+  flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+}
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+
+main() {
+  detect_os
+
+  case "$OS" in
+    macOS)
+      update_homebrew
+      ;;
+    Ubuntu)
+      install_apt_packages "ubuntu_apt"
+      check_unsaved_apt_packages "ubuntu_apt"
+      setup_flatpak
+      ;;
+    WSL)
+      install_apt_packages "wsl_apt"
+      check_unsaved_apt_packages "wsl_apt"
+      ;;
+    *)
+      log_warning "Unsupported OS: $OS"
+      exit 1
+      ;;
+  esac
+
+  setup_shell
+  setup_git
+  install_languages
+  setup_neovim
+  setup_fonts
+  setup_work
+
+  log_success "Install complete."
+}
+
+main "$@"
