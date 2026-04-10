@@ -1,6 +1,6 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  "model": "github-copilot/claude-sonnet-4.5",
+  "model": "github-copilot/claude-sonnet-4.6",
   "permission": {
     "edit": "ask",
     "bash": {
@@ -32,7 +32,23 @@
       "make *": "allow",
       "npm *": "allow",
       "npx *": "allow",
-      "node *": "allow"
+      "node *": "allow",
+      "cat *": "allow",
+      "wc *": "allow",
+      "find *": "allow",
+      "rg *": "allow",
+      "python *": "allow",
+      "python3 *": "allow",
+      "ruby *": "allow",
+      "elixir *": "allow",
+      "mix *": "allow",
+      "bundle *": "allow",
+      "cargo *": "allow",
+      "docker *": "allow",
+      "docker-compose *": "allow",
+      "jq *": "allow",
+      "curl *": "allow",
+      "wget *": "allow"
     },
     "external_directory": {
       "~/.config/opencode/*": "allow",
@@ -43,6 +59,8 @@
     "superpowers@git+https://github.com/obra/superpowers.git",
     "opencode-handoff",
     "opencode-agent-memory",
-    "@tarquinen/opencode-dcp@latest"
+    "@tarquinen/opencode-dcp@latest",
+    "opencode-usage",
+    "opencode-codegraph"
   ]
 }
