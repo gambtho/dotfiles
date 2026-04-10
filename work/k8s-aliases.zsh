@@ -1,6 +1,11 @@
 # Guard: only load when work profile is active
 [[ -z "$WORK_PROFILE" ]] && return
 
+# AKS namespace shortcuts (Azure-specific namespaces)
+alias kneg='kubectl -n eventgrid'
+alias kncs='kubectl -n containerservice'
+alias kncsa='kubectl -n containerservicei-async'
+
 # AKS prod tools aliases — only loaded with work profile
 alias aks='aks-prod-tools'
 alias as='aks-prod-tools ssh'
