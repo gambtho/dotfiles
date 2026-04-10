@@ -10,7 +10,7 @@ DOTFILES_ROOT=$(pwd -P)
 # Determine active profile
 PROFILE="personal"
 if [[ -f "$HOME/.dotfiles-profile" ]]; then
-  PROFILE=$(cat "$HOME/.dotfiles-profile")
+  PROFILE=$(tr -d '[:space:]' < "$HOME/.dotfiles-profile")
 fi
 
 log_info "Running install for profile: $PROFILE"
@@ -31,7 +31,11 @@ install_apt_packages() {
   log_info "Updating APT packages from $apt_file..."
   {
     sudo apt update > /dev/null 2>&1
-    sudo apt install -y $(cat "$DOTFILES_ROOT/platforms/linux/$apt_file") > /dev/null 2>&1
+  } || log_warning "Error during apt update. Continuing..."
+
+  {
+    mapfile -t apt_packages < "$DOTFILES_ROOT/platforms/linux/$apt_file"
+    sudo apt install -y "${apt_packages[@]}" > /dev/null 2>&1
   } || log_warning "Error during apt install. Continuing..."
 
   {
@@ -44,6 +48,10 @@ install_apt_packages() {
 
 check_unsaved_apt_packages() {
   local apt_file=$1
+  if [ ! -f "$DOTFILES_ROOT/platforms/linux/$apt_file" ]; then
+    log_warning "Reference apt file missing: $apt_file. Skipping package diff."
+    return
+  fi
   mkdir -p "$DOTFILES_ROOT/tmp"
   apt-mark showmanual | sort -u > "$DOTFILES_ROOT/tmp/$apt_file"
   local apt_diff

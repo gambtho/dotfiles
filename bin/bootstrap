@@ -17,8 +17,8 @@ setup_gitconfig() {
     log_info " - What is your GitHub author email?"
     read -e git_authoremail
 
-    sed -e "s/AUTHORNAME/$git_authorname/g" \
-        -e "s/AUTHOREMAIL/$git_authoremail/g" \
+    sed -e "s|AUTHORNAME|$git_authorname|g" \
+        -e "s|AUTHOREMAIL|$git_authoremail|g" \
         "$DOTFILES_ROOT/core/git/gitconfig.local.symlink.example" > "$DOTFILES_ROOT/core/git/gitconfig.local.symlink"
 
     log_success "Gitconfig setup completed"
@@ -62,8 +62,10 @@ link_file() {
 
   if [ -f "$dst" ] || [ -d "$dst" ] || [ -L "$dst" ]; then
     if [ "$overwrite_all" == "false" ] && [ "$backup_all" == "false" ] && [ "$skip_all" == "false" ]; then
-      local currentSrc
-      currentSrc=$(readlink "$dst")
+      local currentSrc=""
+      if [ -L "$dst" ]; then
+        currentSrc=$(readlink "$dst")
+      fi
 
       if [ "$currentSrc" == "$src" ]; then
         skip=true
@@ -119,13 +121,13 @@ install_dotfiles() {
   local overwrite_all=false backup_all=false skip_all=false
 
   # Link *.symlink files to $HOME/.<name>
-  for src in $(find -H "$DOTFILES_ROOT" \
-    -not -path '*/archived/*' \
-    -not -path '*/.git/*' \
-    -name '*.symlink'); do
+  while IFS= read -r -d '' src; do
     dst="$HOME/.$(basename "${src%.*}")"
     link_file "$src" "$dst"
-  done
+  done < <(find -H "$DOTFILES_ROOT" \
+    -not -path '*/archived/*' \
+    -not -path '*/.git/*' \
+    -name '*.symlink' -print0)
 
   # Link config/ subdirectories to ~/.config/<name>
   if [ -d "$DOTFILES_ROOT/config" ]; then
