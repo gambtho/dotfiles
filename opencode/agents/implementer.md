@@ -1,7 +1,7 @@
 ---
 description: Fast implementation agent for mechanical coding tasks with clear specs. Use for well-specified tasks touching 1-2 files.
 mode: subagent
-model: github-copilot/claude-haiku-4-5
+model: github-copilot/claude-haiku-4.5
 hidden: true
 permission:
   edit: allow
