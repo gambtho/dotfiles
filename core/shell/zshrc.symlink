@@ -40,6 +40,15 @@ function load_custom() {
     source $file
   done
 
+  # Load profile-specific configuration
+  if [[ -f "$HOME/.dotfiles-profile" ]]; then
+    local profile_name
+    profile_name=$(cat "$HOME/.dotfiles-profile")
+    if [[ -f "$DOTFILES/profiles/${profile_name}.zsh" ]]; then
+      source "$DOTFILES/profiles/${profile_name}.zsh"
+    fi
+  fi
+
   if [[ -a ~/.localrc ]]
   then
     source ~/.localrc
