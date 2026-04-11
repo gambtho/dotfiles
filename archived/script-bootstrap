@@ -1,0 +1,177 @@
+#!/usr/bin/env bash
+
+set -e
+
+# Source the common functions, including detect_os and command_exists
+source "$(dirname "$0")/../bin/common.sh"
+
+cd "$(dirname "$0")/.."
+DOTFILES_ROOT=$(pwd -P)
+
+sudo -v
+
+setup_gitconfig () {
+  if ! [ -f git/gitconfig.local.symlink ]; then
+    log_info "Setting up gitconfig"
+
+    log_info " - What is your GitHub author name?"
+    read -e git_authorname
+    log_info " - What is your GitHub author email?"
+    read -e git_authoremail
+
+    sed -e "s/AUTHORNAME/$git_authorname/g" \
+        -e "s/AUTHOREMAIL/$git_authoremail/g" \
+        git/gitconfig.local.symlink.example > git/gitconfig.local.symlink
+
+    log_success "Gitconfig setup completed"
+  else
+    log_info "Gitconfig already set up"
+  fi
+}
+
+link_file () {
+  local src=$1 dst=$2
+
+  local overwrite= backup= skip=
+  local action=
+
+  if [ -f "$dst" ] || [ -d "$dst" ] || [ -L "$dst" ]; then
+
+    if [ "$overwrite_all" == "false" ] && [ "$backup_all" == "false" ] && [ "$skip_all" == "false" ]; then
+
+      local currentSrc
+      currentSrc=$(readlink "$dst")
+
+      if [ "$currentSrc" == "$src" ]; then
+        skip=true
+      else
+        log_warning "File already exists: $dst ($(basename "$src")), what do you want to do?\n\
+        [s]kip, [S]kip all, [o]verwrite, [O]verwrite all, [b]ackup, [B]ackup all?"
+        read -n 1 action
+        echo
+
+        case "$action" in
+          o ) overwrite=true ;;
+          O ) overwrite_all=true ;;
+          b ) backup=true ;;
+          B ) backup_all=true ;;
+          s ) skip=true ;;
+          S ) skip_all=true ;;
+          * ) ;;
+        esac
+      fi
+    fi
+
+    overwrite=${overwrite:-$overwrite_all}
+    backup=${backup:-$backup_all}
+    skip=${skip:-$skip_all}
+
+    if [ "$overwrite" == "true" ]; then
+      rm -rf "$dst"
+      log_success "Removed $dst"
+    fi
+
+    if [ "$backup" == "true" ]; then
+      mv "$dst" "${dst}.backup"
+      log_success "Moved $dst to ${dst}.backup"
+    fi
+
+    if [ "$skip" == "true" ]; then
+      log_info "Skipped $src"
+      return
+    fi
+  fi
+
+  ln -s "$src" "$dst"
+  log_success "Linked $src to $dst"
+}
+
+install_dotfiles () {
+  log_info "Installing dotfiles"
+
+  mkdir -p "$DOTFILES_ROOT/tmp"
+  touch "$DOTFILES_ROOT/tmp/aptfile"
+  touch "$DOTFILES_ROOT/tmp/brewfile"
+
+  local overwrite_all=false backup_all=false skip_all=false
+
+  for src in $(find -H "$DOTFILES_ROOT" -maxdepth 2 -name '*.symlink' -not -path '*.git*'); do
+    dst="$HOME/.$(basename "${src%.*}")"
+    link_file "$src" "$dst"
+  done
+  log_info "Change shell to zsh -- chsh -s $(which zsh)"
+}
+
+linux_prep () {
+  log_info "Preparing Linux environment"
+
+  sudo apt update
+  sudo apt-get install -y ca-certificates curl gnupg flatpak build-essential libssl-dev libreadline-dev zlib1g-dev libyaml-dev
+  sudo install -m 0755 -d /etc/apt/keyrings
+
+  if ! command_exists zsh; then
+    log_info "Installing zsh"
+    sudo apt install -y zsh
+    log_success "zsh installed"
+  else
+    log_info "zsh already installed"
+  fi
+
+  if ! command_exists mise; then
+    install_mise_ubuntu
+  else
+    log_info "mise already installed"
+  fi
+}
+
+mac_prep () {
+  log_info "Preparing macOS environment"
+
+  if ! command_exists brew; then
+    log_info "Installing Homebrew"
+    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/master/install.sh)"
+    log_success "Homebrew installed"
+  else
+    log_info "Homebrew already installed"
+  fi
+
+  if ! command_exists zsh; then
+    log_info "Installing zsh"
+    brew install zsh
+    log_success "zsh installed"
+  else
+    log_info "zsh already installed"
+  fi
+
+  if ! command_exists mise; then
+    log_info "Installing mise"
+    brew install mise
+    log_success "mise installed"
+  else
+    log_info "mise already installed"
+  fi
+}
+
+main() {
+  detect_os
+
+  case "$OS" in
+    macOS)
+      mac_prep
+      ;;
+    Ubuntu | WSL)
+      linux_prep
+      ;;
+    *)
+      log_warning "Unsupported operating system: $OS"
+      exit 1
+      ;;
+  esac
+
+  setup_gitconfig
+  install_dotfiles
+
+  log_success "All installed!"
+}
+
+main "$@"

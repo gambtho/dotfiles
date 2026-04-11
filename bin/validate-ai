@@ -1,0 +1,154 @@
+#!/usr/bin/env bash
+# Validate AI config structure: agents, commands, skills, and cross-references.
+# Usage: bin/validate-ai [--verbose]
+
+set -e
+
+DOTFILES_ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
+AI_DIR="$DOTFILES_ROOT/ai/opencode"
+ERRORS=0
+WARNINGS=0
+VERBOSE=false
+
+[[ "${1:-}" == "--verbose" ]] && VERBOSE=true
+
+error() { echo "  ERROR: $1"; ((ERRORS++)); }
+warn()  { echo "  WARN:  $1"; ((WARNINGS++)); }
+info()  { $VERBOSE && echo "  OK:    $1" || true; }
+
+echo "=== Validating AI config ==="
+
+# ── Agents ────────────────────────────────────────────────────────────────────
+echo ""
+echo "Agents:"
+for agent in "$AI_DIR"/agents/*.md; do
+    [ -f "$agent" ] || continue
+    name=$(basename "$agent")
+
+    # Check frontmatter exists
+    if ! head -1 "$agent" | grep -q '^---$'; then
+        error "$name: missing frontmatter"
+        continue
+    fi
+
+    # Check required fields
+    if ! grep -q '^description:' "$agent"; then
+        error "$name: missing 'description' in frontmatter"
+    fi
+    if ! grep -q '^mode: subagent' "$agent"; then
+        warn "$name: missing 'mode: subagent' (may be intentional)"
+    fi
+
+    # Check permission block exists
+    if ! grep -q '^permission:' "$agent"; then
+        warn "$name: no permission block defined"
+    fi
+
+    info "$name"
+done
+
+# ── Commands ──────────────────────────────────────────────────────────────────
+echo ""
+echo "Commands:"
+for cmd in "$AI_DIR"/commands/*.md; do
+    [ -f "$cmd" ] || continue
+    name=$(basename "$cmd")
+
+    if ! head -1 "$cmd" | grep -q '^---$'; then
+        error "$name: missing frontmatter"
+        continue
+    fi
+
+    if ! grep -q '^description:' "$cmd"; then
+        error "$name: missing 'description' in frontmatter"
+    fi
+
+    info "$name"
+done
+
+# ── Skills ────────────────────────────────────────────────────────────────────
+echo ""
+echo "Skills:"
+for skill_dir in "$AI_DIR"/skills/*/; do
+    [ -d "$skill_dir" ] || continue
+    skill_name=$(basename "$skill_dir")
+
+    if [ ! -f "$skill_dir/SKILL.md" ]; then
+        error "$skill_name: missing SKILL.md"
+        continue
+    fi
+
+    if ! head -1 "$skill_dir/SKILL.md" | grep -q '^---$'; then
+        error "$skill_name/SKILL.md: missing frontmatter"
+    fi
+
+    if ! grep -q '^name:' "$skill_dir/SKILL.md"; then
+        error "$skill_name/SKILL.md: missing 'name' in frontmatter"
+    fi
+
+    if ! grep -q '^description:' "$skill_dir/SKILL.md"; then
+        error "$skill_name/SKILL.md: missing 'description' in frontmatter"
+    fi
+
+    info "$skill_name"
+done
+
+# ── Config files ──────────────────────────────────────────────────────────────
+echo ""
+echo "Config files:"
+
+if [ ! -f "$AI_DIR/opencode.json" ]; then
+    error "opencode.json: missing"
+else
+    # Validate JSON syntax
+    if command -v jq &>/dev/null; then
+        if ! jq empty "$AI_DIR/opencode.json" 2>/dev/null; then
+            error "opencode.json: invalid JSON"
+        else
+            info "opencode.json: valid JSON"
+        fi
+    fi
+fi
+
+if [ ! -f "$AI_DIR/dcp.jsonc" ]; then
+    warn "dcp.jsonc: missing (DCP plugin won't have config)"
+else
+    info "dcp.jsonc"
+fi
+
+# ── Cross-tool consistency ────────────────────────────────────────────────────
+echo ""
+echo "Cross-tool consistency:"
+
+# Check Claude commands exist for each OpenCode command that has a Claude counterpart
+for claude_cmd in "$DOTFILES_ROOT/ai/claude/commands"/*.md; do
+    [ -f "$claude_cmd" ] || continue
+    cmd_name=$(basename "$claude_cmd" .md)
+    if [ ! -f "$AI_DIR/commands/$cmd_name.md" ]; then
+        warn "Claude command '$cmd_name' has no OpenCode counterpart"
+    else
+        info "Claude '$cmd_name' -> OpenCode '$cmd_name'"
+    fi
+done
+
+# ── Summary ───────────────────────────────────────────────────────────────────
+echo ""
+echo "=== Summary ==="
+agent_count=$(ls "$AI_DIR"/agents/*.md 2>/dev/null | wc -l)
+cmd_count=$(ls "$AI_DIR"/commands/*.md 2>/dev/null | wc -l)
+skill_count=$(ls -d "$AI_DIR"/skills/*/ 2>/dev/null | wc -l)
+echo "  Agents:   $agent_count"
+echo "  Commands: $cmd_count"
+echo "  Skills:   $skill_count"
+echo "  Errors:   $ERRORS"
+echo "  Warnings: $WARNINGS"
+
+if [ $ERRORS -gt 0 ]; then
+    echo ""
+    echo "FAILED: $ERRORS errors found"
+    exit 1
+else
+    echo ""
+    echo "PASSED"
+    exit 0
+fi

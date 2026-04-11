@@ -1,5 +1,5 @@
-# Path to mise.toml
-MISE_TOML="$(dirname "$0")/../mise/mise.toml"
+# Path to mise local toml (callers can override by passing $2 to get_version_from_mise)
+MISE_TOML="$(dirname "${BASH_SOURCE[0]}")/../languages/mise/mise.local.toml.symlink"
 
 # Function to check if a string is a valid version number
 is_valid_version() {
@@ -51,7 +51,7 @@ install_or_update() {
 }
 
 setup_mise_env() {
-  eval "$(mise env > /dev/null 2>&1)" || log_error "Failed to load mise environment."
+  eval "$(mise env 2>/dev/null)" || log_error "Failed to load mise environment."
 }
 
 

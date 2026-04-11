@@ -1,9 +1,12 @@
-mise/.venv
-linux/set_background
-git/git_updated
+languages/mise/.venv
+platforms/linux/set_background
+core/git/git_updated
 .vscode
 .idea
 tmp/
 cache/
-macos/brewfile.lock.json
-git/gitconfig.local.symlink
+docs/
+platforms/macos/brewfile.lock.json
+core/git/gitconfig.local.symlink
+.dotfiles-profile
+.opencode/
