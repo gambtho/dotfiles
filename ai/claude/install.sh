@@ -2,7 +2,7 @@
 
 set -e
 
-source "$(dirname "$0")/../bin/common.sh"
+source "$(dirname "$0")/../../bin/common.sh"
 
 DOTFILES_ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
 
