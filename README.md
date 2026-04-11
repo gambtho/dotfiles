@@ -93,3 +93,62 @@ in `languages/mise/mise.local.toml.symlink` (symlinked to `~/.mise.local.toml`).
 - `aks-localrc.symlink`, `aks-env.zsh` — goms.io GOPRIVATE/GOPROXY settings
 - `localrc` — ssh-agent + goms.io environment
 - `script-bootstrap`, `script-install` — old install scripts (replaced by `bin/bootstrap` and `bin/install`)
+
+## AI Coding Assistants
+
+Three AI tools are configured under `ai/`, with OpenCode as the primary tool:
+
+```
+ai/
+  opencode/     # Primary — 18 agents, 9 commands, 3 skills, DCP, plugins
+  claude/       # Claude Code — thin wrapper commands over OpenCode versions
+  copilot/      # GitHub Copilot CLI — independent MCP-based implementations
+```
+
+### Setup
+
+```bash
+make ai          # install/update all AI tool configs
+make ai-check    # dry-run: show what would be linked
+```
+
+Or run individually: `ai/opencode/install.sh`, `ai/claude/install.sh`, `ai/copilot/install.sh`.
+
+AI tools are also installed during `bin/install` (Phase 9).
+
+### OpenCode Agents
+
+**Review agents** (read-only, hidden from agent list):
+`code-reviewer`, `reviewer`, `comment-analyzer`, `silent-failure-hunter`,
+`code-explorer`, `type-design-analyzer`, `cr-reviewer`,
+`react-reviewer`, `frontend-reviewer`, `ts-patterns`, `go-idioms`,
+`ruby-conventions`, `elixir-otp`, `python-reviewer`, `rust-reviewer`
+
+**Implementation agents** (can edit files):
+`implementer` (fast, Haiku-based), `react-developer`, `frontend-developer`
+
+### OpenCode Commands
+
+| Command | Description |
+|---------|-------------|
+| `/brainstorm` | Structured brainstorm -> spec -> plan -> implement workflow |
+| `/review-code` | Review changes since a commit (dispatches specialized agents) |
+| `/review-prs` | Batch-review open PRs with learning and persistent knowledge |
+| `/fix-pr` | Analyze PR comments/CI failures, produce implementation plan |
+| `/cr-review` | Run CodeRabbit CLI review with fix-and-verify loop |
+| `/simplify` | Simplify recently modified code (loads language-specific rules) |
+| `/ai-firstify` | Audit/re-engineer a project for AI-first design |
+| `/prereqs` | Check tool availability for current project |
+| `/status` | Health check: symlinks, auth, plugins, runtimes |
+
+### OpenCode Skills
+
+- **code-simplifier** — Language-specific simplification rules (7 languages)
+- **ai-firstify** — AI-first design principles with audit/bootstrap/re-engineer modes
+- **prereq-checker** — Tool availability checking with install suggestions
+
+### Per-Project Config
+
+OpenCode automatically merges project-level `opencode.json` with the global config.
+Drop an `opencode.json` in any project root to override model, permissions, or plugins
+for that project. See [OpenCode config docs](https://opencode.ai/docs/config/) for details.

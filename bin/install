@@ -121,6 +121,20 @@ setup_flatpak() {
   flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
 }
 
+# ── Phase 9: AI tools ────────────────────────────────────────────────────────
+
+setup_ai() {
+  log_info "Setting up AI tools..."
+  for installer in "$DOTFILES_ROOT/ai"/*/install.sh; do
+    [ -f "$installer" ] || continue
+    local tool_name
+    tool_name=$(basename "$(dirname "$installer")")
+    log_info "Running $tool_name install..."
+    bash "$installer" || log_warning "$tool_name install failed. Continuing..."
+  done
+  log_success "AI tools setup complete."
+}
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 main() {
@@ -151,6 +165,7 @@ main() {
   setup_neovim
   setup_fonts
   setup_work
+  setup_ai
 
   log_success "Install complete."
 }

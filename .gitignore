@@ -9,3 +9,4 @@ docs/
 platforms/macos/brewfile.lock.json
 core/git/gitconfig.local.symlink
 .dotfiles-profile
+.opencode/

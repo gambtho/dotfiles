@@ -39,6 +39,9 @@
       "rg *": "allow",
       "python *": "allow",
       "python3 *": "allow",
+      "pytest *": "allow",
+      "pip *": "allow",
+      "uv *": "allow",
       "ruby *": "allow",
       "elixir *": "allow",
       "mix *": "allow",
@@ -48,7 +51,14 @@
       "docker-compose *": "allow",
       "jq *": "allow",
       "curl *": "allow",
-      "wget *": "allow"
+      "wget *": "allow",
+      "mise *": "allow",
+      "pnpm *": "allow",
+      "yarn *": "allow",
+      "bun *": "allow",
+      "just *": "allow",
+      "cr *": "allow",
+      "coderabbit *": "allow"
     },
     "external_directory": {
       "~/.config/opencode/*": "allow",

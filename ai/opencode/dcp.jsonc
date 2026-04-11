@@ -7,12 +7,13 @@
         "mode": "range",
         "permission": "allow",
         "summaryBuffer": true,
-        "maxContextLimit": "60%",
-        "minContextLimit": "30%",
+        "maxContextLimit": "55%",
+        "minContextLimit": "25%",
         "nudgeFrequency": 3,
-        "iterationNudgeThreshold": 10,
+        "iterationNudgeThreshold": 8,
         "nudgeForce": "soft",
-        "protectUserMessages": false
+        "protectUserMessages": true,
+        "protectedUserMessageCount": 5
     },
     "strategies": {
         "deduplication": {
@@ -20,7 +21,12 @@
         },
         "purgeErrors": {
             "enabled": true,
-            "turns": 3
+            "turns": 2
+        },
+        "purgeToolResults": {
+            "enabled": true,
+            "turns": 5,
+            "excludeTools": ["read", "grep", "glob"]
         }
     }
 }
