@@ -2,6 +2,15 @@
 # https://boxstarter.org/weblauncher
 # START https://boxstarter.org/package/nr/url?https://raw.githubusercontent.com/gambtho/dotfiles/refs/heads/main/platforms/windows/boxstarter.ps1
 
+function Invoke-NativeOrThrow {
+    [CmdletBinding()]
+    Param([scriptblock]$Command)
+    & $Command
+    if ($LASTEXITCODE -ne 0) {
+        throw "Command failed with exit code $LASTEXITCODE: $Command"
+    }
+}
+
 function removeApp {
     Param ([string]$appName)
     Write-Host "[DEBUG] Attempting to remove app: $appName"
@@ -24,7 +33,7 @@ Write-Host "[DEBUG] Configuring Windows features and settings..."
 # Enable Developer Mode (allows symlink creation without UAC elevation)
 Write-Host "[DEBUG] Enabling Developer Mode..."
 try {
-    reg add "HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock" /t REG_DWORD /d 1 /f /v "AllowDevelopmentWithoutDevLicense"
+    Invoke-NativeOrThrow { reg add "HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock" /t REG_DWORD /d 1 /f /v "AllowDevelopmentWithoutDevLicense" }
     Write-Host "[INFO] Developer Mode enabled."
 } catch {
     Write-Host "[ERROR] Failed to enable Developer Mode: $_"
@@ -86,7 +95,7 @@ foreach ($app in $apps) {
     if (![String]::Join("", $listApp).Contains($app.name)) {
         Write-Host "[INFO] Installing: $($app.name)"
         try {
-            winget install -e --accept-source-agreements --accept-package-agreements --id $app.name
+            Invoke-NativeOrThrow { winget install -e --accept-source-agreements --accept-package-agreements --id $app.name }
             Write-Host "[INFO] Successfully installed: $($app.name)"
         } catch {
             Write-Host "[ERROR] Failed to install: $($app.name) - $_"
@@ -99,7 +108,7 @@ foreach ($app in $apps) {
 # Install Nerd Fonts (Hack) via choco — not available in winget
 Write-Host "[DEBUG] Installing Nerd Fonts via chocolatey..."
 try {
-    choco install -y nerd-fonts-hack
+    Invoke-NativeOrThrow { choco install -y nerd-fonts-hack }
     Write-Host "[INFO] Nerd Fonts installed."
 } catch {
     Write-Host "[ERROR] Failed to install Nerd Fonts: $_"
@@ -118,8 +127,8 @@ try {
 # Step 5: Enable WSL 2
 Write-Host "[DEBUG] Installing WSL 2..."
 try {
-    wsl --install
-    wsl --set-default-version 2
+    Invoke-NativeOrThrow { wsl --install }
+    Invoke-NativeOrThrow { wsl --set-default-version 2 }
     Write-Host "[INFO] WSL 2 installed and set as default. A reboot is required to complete setup."
 } catch {
     Write-Host "[ERROR] Failed to install WSL: $_"
@@ -130,7 +139,7 @@ Write-Host "[DEBUG] Configuring Windows Terminal default profile..."
 try {
     $wtSettingsPath = "$env:LOCALAPPDATA\Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\LocalState\settings.json"
     if (Test-Path $wtSettingsPath) {
-        $wtSettings = Get-Content $wtSettingsPath | ConvertFrom-Json
+        $wtSettings = Get-Content -Raw $wtSettingsPath | ConvertFrom-Json
         # Find the WSL profile GUID and set as default
         $wslProfile = $wtSettings.profiles.list | Where-Object { $_.name -like "*Ubuntu*" -or $_.source -like "*wsl*" } | Select-Object -First 1
         if ($wslProfile) {
