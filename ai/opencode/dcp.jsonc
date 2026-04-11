@@ -12,8 +12,7 @@
         "nudgeFrequency": 3,
         "iterationNudgeThreshold": 8,
         "nudgeForce": "soft",
-        "protectUserMessages": true,
-        "protectedUserMessageCount": 5
+        "protectUserMessages": true
     },
     "strategies": {
         "deduplication": {
@@ -22,11 +21,6 @@
         "purgeErrors": {
             "enabled": true,
             "turns": 2
-        },
-        "purgeToolResults": {
-            "enabled": true,
-            "turns": 5,
-            "excludeTools": ["read", "grep", "glob"]
         }
     }
 }

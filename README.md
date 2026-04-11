@@ -46,6 +46,35 @@ echo "personal" > ~/.dotfiles-profile   # or "work"
 which contains Microsoft/AKS-specific aliases and tooling. All `work/*.zsh` files also
 self-guard with `[[ -z "$WORK_PROFILE" ]] && return` to prevent accidental loading.
 
+## Multiple GitHub Accounts
+
+If this repo needs to use a different GitHub account than your default, use an SSH host alias.
+
+**1. Generate a key for the second account**
+```bash
+ssh-keygen -t ed25519 -C "you@example.com" -f ~/.ssh/id_ed25519_work
+```
+Add `~/.ssh/id_ed25519_work.pub` to that GitHub account under Settings → SSH keys.
+
+**2. Add a host alias to `~/.ssh/config`**
+```
+Host github-work
+    HostName github.com
+    User git
+    IdentityFile ~/.ssh/id_ed25519_work
+```
+
+**3. Update the repo remote to use the alias**
+```bash
+git remote set-url origin git@github-work:gambtho/dotfiles.git
+```
+
+**Verify:**
+```bash
+ssh -T git@github-work
+# Hi gambtho! You've successfully authenticated...
+```
+
 ## Routine Updates
 
 ```bash

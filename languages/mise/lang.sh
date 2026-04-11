@@ -41,6 +41,10 @@ install_lang() {
     install_or_update "java" "$JAVA_VERSION" "java -version 2>&1 | awk -F '\"' '/version/ {print \$2}'" "$upgrade"
     install_or_update "node" "$NODE_VERSION" "node -v | sed 's/v//'" "$upgrade"
     install_or_update "ruby" "$RUBY_VERSION" "ruby --version 2>&1 | awk '{print \$2}'" "$upgrade"
+
+    # Neovim: uses "stable" version tracking, handled separately from versioned tools
+    log_info "Installing/updating neovim via mise..."
+    mise use -g neovim@stable 2>/dev/null && log_success "Neovim updated to $(nvim --version | head -1)" || log_warning "Failed to install neovim via mise"
 }
 
 install_lang "$@"
