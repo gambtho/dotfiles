@@ -2,7 +2,7 @@
 
 set -e
 
-source "$(dirname "$0")/../bin/common.sh"
+source "$(dirname "$0")/../../bin/common.sh"
 
 log_info "Updating gems..."
 

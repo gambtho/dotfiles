@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 set -e
-source "$(dirname "$0")/../bin/common.sh"
+source "$(dirname "$0")/../../bin/common.sh"
 
 MISE_TOML="$(dirname "$0")/../mise/mise.local.toml.symlink"
 

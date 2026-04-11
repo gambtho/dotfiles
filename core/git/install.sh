@@ -2,7 +2,7 @@
 
 set -e
 
-source "$(dirname "$0")/../bin/common.sh"
+source "$(dirname "$0")/../../bin/common.sh"
 
 MARKER_FILE="$(dirname "$0")/git_updated"
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-source "$(dirname "$0")/../bin/common.sh"
+source "$(dirname "$0")/../../bin/common.sh"
 
 log_info "Setting reasonable macOS defaults..."
 

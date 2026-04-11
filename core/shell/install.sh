@@ -3,7 +3,7 @@
 set -e
 
 # Source the common functions, including detect_os and command_exists
-source "$(dirname "$0")/../bin/common.sh"
+source "$(dirname "$0")/../../bin/common.sh"
 
 # Function to set the default shell to Zsh
 set_default_shell_to_zsh() {
