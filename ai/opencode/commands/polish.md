@@ -38,7 +38,7 @@ Scan for language markers in the project root to determine the tech stack:
 | `pyproject.toml`, `setup.py`, `requirements.txt` | Python |
 | `mix.exs` | Elixir |
 | `pom.xml`, `build.gradle` | Java |
-| `Makefile`, `CMakeLists.txt` | C/C++ |
+| `Makefile`, `CMakeLists.txt` | C/C++ (no language rules — general principles only) |
 
 Convention sources (in priority order):
 1. `AGENTS.md` or `CLAUDE.md` at project root (highest priority)
@@ -80,7 +80,7 @@ Language rules loaded: go.md, typescript.md
 
 All analysis in this phase is **read-only** — no edits. Each finding is classified with:
 - **Confidence:** HIGH or MEDIUM
-- **Action type:** `auto-fix` (will be applied in Phase 4), `report` (needs human review), or `info` (observation only)
+- **Action type:** `auto-fix` (will be applied in Phase 4) or `report` (needs human review)
 
 ### 3a: Bugs & Security
 
@@ -121,7 +121,7 @@ Per-language checks (apply those relevant to the detected stack):
 
 Idiom fixes at HIGH confidence: action `auto-fix`. At MEDIUM confidence: action `report`.
 
-**Naming improvements:** If a variable, function, or parameter name is clearly misleading or non-descriptive and there is an unambiguous better name (single use site, no public API impact), classify as `auto-fix` at HIGH confidence. If the rename is ambiguous or touches multiple call sites, classify as `report`.
+**Naming improvements:** If a variable, function, or parameter name is clearly misleading or non-descriptive and there is an unambiguous better name (single use site, no public API impact, not referenced via reflection or string-based lookups), classify as `auto-fix` at HIGH confidence. If the rename is ambiguous or touches multiple call sites, classify as `report`.
 
 ### 3c: Codebase Pattern Adherence
 
@@ -224,7 +224,7 @@ Auto-fix categories:
 - Dead imports, unused variables, unreachable code → remove
 - Dead parameters → remove from function signature and all call sites
 - Dead branches (always-true/always-false conditions) → simplify to the live branch
-- Early returns to reduce nesting → restructure with guard clauses
+- Early returns to reduce nesting → restructure with guard clauses (only when no side effects or cleanup logic follows the if-block)
 - Language-specific idiom fixes → apply per loaded language rules
 - Tautological comments → remove
 - Verified vestigial TODOs → remove

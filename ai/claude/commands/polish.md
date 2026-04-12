@@ -2,7 +2,7 @@
 name: polish
 description: Analyze code changes, auto-fix high-confidence issues, and report remaining findings
 argument-hint: "[commit ref — defaults to HEAD~1] [--dry-run]"
-allowed-tools: Bash(git log:*), Bash(git diff:*), Bash(git rev-parse:*), Bash(git show:*), Bash(git status:*), Bash(git remote:*), Bash(git branch:*), Read, Write, Edit, Glob, Grep, Task, Agent, Skill
+allowed-tools: Bash(git log:*), Bash(git diff:*), Bash(git rev-parse:*), Bash(git show:*), Bash(git status:*), Bash(git remote:*), Bash(git branch:*), Read, Edit, Glob, Grep, Task, Agent, Skill
 ---
 
 # Polish — Review & Fix
@@ -43,7 +43,7 @@ Get the full diff and file list. Read full current versions of modified/added fi
 
 ### Phase 3: Analyze
 
-Classify each finding with confidence (HIGH/MEDIUM) and action type (auto-fix/report/info).
+Classify each finding with confidence (HIGH/MEDIUM) and action type (auto-fix/report).
 
 - **3a: Bugs & Security** — logic errors, null safety, race conditions, injection, hardcoded secrets, auth issues
 - **3b: Idiomatic Code** — language-specific idiom checks informed by loaded language rules
