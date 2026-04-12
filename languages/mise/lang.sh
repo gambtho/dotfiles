@@ -45,6 +45,10 @@ install_lang() {
     # Neovim: uses "stable" version tracking, handled separately from versioned tools
     log_info "Installing/updating neovim via mise..."
     mise use -g neovim@stable 2>/dev/null && log_success "Neovim updated to $(nvim --version | head -1)" || log_warning "Failed to install neovim via mise"
+
+    # tree-sitter CLI: required by nvim-treesitter (main branch) to build parsers
+    log_info "Installing/updating tree-sitter-cli via mise..."
+    mise use -g "npm:tree-sitter-cli@latest" >/dev/null 2>&1 && log_success "tree-sitter-cli updated to $(tree-sitter --version 2>/dev/null | awk '{print $2}')" || log_warning "Failed to install tree-sitter-cli via mise"
 }
 
 install_lang "$@"

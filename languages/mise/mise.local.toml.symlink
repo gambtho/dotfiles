@@ -4,7 +4,8 @@ python = "3.14.3"
 java = "25.0.2"
 node = "25.6.0"
 ruby = "4.0.1"
-neovim = "stable"
+neovim = "0.11.7" # pinned: 0.12.x breaks Shift+digit in VSCode terminal (neovim/neovim#38651)
+"npm:tree-sitter-cli" = "latest"
 
 # [env]
 # _.python.venv = { path = ".venv", create = true } # create the venv if it doesn't exist
