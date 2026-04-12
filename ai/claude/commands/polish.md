@@ -31,10 +31,11 @@ Follow the complete polish workflow with these phases:
 3. Resolve the target commit (use `HEAD~1` if not specified). If resolution fails, **STOP**.
 4. Run `git log --oneline BASE_COMMIT..HEAD` and `git diff --stat BASE_COMMIT..HEAD`.
 5. If there are no changes, print "No changes found" and **STOP**.
+6. Print mode: "Mode: **polish** (analyze + fix)" or "Mode: **dry-run** (analyze only)" based on the flag.
 
 ### Phase 1: Detect Project Stack & Conventions
 
-Scan for language markers (`package.json`, `go.mod`, `Cargo.toml`, etc.), convention sources (`CLAUDE.md`, `AGENTS.md`, `CONTRIBUTING.md`, linter configs), and sample existing codebase patterns. Load matching language rules from the code-simplifier skill's `rules/` directory.
+Scan for language markers (`package.json`, `go.mod`, `Cargo.toml`, etc.), convention sources (`CLAUDE.md`, `AGENTS.md`, `CONTRIBUTING.md`, linter configs), and sample existing codebase patterns. Use the `Skill` tool to load `code-simplifier`, then read matching language rule files from its `rules/` directory for detected languages.
 
 ### Phase 2: Gather the Diff
 
