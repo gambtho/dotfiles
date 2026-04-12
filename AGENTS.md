@@ -12,7 +12,7 @@ ai/
     opencode.json          # Main config: model, permissions, plugins
     dcp.jsonc              # Dynamic context pruning config
     agents/                # 16+ custom subagents (review + implementation)
-    commands/              # Slash commands (brainstorm, fix-pr, review-code, etc.)
+    commands/              # Slash commands (brainstorm, fix-pr, polish, etc.)
     skills/                # Custom skills (code-simplifier, ai-firstify, prereq-checker)
     .opencode/             # Plugin dependencies (package.json)
     install.sh             # Symlink setup script (--check for dry-run)

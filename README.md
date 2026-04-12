@@ -161,11 +161,10 @@ AI tools are also installed during `bin/install` (Phase 9).
 | Command | Description |
 |---------|-------------|
 | `/brainstorm` | Structured brainstorm -> spec -> plan -> implement workflow |
-| `/review-code` | Review changes since a commit (dispatches specialized agents) |
+| `/polish` | Review and simplify changes; dispatches specialized agents for feedback |
 | `/review-prs` | Batch-review open PRs with learning and persistent knowledge |
 | `/fix-pr` | Analyze PR comments/CI failures, produce implementation plan |
 | `/cr-review` | Run CodeRabbit CLI review with fix-and-verify loop |
-| `/simplify` | Simplify recently modified code (loads language-specific rules) |
 | `/ai-firstify` | Audit/re-engineer a project for AI-first design |
 | `/prereqs` | Check tool availability for current project |
 | `/status` | Health check: symlinks, auth, plugins, runtimes |
