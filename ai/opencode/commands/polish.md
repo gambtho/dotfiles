@@ -9,8 +9,9 @@ You are performing a thorough analysis of all changes since a specified commit, 
 **Arguments**: $ARGUMENTS (default: `HEAD~1` if not specified)
 
 Parse arguments:
-- If `--dry-run` is present, set DRY_RUN=true and remove it from the commit reference.
+- If `--dry-run` is present (in any position), set DRY_RUN=true and remove it from the commit reference.
 - Remaining argument is the commit reference (default: `HEAD~1`).
+- Examples: `/polish`, `/polish HEAD~5`, `/polish abc123 --dry-run`, `/polish --dry-run HEAD~3`
 
 ---
 
@@ -45,7 +46,7 @@ Convention sources (in priority order):
 3. `CONTRIBUTING.md`, `STYLE.md`, or similar docs
 4. Patterns sampled from surrounding (unchanged) files
 
-**Load language rules** from the code-simplifier skill. Use the `skill` tool to load the `code-simplifier` skill. Map file extensions from the diff to language rule files:
+**Load language rules** for the detected languages. Map file extensions from the diff to language rule files and read them directly from `~/.config/opencode/skills/code-simplifier/rules/`:
 
 - `.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, `.cjs` → `rules/typescript.md`
 - `.py`, `.pyi` → `rules/python.md`
@@ -55,7 +56,7 @@ Convention sources (in priority order):
 - `.rs` → `rules/rust.md`
 - `.java` → `rules/java.md`
 
-Only load rules for languages actually present in the changed files. Read each matching rule file from `~/.config/opencode/skills/code-simplifier/rules/`.
+Only load rules for languages actually present in the changed files.
 
 Print detected stack summary:
 ```
@@ -71,7 +72,7 @@ Language rules loaded: go.md, typescript.md
 1. Run `git diff BASE_COMMIT..HEAD` to get the full diff.
 2. Run `git diff --name-status BASE_COMMIT..HEAD` to get the file list with status (A/M/D/R).
 3. For each added or modified file, read the full current file contents (not just the diff hunks) — context is essential for dead code analysis and pattern detection.
-4. For large diffs (>50 files), prioritize source code files. Skip generated files (`*.lock`, `*.min.*`, `dist/`, `build/`, `vendor/`, `node_modules/`).
+4. For large diffs (>50 files or >3000 lines), prioritize source code files. Skip generated files (`*.lock`, `*.min.*`, `dist/`, `build/`, `vendor/`, `node_modules/`).
 
 ---
 
@@ -119,6 +120,8 @@ Per-language checks (apply those relevant to the detected stack):
 **Java:** Try-with-resources, `Optional` over null, streams over manual loops, `var` for local type inference, records for data classes.
 
 Idiom fixes at HIGH confidence: action `auto-fix`. At MEDIUM confidence: action `report`.
+
+**Naming improvements:** If a variable, function, or parameter name is clearly misleading or non-descriptive and there is an unambiguous better name (single use site, no public API impact), classify as `auto-fix` at HIGH confidence. If the rename is ambiguous or touches multiple call sites, classify as `report`.
 
 ### 3c: Codebase Pattern Adherence
 
@@ -178,8 +181,8 @@ Tautological comments at HIGH confidence: action `auto-fix`. All others: action 
 
 Perform call-chain analysis beyond simple reachability. For each category, use Grep/Glob to search the full codebase — not just the diff — to verify liveness.
 
-- **Dead exports** — functions, types, or constants exported but never imported anywhere in the codebase. Use `grep` to search for import references across the project. Action: `report` (might be part of a public API).
-- **Dead parameters** — function parameters that are never read within the function body. Action: `auto-fix` at HIGH confidence.
+- **Dead exports** — functions, types, or constants exported but never imported anywhere in the codebase. Use Grep to search for import references across the project. Action: `report` (might be part of a public API).
+- **Dead parameters** — function parameters that are never read within the function body. Action: `auto-fix` at HIGH confidence. **Exclude** parameters required by interface/trait contracts, callback signatures, or public API surfaces — classify those as `report` instead.
 - **Dead branches** — conditional branches where the condition is always true or always false based on surrounding code or control flow. Action: `auto-fix` at HIGH confidence.
 - **Orphaned abstractions** — interfaces, traits, or protocols implemented by exactly one type with no indication of testing or extension intent. Action: `report`.
 - **Stale feature flags** — feature flags that are always on or always off with no toggle path in the codebase. Action: `report`.
@@ -196,8 +199,11 @@ Dispatch the following specialized subagents **in parallel** using the `task` to
 4. **type-design-analyzer** (`subagent_type: "type-design-analyzer"`) — reviews type/interface/struct design
 
 Each subagent receives:
+- The list of changed files and their paths
 - The full diff from Phase 2
+- The base commit and branch context
 - The detected stack and conventions from Phase 1
+- A brief description of what the changes do (from Phase 3 analysis)
 - Instructions to format findings as: `[Severity|Confidence] file:line — description`
 
 Only dispatch agents relevant to the changes (e.g., skip type-design-analyzer if no new types/interfaces are introduced).
@@ -275,3 +281,14 @@ Same format, but:
 - If there are zero fixed items, omit the FIXED section.
 - If there are zero review items, omit the NEEDS REVIEW section and congratulate briefly.
 - Include the subagent attribution in parentheses for findings that originated from a subagent: `(via code-reviewer)`, `(via silent-failure-hunter)`, etc.
+
+---
+
+## Important Notes
+
+- **Behavior preservation is paramount.** Verify all auto-fixes are behavior-preserving. If unsure whether a change alters behavior, classify it as `report` rather than `auto-fix`.
+- Focus on issues a senior engineer would flag during code review. Skip pedantic nitpicks that formatters and linters handle.
+- Always ground your feedback in the actual codebase patterns — "the rest of the codebase does X, but this code does Y" is more useful than "best practice is X."
+- When flagging over-engineering, be specific about the simpler alternative — don't just say "this is too complex."
+- If the changes are trivially correct (e.g., fixing a typo, updating a version), say so briefly and don't force findings where there are none.
+- When in doubt between `auto-fix` and `report`, choose `report`. False positives in auto-fix erode trust.
