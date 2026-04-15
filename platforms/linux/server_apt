@@ -2,6 +2,7 @@ build-essential
 ca-certificates
 curl
 fonts-powerline
+gh
 git
 gnupg
 gpg
