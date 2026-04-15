@@ -7,7 +7,7 @@ source "$(dirname "$0")/common.sh"
 cd "$(dirname "$0")/.."
 DOTFILES_ROOT=$(pwd -P)
 
-sudo -v
+# sudo -v  # disabled: prompts on passwordless accounts; NOPASSWD sudoers covers later calls
 
 setup_gitconfig() {
   if ! [ -f "$DOTFILES_ROOT/core/git/gitconfig.local.symlink" ]; then
@@ -36,7 +36,8 @@ setup_profile() {
   log_info "Select a profile:"
   log_info "  1) personal"
   log_info "  2) work"
-  read -e -p "Enter choice [1/2]: " profile_choice
+  log_info "  3) server  (headless/VPS, no GUI)"
+  read -e -p "Enter choice [1/2/3]: " profile_choice
 
   case "$profile_choice" in
     1|personal)
@@ -46,6 +47,10 @@ setup_profile() {
     2|work)
       echo "work" > "$HOME/.dotfiles-profile"
       log_success "Profile set to: work"
+      ;;
+    3|server)
+      echo "server" > "$HOME/.dotfiles-profile"
+      log_success "Profile set to: server"
       ;;
     *)
       echo "personal" > "$HOME/.dotfiles-profile"
@@ -145,7 +150,7 @@ linux_prep() {
   log_info "Preparing Linux environment"
 
   sudo apt update
-  sudo apt-get install -y ca-certificates curl gnupg flatpak build-essential \
+  sudo apt-get install -y ca-certificates curl gnupg build-essential \
     libssl-dev libreadline-dev zlib1g-dev libyaml-dev
 
   sudo install -m 0755 -d /etc/apt/keyrings

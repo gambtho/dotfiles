@@ -69,7 +69,11 @@ check_unsaved_apt_packages() {
 
 install_languages() {
   log_info "Installing language runtimes via mise..."
-  bash "$DOTFILES_ROOT/languages/mise/lang.sh"
+  if [[ "$PROFILE" == "server" ]]; then
+    bash "$DOTFILES_ROOT/languages/mise/lang.sh" --langs "node python"
+  else
+    bash "$DOTFILES_ROOT/languages/mise/lang.sh"
+  fi
 }
 
 # ── Phase 3: Shell setup ──────────────────────────────────────────────────────
@@ -145,9 +149,14 @@ main() {
       update_homebrew
       ;;
     Ubuntu)
-      install_apt_packages "ubuntu_apt"
-      check_unsaved_apt_packages "ubuntu_apt"
-      setup_flatpak
+      if [[ "$PROFILE" == "server" ]]; then
+        install_apt_packages "server_apt"
+        check_unsaved_apt_packages "server_apt"
+      else
+        install_apt_packages "ubuntu_apt"
+        check_unsaved_apt_packages "ubuntu_apt"
+        setup_flatpak
+      fi
       ;;
     WSL)
       install_apt_packages "wsl_apt"
@@ -163,7 +172,9 @@ main() {
   setup_git
   install_languages
   setup_neovim
-  setup_fonts
+  if [[ "$PROFILE" != "server" ]]; then
+    setup_fonts
+  fi
   setup_work
   setup_ai
 
