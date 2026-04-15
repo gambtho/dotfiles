@@ -7,14 +7,14 @@ source "$(dirname "$0")/../../bin/common.sh"
 DOTFILES_ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
 
 install_opencode() {
-    log_info "Installing OpenCode..."
-    npm install -g opencode-ai
+    log_info "Installing OpenCode (native)..."
+    curl -fsSL https://opencode.ai/install | bash
     log_success "OpenCode installed."
 }
 
 update_opencode() {
-    log_info "Updating OpenCode..."
-    npm update -g opencode-ai
+    log_info "Updating OpenCode (native)..."
+    curl -fsSL https://opencode.ai/install | bash
     log_success "OpenCode updated."
 }
 
@@ -92,19 +92,19 @@ main() {
 
     if [[ "$check_only" == true ]]; then
         if command_exists opencode; then
-            log_info "[dry-run] OpenCode is installed, would update"
+            log_info "[dry-run] OpenCode is installed, would update via native installer"
         else
-            log_info "[dry-run] OpenCode not installed, would install via npm"
+            log_info "[dry-run] OpenCode not installed, would install via native installer"
         fi
     else
         if command_exists opencode; then
             log_info "OpenCode is already installed."
             update_opencode
         else
-            if command_exists npm; then
+            if command_exists curl; then
                 install_opencode
             else
-                log_warning "npm not found. Install Node.js/npm first, then re-run."
+                log_warning "curl not found. Install curl first, then re-run."
                 return 1
             fi
         fi

@@ -17,30 +17,33 @@ install_or_update() {
   # Load mise environment quietly
   setup_mise_env
 
+  latest_version=$(mise ls-remote "$lang" 2>/dev/null | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1)
+  if [[ -z "$latest_version" ]]; then
+    log_error "Could not determine the latest version for $lang."
+  fi
+  log_debug "Latest version identified for $lang: $latest_version"
+
+  # Resolve "latest" to a concrete version so equality checks work.
+  local target_version=$version
+  if [ "$version" = "latest" ]; then
+    target_version=$latest_version
+  fi
+
   if ! command_exists "$lang"; then
     log_info "$lang not installed. Installing version $version."
     mise use -g "$lang@$version" || log_error "Failed to install $lang@$version"
   else
     current_version=$(eval "$current_version_cmd" 2>/dev/null || echo "none")
-    # log_info "Current version of $lang: $current_version"
 
-    latest_version=$(mise ls-remote "$lang" 2>/dev/null | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1)
-
-    if [[ -z "$latest_version" ]]; then
-      log_error "Could not determine the latest version for $lang."
-    fi
-
-    log_debug "Latest version identified for $lang: $latest_version"
-
-    if [ "$current_version" != "$version" ] || [ "$force_upgrade" == "true" ]; then
+    if [ "$current_version" != "$target_version" ] || [ "$force_upgrade" == "true" ]; then
       log_info "Updating $lang to version $version"
       mise use -g "$lang@$version" || log_error "Failed to update $lang@$version"
       setup_mise_env
       new_version=$(eval "$current_version_cmd" || echo "none")
-      if [ "$new_version" != "$version" ]; then
-        log_error "$lang update failed. Expected $version, but got $new_version."
+      if [ "$new_version" != "$target_version" ]; then
+        log_error "$lang update failed. Expected $target_version, but got $new_version."
       else
-        log_success "$lang successfully updated to $version."
+        log_success "$lang successfully updated to $new_version."
       fi
     elif [ "$latest_version" != "$current_version" ]; then
       log_warning "$lang version $current_version is outdated. Latest is $latest_version."

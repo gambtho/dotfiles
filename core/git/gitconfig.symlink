@@ -36,3 +36,6 @@
 	rebase = false
 [init]
 	defaultBranch = main
+[user]
+	email = thomasgamble2@gmail.com
+	name = Tom
