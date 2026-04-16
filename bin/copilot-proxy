@@ -1,0 +1,139 @@
+#!/usr/bin/env bash
+# Manage the local LiteLLM proxy that fronts GitHub Copilot as an Anthropic API.
+# Usage: copilot-proxy [start|stop|restart|status|env|logs]
+#   (no args → ensure running + print env)
+#
+# ─── One-time setup (not done by this script) ─────────────────────────────────
+#
+# 1. Install LiteLLM (needs Python ≤ 3.13 — orjson doesn't build on 3.14 yet):
+#      uv tool install --python 3.13 'litellm[proxy]'
+#      litellm --version     # → LiteLLM: Current Version = 1.83.8+
+#
+# 2. Write ~/.config/litellm/config.yaml:
+#      model_list:
+#        - model_name: claude-opus-4-6
+#          litellm_params: { model: github_copilot/claude-opus-4.6 }
+#        - model_name: claude-opus-4-6-1m
+#          litellm_params: { model: github_copilot/claude-opus-4.6-1m }
+#        - model_name: claude-sonnet-4-6
+#          litellm_params: { model: github_copilot/claude-sonnet-4.6 }
+#        - model_name: claude-haiku-4-5
+#          litellm_params: { model: github_copilot/claude-haiku-4.5 }
+#      litellm_settings:
+#        disable_copilot_system_to_assistant: true   # keep system prompts as system
+#        drop_params: true                           # drop thinking/context_management
+#      general_settings:
+#        master_key: sk-litellm-local-dev-key-change-me
+#
+# 3. Authorize GitHub Copilot via device flow (runs the OAuth once, caches tokens):
+#      ~/.local/share/uv/tools/litellm/bin/python -c "
+#      from litellm.llms.github_copilot.authenticator import Authenticator
+#      a = Authenticator(); print(a.get_access_token()[:8]); print(a.get_api_key()[:8])"
+#    It prints a github.com/login/device URL and a code — open, enter, authorize.
+#    Tokens land in ~/.config/litellm/github_copilot/ and auto-refresh thereafter.
+#
+# 4. Discover available Copilot models (optional — the config above is current):
+#      API_KEY=$(jq -r .token ~/.config/litellm/github_copilot/api-key.json)
+#      API_BASE=$(jq -r .endpoints.api ~/.config/litellm/github_copilot/api-key.json)
+#      curl -s -H "Authorization: Bearer $API_KEY" \
+#           -H "Copilot-Integration-Id: vscode-chat" \
+#           -H "Editor-Version: vscode/1.95.0" \
+#           "$API_BASE/models" | jq -r '.data[] | select(.id|test("claude";"i")) | .id'
+#
+# Full README: ~/workspace/tmp/README.md
+# Known limits: no prompt caching, no extended thinking, tool-call translation
+# is imperfect for complex schemas. Subject to Copilot per-user quotas.
+# ──────────────────────────────────────────────────────────────────────────────
+
+set -euo pipefail
+
+CONFIG="$HOME/.config/litellm/config.yaml"
+PORT=4000
+LOG="$HOME/.config/litellm/proxy.log"
+PIDFILE="$HOME/.config/litellm/proxy.pid"
+HEALTH="http://127.0.0.1:${PORT}/health/liveliness"
+
+master_key() {
+  awk '/^[[:space:]]*master_key:/ {print $2; exit}' "$CONFIG"
+}
+
+is_up() { curl -sf --max-time 2 "$HEALTH" >/dev/null 2>&1; }
+
+pid_of() {
+  [[ -f "$PIDFILE" ]] || return 1
+  local pid; pid=$(cat "$PIDFILE")
+  [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null && echo "$pid"
+}
+
+start() {
+  if is_up; then echo "proxy already running on :${PORT}"; return 0; fi
+  echo -n "starting proxy (cold start can take 2-3 min) "
+  nohup litellm --config "$CONFIG" --port "$PORT" >"$LOG" 2>&1 &
+  echo $! >"$PIDFILE"
+  disown || true
+  local deadline=$((SECONDS + 240))
+  until is_up; do
+    if ! kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+      echo " DIED"; tail -30 "$LOG" >&2; return 1
+    fi
+    if (( SECONDS > deadline )); then
+      echo " TIMEOUT after 90s — check $LOG" >&2; return 1
+    fi
+    echo -n "."; sleep 2
+  done
+  echo " UP (pid $(cat "$PIDFILE"))"
+}
+
+stop() {
+  local pid; pid=$(pid_of || true)
+  if [[ -n "${pid:-}" ]]; then
+    kill "$pid" 2>/dev/null || true
+    echo -n "stopping pid $pid "
+  else
+    pkill -f "litellm --config $CONFIG" 2>/dev/null || true
+    echo -n "no tracked pid; sent pkill "
+  fi
+  rm -f "$PIDFILE"
+  local deadline=$((SECONDS + 15))
+  while is_up; do
+    if (( SECONDS > deadline )); then
+      echo " still up — force killing"
+      pkill -9 -f "litellm --config $CONFIG" 2>/dev/null || true
+      sleep 1; break
+    fi
+    echo -n "."; sleep 1
+  done
+  echo " DOWN"
+}
+
+status() {
+  if is_up; then
+    echo "UP   port=${PORT} pid=$(pid_of || echo unknown)"
+  else
+    echo "DOWN"
+    return 1
+  fi
+}
+
+print_env() {
+  local key; key=$(master_key)
+  cat <<EOF
+# Paste into the shell where you run \`claude\`:
+export ANTHROPIC_BASE_URL="http://127.0.0.1:${PORT}"
+export ANTHROPIC_AUTH_TOKEN="${key}"
+export ANTHROPIC_MODEL="claude-opus-4-6"
+# Optional: one-shot for this command only →
+#   ANTHROPIC_BASE_URL=http://127.0.0.1:${PORT} ANTHROPIC_AUTH_TOKEN=${key} claude
+EOF
+}
+
+case "${1:-default}" in
+  start)   start ;;
+  stop)    stop ;;
+  restart) stop; start ;;
+  status)  status ;;
+  env)     print_env ;;
+  logs)    tail -n "${2:-50}" -f "$LOG" ;;
+  default) start; echo; print_env ;;
+  *) echo "usage: $0 [start|stop|restart|status|env|logs]" >&2; exit 2 ;;
+esac
