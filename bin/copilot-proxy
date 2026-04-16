@@ -40,7 +40,6 @@
 #           -H "Editor-Version: vscode/1.95.0" \
 #           "$API_BASE/models" | jq -r '.data[] | select(.id|test("claude";"i")) | .id'
 #
-# Full README: ~/workspace/tmp/README.md
 # Known limits: no prompt caching, no extended thinking, tool-call translation
 # is imperfect for complex schemas. Subject to Copilot per-user quotas.
 # ──────────────────────────────────────────────────────────────────────────────
@@ -67,6 +66,7 @@ pid_of() {
 
 start() {
   if is_up; then echo "proxy already running on :${PORT}"; return 0; fi
+  mkdir -p "$(dirname "$LOG")"
   echo -n "starting proxy (cold start can take 2-3 min) "
   nohup litellm --config "$CONFIG" --port "$PORT" >"$LOG" 2>&1 &
   echo $! >"$PIDFILE"
@@ -77,7 +77,7 @@ start() {
       echo " DIED"; tail -30 "$LOG" >&2; return 1
     fi
     if (( SECONDS > deadline )); then
-      echo " TIMEOUT after 90s — check $LOG" >&2; return 1
+      echo " TIMEOUT after 240s — check $LOG" >&2; return 1
     fi
     echo -n "."; sleep 2
   done

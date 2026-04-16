@@ -26,6 +26,10 @@ link_config() {
         local backup="$dst.backup.$(date +%Y%m%d%H%M%S)"
         log_info "Backing up existing config.yaml -> $backup"
         mv "$dst" "$backup"
+    elif [ -e "$dst" ]; then
+        local backup="$dst.backup.$(date +%Y%m%d%H%M%S)"
+        log_info "Backing up existing config.yaml (non-regular) -> $backup"
+        mv "$dst" "$backup"
     fi
 
     ln -s "$src" "$dst"
