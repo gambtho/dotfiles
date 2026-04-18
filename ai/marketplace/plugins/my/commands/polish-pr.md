@@ -2,7 +2,7 @@
 name: polish-pr
 description: Check out a PR into a worktree, run /polish --fix, commit the auto-fixes, prompt before pushing to the PR branch, and summarize fixed vs deferred findings
 argument-hint: "<PR URL or number>"
-allowed-tools: Bash(gh pr view:*), Bash(gh pr checkout:*), Bash(gh auth:*), Bash(gh repo view:*), Bash(gh api:*), Bash(git worktree:*), Bash(git fetch:*), Bash(git merge-base:*), Bash(git log:*), Bash(git diff:*), Bash(git status:*), Bash(git rev-parse:*), Bash(git remote:*), Bash(git add:*), Bash(git commit:*), Bash(git push:*), Bash(git branch:*), Bash(git show:*), Bash(cd:*), Bash(mkdir:*), Bash(rm -rf /tmp/polish-pr-*), Bash(ls:*), Bash(date:*), Read, Edit, Glob, Grep, Agent, Skill
+allowed-tools: Bash(gh pr view:*), Bash(gh pr checkout:*), Bash(gh auth:*), Bash(gh repo view:*), Bash(gh api:*), Bash(git worktree:*), Bash(git fetch:*), Bash(git pull:*), Bash(git merge-base:*), Bash(git log:*), Bash(git diff:*), Bash(git status:*), Bash(git rev-parse:*), Bash(git remote:*), Bash(git add:*), Bash(git commit:*), Bash(git push:*), Bash(git branch:*), Bash(git show:*), Bash(cd:*), Bash(mkdir:*), Bash(rm -rf /tmp/polish-pr-*), Bash(ls:*), Bash(date:*), Read, Edit, Glob, Grep, Agent, Skill
 ---
 
 # Polish PR — Auto-Fix a PR from the Outside
@@ -11,12 +11,13 @@ allowed-tools: Bash(gh pr view:*), Bash(gh pr checkout:*), Bash(gh auth:*), Bash
 
 Given a PR, this command:
 
-1. Checks it out into a disposable worktree under `/tmp/polish-pr-*`
+1. Reuses an existing worktree for this PR if one is available under `/tmp/polish-pr-*`; otherwise checks the PR out into a fresh worktree
 2. Runs `/polish --fix` against the full PR diff (merge-base..HEAD)
 3. Commits whatever `/polish` auto-fixed
 4. Prompts for confirmation, then pushes back to the PR branch
 5. Prints a summary of what was fixed vs. what was deferred (the NEEDS REVIEW items `/polish` is not safe to auto-fix)
-6. Removes the worktree
+6. Offers to apply any deferred items interactively (preserves the worktree until the user says otherwise)
+7. Removes the worktree only when the work is safe on the remote or the user opts in
 
 ## What gets fixed vs deferred
 
@@ -28,7 +29,7 @@ Bugs, security issues, over-engineering, naming, pattern-adherence, and anything
 
 ## Phase 0: Validate & parse the argument
 
-**Narration rule for this command**: keep the running narration minimal. Do not announce each Phase. The two moments that warrant a one-line update are (a) right after Phase 0d when the PR is identified, and (b) right before Phase 4d when the push confirmation prompt is shown. Everything else speaks for itself via tool output.
+**Narration rule for this command**: keep the running narration minimal. Do not announce each Phase. The moments that warrant a one-line update are (a) right after Phase 0d when the PR is identified, (b) in Phase 1a if an existing worktree is found (so the user knows we're not re-checking-out), and (c) right before Phase 4d when the push confirmation prompt is shown. Everything else speaks for itself via tool output.
 
 ### 0a: Require the argument
 
@@ -74,15 +75,55 @@ Print: **"Polishing PR #{PR_NUMBER}: {title}"**.
 
 ## Phase 1: Set up an isolated worktree
 
-### 1a: Clean leftovers from failed prior runs of THIS PR
+### 1a: Look for an existing worktree for this PR and reuse it if possible
 
-Only clean worktrees for the **same PR**. Other PRs may be actively polished in another terminal — do not touch them.
+Only consider worktrees for the **same PR**. Other PRs may be actively polished in another terminal — do not touch them.
 
 ```
-ls -d /tmp/polish-pr-{OWNER}-{REPO}-{PR_NUMBER}-* 2>/dev/null
+ls -td /tmp/polish-pr-{OWNER}-{REPO}-{PR_NUMBER}-* 2>/dev/null
 ```
 
-For each match, `git worktree remove --force <dir> 2>/dev/null` then `rm -rf <dir>`. If any were found, print: `"Removed {N} stale worktree(s) from prior runs of /polish-pr on PR #{PR_NUMBER}."` If none, say nothing — do not narrate a no-op.
+For each match (newest first):
+- If `git -C <dir> rev-parse HEAD 2>/dev/null` fails, it's not a valid worktree anymore — `rm -rf <dir>` (and `git worktree prune` at the end of the sweep). Continue to the next match.
+- If the path doesn't show up in `git worktree list --porcelain`, it's orphaned — `rm -rf <dir>` and continue.
+
+After the sweep, if at least one valid worktree remains, pick the newest and inspect its state:
+
+```
+WT_CANDIDATE=<newest valid match>
+HEAD_SHA=$(git -C ${WT_CANDIDATE} rev-parse --short HEAD)
+BRANCH=$(git -C ${WT_CANDIDATE} rev-parse --abbrev-ref HEAD)
+DIRTY=$(git -C ${WT_CANDIDATE} status --porcelain)
+UNPUSHED=$(git -C ${WT_CANDIDATE} log --oneline @{upstream}..HEAD 2>/dev/null)
+```
+
+Print the candidate's state:
+
+```
+Found existing worktree for PR #{PR_NUMBER}:
+  Path:       {WT_CANDIDATE}
+  Branch:     {BRANCH} @ {HEAD_SHA}
+  Dirty:      {yes/no — list files if yes, up to 5}
+  Unpushed:   {commit list if any, else "none"}
+```
+
+Decision:
+
+- **Clean AND HEAD matches the PR's current `headRefOid`**: print `"Reusing existing worktree."` and set `WT=${WT_CANDIDATE}`. Skip to Phase 1b.
+- **Dirty OR has unpushed commits OR HEAD differs from `headRefOid`**: the prior session left real state. Prompt:
+  ```
+  Reuse this worktree? [Y/n/fresh]
+    - "y" (default): continue in the existing worktree, preserving changes
+    - "n": abort (leave everything as-is)
+    - "fresh": remove this worktree and start a new one (destroys uncommitted work!)
+  ```
+  - On `y` or empty → set `WT=${WT_CANDIDATE}`; skip to Phase 1b.
+  - On `n` → print the worktree path and **STOP** (user handles it manually).
+  - On `fresh` → `git worktree remove ${WT_CANDIDATE} --force`, `rm -rf ${WT_CANDIDATE}`, then fall through to 1c to create a new one.
+
+If any additional (older) valid worktrees remain after the candidate is selected, offer to clean them up in a single confirm: `"Also remove {N} older worktree(s) for this PR? [y/N]"`. Default no.
+
+If **no** valid worktrees were found at all, fall through to 1c.
 
 ### 1b: Fetch latest refs
 
@@ -90,7 +131,9 @@ For each match, `git worktree remove --force <dir> 2>/dev/null` then `rm -rf <di
 git fetch origin
 ```
 
-### 1c: Create the worktree & check out the PR
+Skip this if we're reusing a dirty worktree and fetching would overwrite a ref the user is mid-edit on — actually `git fetch origin` only touches remote-tracking refs, never the working tree, so it's always safe. Run it.
+
+### 1c: Create a new worktree (only if no reusable one exists)
 
 ```
 ts=$(date +%s)
@@ -107,6 +150,14 @@ If **any** step fails:
 - Print the failure reason and **STOP**.
 
 Record `WT` so Phase 6 can always clean up.
+
+### 1d: If reusing, refresh the branch
+
+If we entered Phase 1 via reuse (not 1c) AND the candidate was clean AND its HEAD is an ancestor of the PR's current `headRefOid`, run:
+```
+cd ${WT} && git pull --ff-only
+```
+This picks up any commits pushed to the PR after the prior `/polish-pr` run. **Skip `git pull` if the worktree is dirty or has unpushed commits** — the user's work comes first.
 
 ---
 
@@ -244,10 +295,12 @@ PR: {url}
 
 Reuse the exact grouping, numbering, and `[Severity|Confidence]` tags that `/polish` produced in its NEEDS REVIEW section — do not rewrite or re-classify. Just relabel the section as "DEFERRED FOR HUMAN REVIEW."
 
-Special cases:
-- **Nothing fixed, nothing deferred** → "PR is clean per `/polish`. No changes needed." Phase 6 removes the worktree (no work to lose).
-- **Nothing fixed, items deferred** → omit `FIXED & PUSHED`, keep `DEFERRED`. Phase 6 removes the worktree (nothing was committed).
-- **Items fixed, nothing deferred** → omit `DEFERRED`. Phase 6 handles per push outcome.
+**Do not print a worktree status line here.** Phase 6 owns the final worktree decision, after Phase 5.5 has a chance to act on deferred items.
+
+Special cases (summary-only; worktree lifecycle is decided in Phase 6):
+- **Nothing fixed, nothing deferred** → "PR is clean per `/polish`. No changes needed." Phase 5.5 is skipped; Phase 6 removes the worktree.
+- **Nothing fixed, items deferred** → omit `FIXED & PUSHED`, keep `DEFERRED`. Phase 5.5 then prompts the user — **do not remove the worktree before that prompt**.
+- **Items fixed, nothing deferred** → omit `DEFERRED`. Phase 5.5 is skipped; Phase 6 handles per push outcome.
 - **Push declined** (`PUSH_DECLINED`) → title: `/polish-pr — PR #{N} (NOT PUSHED — worktree kept)`. Include:
   - Committed SHA: `{SHORT_SHA}`
   - Worktree path: `{WT}`
@@ -258,30 +311,100 @@ Special cases:
     To discard:
         git worktree remove {WT} --force
     ```
-  Phase 6 **skips cleanup** in this case.
-- **Push failed** → title: `/polish-pr — PR #{N} (PUSH FAILED — worktree kept)`. Include the error, the committed SHA, the worktree path, and the same "push manually / discard" block. Phase 6 **skips cleanup**.
+- **Push failed** → title: `/polish-pr — PR #{N} (PUSH FAILED — worktree kept)`. Include the error, the committed SHA, the worktree path, and the same "push manually / discard" block.
+
+---
+
+## Phase 5.5: Interactive follow-up on deferred items
+
+**Skip this phase entirely if there are zero deferred items (`M == 0`).**
+
+The worktree is already on the PR branch — it is the obvious place to apply any deferred finding the user wants. Do not destroy it without asking.
+
+After printing the Phase 5 summary, prompt:
+
+```
+{M} deferred item(s) are listed above. Apply any of them now in the worktree?
+  - Numbers (e.g. "1,3,4") — apply those findings
+  - "all"  — apply every finding that has a concrete Suggested fix
+  - "none" — skip; remove the worktree
+  - "keep" — skip but keep the worktree at {WT} for manual follow-up
+
+Your choice: 
+```
+
+Behavior by response:
+
+### Numbers / "all" → fix loop
+
+1. For each selected deferred item:
+   - If it has a concrete `Suggested fix:` in its NEEDS REVIEW entry, apply that fix via the `Edit` tool inside `${WT}`.
+   - If the fix requires a larger refactor or isn't concretely specified, **skip it** and note why (e.g. "#4 skipped — suggested fix is vague, apply manually"). Do not invent a fix.
+2. After all selected edits: show `git diff` so the user can see what changed.
+3. Prompt: `"Commit these {K} manual fixes? [y/N]"`.
+   - **Decline** → leave changes unstaged in the worktree, set `FOLLOW_UP=keep`, and fall through to Phase 6 (which will preserve the worktree).
+   - **Accept** → continue.
+4. Stage each modified file by name (same rule as Phase 4b — never `-A`). Commit via HEREDOC:
+   ```
+   git commit -m "$(cat <<'EOF'
+   polish: apply {K} deferred fixes via /polish-pr
+
+   Applied via interactive follow-up against {BASE_SHORT}..HEAD:
+   - <short list of applied items, one per line>
+
+   Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+   EOF
+   )"
+   ```
+   Never `--no-verify`. If the hook fails, surface it and stop — do not bypass.
+5. Re-enter the Phase 4d push prompt for this new commit. The push outcome (pushed / declined / failed) feeds Phase 6 exactly like an auto-fix commit.
+6. After the follow-up commit settles, if any unactioned deferred items remain, offer the prompt one more time. Loop until the user answers "none" or "keep".
+
+### "none" (or empty) → skip
+
+Set `FOLLOW_UP=declined` and proceed to Phase 6. The user has explicitly waived all deferred items; the worktree is safe to remove (subject to push state).
+
+### "keep" → skip but preserve
+
+Set `FOLLOW_UP=keep` and proceed to Phase 6. The worktree is preserved with push/discard hints.
+
+### Unparseable input
+
+Re-prompt once with a clarification ("Enter numbers like `1,3`, or one of: all, none, keep."). On a second unparseable answer, default to `FOLLOW_UP=keep` — preserving work is always the safer default.
 
 ---
 
 ## Phase 6: Cleanup
 
-The worktree holds work the user may still care about. Only remove it when the work is either (a) durable on the remote or (b) non-existent. Decide based on the outcome state:
+The worktree holds work the user may still care about. Only remove it when (a) the work is durable on the remote, (b) there's nothing to do, or (c) the user explicitly opted into cleanup. Decide based on the combined state of commits, push outcome, and `FOLLOW_UP`:
 
-| Outcome | Action |
+| Prior state                                                            | Action |
 |---|---|
-| Nothing committed (polish found nothing to fix) | Remove worktree |
-| Committed + pushed successfully | Remove worktree |
-| Committed but `PUSH_DECLINED` | **Keep worktree.** Print path + `git -C {WT} push` / `git worktree remove {WT} --force` hints. |
-| Committed but push failed | **Keep worktree.** Print path + error + same hints. |
-| Any unexpected error before commit | Remove worktree (nothing to lose) |
+| Nothing committed AND no deferred items                                | Remove worktree |
+| Nothing committed AND `FOLLOW_UP=declined`                             | Remove worktree |
+| Nothing committed AND `FOLLOW_UP=keep`                                 | **Keep worktree** (+ hints) |
+| Committed + pushed successfully AND `FOLLOW_UP != keep`                | Remove worktree |
+| Committed + pushed successfully AND `FOLLOW_UP=keep`                   | **Keep worktree** (+ hints) |
+| Commit exists but `PUSH_DECLINED` (auto-fix or manual follow-up)       | **Keep worktree** (+ hints) |
+| Commit exists but push failed                                          | **Keep worktree** (+ hints + error) |
+| Unexpected error before commit                                         | Remove worktree |
 
-When removing:
+Underlying rule: the worktree is kept whenever (a) uncommitted deferred work may still be applied, (b) a local commit has not reached the remote, or (c) the user said "keep".
+
+When **keeping**, print:
+```
+Worktree kept: {WT}
+  Push a pending commit:  git -C {WT} push
+  Discard everything:     git worktree remove {WT} --force
+```
+
+When **removing**:
 ```
 cd - >/dev/null 2>&1 || true
 git worktree remove ${WT} --force
 ```
 
-When keeping, do not `cd` out silently — print the worktree path clearly and end the run. Print the PR URL one more time at the end regardless.
+Print the PR URL once more at the end regardless.
 
 ---
 
