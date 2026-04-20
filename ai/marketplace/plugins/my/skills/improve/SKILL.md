@@ -1,12 +1,25 @@
 ---
 name: improve
-description: Holistic codebase review focused on architecture drift, duplicate logic across packages, code smells, quality, tests, and UX — returns up to 10 high-impact improvements (sharp over padded). Reads project conventions from CLAUDE.md before the review. Use when the user asks about tech debt, what to refactor, code audit, codebase health, what needs fixing, improvement opportunities, or general code quality review.
+description: Holistic codebase review focused on architecture drift, duplicate logic across packages, code smells, quality, tests, and UX — returns up to 10 high-impact improvements (sharp over padded). Reads project conventions from CLAUDE.md/AGENTS.md before the review. Use when the user asks about tech debt, what to refactor, code audit, codebase health, what needs fixing, improvement opportunities, or general code quality review.
 argument-hint: "[backend | frontend | diff | since:<date> | <package-or-path>]"
 ---
 
 # Codebase Improvement Review
 
-Perform a holistic codebase review and produce a ranked list (up to 10) of the highest-impact improvements. Use this skill to continuously improve any codebase. **Before running, read the project's `CLAUDE.md`** to learn its architecture rules, language stack, and project-specific conventions — these inform what counts as architectural drift in Phase 2.
+## Platform Compatibility
+
+This skill is portable across Claude Code and OpenCode. Adapt instructions based on your environment:
+
+| Concept | Claude Code | OpenCode |
+|---------|-------------|----------|
+| **Config file** | `CLAUDE.md` | `CLAUDE.md` or `AGENTS.md` |
+| **Parallel agents** | Use `Agent` tool with `explore` | Use `task` tool with `subagent_type: "explore"` |
+| **Memory path** | `~/.claude/projects/<project>/memory/` | Use `memory_set` tool (scope: `project`) |
+| **Code-simplifier rules** | `~/.claude/plugins/cache/.../code-simplifier/*/rules/` | `~/.config/opencode/skills/code-simplifier/rules/` or `~/.dotfiles/ai/opencode/skills/code-simplifier/rules/` |
+
+**Platform detection**: If your system prompt mentions "OpenCode", use OpenCode conventions. Otherwise use Claude Code conventions.
+
+Perform a holistic codebase review and produce a ranked list (up to 10) of the highest-impact improvements. Use this skill to continuously improve any codebase. **Before running, read the project's `CLAUDE.md` or `AGENTS.md`** to learn its architecture rules, language stack, and project-specific conventions — these inform what counts as architectural drift in Phase 2.
 
 ## What this skill is for (read before every run)
 
@@ -53,7 +66,11 @@ Pass the resulting file list as the scope for Phase 1 (run tests/lint scoped to 
 
 ## Step 1: Check for previous findings
 
-Read the memory file at `~/.claude/projects/<current-project>/memory/improve_findings.md` if it exists. Determine `<current-project>` from the current working directory (Claude Code maps each project dir to a memory subdir under `~/.claude/projects/`). Note what was found last time so you can compare — which issues persist, which improved, which are new. If the file does not exist, this is the first run.
+**Claude Code:** Read the memory file at `~/.claude/projects/<current-project>/memory/improve_findings.md` if it exists. Determine `<current-project>` from the current working directory (Claude Code maps each project dir to a memory subdir under `~/.claude/projects/`).
+
+**OpenCode:** Use `memory_list` to check if a `project`-scoped block named `improve-findings` exists. If it does, read its contents.
+
+Note what was found last time so you can compare — which issues persist, which improved, which are new. If no previous findings exist, this is the first run.
 
 ## Step 2: Phase 1 — Quantitative Sweep
 
@@ -135,14 +152,22 @@ For package-scoped or diff-scoped runs, restrict structural analysis to the rele
 
 Using Phase 1 data as a guide, do targeted code reading. Phase 1 points at *where* to look; Phase 2 decides *what matters*. Remember the ranking rule at the top — the goal is findings a linter couldn't have produced.
 
-**Parallelize with sub-agents.** For full-codebase or backend scope, spawn 3 Explore agents in parallel in a single message. For narrow scopes (single package, diff, frontend-only), run in the main context — sub-agents add overhead that isn't worth it for small reviews.
+**Parallelize with sub-agents.** For full-codebase or backend scope, spawn 3 explore agents in parallel in a single message:
+- **Claude Code:** Use 3 `Agent` tool calls with `explore` type in one message.
+- **OpenCode:** Use 3 `task` tool calls with `subagent_type: "explore"` in one message.
+
+For narrow scopes (single package, diff, frontend-only), run in the main context — sub-agents add overhead that isn't worth it for small reviews.
 
 ### Agent roles
 
 The split is deliberate: Agent 1 is the high-value "senior reviewer" agent, and its findings should dominate the final top 10. Agents 2 and 3 are the floor — they catch the boring-but-real issues.
 
 - **Agent 1 — Semantic & architectural (the one that matters most)**: Categories 1 (Maintainability at the service/package level), 3 (Duplicate logic across packages), 6 (Architecture & code smells). **Prime this agent** by having it read the project's architecture docs first (look for `docs/ARCHITECTURE.md`, `ARCHITECTURE.md` at repo root, or the architecture section of `CLAUDE.md`) so it has a mental model of the intended layering before it looks for drift. **Target 3 findings by default.** Return up to 5 only if all 5 would independently earn a top-10 slot — no borderline Low-severity picks to hit a quota. Returning 2 excellent findings is a better outcome than 5 mixed ones; the orchestrator backfills Low-severity spots from other agents if needed.
-- **Agent 2 — Correctness & quality**: Categories 2 (Dead Code), 4 (Code Quality / swallowed errors), 5 (Tests), 9 (Performance & Concurrency). **Target 3 findings by default**, up to 5 if warranted. **Prime this agent** by reading the language idiom rules that match the scope. The official `code-simplifier` plugin (Anthropic marketplace) ships rule files for Go, TypeScript, Python, and others — look under `~/.claude/plugins/cache/claude-plugins-official/code-simplifier/*/rules/<lang>.md`. If the plugin is not installed, proceed without it; the agent's value is what linters miss regardless. **Don't re-surface findings that `make check`/`golangci-lint` already flagged** — Agent 2's value is what linters miss (deviations from idiom rules, swallowed errors lint can't see because they're technically handled, test assertions that never fail). **Evidence-verification rule: before reporting anything as dead code or "unused export", run a grep for the identifier across the whole repo (including `cmd/`, `internal/`, and `*_test.go`) and confirm no callers exist. Coverage gaps for wiring code are expected — they are not evidence of dead code. Dead-code and unused-export claims require grep evidence, not intuition or zero-coverage inference. If you haven't grepped, don't flag.**
+- **Agent 2 — Correctness & quality**: Categories 2 (Dead Code), 4 (Code Quality / swallowed errors), 5 (Tests), 9 (Performance & Concurrency). **Target 3 findings by default**, up to 5 if warranted. **Prime this agent** by reading the language idiom rules that match the scope. Look for code-simplifier rule files:
+  - **Claude Code:** `~/.claude/plugins/cache/claude-plugins-official/code-simplifier/*/rules/<lang>.md`
+  - **OpenCode:** `~/.config/opencode/skills/code-simplifier/rules/<lang>.md` or `~/.dotfiles/ai/opencode/skills/code-simplifier/rules/<lang>.md`
+  
+  If the plugin/skill is not installed, proceed without it; the agent's value is what linters miss regardless. **Don't re-surface findings that `make check`/`golangci-lint` already flagged** — Agent 2's value is what linters miss (deviations from idiom rules, swallowed errors lint can't see because they're technically handled, test assertions that never fail). **Evidence-verification rule: before reporting anything as dead code or "unused export", run a grep for the identifier across the whole repo (including `cmd/`, `internal/`, and `*_test.go`) and confirm no callers exist. Coverage gaps for wiring code are expected — they are not evidence of dead code. Dead-code and unused-export claims require grep evidence, not intuition or zero-coverage inference. If you haven't grepped, don't flag.**
 - **Agent 3 — Surface & dependencies**: Categories 7 (UX), 8 (Docs), 10 (Deps). **Target 2 findings, max 3** — this category often produces low-impact noise, so keep the budget tight. Return 0 if nothing warrants a top-10 slot.
 
 ### How to structure each agent's prompt
@@ -325,7 +350,9 @@ If there are previous findings from Step 1, note for each item whether it is **n
 
 ## Step 5: Save findings to memory and clean up
 
-Write the summary to the same memory path used in Step 1 (`~/.claude/projects/<current-project>/memory/improve_findings.md`). When updating an existing file, **preserve the metrics history table** — append a new row and keep the last 5 rows. For findings, update the status of resolved items (add the PR number if known) and add new items.
+**Claude Code:** Write the summary to the same memory path used in Step 1 (`~/.claude/projects/<current-project>/memory/improve_findings.md`). When updating an existing file, **preserve the metrics history table** — append a new row and keep the last 5 rows. For findings, update the status of resolved items (add the PR number if known) and add new items.
+
+**OpenCode:** Use `memory_set` with `scope: "project"` and `label: "improve-findings"` to store the summary. Include the description field: `"Latest codebase review findings from /improve skill"`. OpenCode's memory blocks have size limits (~5000 chars), so keep the format concise — store only the current metrics row plus the last 2 rows of history, and summarize findings to title + status only.
 
 ```markdown
 ---
