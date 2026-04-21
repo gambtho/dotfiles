@@ -124,6 +124,11 @@ export ANTHROPIC_AUTH_TOKEN="${key}"
 export ANTHROPIC_MODEL="claude-opus-4-6"
 # Optional: one-shot for this command only →
 #   ANTHROPIC_BASE_URL=http://127.0.0.1:${PORT} ANTHROPIC_AUTH_TOKEN=${key} claude
+
+# Inside a devcontainer (requires extra_hosts: host.docker.internal:host-gateway in compose):
+export ANTHROPIC_BASE_URL="http://host.docker.internal:${PORT}"
+export ANTHROPIC_AUTH_TOKEN="${key}"
+export ANTHROPIC_MODEL="claude-opus-4-6"
 EOF
 }
 
