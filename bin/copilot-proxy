@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Manage the local LiteLLM proxy that fronts GitHub Copilot as an Anthropic API.
-# Usage: copilot-proxy [start|stop|restart|status|env|logs]
+# Usage: copilot-proxy [start|stop|restart|status|env|logs|models [--upstream]]
 #   (no args → ensure running + print env)
 #
 # ─── One-time setup (not done by this script) ─────────────────────────────────
@@ -32,13 +32,12 @@
 #    It prints a github.com/login/device URL and a code — open, enter, authorize.
 #    Tokens land in ~/.config/litellm/github_copilot/ and auto-refresh thereafter.
 #
-# 4. Discover available Copilot models (optional — the config above is current):
-#      API_KEY=$(jq -r .token ~/.config/litellm/github_copilot/api-key.json)
-#      API_BASE=$(jq -r .endpoints.api ~/.config/litellm/github_copilot/api-key.json)
-#      curl -s -H "Authorization: Bearer $API_KEY" \
-#           -H "Copilot-Integration-Id: vscode-chat" \
-#           -H "Editor-Version: vscode/1.95.0" \
-#           "$API_BASE/models" | jq -r '.data[] | select(.id|test("claude";"i")) | .id'
+# 4. Discover available Copilot models:
+#      copilot-proxy models --upstream   # everything your account can see (ctx/out, vendor)
+#      copilot-proxy models              # what the local proxy currently serves
+#    --upstream filters to picker-enabled models and auto-refreshes the IDE token on 401.
+#    To add one, append to config.yaml and restart:
+#      - { model_name: <alias>, litellm_params: { model: github_copilot/<exact-id> } }
 #
 # Known limits: no prompt caching, no extended thinking, tool-call translation
 # is imperfect for complex schemas. Subject to Copilot per-user quotas.
@@ -118,18 +117,83 @@ status() {
 print_env() {
   local key; key=$(master_key)
   cat <<EOF
-# Paste into the shell where you run \`claude\`:
+# Paste (or run:  eval "\$(copilot-proxy env)"  ) into the shell where you run \`claude\`:
+unset ANTHROPIC_API_KEY   # avoid conflict with ANTHROPIC_AUTH_TOKEN
 export ANTHROPIC_BASE_URL="http://127.0.0.1:${PORT}"
 export ANTHROPIC_AUTH_TOKEN="${key}"
-export ANTHROPIC_MODEL="claude-opus-4-6"
+export ANTHROPIC_MODEL="claude-opus-4-7"
 # Optional: one-shot for this command only →
 #   ANTHROPIC_BASE_URL=http://127.0.0.1:${PORT} ANTHROPIC_AUTH_TOKEN=${key} claude
 
 # Inside a devcontainer (requires extra_hosts: host.docker.internal:host-gateway in compose):
+unset ANTHROPIC_API_KEY
 export ANTHROPIC_BASE_URL="http://host.docker.internal:${PORT}"
 export ANTHROPIC_AUTH_TOKEN="${key}"
-export ANTHROPIC_MODEL="claude-opus-4-6"
+export ANTHROPIC_MODEL="claude-opus-4-7"
 EOF
+}
+
+models() {
+  # Default: list what the local proxy currently serves (from config.yaml).
+  if [[ "${1:-}" != "--upstream" ]]; then
+    if ! is_up; then
+      echo "proxy is DOWN — start it first, or use: $0 models --upstream" >&2
+      return 1
+    fi
+    curl -sS "http://127.0.0.1:${PORT}/v1/models" \
+         -H "Authorization: Bearer $(master_key)" \
+      | jq -r '.data[].id' | sort
+    return
+  fi
+
+  # --upstream: ask Copilot itself what this account can use.
+  local api_key_file="$HOME/.config/litellm/github_copilot/api-key.json"
+  [[ -f "$api_key_file" ]] || {
+    echo "not authenticated yet — see setup step 3 in the header" >&2
+    return 1
+  }
+
+  local tmp; tmp=$(mktemp)
+  trap 'rm -f "$tmp"' RETURN
+
+  local attempt api_key api_base http_code
+  for attempt in 1 2; do
+    api_key=$(jq -r .token     "$api_key_file")
+    api_base=$(jq -r .endpoints.api "$api_key_file")
+    http_code=$(curl -sS -o "$tmp" -w '%{http_code}' \
+                 -H "Authorization: Bearer $api_key" \
+                 -H "Copilot-Integration-Id: vscode-chat" \
+                 -H "Editor-Version: vscode/1.95.0" \
+                 "$api_base/models")
+
+    if [[ "$http_code" == "200" ]]; then
+      jq -r '.data[]
+             | select(.policy.state == "enabled" and .model_picker_enabled == true)
+             | [ .id,
+                 "\(.capabilities.limits.max_context_window_tokens // "?")/\(.capabilities.limits.max_output_tokens // "?")",
+                 (.vendor // "?") ]
+             | @tsv' "$tmp" \
+        | sort \
+        | column -ts $'\t' -N "id,ctx/out,vendor"
+      return
+    fi
+
+    if [[ "$http_code" == "401" && "$attempt" == "1" ]]; then
+      echo "IDE token expired — refreshing via litellm authenticator..." >&2
+      local py; py=$(command -v litellm || true)
+      [[ -n "$py" ]] && py="$(dirname "$py")/python"
+      [[ -x "${py:-}" ]] || {
+        echo "can't locate litellm's python (tried: ${py:-unset})" >&2
+        return 1
+      }
+      "$py" -c "from litellm.llms.github_copilot.authenticator import Authenticator; Authenticator().get_api_key()" >/dev/null
+      continue
+    fi
+
+    echo "upstream /models returned HTTP $http_code" >&2
+    cat "$tmp" >&2
+    return 1
+  done
 }
 
 case "${1:-default}" in
@@ -139,6 +203,7 @@ case "${1:-default}" in
   status)  status ;;
   env)     print_env ;;
   logs)    tail -n "${2:-50}" -f "$LOG" ;;
+  models)  models "${2:-}" ;;
   default) start; echo; print_env ;;
-  *) echo "usage: $0 [start|stop|restart|status|env|logs]" >&2; exit 2 ;;
+  *) echo "usage: $0 [start|stop|restart|status|env|logs|models [--upstream]]" >&2; exit 2 ;;
 esac
