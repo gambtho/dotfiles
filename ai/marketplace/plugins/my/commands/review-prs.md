@@ -59,6 +59,8 @@ Run: `gh api rate_limit --jq '.rate.remaining'`
 
 **Goal**: Bootstrap from accumulated knowledge of previous review runs.
 
+### 1a: Load Learnings
+
 1. Read `~/.claude/pr-reviews/{OWNER}/{REPO}/learnings.md` (if it exists)
 2. If it exists and has substantial content:
    - Note the review style guidance, common issues, and false positive patterns
@@ -67,7 +69,7 @@ Run: `gh api rate_limit --jq '.rate.remaining'`
    - Otherwise, reduce the number of merged PRs studied in Phase 3 to 5
 3. If it does not exist, proceed with full style learning
 
-### Load Project Config (Optional)
+### 1b: Load Project Config (Optional)
 
 Read `~/.claude/pr-reviews/{OWNER}/{REPO}/config.md` if it exists. This file contains user-defined review conventions that supplement the auto-detected checklist:
 - Commit message format requirements
@@ -79,7 +81,9 @@ If this file does not exist, proceed without it. You will suggest creating one i
 
 ### 1c: Pre-load File History for Changed-File Context
 
-For each PR candidate identified in Phase 4 (defer this step until after 4c selects the final list), gather two signals per changed file — capped to avoid token bloat:
+This step runs **after Phase 4c selects the final PR list** — it is defined here for organizational clarity but must not be executed until the final candidate list is known. Phase 4c will instruct you to return here.
+
+For each PR in the final list (Medium and Large only), gather two signals per changed file — capped to avoid token bloat:
 
 **Git blame summary** (who last touched each file and when — useful for spotting files with high churn or single-author ownership):
 ```
@@ -328,6 +332,8 @@ Filter to PRs where BOTH review count AND comment count are 0.
 4. If any PRs were detected as "updated since last review", include them at the end of the list (marked as re-reviews) if there is room within the N limit.
 
 5. Print a summary table of the PRs that will be reviewed (including size category and model) and proceed.
+
+6. **Execute Phase 1c now** using the final PR list selected above — fetch the file history (git log + prior review comments) for Medium and Large PRs before moving to Phase 5.
 
 ---
 

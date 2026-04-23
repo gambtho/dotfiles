@@ -40,6 +40,7 @@ const (
 type Client struct {
     httpClient *httpx.Client
     apiKey     string
+    baseURL    string
     logger     observability.Logger
 }
 
@@ -49,6 +50,12 @@ func WithLogger(logger observability.Logger) Option {
     return func(c *Client) { c.logger = logger }
 }
 
+// WithBaseURL overrides the default API base URL. Use in tests to point at an
+// httptest.Server instead of the real API.
+func WithBaseURL(u string) Option {
+    return func(c *Client) { c.baseURL = u }
+}
+
 // NewClient builds an Acme API client. Pass an empty apiKey to get a no-op
 // client that reports Available() == false.
 func NewClient(apiKey string, opts ...Option) *Client {
@@ -56,6 +63,7 @@ func NewClient(apiKey string, opts ...Option) *Client {
     cfg.DefaultTimeout = defaultTimeout
     c := &Client{
         apiKey:     apiKey,
+        baseURL:    baseURL,
         httpClient: httpx.NewClient(cfg),
     }
     for _, opt := range opts {
@@ -74,7 +82,7 @@ func (c *Client) GetWidget(ctx context.Context, id string) (*widgets.Widget, err
         "Accept":        "application/json",
     }
 
-    endpoint := baseURL + "/widgets/" + url.PathEscape(id)
+    endpoint := c.baseURL + "/widgets/" + url.PathEscape(id)
     resp, err := c.httpClient.Get(ctx, endpoint, headers, defaultTimeout)
     if err != nil {
         return nil, fmt.Errorf("acme get widget %s: %w", id, err)
@@ -143,10 +151,8 @@ func TestClient_GetWidget(t *testing.T) {
     }))
     defer srv.Close()
 
-    // Point the client at the test server by swapping the base URL via an
-    // unexported option — or by making baseURL a field configurable via an
-    // option (preferred for testability).
-    c := acme.NewClientWithBase(srv.URL+"/v1", "test-key")
+    // Point the client at the test server via the WithBaseURL option.
+    c := acme.NewClient("test-key", acme.WithBaseURL(srv.URL+"/v1"))
 
     widget, err := c.GetWidget(context.Background(), "abc-123")
     require.NoError(t, err)

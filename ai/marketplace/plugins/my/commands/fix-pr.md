@@ -291,7 +291,7 @@ For each agent, provide:
 - Context about what the PR is trying to accomplish
 
 **Important:**
-- Only dispatch agents relevant to the changes (e.g. skip silent-failure-hunter if there's no error handling code; skip pr-test-analyzer if the diff contains no test files or new functionality without tests)
+- Only dispatch agents relevant to the changes (e.g. skip silent-failure-hunter if there's no error handling code; skip pr-test-analyzer if the diff introduces no test files and no new untested functionality)
 - Launch all relevant agents in a single parallel call
 - Incorporate agent findings into the plan as additional issues (clearly marked as "Proactive — not flagged by reviewers") in the Detailed Plan section
 - If agents are unavailable or fail, proceed without them — agent findings are supplementary
