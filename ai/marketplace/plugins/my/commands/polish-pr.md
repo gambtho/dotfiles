@@ -221,8 +221,6 @@ Auto-fixed via /polish --fix against {BASE_SHORT}..HEAD:
 - ...
 
 Deferred {M} items for human review (printed locally).
-
-Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
 EOF
 )"
 ```
@@ -351,8 +349,6 @@ Behavior by response:
 
    Applied via interactive follow-up against {BASE_SHORT}..HEAD:
    - <short list of applied items, one per line>
-
-   Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
    EOF
    )"
    ```
