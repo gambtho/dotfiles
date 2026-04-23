@@ -37,10 +37,10 @@ Configuration is symlinked to `~/.config/opencode/`, `~/.claude/`, and `~/.copil
 - `/fix-pr` — collects all open PR review comments and failing CI checks, then writes a detailed implementation plan to `~/.claude/pr-fix-plans/{OWNER}/{REPO}/pr-{N}-plan.md`
 - `/polish` — analyzes changed code, auto-fixes high-confidence issues with `--fix`, reports the rest
 - `/polish-pr` — checks out a PR into a worktree, runs `/polish --fix` against it, commits, and prompts before pushing back to the PR branch
-- `/review-prs` — batch-reviews open PRs with no human comments; learns review style from merged PRs and accumulates findings across runs in `~/.claude/pr-reviews/{OWNER}/{REPO}/`
+- `/review-prs` — batch-reviews open PRs with no human comments; learns review style from merged PRs and accumulates learnings, style notes, and session logs in `~/.claude/pr-reviews/{OWNER}/{REPO}/`
 
 ### Skills
-- `my:improve` — holistic codebase audit returning up to 10 ranked findings (architecture drift, duplicate logic, code smells, tests, UX). Platform-aware: works in both Claude Code and OpenCode.
+- `my:improve` — holistic codebase audit returning up to 10 ranked findings (architecture drift, duplicate logic, code smells, tests, UX). Reads language rules from `~/.dotfiles/ai/opencode/skills/code-simplifier/rules/` — works in both Claude Code and OpenCode when that path exists.
 - `my:new-api-client` — scaffolds a new external API client in a Go hexagonal-architecture project (domain interface + adapter package + httpx client + tests)
 - `my:overnight-improve` — autonomous overnight loop: runs `my:improve`, picks the top finding, fixes it, runs verification gates, commits or rolls back. Requires `ralph-loop:ralph-loop` and `--permission-mode bypassPermissions`.
 
@@ -57,7 +57,7 @@ The install script symlinks `skills/` and `agents/` into `~/.config/opencode/` a
 - **All config lives in this dotfiles repo**, not directly in target directories. Changes go here; install scripts create symlinks.
 - **Agents** use `mode: subagent`. Review agents are `hidden: true` with `edit: deny` and restricted bash permissions. Implementation agents have broader permissions.
 - **Commands that reference skills** should use the `skill` tool to load them, not inline the skill content.
-- **Custom agents/commands override superpowers equivalents.** The custom `code-reviewer.md` agent and `brainstorm.md` command intentionally override the versions provided by the superpowers plugin.
+- **Custom agents/commands override superpowers equivalents.** `ai/opencode/agents/code-reviewer.md` and `ai/opencode/commands/brainstorm.md` intentionally shadow the versions provided by the superpowers plugin.
 
 ## Working in This Repo
 

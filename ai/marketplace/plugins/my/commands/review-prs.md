@@ -100,7 +100,7 @@ gh api graphql -f query='
         nodes {
           number
           title
-          reviews(first: 5) {
+          reviews(first: 20) {
             nodes {
               comments(first: 20) {
                 nodes {
