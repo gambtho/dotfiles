@@ -121,7 +121,7 @@ print_env() {
 unset ANTHROPIC_API_KEY   # avoid conflict with ANTHROPIC_AUTH_TOKEN
 export ANTHROPIC_BASE_URL="http://127.0.0.1:${PORT}"
 export ANTHROPIC_AUTH_TOKEN="${key}"
-export ANTHROPIC_MODEL="claude-opus-4-7"
+export ANTHROPIC_MODEL="claude-opus-4-6-1m"   # 1M ctx; 4.7 only has 200k upstream
 # Optional: one-shot for this command only →
 #   ANTHROPIC_BASE_URL=http://127.0.0.1:${PORT} ANTHROPIC_AUTH_TOKEN=${key} claude
 
@@ -129,7 +129,7 @@ export ANTHROPIC_MODEL="claude-opus-4-7"
 unset ANTHROPIC_API_KEY
 export ANTHROPIC_BASE_URL="http://host.docker.internal:${PORT}"
 export ANTHROPIC_AUTH_TOKEN="${key}"
-export ANTHROPIC_MODEL="claude-opus-4-7"
+export ANTHROPIC_MODEL="claude-opus-4-6-1m"
 EOF
 }
 

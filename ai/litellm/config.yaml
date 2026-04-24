@@ -22,6 +22,10 @@ model_list:
 litellm_settings:
   disable_copilot_system_to_assistant: true
   drop_params: true
+  # Overflow routing: 4.7 is 200k-only upstream — if a request blows the window,
+  # retry on 4.6-1m (1M ctx). LiteLLM catches ContextWindowExceededError here.
+  context_window_fallbacks:
+    - claude-opus-4-7: ["claude-opus-4-6-1m"]
 
 general_settings:
   master_key: sk-litellm-local-dev-key-change-me
