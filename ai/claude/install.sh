@@ -91,6 +91,29 @@ PY
     fi
 }
 
+link_file() {
+    local src="$1"
+    local dst="$2"
+    local label="$3"
+
+    if [ -L "$dst" ]; then
+        local current
+        current=$(readlink "$dst")
+        if [ "$current" == "$src" ]; then
+            log_info "Claude $label already linked."
+            return
+        fi
+        log_info "Removing existing $label symlink -> $current"
+        rm "$dst"
+    elif [ -f "$dst" ]; then
+        log_info "Backing up existing $label to ${dst}.backup"
+        mv "$dst" "${dst}.backup"
+    fi
+
+    ln -s "$src" "$dst"
+    log_success "Linked $src to $dst"
+}
+
 main() {
     # Fixup must run before any `claude` invocation — see comment on the function.
     fixup_stale_plugin_paths
@@ -106,6 +129,8 @@ main() {
             return 1
         fi
     fi
+
+    link_file "$DOTFILES_ROOT/claude/settings.json" "$HOME/.claude/settings.json" "settings"
 }
 
 main "$@"
