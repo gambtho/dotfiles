@@ -11,6 +11,10 @@
 #
 # 2. Write ~/.config/litellm/config.yaml:
 #      model_list:
+#        - model_name: claude-opus-4-7
+#          litellm_params: { model: github_copilot/claude-opus-4.7 }
+#        - model_name: claude-opus-4-7-1m
+#          litellm_params: { model: github_copilot/claude-opus-4.7-1m-internal }
 #        - model_name: claude-opus-4-6
 #          litellm_params: { model: github_copilot/claude-opus-4.6 }
 #        - model_name: claude-opus-4-6-1m
@@ -121,7 +125,7 @@ print_env() {
 unset ANTHROPIC_API_KEY   # avoid conflict with ANTHROPIC_AUTH_TOKEN
 export ANTHROPIC_BASE_URL="http://127.0.0.1:${PORT}"
 export ANTHROPIC_AUTH_TOKEN="${key}"
-export ANTHROPIC_MODEL="claude-opus-4-6-1m"   # 1M ctx; 4.7 only has 200k upstream
+export ANTHROPIC_MODEL="claude-opus-4-7-1m"   # 1M ctx (opus-4.7-1m-internal); plain 4.7 is 200k
 # Optional: one-shot for this command only →
 #   ANTHROPIC_BASE_URL=http://127.0.0.1:${PORT} ANTHROPIC_AUTH_TOKEN=${key} claude
 
@@ -129,7 +133,7 @@ export ANTHROPIC_MODEL="claude-opus-4-6-1m"   # 1M ctx; 4.7 only has 200k upstre
 unset ANTHROPIC_API_KEY
 export ANTHROPIC_BASE_URL="http://host.docker.internal:${PORT}"
 export ANTHROPIC_AUTH_TOKEN="${key}"
-export ANTHROPIC_MODEL="claude-opus-4-6-1m"
+export ANTHROPIC_MODEL="claude-opus-4-7-1m"
 EOF
 }
 

@@ -17,21 +17,57 @@ remove_legacy_commands_symlink() {
     fi
 }
 
+marketplace_already_added() {
+    local f="$HOME/.claude/settings.json"
+    [ -f "$f" ] || return 1
+    command_exists python3 || return 1
+    python3 - "$f" <<'PY'
+import json, sys
+try:
+    with open(sys.argv[1]) as fh:
+        data = json.load(fh)
+except Exception:
+    sys.exit(1)
+sys.exit(0 if "guarzo" in (data.get("extraKnownMarketplaces") or {}) else 1)
+PY
+}
+
+plugin_already_installed() {
+    local f="$HOME/.claude/plugins/installed_plugins.json"
+    [ -f "$f" ] || return 1
+    command_exists python3 || return 1
+    python3 - "$f" <<'PY'
+import json, sys
+try:
+    with open(sys.argv[1]) as fh:
+        data = json.load(fh)
+except Exception:
+    sys.exit(1)
+sys.exit(0 if "my@guarzo" in (data.get("plugins") or {}) else 1)
+PY
+}
+
 install_marketplace_and_plugin() {
     if ! command_exists claude; then
         log_warning "claude CLI not found; skipping marketplace install. Run ai/claude/install.sh first."
         return 1
     fi
 
-    log_info "Adding 'guarzo' marketplace from $MARKETPLACE_DIR"
-    claude plugin marketplace add --scope user "$MARKETPLACE_DIR" || \
-        log_info "Marketplace 'guarzo' may already be added — continuing."
+    if marketplace_already_added; then
+        log_info "Marketplace 'guarzo' already registered — skipping add."
+    else
+        log_info "Adding 'guarzo' marketplace from $MARKETPLACE_DIR"
+        claude plugin marketplace add --scope user "$MARKETPLACE_DIR"
+    fi
 
-    log_info "Installing 'my' plugin from 'guarzo' marketplace"
-    claude plugin install my@guarzo || \
-        log_info "Plugin 'my' may already be installed — continuing."
+    if plugin_already_installed; then
+        log_info "Plugin 'my@guarzo' already installed — skipping install."
+    else
+        log_info "Installing 'my' plugin from 'guarzo' marketplace"
+        claude plugin install my@guarzo
+    fi
 
-    log_success "Marketplace + plugin installed."
+    log_success "Marketplace + plugin ready."
 }
 
 bridge_to_tool() {
@@ -40,6 +76,11 @@ bridge_to_tool() {
 
     if [ ! -d "$target_root" ]; then
         log_info "${tool_name} not detected at $target_root — skipping bridge."
+        return 0
+    fi
+
+    if [ ! -w "$target_root" ]; then
+        log_warning "${tool_name} dir $target_root is not writable (owned by another user?) — skipping bridge."
         return 0
     fi
 

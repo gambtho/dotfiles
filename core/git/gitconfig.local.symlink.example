@@ -1,6 +1,11 @@
 [user]
-	name = AUTHORNAME
-	email = AUTHOREMAIL
+	name = Tom
+	email = Guaro.Eve@gmail.com
 	# signingkey = YOUR_GPG_KEY_ID
 # [commit]
 #	gpgsign = true
+[credential]
+	# WSL using the Windows-side Git Credential Manager
+	helper = /mnt/c/Program\\ Files/Git/mingw64/bin/git-credential-manager.exe
+[credential "https://dev.azure.com"]
+	useHttpPath = true

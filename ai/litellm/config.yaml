@@ -1,31 +1,38 @@
 model_list:
   # Claude
   - { model_name: claude-opus-4-7,        litellm_params: { model: github_copilot/claude-opus-4.7 } }
+  - { model_name: claude-opus-4-7-1m,     litellm_params: { model: github_copilot/claude-opus-4.7-1m-internal } }
   - { model_name: claude-opus-4-6,        litellm_params: { model: github_copilot/claude-opus-4.6 } }
   - { model_name: claude-opus-4-6-1m,     litellm_params: { model: github_copilot/claude-opus-4.6-1m } }
+  - { model_name: claude-opus-4-5,        litellm_params: { model: github_copilot/claude-opus-4.5 } }
   - { model_name: claude-sonnet-4-6,      litellm_params: { model: github_copilot/claude-sonnet-4.6 } }
   - { model_name: claude-sonnet-4-5,      litellm_params: { model: github_copilot/claude-sonnet-4.5 } }
+  - { model_name: claude-sonnet-4,        litellm_params: { model: github_copilot/claude-sonnet-4 } }
   - { model_name: claude-haiku-4-5,       litellm_params: { model: github_copilot/claude-haiku-4.5 } }
 
-  # OpenAI (400k ctx / 128k out)
+  # OpenAI (400k ctx / 128k out unless noted)
+  - { model_name: gpt-5-5,                litellm_params: { model: github_copilot/gpt-5.5 } }
   - { model_name: gpt-5-4,                litellm_params: { model: github_copilot/gpt-5.4 } }
-  - { model_name: gpt-5-4-mini,           litellm_params: { model: github_copilot/gpt-5.4-mini } }
+  - { model_name: gpt-5-3-codex,          litellm_params: { model: github_copilot/gpt-5.3-codex } }
   - { model_name: gpt-5-2-codex,          litellm_params: { model: github_copilot/gpt-5.2-codex } }
+  - { model_name: gpt-5-2,                litellm_params: { model: github_copilot/gpt-5.2 } }
+  - { model_name: gpt-5-mini,             litellm_params: { model: github_copilot/gpt-5-mini } }   # 264k/64k, Azure OpenAI
+  - { model_name: gpt-4-1,                litellm_params: { model: github_copilot/gpt-4.1 } }      # 128k/16k, Azure OpenAI
 
   # Google
-  - { model_name: gemini-3-1-pro-preview, litellm_params: { model: github_copilot/gemini-3.1-pro-preview } }
-  - { model_name: gemini-2-5-pro,         litellm_params: { model: github_copilot/gemini-2.5-pro } }
-
-  # Experimental
-  - { model_name: goldeneye,              litellm_params: { model: github_copilot/goldeneye } }
+  - { model_name: gemini-3-1-pro-preview, litellm_params: { model: github_copilot/gemini-3.1-pro-preview } }   # 200k/64k
+  - { model_name: gemini-3-flash-preview, litellm_params: { model: github_copilot/gemini-3-flash-preview } }   # 128k/64k
+  - { model_name: gemini-2-5-pro,         litellm_params: { model: github_copilot/gemini-2.5-pro } }            # 128k/64k
 
 litellm_settings:
   disable_copilot_system_to_assistant: true
   drop_params: true
-  # Overflow routing: 4.7 is 200k-only upstream — if a request blows the window,
-  # retry on 4.6-1m (1M ctx). LiteLLM catches ContextWindowExceededError here.
+  # Overflow routing: 4.7 plain is 200k upstream — if a request blows the input
+  # budget (~168k after reserving 32k output), retry on 4.7-1m (1M ctx, 64k out).
+  # LiteLLM catches ContextWindowExceededError here.
   context_window_fallbacks:
-    - claude-opus-4-7: ["claude-opus-4-6-1m"]
+    - claude-opus-4-7: ["claude-opus-4-7-1m"]
+    - claude-opus-4-6: ["claude-opus-4-6-1m"]
 
 general_settings:
   master_key: sk-litellm-local-dev-key-change-me
