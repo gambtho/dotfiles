@@ -185,7 +185,7 @@ models() {
     if [[ "$http_code" == "401" && "$attempt" == "1" ]]; then
       echo "IDE token expired — refreshing via litellm authenticator..." >&2
       local py; py=$(command -v litellm || true)
-      [[ -n "$py" ]] && py="$(dirname "$py")/python"
+      [[ -n "$py" ]] && py="$(dirname "$(readlink -f "$py")")/python"
       [[ -x "${py:-}" ]] || {
         echo "can't locate litellm's python (tried: ${py:-unset})" >&2
         return 1

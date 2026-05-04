@@ -7,11 +7,26 @@ description: Run an autonomous overnight improvement loop on a codebase. Each it
 
 Orchestrates an unattended overnight improvement session. Each iteration runs a configurable review skill (default `my:improve`), picks the highest-ranked finding not already attempted, applies the fix, runs verification gates, and commits or rolls back. On the final iteration (or when no eligible findings remain), pushes the branch and opens a PR with up to N rounds of CodeRabbit autofix follow-up.
 
+## Platform compatibility
+
+This skill runs on Claude Code or Pi. The orchestration shape is identical; the loop driver differs.
+
+| Concept | Claude Code | Pi |
+|---|---|---|
+| **Loop driver** | `ralph-loop:ralph-loop` skill (invoked via `Skill` tool) | `pi-ralph-wiggum` skill (invoked via `ralph_start` / `ralph_done` tools) |
+| **Permission bypass** | Session must be launched with `--permission-mode bypassPermissions` | Pi must be running with auto-approval enabled (e.g. `--yolo` or equivalent setting that auto-approves Bash/Edit) — confirm with the user before starting |
+| **CodeRabbit autofix** | `coderabbit:autofix` skill in batch mode | If `coderabbit:autofix` is not installed in pi, fall back to manually fetching the PR review (`gh pr view --comments`) and applying fixes inline; skip the round if no equivalent skill is available |
+| **Completion signal** | `<promise>NO_FINDINGS_WORTH_FIXING</promise>` consumed by ralph-loop | Same string, plus `<promise>COMPLETE</promise>` to satisfy pi-ralph-wiggum's stop condition — emit both on the final iteration |
+
+**Detect the platform** the same way as `my:improve`: if a `ralph_start` tool is available you're on Pi; if a `Skill` tool dispatches to `ralph-loop:ralph-loop` you're on Claude Code. If neither, stop and tell the user.
+
 ## Prerequisites
 
-This skill MUST be invoked in a Claude Code session launched with `--permission-mode bypassPermissions`. Plan mode (the default) blocks every write/Bash call, so an unattended loop stalls at the first tool call. If the current session is not in bypass mode, tell the user and stop — do NOT continue.
+**Claude Code:** This skill MUST be invoked in a Claude Code session launched with `--permission-mode bypassPermissions`. Plan mode (the default) blocks every write/Bash call, so an unattended loop stalls at the first tool call. If the current session is not in bypass mode, tell the user and stop — do NOT continue.
 
-The repo MUST have a `.claude/overnight-config.yaml` file. If missing, see `references/config-schema.md` for the schema and stop.
+**Pi:** Verify auto-approval is on (no per-tool prompts) before starting; if it is not, tell the user how to enable it and stop. Pi will pause the loop on any unapproved tool call, defeating the unattended goal.
+
+The repo MUST have a config file. Look for `.claude/overnight-config.yaml` first; if absent, look for `.pi/overnight-config.yaml` (same schema). If neither exists, see `references/config-schema.md` for the schema and stop. State and run logs follow the same precedence — write under `.claude/` if that directory exists, otherwise under `.pi/`.
 
 ## Step 0: Preflight (read references/preflight-checklist.md and run it)
 
@@ -54,21 +69,29 @@ Substitute:
 - `{{gates_block}}` → for each gate, render `<name>: <command>` lines; the loop runs them sequentially and fails on the first non-zero exit
 - `{{do_nots_block}}` → render each do-not as a `- <text>` bullet
 
-## Step 3: Invoke ralph-loop with the rendered prompt
+## Step 3: Invoke the loop driver
 
-Use the `Skill` tool to invoke `ralph-loop:ralph-loop` with these arguments:
+**Claude Code:** Use the `Skill` tool to invoke `ralph-loop:ralph-loop` with these arguments:
 
 - `--max-iterations {{max_iterations}}`
 - `--completion-promise 'NO_FINDINGS_WORTH_FIXING'`
 - prompt: the rendered loop prompt from Step 2
 
-Ralph-loop will fire the prompt up to `{{max_iterations}}` times. Each fire is a fresh session that picks up from `.claude/overnight-run-state.md`.
+Ralph-loop will fire the prompt up to `{{max_iterations}}` times. Each fire is a fresh session that picks up from the run-state file.
+
+**Pi:** Use the `ralph_start` tool with:
+
+- `name`: `overnight-improve`
+- `maxIterations`: `{{max_iterations}}`
+- `taskContent`: the rendered loop prompt from Step 2, wrapped in the task-file format documented in the `pi-ralph-wiggum` skill (`# Task` / `## Goals` / `## Checklist` / `## Verification` / `## Notes` sections — the loop prompt body goes under `## Notes` and the wrap-up checklist items under `## Checklist`).
+
+After each iteration of work, call `ralph_done` to advance. Pi-ralph-wiggum stops when `<promise>COMPLETE</promise>` is emitted or maxIterations is reached, so on the final iteration emit BOTH `<promise>NO_FINDINGS_WORTH_FIXING</promise>` (for parity with the Claude Code log/state) AND `<promise>COMPLETE</promise>` (to satisfy pi-ralph-wiggum's stop condition).
 
 ## Step 4: Stop conditions
 
 The loop stops when any of:
-- The fired prompt outputs `<promise>NO_FINDINGS_WORTH_FIXING</promise>` (which only happens after PHASE 2 wrap-up completes, or on a wrong-branch safety trip)
-- ralph-loop's own max-iterations is reached without the promise being emitted
+- The fired prompt outputs `<promise>NO_FINDINGS_WORTH_FIXING</promise>` (Claude Code) / `<promise>COMPLETE</promise>` (Pi) — both only fire after PHASE 2 wrap-up completes, or on a wrong-branch safety trip
+- The driver's own max-iterations is reached without the completion promise being emitted
 
 When the loop ends, tell the user where to find:
 - `.claude/overnight-run-state.md` — the per-iteration log
@@ -170,7 +193,7 @@ If `gh pr create` fails because a PR already exists, fall back to `gh pr view --
 
 W4. Address CodeRabbit in rounds. CodeRabbit (`coderabbitai[bot]`) auto-reviews on PR open AND re-reviews each new commit. One autofix pass usually does not clear every comment, so loop up to `max_wrap_iterations` (read from state file frontmatter) times. Each round: wait for the review of the *current HEAD*, apply autofix, gate, push.
 
-Use the `coderabbit:autofix` skill in batch mode against the PR for each round. After each round:
+Use the `coderabbit:autofix` skill in batch mode against the PR for each round (Claude Code). On Pi, if `coderabbit:autofix` is not installed, fetch the latest review with `gh pr view "$PR" --comments` and apply fixes inline; if there is no clear automated path for a comment, skip it and log `manual: <comment-id> deferred` rather than silently dropping it. After each round:
 - Re-run all gates (the same ones from step 5)
 - If gates pass and there are file changes, commit with subject `improve: address coderabbit review (round <N>)` (with Co-Authored-By trailer) and push
 - If gates fail after autofix, `git reset --hard HEAD` and log `autofix broke <gate>, rolled back` — break the loop, do NOT push a broken commit

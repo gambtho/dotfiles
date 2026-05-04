@@ -8,16 +8,16 @@ argument-hint: "[backend | frontend | diff | since:<date> | <package-or-path>]"
 
 ## Platform Compatibility
 
-This skill is portable across Claude Code and OpenCode. Adapt instructions based on your environment:
+This skill is portable across Claude Code, OpenCode, and Pi. Adapt instructions based on your environment:
 
-| Concept | Claude Code | OpenCode |
-|---------|-------------|----------|
-| **Config file** | `CLAUDE.md` | `CLAUDE.md` or `AGENTS.md` |
-| **Parallel agents** | Use `Agent` tool with `explore` | Use `task` tool with `subagent_type: "explore"` |
-| **Memory path** | `~/.claude/projects/<project>/memory/` | Use `memory_set` tool (scope: `project`) |
-| **Code-simplifier rules** | `~/.claude/plugins/cache/.../code-simplifier/*/rules/` | `~/.config/opencode/skills/code-simplifier/rules/` or `~/.dotfiles/ai/opencode/skills/code-simplifier/rules/` |
+| Concept | Claude Code | OpenCode | Pi |
+|---------|-------------|----------|----|
+| **Config file** | `CLAUDE.md` | `CLAUDE.md` or `AGENTS.md` | `AGENTS.md` (fall back to `CLAUDE.md`) |
+| **Parallel agents** | Use `Agent` tool with `explore` | Use `task` tool with `subagent_type: "explore"` | Use the `subagent` tool with one task per agent (pass all required context in each task prompt) |
+| **Memory path** | `~/.claude/projects/<project>/memory/` | Use `memory_set` tool (scope: `project`) | Write to `.pi/memory/improve_findings.md` in the project root (create the dir if missing) |
+| **Code-simplifier rules** | `~/.claude/plugins/cache/.../code-simplifier/*/rules/` | `~/.config/opencode/skills/code-simplifier/rules/` or `~/.dotfiles/ai/opencode/skills/code-simplifier/rules/` | Same as OpenCode paths if present; otherwise skip — the skill works without them |
 
-**Platform detection**: If your system prompt mentions "OpenCode", use OpenCode conventions. Otherwise use Claude Code conventions.
+**Platform detection**: If your system prompt mentions "OpenCode", use OpenCode conventions. If it mentions "pi" / "Pi coding agent" or exposes a `subagent` tool but no `Agent`/`task` tool, use Pi conventions. Otherwise use Claude Code conventions.
 
 Perform a holistic codebase review and produce a ranked list (up to 10) of the highest-impact improvements. Use this skill to continuously improve any codebase. **Before running, read the project's `CLAUDE.md` or `AGENTS.md`** to learn its architecture rules, language stack, and project-specific conventions — these inform what counts as architectural drift in Phase 2.
 
@@ -69,6 +69,8 @@ Pass the resulting file list as the scope for Phase 1 (run tests/lint scoped to 
 **Claude Code:** Read the memory file at `~/.claude/projects/<current-project>/memory/improve_findings.md` if it exists. Determine `<current-project>` from the current working directory (Claude Code maps each project dir to a memory subdir under `~/.claude/projects/`).
 
 **OpenCode:** Use `memory_list` to check if a `project`-scoped block named `improve-findings` exists. If it does, read its contents.
+
+**Pi:** Read `.pi/memory/improve_findings.md` from the project root if it exists. (No global memory tool — the file in the project tree is the source of truth, and can be committed or gitignored at the user's discretion.)
 
 Note what was found last time so you can compare — which issues persist, which improved, which are new. If no previous findings exist, this is the first run.
 
@@ -155,6 +157,7 @@ Using Phase 1 data as a guide, do targeted code reading. Phase 1 points at *wher
 **Parallelize with sub-agents.** For full-codebase or backend scope, spawn 3 explore agents in parallel in a single message:
 - **Claude Code:** Use 3 `Agent` tool calls with `explore` type in one message.
 - **OpenCode:** Use 3 `task` tool calls with `subagent_type: "explore"` in one message.
+- **Pi:** One `subagent` tool call with a `tasks` array of 3 prompts (one per agent role). Each task prompt MUST be self-contained — repeat the full priming reads, Phase 1 data, finding format, and strict output contract, since pi subagents have no shared conversation history.
 
 For narrow scopes (single package, diff, frontend-only), run in the main context — sub-agents add overhead that isn't worth it for small reviews.
 
@@ -166,6 +169,7 @@ The split is deliberate: Agent 1 is the high-value "senior reviewer" agent, and 
 - **Agent 2 — Correctness & quality**: Categories 2 (Dead Code), 4 (Code Quality / swallowed errors), 5 (Tests), 9 (Performance & Concurrency). **Target 3 findings by default**, up to 5 if warranted. **Prime this agent** by reading the language idiom rules that match the scope. Look for code-simplifier rule files:
   - **Claude Code:** `~/.dotfiles/ai/opencode/skills/code-simplifier/rules/<lang>.md`
   - **OpenCode:** `~/.config/opencode/skills/code-simplifier/rules/<lang>.md` or `~/.dotfiles/ai/opencode/skills/code-simplifier/rules/<lang>.md`
+  - **Pi:** check the OpenCode paths above; if neither is present, proceed without them
   
   If the plugin/skill is not installed, proceed without it; the agent's value is what linters miss regardless. **Don't re-surface findings that `make check`/`golangci-lint` already flagged** — Agent 2's value is what linters miss (deviations from idiom rules, swallowed errors lint can't see because they're technically handled, test assertions that never fail). **Evidence-verification rule: before reporting anything as dead code or "unused export", run a grep for the identifier across the whole repo (including `cmd/`, `internal/`, and `*_test.go`) and confirm no callers exist. Coverage gaps for wiring code are expected — they are not evidence of dead code. Dead-code and unused-export claims require grep evidence, not intuition or zero-coverage inference. If you haven't grepped, don't flag.**
 - **Agent 3 — Surface & dependencies**: Categories 7 (UX), 8 (Docs), 10 (Deps). **Target 2 findings, max 3** — this category often produces low-impact noise, so keep the budget tight. Return 0 if nothing warrants a top-10 slot.
@@ -353,6 +357,8 @@ If there are previous findings from Step 1, note for each item whether it is **n
 **Claude Code:** Write the summary to the same memory path used in Step 1 (`~/.claude/projects/<current-project>/memory/improve_findings.md`). When updating an existing file, **preserve the metrics history table** — append a new row and keep the last 5 rows. For findings, update the status of resolved items (add the PR number if known) and add new items.
 
 **OpenCode:** Use `memory_set` with `scope: "project"` and `label: "improve-findings"` to store the summary. Include the description field: `"Latest codebase review findings from /improve skill"`. OpenCode's memory blocks have size limits (~5000 chars), so keep the format concise — store only the current metrics row plus the last 2 rows of history, and summarize findings to title + status only.
+
+**Pi:** Write to `.pi/memory/improve_findings.md` in the project root (create the directory if missing). Same append-and-keep-last-5 rule as Claude Code. No size limit applies.
 
 ```markdown
 ---

@@ -1,0 +1,16 @@
+{
+  "name": "my",
+  "version": "0.1.0",
+  "description": "Personal Pi skills shared from the local AI marketplace plugin",
+  "keywords": ["pi-package"],
+  "author": "guarzo",
+  "private": true,
+  "pi": {
+    "skills": [
+      "./skills/improve/SKILL.md",
+      "./skills/new-api-client/SKILL.md",
+      "./skills/overnight-improve/SKILL.md",
+      "./skills/ux-react/SKILL.md"
+    ]
+  }
+}

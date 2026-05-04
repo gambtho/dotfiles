@@ -411,7 +411,8 @@
     "vercel@claude-plugins-official": true,
     "my@guarzo": true,
     "linear@claude-plugins-official": true,
-    "ruby-lsp@claude-plugins-official": true
+    "ruby-lsp@claude-plugins-official": true,
+    "ai-firstify@techwolf-ai-first": true
   },
   "extraKnownMarketplaces": {
     "guarzo": {
