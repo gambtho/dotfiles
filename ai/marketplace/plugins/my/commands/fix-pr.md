@@ -1,7 +1,7 @@
 ---
 name: fix-pr
-description: Analyze a PR's open comments and failing CI checks, then produce a detailed implementation plan to resolve all issues
-argument-hint: "<PR URL or number>"
+description: Analyze a PR's open comments and failing CI checks, then produce a detailed implementation plan to resolve all issues. Add --deep to also dispatch specialized agents for preemptive findings reviewers may have missed.
+argument-hint: "<PR URL or number> [--deep]"
 allowed-tools: Bash(gh pr view:*), Bash(gh pr diff:*), Bash(gh pr checks:*), Bash(gh pr checkout:*), Bash(gh api:*), Bash(gh issue view:*), Bash(gh repo view:*), Bash(gh auth:*), Bash(gh run view:*), Bash(gh run list:*), Bash(git log:*), Bash(git rev-parse:*), Bash(git remote:*), Bash(git status:*), Bash(git fetch:*), Bash(git diff:*), Bash(git show:*), Bash(ls:*), Bash(date:*), Bash(wc:*), Bash(cat:*), Bash(mkdir:*), Bash(echo:*), Read, Glob, Grep, Write, Task, Agent, Skill
 ---
 
@@ -34,7 +34,11 @@ Run: `gh auth status`
 
 ### 0b: Parse the PR Argument
 
-The argument can be:
+Parse the arguments. There is a required PR identifier and an optional `--deep` flag (in any position):
+
+- **`--deep`** (optional): if present, set `DEEP_MODE=true` and remove the token before parsing the PR identifier. Without this flag, the plan reflects only what reviewers and CI flagged. With it, Phase 4c additionally dispatches specialized agents (silent-failure-hunter, code-reviewer, code-explorer, pr-test-analyzer) for preemptive findings.
+
+After stripping `--deep`, the remaining argument is the PR identifier:
 1. **A full URL**: `https://github.com/{OWNER}/{REPO}/pull/{NUMBER}` — extract OWNER, REPO, and NUMBER
 2. **A bare number**: `123` — use the current repo context
 
@@ -272,9 +276,11 @@ Identify connections:
 - Do any comments request changes that would affect other parts of the diff?
 - Are there comments that are already addressed by subsequent commits but not yet resolved?
 
-### 4c: Leverage Specialized Agents
+### 4c: Leverage Specialized Agents (only if `--deep`)
 
-While performing your own analysis, dispatch specialized agents in parallel to surface issues that reviewers and CI may have missed. These findings enrich the plan with preemptive fixes.
+**Skip this section entirely if `DEEP_MODE` is not set.** The default behavior is to plan around reviewer + CI feedback only. Agent dispatch adds preemptive findings, which is useful when the user explicitly opted in but is noisy as a default — those agents are tuned for fresh code, and running them on a PR that already has reviewer comments tends to surface things reviewers chose to ignore.
+
+When `DEEP_MODE` is set, dispatch specialized agents in parallel to surface issues that reviewers and CI may have missed. These findings enrich the plan with preemptive fixes.
 
 **Launch these agents in parallel on the PR's changed files using the `Agent` tool (make all calls in a single message):**
 
@@ -307,141 +313,20 @@ For each issue, determine:
 
 ## Phase 5: Generate the Implementation Plan
 
-**Goal**: Produce a detailed, actionable markdown file that a developer (or AI agent) can follow step-by-step to resolve every issue.
+**Goal**: produce a detailed, actionable markdown file that a developer (or AI agent) can follow step-by-step to resolve every issue.
 
-Create the file at: `~/.claude/pr-fix-plans/{OWNER}/{REPO}/pr-{PR_NUMBER}-plan.md`
+Read `~/.dotfiles/ai/marketplace/plugins/my/commands/references/fix-pr-plan-template.md` — it has the exact markdown structure to write, plus per-section rules (verbatim quoting of comments, blockquotes for context, omit Conflicting Feedback if no conflicts, etc.).
 
-If a plan for this PR already exists, archive it by renaming to `pr-{PR_NUMBER}-plan-{YYYY-MM-DD-HHMMSS}.md`.
+Write the plan to:
 
-### Plan Structure
+`~/.claude/pr-fix-plans/{OWNER}/{REPO}/pr-{PR_NUMBER}-plan.md`
 
-```markdown
-# Implementation Plan — PR #{PR_NUMBER}: {title}
+If a plan for this PR already exists, archive the old one by renaming to `pr-{PR_NUMBER}-plan-{YYYY-MM-DD-HHMMSS}.md` before writing the new file.
 
-**Repository**: {OWNER}/{REPO}
-**PR URL**: {REPO_URL}/pull/{PR_NUMBER}
-**Branch**: {headRefName} → {baseRefName}
-**Author**: @{author}
-**Generated**: {YYYY-MM-DD HH:MM}
-**Status**: {open|closed|merged}
-
-## PR Summary
-
-{2-4 sentence summary of what the PR does, based on the description, linked issues, and the diff}
-
-## Issues to Resolve
-
-### Overview
-
-| # | Source | File | Description | Complexity | Depends On |
-|---|--------|------|-------------|------------|------------|
-| 1 | Review comment by @user | `path/to/file.ts:42` | Brief description | Small | — |
-| 2 | CI: test-suite | `path/to/file.test.ts` | Test assertion failure | Medium | #1 |
-| 3 | Review comment by @user | General | Architecture concern | Large | — |
-| ... | ... | ... | ... | ... | ... |
-
-### Suggested Resolution Order
-
-{Ordered list considering dependencies — which issues should be tackled first}
-
----
-
-## Detailed Plan
-
-### Issue 1: {Short title}
-
-**Source**: {Review comment by @username | CI check: {name} | Formal review by @username}
-**File(s)**: `{path/to/file}:{line}`
-**Complexity**: {Trivial | Small | Medium | Large}
-
-#### Context
-
-{Quote the original comment or CI error verbatim in a blockquote}
-
-> {exact comment text or error message}
-
-{If part of a thread, include the full thread to show the discussion}
-
-#### Current Code
-
-```{language}
-{The relevant code snippet from the PR diff, with enough context to understand the issue}
-```
-
-#### What Needs to Change
-
-{Clear explanation of what's wrong and what the expected behavior/code should be}
-
-#### Suggested Implementation
-
-```{language}
-{Concrete code showing the fix, or a detailed description of the approach if the fix is more complex}
-```
-
-#### Verification
-
-- {How to verify this fix works — specific test to run, behavior to check, etc.}
-
----
-
-### Issue 2: {Short title}
-{... repeat the same structure for each issue ...}
-
----
-
-## CI Failures
-
-### {Check Name}: {Classification}
-
-**Status**: {failure | error | timed_out}
-**Details URL**: {url}
-
-#### Error Output
-
-```
-{Exact error message or log excerpt}
-```
-
-#### Root Cause Analysis
-
-{What is causing this failure — be specific. Reference the exact lines of code if possible.}
-
-#### Fix
-
-{Step-by-step instructions to fix this CI failure}
-
-#### Files to Modify
-
-- `{path/to/file}:{line}` — {what to change}
-
----
-
-{... repeat for each CI failure ...}
-
-## Conflicting Feedback
-
-{If any comments conflict with each other, list them here}
-
-- **Conflict**: @{user1} says "{X}" but @{user2} says "{Y}" on `{file}`
-  - **Recommendation**: {Your suggested resolution, or flag for the developer to decide}
-
-{If no conflicts, omit this section}
-
-## Additional Recommendations
-
-{Any improvements you noticed while analyzing the PR that aren't explicitly requested in comments but would strengthen the PR. Keep this brief and clearly label these as optional.}
-
-## Checklist
-
-- [ ] Issue 1: {short title}
-- [ ] Issue 2: {short title}
-- [ ] ...
-- [ ] CI: {check name}
-- [ ] ...
-- [ ] All review threads resolved
-- [ ] All CI checks passing
-- [ ] Ready for re-review
-```
+Populate the template with:
+- Issues from Phase 2 (review comments) and Phase 3 (CI failures), cross-referenced per Phase 4b
+- Phase 4d complexity estimates and dependency notes in the Overview table
+- (If `DEEP_MODE`) Phase 4c agent findings, listed in **Additional Recommendations** as "Proactive — not flagged by reviewers"
 
 ---
 

@@ -97,106 +97,20 @@ Each finding is classified with:
 - **Confidence:** HIGH or MEDIUM
 - **Action type:** `auto-fix` (will be applied in Phase 4 if `--fix` is set) or `report` (needs human review)
 
-### 3a: Bugs & Security
+### 3a–3h: Find issues by category
 
-Look for:
-- Off-by-one errors, incorrect boundary conditions
-- Null/undefined dereferences in non-trivial paths
-- Race conditions in concurrent code
-- Incorrect boolean logic (De Morgan violations, inverted conditions)
-- Missing return statements, incorrect error propagation
-- Injection vulnerabilities (SQL, command, XSS, path traversal)
-- Hardcoded secrets, API keys, tokens
-- Missing input validation on external data
-- Insecure cryptographic usage
-- Improper authentication/authorization checks
-- SSRF, open redirects, unsafe URL construction
+Read `~/.dotfiles/ai/marketplace/plugins/my/commands/references/polish-categories.md` for the eight category definitions: bugs & security, idiomatic code, pattern adherence, duplication, over-engineering, comments, dead code & dead abstractions, structural simplification. Each category in the reference specifies what auto-fixes vs. what reports.
 
-For each function in the diff, trace its inputs to its outputs. Check boundary values of loops and conditionals. For each error/null check, verify the negative path is handled.
+Core principles that hold across all categories:
 
-All bugs/security findings: action `report` at MEDIUM+ confidence. These require human verification.
+- **Behavior preservation is paramount.** When in doubt between `auto-fix` and `report`, choose `report`. False positives in auto-fix erode trust.
+- **Ground every finding in evidence.** Use Grep/Glob to verify before reporting — never flag something you can't point at a specific line for.
+- **Bugs and security findings are always `report`.** Human verification required.
+- **Naming changes are always `report`.** Subjective and the model lacks domain context.
+- **Over-engineering findings are always `report`.** They require understanding intent.
+- **Don't auto-fix nesting reductions in functions with cleanup logic** (`defer`, `finally`, `ensure`, `with`) — the transformation can change cleanup ordering.
 
-### 3b: Idiomatic Code
-
-Check changed code against the language rules loaded in Phase 1. If no language rules were loaded for a given language, apply general idiom knowledge.
-
-Idiom fixes at HIGH confidence: action `auto-fix`. At MEDIUM confidence: action `report`.
-
-**Naming improvements:** All naming suggestions are classified as `report` regardless of confidence. Include the suggested new name in the finding so the user can accept it easily, but never auto-fix naming changes — naming is inherently subjective and the LLM may lack domain context (e.g., `k` in cryptography is standard convention, not a poor name).
-
-### 3c: Codebase Pattern Adherence
-
-Compare the changed code against patterns established in surrounding (unchanged) files:
-- Naming conventions (casing, prefixes, suffixes)
-- File/directory organization
-- Error handling style (custom error types, wrapping conventions)
-- Import organization
-- Test structure and naming
-- API patterns (request/response shapes, middleware usage)
-- Logging patterns (levels, structured fields)
-
-Pattern deviations: action `report` (these require understanding intent).
-
-### 3d: Duplication Detection
-
-Search for:
-- Existing utility functions that overlap with newly written code (use Grep to search the codebase)
-- Standard library functions that could replace custom implementations — at HIGH confidence when the replacement is semantically identical, classify as `auto-fix`; when there are subtle behavioral differences (error handling, edge cases with empty input), classify as `report`
-- Near-duplicate logic across changed files
-- Copy-pasted blocks with minor variations
-
-Duplication findings (except standard library replacements as noted above): action `report`.
-
-### 3e: Over-Engineering Detection
-
-Look for:
-- **Over-abstraction** — unnecessary interfaces, wrappers, or indirection layers that add no value
-- **Premature generalization** — generic solutions for problems that only exist in one form
-- **Gold plating** — features or options beyond what the code's current callers require
-- **Unnecessary indirection** — wrapper functions whose body is a single call to another function with the same or fewer parameters
-- **Speculative generality** — type parameters, config options, or extension points with exactly one user; a generic type instantiated with only one concrete type
-- **Premature DRY** — shared functions extracted from only 2-3 lines of code called from exactly 2 places, where the abstraction obscures intent
-- **Deep abstraction stacks** — chains of 3+ delegation layers where intermediate layers add no meaningful logic
-- **Config-driven complexity** — config/env vars for behavior that never varies across environments
-- **Defensive copies that aren't needed** — deep cloning or copying when consumers never mutate the data
-
-All over-engineering findings: action `report` (these require understanding intent). Never auto-fix.
-
-### 3f: Comment Quality
-
-Flag:
-- Tautological comments that repeat what the code says (`// increment i` above `i++`)
-- Stale comments that don't match the current code
-- Journal-style comments (changelogs in code)
-- Noise comments (commented-out code blocks, `// TODO` with no context)
-
-Preserve:
-- Comments explaining **why** (business rules, non-obvious decisions)
-- Warning comments (`// WARNING:`, `// HACK:`, `// NOTE:`)
-- Legal/license headers
-- API documentation comments
-
-Tautological comments at HIGH confidence: action `auto-fix`. All others: action `report`.
-
-### 3g: Dead Code & Dead Abstractions
-
-Perform call-chain analysis beyond simple reachability. For each category, use Grep/Glob to search the full codebase — not just the diff — to verify liveness.
-
-- **Dead exports** — functions, types, or constants exported but never imported anywhere in the codebase. Use Grep to search for import references across the project. Action: `report` (might be part of a public API).
-- **Dead parameters** — function parameters that are never read within the function body. Action: `report` by default. Only classify as `auto-fix` when ALL of: (1) the function is unexported/private, (2) Grep confirms a single call site in the codebase, and (3) the parameter is not part of an interface/trait/callback contract or public API surface.
-- **Dead branches** — conditional branches where the condition is always true or always false based on surrounding code or control flow. Action: `auto-fix` at HIGH confidence.
-- **Orphaned abstractions** — interfaces, traits, or protocols implemented by exactly one type with no indication of testing or extension intent. Action: `report`.
-- **Stale feature flags** — feature flags that are always on or always off with no toggle path in the codebase. Action: `report`.
-- **Dead error handling** — catch/rescue blocks for error types that the called function never throws. Common after refactors where the error type changes but the handler remains. Action: `report` (complements silent-failure-hunter, which detects *missing* error handling).
-- **Vestigial TODO/FIXME comments** — referencing closed issues, shipped features, or already-refactored code. If the TODO references an issue number, check if it's verifiable as closed. Action: `auto-fix` at HIGH confidence if verified closed, otherwise `report`.
-
-### 3h: Structural Simplification
-
-Look for opportunities to reduce nesting via early returns and guard clauses.
-
-- At HIGH confidence, classify as `auto-fix` when the function has a simple structure and the guard clause transformation is unambiguous.
-- Do NOT auto-fix nesting reduction in functions containing `defer`, `finally`, `ensure`, `with` (Python context manager), or any cleanup/teardown logic. Classify as `report` instead.
-- When no side effects or cleanup logic follows the if-block and the transformation is straightforward, `auto-fix` is appropriate.
+Walk through each of 3a-3h from the reference and produce findings, classifying each as `auto-fix` (HIGH confidence + safe per the per-category rules) or `report` (everything else).
 
 ### 3i: Dispatch Subagents
 

@@ -9,8 +9,7 @@
     "skills": [
       "./skills/improve/SKILL.md",
       "./skills/new-api-client/SKILL.md",
-      "./skills/overnight-improve/SKILL.md",
-      "./skills/ux-react/SKILL.md"
+      "./skills/overnight-improve/SKILL.md"
     ]
   }
 }

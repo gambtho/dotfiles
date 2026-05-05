@@ -79,155 +79,19 @@ Read `~/.claude/pr-reviews/{OWNER}/{REPO}/config.md` if it exists. This file con
 
 If this file does not exist, proceed without it. You will suggest creating one in the final report.
 
-### 1c: Pre-load File History for Changed-File Context
-
-This step runs **after Phase 4c selects the final PR list** — it is defined here for organizational clarity but must not be executed until the final candidate list is known. Phase 4c will instruct you to return here.
-
-For each PR in the final list (Medium and Large only), gather two signals per changed file — capped to avoid token bloat:
-
-**Git blame summary** (who last touched each file and when — useful for spotting files with high churn or single-author ownership):
-```
-git log --follow --oneline -10 -- <file>
-```
-Run for the top 5 most-changed files per PR (by lines changed from `gh pr view --json files`).
-
-**Prior PR review comments on these files** (what reviewers flagged before on the same code):
-```
-gh api graphql -f query='
-  query {
-    repository(owner: "{OWNER}", name: "{REPO}") {
-      pullRequests(states: MERGED, last: 20, orderBy: {field: UPDATED_AT, direction: DESC}) {
-        nodes {
-          number
-          title
-          reviews(first: 20) {
-            nodes {
-              comments(first: 20) {
-                nodes {
-                  path
-                  body
-                  author { login }
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-  }
-'
-```
-Filter the results to comments whose `path` matches any file in the current PR's changed file list. Keep at most 5 comments per file (most recent). Discard bot comments.
-
-Store as `FILE_HISTORY[{pr_number}]` — a map of file path → { recent_commits: [...], prior_review_comments: [...] }.
-
-**Skip condition**: omit this step for Lockfile-only and Small PRs — the overhead isn't worth it for trivial changes.
-
 ---
 
 ## Phase 2: Detect Project Stack
 
-**Goal**: Automatically determine the project's technology stack to generate a relevant review checklist.
+**Goal**: identify the project's technology stack so the review checklist matches what's actually in the repo.
 
-Examine the repository root to identify frameworks, languages, and conventions. Check for:
+Read `~/.dotfiles/ai/marketplace/plugins/my/commands/references/review-prs-stack-checklist.md`. It contains:
+- A detection table — files/markers that signal each language/framework/convention
+- The universal review checklist (always include)
+- Stack-specific checklists organized by language/framework
+- The assembly procedure for composing the final checklist
 
-### Language Markers
-| File | Language/Platform |
-|------|------------------|
-| `package.json` | Node.js / JavaScript / TypeScript |
-| `go.mod` | Go |
-| `Cargo.toml` | Rust |
-| `pyproject.toml` or `requirements.txt` or `setup.py` | Python |
-| `pom.xml` or `build.gradle` or `build.gradle.kts` | Java / Kotlin |
-| `Gemfile` | Ruby |
-| `mix.exs` | Elixir |
-| `*.csproj` or `*.sln` | C# / .NET |
-
-### Framework & Tooling Markers (check `package.json` dependencies if it exists)
-| Marker | Stack |
-|--------|-------|
-| `"react"` in dependencies | React frontend |
-| `"@mui/material"` in dependencies | MUI component library |
-| `.storybook/` directory | Storybook stories expected |
-| `"vitest"` in devDependencies | Vitest test framework |
-| `"jest"` in devDependencies | Jest test framework |
-| `"next"` in dependencies | Next.js |
-| `"vue"` in dependencies | Vue.js |
-| `angular.json` | Angular |
-| `tailwind.config.*` | Tailwind CSS |
-| `"i18next"` or `"react-i18next"` in dependencies | i18n expected |
-| `"express"` or `"fastify"` or `"koa"` in dependencies | Node.js backend |
-
-### Convention Markers
-| File | Convention |
-|------|-----------|
-| `LICENSE` | Read it to determine expected license type |
-| `CONTRIBUTING.md` | Read for contribution guidelines (commit format, PR requirements) |
-| `CLAUDE.md` or `AGENTS.md` | Read for project-specific coding guidelines |
-| `.eslintrc*` or `eslint.config.*` | ESLint style conventions in use |
-| `.prettierrc*` | Prettier formatting in use |
-| `Makefile` or `justfile` | Build/task conventions |
-
-### Build the Review Checklist
-
-Based on what you detect, compose the **Stack-Specific Checklist** by selecting relevant items from the menu below. Only include sections for technologies actually detected in this project.
-
-**JavaScript/TypeScript (if detected):**
-- TypeScript types are correct (no `any` unless justified)
-- No `console.log` or debug statements left in production code
-- Async/await error handling is correct (no unhandled promise rejections)
-- Dependencies added to the correct section (dependencies vs devDependencies)
-
-**React (if detected):**
-- Components follow existing patterns in the codebase
-- Props are properly typed
-- Effects have correct dependency arrays
-- No unnecessary re-renders from object/function references in render
-
-**MUI (if detected):**
-- Uses MUI components consistently (not raw HTML for styled UI elements)
-- Theme-aware colors used (no hardcoded colors that break dark mode)
-
-**Storybook (if detected):**
-- New components have Storybook stories (`.stories.tsx` / `.stories.jsx`)
-- Stories cover meaningful states (not just default rendering)
-
-**i18n (if detected):**
-- User-facing strings are internationalized (wrapped in `t()` / `useTranslation`)
-
-**Vitest/Jest (if detected):**
-- Tests use the project's test framework and assertion patterns
-- Tests follow existing patterns (React Testing Library, etc.)
-
-**Go (if detected):**
-- All errors are checked and handled
-- Exported functions have doc comments
-- No goroutine leaks (goroutines have proper lifecycle management)
-- Input validation for external data (no command injection, path traversal)
-- Tests use the project's assertion library (testify, standard, etc.)
-
-**Rust (if detected):**
-- Proper use of `Result` and `Option` types
-- No unnecessary `unwrap()` / `expect()` in library code
-- Lifetime annotations are correct
-
-**Python (if detected):**
-- Type hints present on public functions
-- Proper exception handling (no bare `except:`)
-- No security issues (SQL injection, command injection, path traversal)
-
-**Java/Kotlin (if detected):**
-- Proper null handling
-- Resources properly closed (try-with-resources)
-- Thread safety considered for shared state
-
-**License Header (if LICENSE file detected):**
-- License header present on new source files matching the project's license
-
-**Commit Message Format (if CONTRIBUTING.md specifies one, or config.md defines one):**
-- Commit messages follow the project's required format
-
-Print the composed checklist so the user can see what will be checked.
+Walk the detection table against the repo root. Assemble the final checklist as **universal items** plus each matched stack-specific section. Print the composed checklist so the user sees what will be checked, and pass it to each review agent in Phase 6.
 
 ---
 
@@ -333,7 +197,42 @@ Filter to PRs where BOTH review count AND comment count are 0.
 
 5. Print a summary table of the PRs that will be reviewed (including size category and model) and proceed.
 
-6. **Execute Phase 1c now** using the final PR list selected above — fetch the file history (git log + prior review comments) for Medium and Large PRs before moving to Phase 5.
+6. **Pre-load file history for Medium and Large PRs.** This is the per-PR context for changed files — skip for Lockfile-only and Small (the overhead isn't worth it for trivial changes). For each Medium/Large PR, gather two signals per changed file, capped to avoid token bloat:
+
+   **Git blame summary** (who last touched each file and when — flags files with high churn or single-author ownership). Run for the top 5 most-changed files per PR (by lines changed from `gh pr view --json files`):
+   ```
+   git log --follow --oneline -10 -- <file>
+   ```
+
+   **Prior review comments on these files** (what reviewers flagged before on the same code):
+   ```
+   gh api graphql -f query='
+     query {
+       repository(owner: "{OWNER}", name: "{REPO}") {
+         pullRequests(states: MERGED, last: 20, orderBy: {field: UPDATED_AT, direction: DESC}) {
+           nodes {
+             number
+             title
+             reviews(first: 20) {
+               nodes {
+                 comments(first: 20) {
+                   nodes {
+                     path
+                     body
+                     author { login }
+                   }
+                 }
+               }
+             }
+           }
+         }
+       }
+     }
+   '
+   ```
+   Filter results to comments whose `path` matches any file in the current PR's changed file list. Keep at most 5 comments per file (most recent). Discard bot comments.
+
+   Store as `FILE_HISTORY[{pr_number}]` — a map of file path → `{ recent_commits: [...], prior_review_comments: [...] }`. Phase 6 passes this to each review agent.
 
 ---
 
@@ -403,27 +302,6 @@ For each PR, provide the agent with:
 6. **Any relevant learnings** about this author or common issues
 7. **Size category and re-review flag**: so the agent knows whether to do a full review, summary, or focused delta review
 8. **File history** from Phase 1c (if available): for each changed file, the recent commit log and any prior review comments on that file from merged PRs. Instruct the agent: "If a prior review comment on a file is still relevant to the current diff (same area, same pattern), flag it as a recurring issue. If the recent commit log shows high churn on a file, note it as a stability concern."
-
-### Universal Review Checklist (always include)
-
-**Code Quality:**
-- No obvious bugs or logic errors
-- No security vulnerabilities (OWASP top 10)
-- No unnecessary complexity or over-engineering
-- Proper error handling and edge cases considered
-- No duplicated code that should be abstracted
-- No debug statements left in production code
-
-**Alignment:**
-- Changes match the PR description
-- Changes address the linked issue (if any)
-- No unrelated changes mixed in
-- Scope is appropriate (not too broad, not incomplete)
-
-**Testing:**
-- New functionality has test coverage
-- Tests are meaningful (not just testing implementation details)
-- Edge cases covered in tests
 
 ### Specialized Agent Augmentation (Medium/Large PRs only)
 
