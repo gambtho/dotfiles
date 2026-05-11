@@ -6,6 +6,8 @@
 # (see ~/.dotfiles/projects/). Keep it out of public/open-source commits.
 .claude/
 CLAUDE.md
+CLAUDE.local.md
+AGENTS.local.md
 
 # Personal docker-compose overrides (written by my:project-claude-setup skill).
 # Compose auto-merges docker-compose.override.yml; treat it as host-specific.
