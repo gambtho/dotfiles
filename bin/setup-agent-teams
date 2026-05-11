@@ -109,10 +109,14 @@ declare -a NEW_ALLOWS=(
 )
 # Intentionally NOT adding Read(**) — too broad. Scoped reads should be added per-project.
 
-# WARNING: I have not verified that `teammateMode` and
-# `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` are real keys. If you got them
-# from a doc, great; if not, double-check before relying on them — Claude
-# Code will silently ignore unknown keys.
+# `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` enables the (experimental) agent-teams
+# feature; `teammateMode: auto` picks split panes inside tmux/iTerm2 and falls
+# back to in-process otherwise. Both are documented at
+# https://code.claude.com/docs/en/agent-teams and .../docs/en/settings.
+# Note: Windows Terminal has panes but no runtime control API a running
+# program inside a pane can use to spawn siblings (unlike `tmux split-window`
+# or iTerm2's Python API), so agent-teams split-pane mode falls back to
+# in-process there. To get split panes under WT, run inside tmux first.
 NEW_JSON_FRAGMENT=$(jq -n --argjson allows "$(printf '%s\n' "${NEW_ALLOWS[@]}" | jq -R . | jq -s .)" '
   {
     env: { CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: "1" },

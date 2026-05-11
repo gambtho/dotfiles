@@ -18,7 +18,14 @@ command -v jq           >/dev/null || { echo "jq not on PATH (sudo apt install j
   || { echo "No .devcontainer/ here ($(pwd))" >&2; exit 1; }
 
 # devcontainer up prints banner lines followed by a single JSON line.
-out=$(devcontainer up --workspace-folder . | tee /dev/tty)
+# Echo the banner to the terminal when we have one; otherwise capture silently
+# (the script is normally launched from a Windows Terminal profile, but guard
+# against headless invocation so the pipeline doesn't fail on a missing tty).
+if [[ -t 1 ]]; then
+  out=$(devcontainer up --workspace-folder . | tee /dev/tty)
+else
+  out=$(devcontainer up --workspace-folder .)
+fi
 json=$(printf '%s\n' "$out" | tail -n 1)
 jq empty <<<"$json" 2>/dev/null \
   || { echo "Failed to parse JSON from devcontainer up output" >&2; exit 1; }

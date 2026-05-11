@@ -88,13 +88,10 @@ if [[ "$MODE" == "create" ]]; then
     info "Overlay already exists at $OVERLAY"
   else
     mkdir -p "$OVERLAY/.claude"
-    cat > "$OVERLAY/CLAUDE.md" <<EOF
-# $NAME — personal notes
-
-Personal Claude Code instructions for this project. Lives in
-~/.dotfiles/projects/$NAME/ and is symlinked into the project tree.
-
-EOF
+    # CLAUDE.md is intentionally empty — the project-claude-setup skill defers
+    # CLAUDE.md content generation to `/init`, which reads the codebase. We
+    # only create the file so the symlink target exists.
+    : > "$OVERLAY/CLAUDE.md"
     cat > "$OVERLAY/.claude/settings.json" <<'EOF'
 {
   "permissions": {
