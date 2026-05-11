@@ -1,6 +1,7 @@
 {
   "env": {
-    "ANTHROPIC_MODEL": "claude-opus-4-7-1m"
+    "ANTHROPIC_MODEL": "claude-opus-4-7-1m",
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
   },
   "permissions": {
     "allow": [
@@ -384,7 +385,15 @@
       "Bash(cd /home/tng/.dotfiles*)",
       "Bash(cd /home/tng/workspace/slabledger*)",
       "Bash(claude plugin:*)",
-      "Bash(claude:*)"
+      "Bash(claude:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git status)",
+      "Bash(git show:*)",
+      "Bash(gh pr view:*)",
+      "Bash(gh issue view:*)",
+      "Bash(gh pr list:*)",
+      "Bash(gh issue list:*)"
     ],
     "defaultMode": "auto"
   },
@@ -426,5 +435,6 @@
   "effortLevel": "high",
   "skipDangerousModePermissionPrompt": true,
   "skipAutoPermissionPrompt": true,
-  "compactSystemPrompt": "When summarizing this conversation, preserve the following in priority order:\n\n1. ACTIVE TASK STATE: What the user was working on, which files were modified, what was completed and what remains. Include specific file paths and function names.\n\n2. DECISIONS AND REASONING: Any choices made during the session, including why alternatives were rejected. If the user corrected my approach, record both the correction and the reason.\n\n3. BEHAVIORAL CONSTRAINTS (from the user's CLAUDE.md): Scope discipline (minimum change, propose expansions before doing them), verify before acting (run git/gh before amending, cite evidence before claiming completion), stop and ask instead of guessing, run things myself via Bash rather than asking the user to run them.\n\nThe summary should be dense and specific — err toward preserving too much detail rather than too little. Avoid vague statements like 'the user was working on the codebase.' Name the actual files, decisions, and constraints."
+  "compactSystemPrompt": "When summarizing this conversation, preserve the following in priority order:\n\n1. ACTIVE TASK STATE: What the user was working on, which files were modified, what was completed and what remains. Include specific file paths and function names.\n\n2. DECISIONS AND REASONING: Any choices made during the session, including why alternatives were rejected. If the user corrected my approach, record both the correction and the reason.\n\n3. BEHAVIORAL CONSTRAINTS (from the user's CLAUDE.md): Scope discipline (minimum change, propose expansions before doing them), verify before acting (run git/gh before amending, cite evidence before claiming completion), stop and ask instead of guessing, run things myself via Bash rather than asking the user to run them.\n\nThe summary should be dense and specific — err toward preserving too much detail rather than too little. Avoid vague statements like 'the user was working on the codebase.' Name the actual files, decisions, and constraints.",
+  "teammateMode": "auto"
 }
