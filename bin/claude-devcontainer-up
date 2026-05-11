@@ -34,11 +34,14 @@ wd=$(jq -r '.remoteWorkspaceFolder // "/workspace"' <<<"$json")
 if ! docker exec "$cid" sh -c 'command -v tmux >/dev/null 2>&1'; then
   echo "→ Installing tmux inside container ($cid)..." >&2
   if docker exec --user root "$cid" sh -c 'command -v apt-get >/dev/null'; then
-    docker exec --user root "$cid" sh -c 'apt-get update -qq && apt-get install -y -qq tmux' >&2
+    docker exec --user root "$cid" sh -c 'apt-get update -qq && apt-get install -y -qq tmux' >&2 \
+      || { echo "Failed to install tmux via apt-get in $cid; add tmux to the devcontainer image" >&2; exit 1; }
   elif docker exec --user root "$cid" sh -c 'command -v apk >/dev/null'; then
-    docker exec --user root "$cid" sh -c 'apk add --no-cache tmux' >&2
+    docker exec --user root "$cid" sh -c 'apk add --no-cache tmux' >&2 \
+      || { echo "Failed to install tmux via apk in $cid; add tmux to the devcontainer image" >&2; exit 1; }
   elif docker exec --user root "$cid" sh -c 'command -v dnf >/dev/null'; then
-    docker exec --user root "$cid" sh -c 'dnf install -y tmux' >&2
+    docker exec --user root "$cid" sh -c 'dnf install -y tmux' >&2 \
+      || { echo "Failed to install tmux via dnf in $cid; add tmux to the devcontainer image" >&2; exit 1; }
   else
     echo "Couldn't find apt-get/apk/dnf — please add tmux to your devcontainer image." >&2
     exit 1
