@@ -200,7 +200,7 @@ Report to the user:
 - Files created/updated in `~/.dotfiles/projects/<slug>/`
 - Symlinks created in the project worktree
 - Commands to commit dotfiles changes:
-  ```
+  ```bash
   cd ~/.dotfiles && git add projects/<slug> && git commit -m "add project overlay for <slug>"
   ```
 - For case (a): rebuild the devcontainer to pick up new mounts —
