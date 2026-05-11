@@ -1,0 +1,42 @@
+# Better prefix
+unbind C-b
+set -g prefix C-a
+bind C-a send-prefix
+
+# Sensible defaults
+set -g mouse on                    # click panes, scroll naturally
+set -g base-index 1                # windows start at 1, not 0
+setw -g pane-base-index 1
+set -g renumber-windows on
+set -g history-limit 50000         # generous scrollback
+set -sg escape-time 0              # responsive ESC for vim/Claude
+set -g focus-events on             # let vim/nvim see focus gained/lost
+setw -g aggressive-resize on       # resize to smallest *attached* client, not session
+
+# Colors / truecolor terminal
+set -g default-terminal "tmux-256color"
+set -ga terminal-overrides ",*256col*:Tc"
+
+# Easier splits — match the visual direction, keep cwd
+bind | split-window -h -c "#{pane_current_path}"
+bind - split-window -v -c "#{pane_current_path}"
+unbind '"'
+unbind %
+
+# Reload config without restart
+bind r source-file ~/.tmux.conf \; display "Config reloaded"
+
+# Vim-style pane navigation
+bind h select-pane -L
+bind j select-pane -D
+bind k select-pane -U
+bind l select-pane -R
+
+# Optional: status bar on top (uncomment if preferred)
+# set -g status-position top
+
+# claude-code-agent-teams-config-start
+# Source clipboard + vi-copy bindings when win32yank is available (WSL).
+if-shell 'command -v win32yank >/dev/null 2>&1' \
+    'source-file ~/.dotfiles/tools/tmux/agent-teams-extras.conf'
+# claude-code-agent-teams-config-end

@@ -1,9 +1,9 @@
----
-name: devcontainer-host-mounts
-description: Set up a `.devcontainer/docker-compose.override.yml` that mounts the host's dev tools (Claude Code config, OpenCode config, dotfiles, SSH keys, gh CLI auth) into a devcontainer so the container reuses host credentials and tooling. Also wires up the `host.docker.internal` host entry and an optional `gitconfig_local` config for HTTPS credential reuse. Use whenever the user is setting up or re-bootstrapping a devcontainer, asks to share host SSH/gh/Claude/OpenCode/dotfiles with a container, mentions a docker-compose override file, or starts a new project that uses `.devcontainer/docker-compose.yml` — even if they don't say the word "override".
----
+# Devcontainer host mounts (reference)
 
-# Devcontainer host mounts
+> This file is referenced from `SKILL.md` in this directory. It is the
+> full content of the original `my:devcontainer-host-mounts` skill, kept
+> here as a deep-dive for the host-mount step of `my:project-claude-setup`.
+> No YAML frontmatter — this is not a separately-loaded skill.
 
 The user runs the same devcontainer pattern across most of their projects: a `.devcontainer/docker-compose.yml` that defines the dev container, plus a `.devcontainer/docker-compose.override.yml` that adds host-specific bind mounts so the container reuses what's already on the host (SSH keys, `gh` auth, Claude Code config + plugins + commands, OpenCode config, dotfiles). Compose auto-merges the override on top of the base file.
 

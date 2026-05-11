@@ -1,0 +1,19 @@
+# ~/.zprofile is sourced by zsh login shells *before* .zshrc.
+# Putting `mise activate` here means non-interactive login shells
+# (cron, `wsl.exe -- zsh -lc`, ssh ForceCommand, etc.) also get the
+# mise-managed PATH (node, go, python, devcontainer CLI, ...).
+#
+# Interactive shells still go through .zshrc afterwards, which is harmless
+# since mise activate is idempotent.
+
+if command -v mise >/dev/null 2>&1; then
+  eval "$(mise activate zsh --shims)"
+fi
+
+# Make ~/.dotfiles/bin and ~/.local/bin available in non-interactive login
+# shells (cron, `wsl.exe -- zsh -lc <cmd>`, ssh ForceCommand). .zshrc still
+# sets the full interactive PATH on top of this.
+for d in "$HOME/.dotfiles/bin" "$HOME/.local/bin" "$HOME/bin"; do
+  [[ -d "$d" && ":$PATH:" != *":$d:"* ]] && PATH="$d:$PATH"
+done
+export PATH

@@ -1,0 +1,176 @@
+#!/usr/bin/env bash
+# bin/setup-agent-teams
+#
+# WSL setup for the Claude Code agent-teams + tmux clipboard workflow.
+# Edits dotfiles SOURCE FILES (not the symlinks):
+#   - ~/.dotfiles/tools/tmux/tmux.conf.symlink  (clipboard bindings already wired)
+#   - ~/.dotfiles/ai/claude/settings.json       (env + teammateMode + scoped allows)
+#
+# Installs apt/binary deps if missing. Idempotent. Asks before sudo or writes.
+#
+# Usage: bin/setup-agent-teams [--yes] [--dry-run]
+
+set -euo pipefail
+
+DOTFILES="$HOME/.dotfiles"
+TMUX_CONF="$DOTFILES/tools/tmux/tmux.conf.symlink"
+CLAUDE_SETTINGS="$DOTFILES/ai/claude/settings.json"
+WIN32YANK_VER="v0.1.1"
+
+ASSUME_YES=0
+DRY_RUN=0
+for arg in "$@"; do
+  case "$arg" in
+    -y|--yes)     ASSUME_YES=1 ;;
+    -n|--dry-run) DRY_RUN=1 ;;
+    -h|--help)    sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) echo "unknown arg: $arg" >&2; exit 2 ;;
+  esac
+done
+
+if [[ -t 1 ]]; then
+  C_INFO=$'\033[36m'; C_OK=$'\033[32m'; C_WARN=$'\033[33m'; C_ERR=$'\033[31m'; C_OFF=$'\033[0m'
+else
+  C_INFO=""; C_OK=""; C_WARN=""; C_ERR=""; C_OFF=""
+fi
+info()  { printf '%s%s%s\n' "$C_INFO" "$*" "$C_OFF"; }
+ok()    { printf '%s%s%s\n' "$C_OK"   "$*" "$C_OFF"; }
+warn()  { printf '%s%s%s\n' "$C_WARN" "$*" "$C_OFF" >&2; }
+die()   { printf '%s%s%s\n' "$C_ERR"  "$*" "$C_OFF" >&2; exit 1; }
+confirm() {
+  (( ASSUME_YES )) && return 0
+  read -r -p "$1 [y/N] " a; [[ "$a" =~ ^[Yy]$ ]]
+}
+
+# ── 1. Sanity ────────────────────────────────────────────────────────────────
+uname -a | grep -qi microsoft || die "Not on WSL (uname -a lacks 'microsoft'). This script is WSL-only."
+[[ -f /.dockerenv || -n "${REMOTE_CONTAINERS:-}" ]] \
+  && die "Looks like we're inside a devcontainer (/.dockerenv or \$REMOTE_CONTAINERS set). Run this on the host WSL instance."
+[[ -d "$DOTFILES" ]] || die "Expected $DOTFILES to exist."
+[[ -f "$TMUX_CONF" ]] || die "Missing $TMUX_CONF (your tmux dotfile)."
+[[ -f "$CLAUDE_SETTINGS" ]] || die "Missing $CLAUDE_SETTINGS (your claude dotfile)."
+command -v jq      >/dev/null || die "jq is required (sudo apt install jq)."
+command -v python3 >/dev/null || die "python3 is required."
+ok "Sanity OK: WSL, not in container, dotfiles present."
+
+# ── 2. tmux ──────────────────────────────────────────────────────────────────
+if command -v tmux >/dev/null; then
+  ok "tmux already installed: $(tmux -V)"
+else
+  info "tmux not found. About to run: sudo apt-get update && sudo apt-get install -y tmux"
+  confirm "Proceed?" || die "Aborted."
+  (( DRY_RUN )) || { sudo apt-get update && sudo apt-get install -y tmux; }
+  ok "tmux installed."
+fi
+
+# ── 3. win32yank ─────────────────────────────────────────────────────────────
+if command -v win32yank >/dev/null; then
+  ok "win32yank already installed: $(command -v win32yank)"
+else
+  url="https://github.com/equalsraf/win32yank/releases/download/${WIN32YANK_VER}/win32yank-x64.zip"
+  info "win32yank not found. Will install ${WIN32YANK_VER} from:"
+  info "  $url"
+  info "Steps: curl → unzip → chmod +x → sudo mv to /usr/local/bin/win32yank"
+  confirm "Proceed?" || die "Aborted."
+  if (( ! DRY_RUN )); then
+    tmpdir=$(mktemp -d); trap 'rm -rf "$tmpdir"' EXIT
+    curl -fsSL "$url" -o "$tmpdir/win32yank.zip"
+    command -v unzip >/dev/null || { sudo apt-get install -y unzip; }
+    unzip -p "$tmpdir/win32yank.zip" win32yank.exe > "$tmpdir/win32yank.exe"
+    chmod +x "$tmpdir/win32yank.exe"
+    sudo mv "$tmpdir/win32yank.exe" /usr/local/bin/win32yank
+  fi
+  ok "win32yank installed."
+fi
+
+# ── 4. tmux.conf clipboard block ─────────────────────────────────────────────
+if grep -q 'claude-code-agent-teams-config-start' "$TMUX_CONF"; then
+  ok "tmux.conf clipboard block already present — leaving as-is."
+else
+  warn "Expected marker block in $TMUX_CONF but it's missing. (Script writes it directly to the dotfile.)"
+  die  "Pull the latest dotfiles or re-create the marker block manually."
+fi
+# Sanity-check the helper file exists.
+[[ -f "$DOTFILES/tools/tmux/agent-teams-extras.conf" ]] \
+  || die "Missing $DOTFILES/tools/tmux/agent-teams-extras.conf"
+ok "tmux clipboard bindings wired (sourced when win32yank is on PATH)."
+
+# ── 5. Claude settings deep-merge ────────────────────────────────────────────
+# Keys to ensure. Edit the SOURCE file in the dotfiles repo.
+declare -a NEW_ALLOWS=(
+  "Bash(git diff:*)"
+  "Bash(git log:*)"
+  "Bash(git status)"
+  "Bash(git show:*)"
+  "Bash(gh pr view:*)"
+  "Bash(gh issue view:*)"
+  "Bash(gh pr list:*)"
+  "Bash(gh issue list:*)"
+)
+# Intentionally NOT adding Read(**) — too broad. Scoped reads should be added per-project.
+
+# `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` enables the (experimental) agent-teams
+# feature; `teammateMode: auto` picks split panes inside tmux/iTerm2 and falls
+# back to in-process otherwise. Both are documented at
+# https://code.claude.com/docs/en/agent-teams and .../docs/en/settings.
+# Note: Windows Terminal has panes but no runtime control API a running
+# program inside a pane can use to spawn siblings (unlike `tmux split-window`
+# or iTerm2's Python API), so agent-teams split-pane mode falls back to
+# in-process there. To get split panes under WT, run inside tmux first.
+NEW_JSON_FRAGMENT=$(jq -n --argjson allows "$(printf '%s\n' "${NEW_ALLOWS[@]}" | jq -R . | jq -s .)" '
+  {
+    env: { CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: "1" },
+    teammateMode: "auto",
+    permissions: { allow: $allows }
+  }
+')
+
+merged=$(mktemp); trap 'rm -f "$merged"' EXIT
+# Preserve top-level key order from the existing file; only mutate the
+# specific fields we care about. The allow array gets dedupe'd but its
+# *order* (insertion order) is preserved — sorting it would create a huge
+# noisy diff against the existing unsorted file.
+jq --argjson new "$NEW_JSON_FRAGMENT" '
+  .env          = ((.env // {}) + ($new.env))
+  | .teammateMode = ($new.teammateMode)
+  | .permissions = (.permissions // {})
+  | .permissions.allow = (
+      ((.permissions.allow // []) + $new.permissions.allow)
+      | reduce .[] as $x ([]; if index($x) then . else . + [$x] end)
+    )
+' "$CLAUDE_SETTINGS" > "$merged"
+
+python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$merged" \
+  || die "Merged claude settings.json failed JSON validation."
+
+if diff -q "$CLAUDE_SETTINGS" "$merged" >/dev/null; then
+  ok "Claude settings already up to date."
+else
+  echo
+  info "──── proposed diff (claude settings.json) ────"
+  diff -u "$CLAUDE_SETTINGS" "$merged" || true
+  echo
+  if (( DRY_RUN )); then
+    warn "--dry-run; not writing."
+  else
+    confirm "Apply changes to $CLAUDE_SETTINGS?" || die "Aborted."
+    ts=$(date -u +%Y%m%dT%H%M%SZ)
+    cp "$CLAUDE_SETTINGS" "${CLAUDE_SETTINGS}.backup-${ts}"
+    ok  "Backup: ${CLAUDE_SETTINGS}.backup-${ts}"
+    cp "$merged" "$CLAUDE_SETTINGS"
+    ok  "Updated: $CLAUDE_SETTINGS"
+  fi
+fi
+
+# ── 6. Final verification ────────────────────────────────────────────────────
+echo
+info "──── verification ────"
+echo "tmux:      $(tmux -V 2>/dev/null || echo missing)"
+echo "win32yank: $(command -v win32yank || echo missing)"
+echo "claude settings symlink: $(readlink -f "$HOME/.claude/settings.json")"
+echo "tmux.conf symlink:       $(readlink -f "$HOME/.tmux.conf")"
+echo
+ok "Done."
+echo "  • tmux changes: run  tmux source-file ~/.tmux.conf  in any existing session,"
+echo "    or just open a new one."
+echo "  • Claude Code picks up settings.json on next launch."
