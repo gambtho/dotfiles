@@ -76,7 +76,7 @@ Wait for the user to confirm before generating anything.
 
 The overlay directory under `~/.dotfiles/projects/<slug>/` is the master copy. The project worktree only ever has symlinks pointing into it.
 
-Slug derivation: `basename "$PROJECT_DIR"`. Preserve case. Don't transform — the user's existing layout (`~/workspace/eveDMV`, `~/workspace/wanderer-kills`) uses verbatim directory names.
+Slug derivation: the basename of the project directory (e.g., for a project at `~/workspace/eveDMV`, `basename ~/workspace/eveDMV` yields `eveDMV` — that's the slug). Preserve case. Don't transform — the user's existing layout (`~/workspace/eveDMV`, `~/workspace/wanderer-kills`) uses verbatim directory names.
 
 Use the existing `~/.dotfiles/bin/claude-link-project --create <project-dir>` helper rather than inlining the logic. It:
 - Creates `~/.dotfiles/projects/<slug>/{CLAUDE.md,.claude/settings.json}` placeholders
