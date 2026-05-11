@@ -20,6 +20,8 @@ command -v jq           >/dev/null || { echo "jq not on PATH (sudo apt install j
 # devcontainer up prints banner lines followed by a single JSON line.
 out=$(devcontainer up --workspace-folder . | tee /dev/tty)
 json=$(printf '%s\n' "$out" | tail -n 1)
+jq empty <<<"$json" 2>/dev/null \
+  || { echo "Failed to parse JSON from devcontainer up output" >&2; exit 1; }
 
 cid=$(jq -r '.containerId'             <<<"$json")
 user=$(jq -r '.remoteUser // "root"'   <<<"$json")
