@@ -171,7 +171,7 @@ trap 'rm -f "$NEW_PROFILES_JSON"' EXIT
   done
   # Generic attach profile
   attach_guid="$(uuidgen)"
-  attach_cmd="$WSLEXE --distribution $DISTRO_NAME -- $LOGIN_SHELL -lc \"docker exec -it \$(docker ps --filter 'label=devcontainer.local_folder' --format '{{.Names}}' | head -1) bash\""
+  attach_cmd="$WSLEXE --distribution $DISTRO_NAME -- $LOGIN_SHELL -lc \"cid=\\\$(docker ps --filter 'label=devcontainer.local_folder' --format '{{.Names}}' | head -1); if [ -z \\\"\\\$cid\\\" ]; then echo 'No running devcontainer found' >&2; exit 1; fi; docker exec -it \\\$cid bash\""
   echo ","
   jq -n --arg guid "{$attach_guid}" --arg cmd "$attach_cmd" '{
     guid: $guid,
