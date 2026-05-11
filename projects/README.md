@@ -10,7 +10,7 @@ projects where you don't want to commit your AI setup. Useful when:
 
 ## Layout
 
-```
+```text
 projects/
   <project-name>/
     CLAUDE.md          # your personal instructions for this project
