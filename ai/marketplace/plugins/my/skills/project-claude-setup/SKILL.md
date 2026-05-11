@@ -63,7 +63,7 @@ Read concrete files. **Don't infer**; cite the file you read.
 
 Summarize in 4–6 lines:
 
-```
+```text
 Project: <name> (slug: <basename>)
 Language: <lang> (from <file>)
 Build: <cmd> | Test: <cmd> | Lint: <cmd>  (from <Makefile/scripts/CI>)
