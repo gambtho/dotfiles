@@ -15,7 +15,7 @@ set -euo pipefail
 DOTFILES="$HOME/.dotfiles"
 TMUX_CONF="$DOTFILES/tools/tmux/tmux.conf.symlink"
 CLAUDE_SETTINGS="$DOTFILES/ai/claude/settings.json"
-WIN32YANK_VER="v0.1.2"
+WIN32YANK_VER="v0.1.1"
 
 ASSUME_YES=0
 DRY_RUN=0
