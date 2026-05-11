@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# claude-devcontainer-up
+#
+# Bring up the devcontainer in the current directory and attach to a tmux
+# session named "claude" inside it. Works around a `devcontainer exec` bug
+# on compose-based setups by docker-exec'ing directly with the containerId
+# reported by `devcontainer up`.
+#
+# Usage: cd into a project with .devcontainer/, then run this.
+
+set -euo pipefail
+
+command -v devcontainer >/dev/null || { echo "devcontainer CLI not on PATH" >&2; exit 127; }
+command -v docker       >/dev/null || { echo "docker not on PATH" >&2; exit 127; }
+command -v jq           >/dev/null || { echo "jq not on PATH (sudo apt install jq)" >&2; exit 127; }
+
+[[ -f .devcontainer/devcontainer.json || -f .devcontainer.json ]] \
+  || { echo "No .devcontainer/ here ($(pwd))" >&2; exit 1; }
+
+# devcontainer up prints banner lines followed by a single JSON line.
+out=$(devcontainer up --workspace-folder . | tee /dev/tty)
+json=$(printf '%s\n' "$out" | tail -n 1)
+
+cid=$(jq -r '.containerId'             <<<"$json")
+user=$(jq -r '.remoteUser // "root"'   <<<"$json")
+wd=$(jq -r '.remoteWorkspaceFolder // "/workspace"' <<<"$json")
+
+[[ -n "$cid" && "$cid" != "null" ]] || { echo "Failed to parse containerId from devcontainer up output" >&2; exit 1; }
+
+# Ensure tmux is available inside the container. Devcontainer images
+# vary — some ship tmux, most don't. Install on first attach.
+if ! docker exec "$cid" sh -c 'command -v tmux >/dev/null 2>&1'; then
+  echo "→ Installing tmux inside container ($cid)..." >&2
+  if docker exec --user root "$cid" sh -c 'command -v apt-get >/dev/null'; then
+    docker exec --user root "$cid" sh -c 'apt-get update -qq && apt-get install -y -qq tmux' >&2
+  elif docker exec --user root "$cid" sh -c 'command -v apk >/dev/null'; then
+    docker exec --user root "$cid" sh -c 'apk add --no-cache tmux' >&2
+  elif docker exec --user root "$cid" sh -c 'command -v dnf >/dev/null'; then
+    docker exec --user root "$cid" sh -c 'dnf install -y tmux' >&2
+  else
+    echo "Couldn't find apt-get/apk/dnf — please add tmux to your devcontainer image." >&2
+    exit 1
+  fi
+fi
+
+exec docker exec -it -u "$user" -w "$wd" "$cid" tmux new -A -s claude

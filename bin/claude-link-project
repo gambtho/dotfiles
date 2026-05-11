@@ -1,0 +1,140 @@
+#!/usr/bin/env bash
+# bin/claude-link-project — symlink personal claude overlays into a project tree.
+#
+# Looks up an overlay at ~/.dotfiles/projects/<basename(project-dir)>/
+# and symlinks CLAUDE.md and .claude/ into the project. The global gitignore
+# excludes those paths, so the project repo stays clean.
+#
+# Usage:
+#   claude-link-project <project-dir>          # link
+#   claude-link-project --unlink <project-dir> # remove symlinks (overlay stays)
+#   claude-link-project --create <project-dir> # scaffold overlay then link
+#
+# Example:
+#   mkdir -p ~/.dotfiles/projects/slabledger/.claude
+#   echo "# slabledger notes" > ~/.dotfiles/projects/slabledger/CLAUDE.md
+#   claude-link-project ~/workspace/slabledger
+
+set -euo pipefail
+
+DOTFILES="${DOTFILES:-$HOME/.dotfiles}"
+OVERLAY_ROOT="$DOTFILES/projects"
+
+MODE=link
+PROJECT_DIR=""
+SKIP_CLAUDE_MD=0
+
+usage() { sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -u|--unlink)      MODE=unlink; shift ;;
+    -c|--create)      MODE=create; shift ;;
+    --no-claude-md)   SKIP_CLAUDE_MD=1; shift ;;
+    -h|--help)        usage 0 ;;
+    -*)               echo "unknown flag: $1" >&2; usage 1 ;;
+    *)                PROJECT_DIR="$1"; shift ;;
+  esac
+done
+
+[[ -n "$PROJECT_DIR" ]] || { echo "missing project dir" >&2; usage 1; }
+PROJECT_DIR="$(cd "$PROJECT_DIR" && pwd -P)" || { echo "no such dir: $PROJECT_DIR" >&2; exit 1; }
+NAME="$(basename "$PROJECT_DIR")"
+OVERLAY="$OVERLAY_ROOT/$NAME"
+
+if [[ -t 1 ]]; then
+  C_INFO=$'\033[36m'; C_OK=$'\033[32m'; C_WARN=$'\033[33m'; C_ERR=$'\033[31m'; C_OFF=$'\033[0m'
+else
+  C_INFO=""; C_OK=""; C_WARN=""; C_ERR=""; C_OFF=""
+fi
+info() { printf '%s%s%s\n' "$C_INFO" "$*" "$C_OFF"; }
+ok()   { printf '%s%s%s\n' "$C_OK"   "$*" "$C_OFF"; }
+warn() { printf '%s%s%s\n' "$C_WARN" "$*" "$C_OFF" >&2; }
+die()  { printf '%s%s%s\n' "$C_ERR"  "$*" "$C_OFF" >&2; exit 1; }
+
+# ── unlink ───────────────────────────────────────────────────────────────────
+unlink_one() {
+  local target="$1"
+  if [[ -L "$target" ]]; then
+    rm "$target"
+    ok "removed symlink: $target"
+  elif [[ -e "$target" ]]; then
+    warn "skipping $target — not a symlink (real file). Leave it as-is."
+  fi
+}
+
+if [[ "$MODE" == "unlink" ]]; then
+  unlink_one "$PROJECT_DIR/CLAUDE.md"
+  unlink_one "$PROJECT_DIR/.claude"
+  ok "Unlinked overlay from $PROJECT_DIR (overlay still at $OVERLAY)."
+  exit 0
+fi
+
+# ── create scaffold ──────────────────────────────────────────────────────────
+if [[ "$MODE" == "create" ]]; then
+  # Refuse to scaffold/link a personal CLAUDE.md if the project already has
+  # one (unless --no-claude-md skips that part). The symlink would clobber.
+  # AGENTS.md is also checked since some projects use it instead.
+  if (( ! SKIP_CLAUDE_MD )); then
+    for f in CLAUDE.md AGENTS.md; do
+      target="$PROJECT_DIR/$f"
+      if [[ -e "$target" && ! -L "$target" ]]; then
+        die "$target already exists as a real file. Re-run with --no-claude-md to skip the CLAUDE.md symlink (the overlay's .claude/ dir will still be linked), or move/rename the project's file first."
+      fi
+    done
+  fi
+
+  if [[ -d "$OVERLAY" ]]; then
+    info "Overlay already exists at $OVERLAY"
+  else
+    mkdir -p "$OVERLAY/.claude"
+    cat > "$OVERLAY/CLAUDE.md" <<EOF
+# $NAME — personal notes
+
+Personal Claude Code instructions for this project. Lives in
+~/.dotfiles/projects/$NAME/ and is symlinked into the project tree.
+
+EOF
+    cat > "$OVERLAY/.claude/settings.json" <<'EOF'
+{
+  "permissions": {
+    "allow": []
+  }
+}
+EOF
+    ok "Scaffolded overlay at $OVERLAY"
+  fi
+fi
+
+# ── link ─────────────────────────────────────────────────────────────────────
+[[ -d "$OVERLAY" ]] || die "No overlay found at $OVERLAY. Run with --create to scaffold one."
+
+link_one() {
+  local src="$1" dst="$2"
+  [[ -e "$src" ]] || { warn "skip: $src does not exist in overlay"; return; }
+  if [[ -L "$dst" ]]; then
+    local cur; cur="$(readlink "$dst")"
+    if [[ "$cur" == "$src" ]]; then
+      ok "already linked: $dst"
+      return
+    fi
+    warn "$dst already a symlink to $cur — leave it alone (remove manually if you want to relink)"
+    return
+  elif [[ -e "$dst" ]]; then
+    die "$dst exists as a real file/dir. Move or delete it first."
+  fi
+  ln -s "$src" "$dst"
+  ok "linked: $dst -> $src"
+}
+
+if (( SKIP_CLAUDE_MD )); then
+  info "Skipping CLAUDE.md symlink (--no-claude-md). Project keeps its own."
+else
+  link_one "$OVERLAY/CLAUDE.md" "$PROJECT_DIR/CLAUDE.md"
+fi
+link_one "$OVERLAY/.claude"   "$PROJECT_DIR/.claude"
+
+echo
+info "Reminder: the global gitignore (~/.dotfiles/core/git/gitignore.symlink)"
+info "ignores CLAUDE.md and .claude/, so these symlinks won't show up in"
+info "git status inside the project."

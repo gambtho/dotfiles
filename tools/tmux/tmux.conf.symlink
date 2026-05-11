@@ -34,3 +34,9 @@ bind l select-pane -R
 
 # Optional: status bar on top (uncomment if preferred)
 # set -g status-position top
+
+# claude-code-agent-teams-config-start
+# Source clipboard + vi-copy bindings when win32yank is available (WSL).
+if-shell 'command -v win32yank >/dev/null 2>&1' \
+    'source-file ~/.dotfiles/tools/tmux/agent-teams-extras.conf'
+# claude-code-agent-teams-config-end
