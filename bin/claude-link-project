@@ -9,6 +9,9 @@
 #   claude-link-project <project-dir>          # link
 #   claude-link-project --unlink <project-dir> # remove symlinks (overlay stays)
 #   claude-link-project --create <project-dir> # scaffold overlay then link
+#   claude-link-project --local-md <project-dir>        # write CLAUDE.local.md import shim (project tracks its own CLAUDE.md)
+#   claude-link-project --local-md --agents-md <dir>    # also write AGENTS.local.md import shim
+#   claude-link-project --no-claude-md <project-dir>    # skip CLAUDE.md symlink entirely
 #
 # Example:
 #   mkdir -p ~/.dotfiles/projects/slabledger/.claude
@@ -23,14 +26,18 @@ OVERLAY_ROOT="$DOTFILES/projects"
 MODE=link
 PROJECT_DIR=""
 SKIP_CLAUDE_MD=0
+MODE_LOCAL_MD=0
+SKIP_AGENTS_MD=1   # default: skip AGENTS.local.md (opt-in)
 
-usage() { sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+usage() { sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -u|--unlink)      MODE=unlink; shift ;;
     -c|--create)      MODE=create; shift ;;
     --no-claude-md)   SKIP_CLAUDE_MD=1; shift ;;
+    --local-md)       MODE_LOCAL_MD=1; shift ;;
+    --agents-md)      SKIP_AGENTS_MD=0; shift ;;
     -h|--help)        usage 0 ;;
     -*)               echo "unknown flag: $1" >&2; usage 1 ;;
     *)                PROJECT_DIR="$1"; shift ;;
@@ -75,7 +82,7 @@ if [[ "$MODE" == "create" ]]; then
   # Refuse to scaffold/link a personal CLAUDE.md if the project already has
   # one (unless --no-claude-md skips that part). The symlink would clobber.
   # AGENTS.md is also checked since some projects use it instead.
-  if (( ! SKIP_CLAUDE_MD )); then
+  if (( ! SKIP_CLAUDE_MD && ! MODE_LOCAL_MD )); then
     for f in CLAUDE.md AGENTS.md; do
       target="$PROJECT_DIR/$f"
       if [[ -e "$target" && ! -L "$target" ]]; then
@@ -118,20 +125,76 @@ link_one() {
     warn "$dst already a symlink to $cur — leave it alone (remove manually if you want to relink)"
     return
   elif [[ -e "$dst" ]]; then
-    die "$dst exists as a real file/dir. Move or delete it first."
+    case "$(basename "$dst")" in
+      CLAUDE.md|AGENTS.md)
+        die "$dst exists as a real file (project tracks it). Re-run with --local-md to write a CLAUDE.local.md import shim alongside it instead." ;;
+      *)
+        die "$dst exists as a real file/dir. Move or delete it first." ;;
+    esac
   fi
   ln -s "$src" "$dst"
   ok "linked: $dst -> $src"
 }
 
-if (( SKIP_CLAUDE_MD )); then
+# Write a 1-line .local.md import shim that pulls in the overlay's master
+# file via Claude Code's @~/ import syntax. Idempotent: if the file
+# already exists with the correct import line, do nothing.
+write_import_shim() {
+  local overlay_path="$1"   # e.g. ~/.dotfiles/projects/foo/CLAUDE.md
+  local dst="$2"            # e.g. <project>/CLAUDE.local.md
+
+  # Convert overlay_path to a @~/-prefixed form for portability across machines.
+  local home_prefix="$HOME/"
+  local import_target
+  if [[ "$overlay_path" == "$home_prefix"* ]]; then
+    import_target="@~/${overlay_path#$home_prefix}"
+  else
+    import_target="@${overlay_path}"
+  fi
+  local desired="${import_target}"
+
+  if [[ -L "$dst" ]]; then
+    warn "$dst is a symlink — leaving as-is. (Remove it manually if you want a .local.md import shim instead.)"
+    return
+  fi
+  if [[ -e "$dst" ]]; then
+    if grep -qxF "$desired" "$dst"; then
+      ok "already has import: $dst"
+      return
+    fi
+    warn "$dst exists and doesn't contain the expected import line. Leaving as-is. Add this manually if you want it:"
+    warn "  $desired"
+    return
+  fi
+
+  printf '%s\n' "$desired" > "$dst"
+  ok "wrote import shim: $dst -> $desired"
+}
+
+# CLAUDE.md handling: three paths.
+#   --local-md   → write CLAUDE.local.md import shim (project tracks its own CLAUDE.md)
+#   --no-claude-md → skip entirely (legacy; equivalent to "user doesn't want a personal CLAUDE.md")
+#   default      → symlink overlay's CLAUDE.md into project (no tracked file in the way)
+if (( MODE_LOCAL_MD )); then
+  write_import_shim "$OVERLAY/CLAUDE.md" "$PROJECT_DIR/CLAUDE.local.md"
+elif (( SKIP_CLAUDE_MD )); then
   info "Skipping CLAUDE.md symlink (--no-claude-md). Project keeps its own."
 else
   link_one "$OVERLAY/CLAUDE.md" "$PROJECT_DIR/CLAUDE.md"
+fi
+
+# AGENTS.md handling: only when --local-md AND user opted into AGENTS too.
+# Default off — most users don't keep an AGENTS overlay separately.
+if (( MODE_LOCAL_MD && ! SKIP_AGENTS_MD )); then
+  if [[ -f "$OVERLAY/AGENTS.md" ]]; then
+    write_import_shim "$OVERLAY/AGENTS.md" "$PROJECT_DIR/AGENTS.local.md"
+  else
+    info "Skipping AGENTS.local.md — no overlay AGENTS.md at $OVERLAY/AGENTS.md."
+  fi
 fi
 link_one "$OVERLAY/.claude"   "$PROJECT_DIR/.claude"
 
 echo
 info "Reminder: the global gitignore (~/.dotfiles/core/git/gitignore.symlink)"
-info "ignores CLAUDE.md and .claude/, so these symlinks won't show up in"
-info "git status inside the project."
+info "ignores CLAUDE.md, CLAUDE.local.md, AGENTS.local.md and .claude/, so"
+info "none of these will show up in git status inside the project."
