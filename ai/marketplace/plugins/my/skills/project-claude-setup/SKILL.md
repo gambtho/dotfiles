@@ -28,7 +28,7 @@ It replaces the old narrower `devcontainer-host-mounts` skill. The host-mounts l
 2. **Project root.** `.git/` exists in the current dir. If not, ask the user to `cd` first.
 3. **Dotfiles repo present.** `~/.dotfiles/` exists with `core/git/gitignore.symlink` and `projects/` subdir. If not, point at `~/.dotfiles/projects/README.md` for the setup story.
 4. **Global gitignore wired.** `git config --global core.excludesFile` resolves to a real file that includes `.claude/` and `CLAUDE.md`. Without this, symlinking the overlay into the project will leak it to `git status`. Stop and tell the user to add those patterns.
-5. **`yq` (mikefarah/yq) available.** `command -v yq` resolves, and `yq --version` mentions `mikefarah`. If missing, point the user at `~/.dotfiles/bin/setup-agent-teams` which installs it. (The Python `kislyuk/yq` has incompatible merge semantics — refuse rather than risk a silent mismerge.)
+5. **`yq` (mikefarah/yq) and `jq` available.** `command -v yq` and `command -v jq` both resolve, and `yq --version` mentions `mikefarah`. If yq is missing, point the user at `~/.dotfiles/bin/setup-agent-teams` which installs it. (The Python `kislyuk/yq` has incompatible merge semantics — refuse rather than risk a silent mismerge.) `jq` should already be present on any host that ran `setup-agent-teams`; install via apt if not.
 
 Don't continue past failed prereqs — they're not auto-recoverable from inside this skill.
 
@@ -70,17 +70,20 @@ The overlay directory under `~/.dotfiles/projects/<slug>/` is the master copy. T
 
 Slug derivation: the basename of the project directory (e.g., for a project at `~/workspace/eveDMV`, `basename ~/workspace/eveDMV` yields `eveDMV` — that's the slug). Preserve case. Don't transform — the user's existing layout (`~/workspace/eveDMV`, `~/workspace/wanderer-kills`) uses verbatim directory names.
 
-Detect what the project tracks before calling the helper:
+Detect what the project tracks (or has on disk) before calling the helper:
 
 ```bash
 cd <project>
 PROJ_HAS_CLAUDE_MD=0
 PROJ_HAS_AGENTS_MD=0
-PROJ_CLAUDE_DIR_TRACKED=0
+PROJ_CLAUDE_DIR_NEEDS_PER_FILE=0
 git ls-files --error-unmatch CLAUDE.md   >/dev/null 2>&1 && PROJ_HAS_CLAUDE_MD=1
 git ls-files --error-unmatch AGENTS.md   >/dev/null 2>&1 && PROJ_HAS_AGENTS_MD=1
-# .claude is "tracked" if git knows about ANY file under it.
-git ls-files --error-unmatch -- '.claude/**' >/dev/null 2>&1 && PROJ_CLAUDE_DIR_TRACKED=1
+# Per-file mode is required whenever a real .claude/ directory exists in
+# the project (tracked OR untracked). The legacy directory-symlink path
+# would fail with "exists as a real file/dir" — coexist via per-file
+# symlinks instead.
+if [[ -d .claude && ! -L .claude ]]; then PROJ_CLAUDE_DIR_NEEDS_PER_FILE=1; fi
 ```
 
 Pick the helper flags:
@@ -88,16 +91,16 @@ Pick the helper flags:
 | Detected | Flags to pass |
 |---|---|
 | Project tracks CLAUDE.md | `--local-md` (writes CLAUDE.local.md import shim) |
-| Project tracks AGENTS.md, user wants AGENTS.local.md too | `--local-md` (same flag triggers AGENTS.local.md if `~/.dotfiles/projects/<slug>/AGENTS.md` exists) |
-| Project tracks anything under `.claude/` | `--claude-dir-per-file` |
-| Project tracks none of the above | no extra flags — legacy symlink-the-whole-thing path |
+| Project tracks AGENTS.md, user wants AGENTS.local.md too | `--local-md --agents-md` (AGENTS.local.md is opt-in via `--agents-md`; only fires if `~/.dotfiles/projects/<slug>/AGENTS.md` also exists) |
+| A real `.claude/` directory exists in the project (tracked or not) | `--claude-dir-per-file` |
+| None of the above | no extra flags — legacy symlink-the-whole-thing path |
 
 Then invoke:
 
 ```bash
 flags=()
 (( PROJ_HAS_CLAUDE_MD )) && flags+=(--local-md)
-(( PROJ_CLAUDE_DIR_TRACKED )) && flags+=(--claude-dir-per-file)
+(( PROJ_CLAUDE_DIR_NEEDS_PER_FILE )) && flags+=(--claude-dir-per-file)
 claude-link-project --create "${flags[@]}" <project-dir>
 ```
 
