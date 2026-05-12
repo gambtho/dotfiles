@@ -27,7 +27,7 @@ It replaces the old narrower `devcontainer-host-mounts` skill. The host-mounts l
 1. **WSL host, not a devcontainer.** `uname -a` contains `microsoft` and `/.dockerenv` does NOT exist and `$REMOTE_CONTAINERS` is unset. If we're already in a container, the symlinks won't work — abort with: "Run this on the WSL host, not inside the container."
 2. **Project root.** `.git/` exists in the current dir. If not, ask the user to `cd` first.
 3. **Dotfiles repo present.** `~/.dotfiles/` exists with `core/git/gitignore.symlink` and `projects/` subdir. If not, point at `~/.dotfiles/projects/README.md` for the setup story.
-4. **Global gitignore wired.** `git config --global core.excludesFile` resolves to a real file that includes `.claude/` and `CLAUDE.md`. Without this, symlinking the overlay into the project will leak it to `git status`. Stop and tell the user to add those patterns.
+4. **Global gitignore wired.** `git config --global core.excludesFile` resolves to a real file that includes `.claude/`, `CLAUDE.md`, `CLAUDE.local.md`, and `AGENTS.local.md`. Without these, the symlinks and import shims this skill creates will leak to `git status` inside the project. Stop and tell the user to add the missing patterns.
 5. **`yq` (mikefarah/yq) and `jq` available.** `command -v yq` and `command -v jq` both resolve, and `yq --version` mentions `mikefarah`. If yq is missing, point the user at `~/.dotfiles/bin/setup-agent-teams` which installs it. (The Python `kislyuk/yq` has incompatible merge semantics — refuse rather than risk a silent mismerge.) `jq` should already be present on any host that ran `setup-agent-teams`; install via apt if not.
 
 Don't continue past failed prereqs — they're not auto-recoverable from inside this skill.
@@ -100,7 +100,10 @@ Then invoke:
 ```bash
 flags=()
 (( PROJ_HAS_CLAUDE_MD )) && flags+=(--local-md)
+(( PROJ_HAS_AGENTS_MD )) && flags+=(--local-md --agents-md)   # --agents-md is opt-in; pair with --local-md
 (( PROJ_CLAUDE_DIR_NEEDS_PER_FILE )) && flags+=(--claude-dir-per-file)
+# Dedupe in case both CLAUDE.md and AGENTS.md triggered --local-md above.
+mapfile -t flags < <(printf '%s\n' "${flags[@]}" | awk '!seen[$0]++')
 claude-link-project --create "${flags[@]}" <project-dir>
 ```
 

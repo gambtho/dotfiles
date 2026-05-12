@@ -57,8 +57,13 @@ services:
     environment:
       CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: "1"
     volumes:
-      - \${HOME}/.ssh:${C_HOME}/.ssh:cached
-      - \${HOME}/.config/gh:${C_HOME}/.config/gh:cached
+      # Auth-only paths: read-only to prevent the container from
+      # mutating host credentials.
+      - \${HOME}/.ssh:${C_HOME}/.ssh:cached,ro
+      - \${HOME}/.config/gh:${C_HOME}/.config/gh:cached,ro
+      # Claude/opencode/dotfiles must be writable — Claude writes auto-memory
+      # into ~/.claude/projects/, opencode persists state, and dotfiles is a
+      # working tree the user may edit from inside the container.
       - \${HOME}/.claude:${C_HOME}/.claude:cached
       - \${HOME}/.config/opencode:${C_HOME}/.config/opencode:cached
       - \${HOME}/.dotfiles:${C_HOME}/.dotfiles:cached
@@ -89,14 +94,12 @@ fi
 #     so we explicitly rebuild .services[svc].volumes after the deep merge
 MERGED=$(mktemp); trap 'rm -f "$PATCH" "$MERGED"' EXIT
 
-if ! yq eval-all '
+if ! SVC="$SERVICE" yq eval-all '
   select(fileIndex == 0) as $dst | select(fileIndex == 1) as $src |
   ($dst * $src) |
-  .services |= with_entries(
-    .value.volumes = (
-      (($dst.services[.key].volumes // []) + ($src.services[.key].volumes // []))
-      | unique
-    )
+  .services[strenv(SVC)].volumes = (
+    (($dst.services[strenv(SVC)].volumes // []) + ($src.services[strenv(SVC)].volumes // []))
+    | unique
   )
 ' "$TARGET" "$PATCH" > "$MERGED"; then
   rm -f "$MERGED"

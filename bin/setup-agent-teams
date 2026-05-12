@@ -97,8 +97,16 @@ if command -v yq >/dev/null; then
     die  "Aborting to avoid silent breakage."
   fi
 else
-  url="https://github.com/mikefarah/yq/releases/download/${YQ_VER}/yq_linux_amd64"
-  info "yq not found. Will install ${YQ_VER} from:"
+  # Map uname -m to mikefarah/yq's asset suffix. Only the two architectures
+  # we actually run on; refuse cleanly on anything else.
+  arch="$(uname -m)"
+  case "$arch" in
+    x86_64)  yq_asset="yq_linux_amd64" ;;
+    aarch64|arm64) yq_asset="yq_linux_arm64" ;;
+    *) die "unsupported architecture for yq install: $arch (expected x86_64 or aarch64)" ;;
+  esac
+  url="https://github.com/mikefarah/yq/releases/download/${YQ_VER}/${yq_asset}"
+  info "yq not found. Will install ${YQ_VER} (${yq_asset}) from:"
   info "  $url"
   info "Steps: curl → chmod +x → sudo mv to /usr/local/bin/yq"
   confirm "Proceed?" || die "Aborted."

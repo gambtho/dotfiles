@@ -87,7 +87,7 @@ tracked today (which can change).
 
 **Layout — overlay master:**
 
-```
+```text
 ~/.dotfiles/projects/<slug>/.claude/
 ├── settings.local.json          # personal allowlist additions
 ├── agents/<name>.md             # personal agents (scaffolded on request)
@@ -96,7 +96,7 @@ tracked today (which can change).
 
 **Layout — in project (all symlinks pointing into the overlay):**
 
-```
+```text
 <project>/.claude/
 ├── settings.local.json          # symlink (if not tracked) — see below
 ├── agents/<name>.md             # one symlink per personal agent
@@ -133,12 +133,15 @@ projects with no existing override.
 
 **Logic:**
 
-1. No existing override at base-compose-file dir: write our template
-   directly (current behavior). Symlink the file from overlay master.
-2. Existing override (tracked or not): parse with `yq`, merge our
-   service's `volumes` (append + dedupe by mount target) and
-   `environment` keys (set without overwriting unrelated keys), write
-   the result back **in-place**. Show unified diff before writing.
+1. **No existing override at the base-compose-file dir:** write our
+   template directly at the project override path. This is an in-place
+   create — the file is a real file in the project worktree (gitignored
+   or not depending on project convention), not a symlink to the
+   overlay.
+2. **Existing override (tracked or not):** parse with `yq` and perform
+   an **in-place merge** into the project override file — append +
+   dedupe `volumes`, deep-merge `environment` keys (set without
+   overwriting unrelated keys). Show unified diff before writing.
 3. If yq isn't installed, bail with install hint. `setup-agent-teams`
    gains a yq-install block (alongside tmux/win32yank).
 

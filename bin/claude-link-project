@@ -76,9 +76,58 @@ unlink_one() {
   fi
 }
 
+# Remove a .local.md import shim ONLY if its content is exactly the
+# 1-line @~/ import this script would have written. Anything else (user
+# additions, hand-edited content) is left in place.
+unlink_local_md_shim() {
+  local dst="$1"
+  [[ -e "$dst" && ! -L "$dst" ]] || return 0   # nothing to do
+  local first_line
+  first_line="$(head -n1 "$dst" 2>/dev/null || true)"
+  local line_count
+  line_count="$(wc -l < "$dst" 2>/dev/null || echo 0)"
+  # Expected shim: single line "@~/.dotfiles/projects/<slug>/..." (with a
+  # trailing newline, so wc -l reports 1).
+  if [[ "$line_count" == "1" && "$first_line" =~ ^@~?/.dotfiles/projects/ ]]; then
+    rm "$dst"
+    ok "removed import shim: $dst"
+  else
+    warn "skipping $dst — not a generated import shim (has $line_count lines or different content). Leave it as-is."
+  fi
+}
+
+# Walk <project>/.claude/ and remove any symlinks pointing into our
+# overlay. Skips real files (project's own). Removes now-empty
+# directories on the way back up so we don't leave bare empty trees.
+unlink_claude_dir_per_file() {
+  local project_dir="$1"   # <project>/.claude
+  [[ -d "$project_dir" ]] || return 0
+
+  # Phase 1: remove every symlink whose target sits under our OVERLAY.
+  while IFS= read -r -d '' link; do
+    local target; target="$(readlink "$link")"
+    if [[ "$target" == "$OVERLAY/.claude/"* || "$target" == "$OVERLAY/.claude" ]]; then
+      rm "$link"
+      ok "removed symlink: $link"
+    fi
+  done < <(find "$project_dir" -type l -print0)
+
+  # Phase 2: prune now-empty dirs (rmdir, no -p, so it fails silently on
+  # non-empty ones; -depth makes us process children first).
+  find "$project_dir" -depth -type d -empty -not -path "$project_dir" -exec rmdir {} \; 2>/dev/null || true
+}
+
 if [[ "$MODE" == "unlink" ]]; then
   unlink_one "$PROJECT_DIR/CLAUDE.md"
-  unlink_one "$PROJECT_DIR/.claude"
+  unlink_local_md_shim "$PROJECT_DIR/CLAUDE.local.md"
+  unlink_local_md_shim "$PROJECT_DIR/AGENTS.local.md"
+  # If .claude/ is itself a symlink to our overlay (legacy mode), remove it.
+  # Otherwise treat it as per-file mode and walk for our symlinks.
+  if [[ -L "$PROJECT_DIR/.claude" ]]; then
+    unlink_one "$PROJECT_DIR/.claude"
+  else
+    unlink_claude_dir_per_file "$PROJECT_DIR/.claude"
+  fi
   ok "Unlinked overlay from $PROJECT_DIR (overlay still at $OVERLAY)."
   exit 0
 fi
@@ -148,6 +197,14 @@ link_one() {
 write_import_shim() {
   local overlay_path="$1"   # e.g. ~/.dotfiles/projects/foo/CLAUDE.md
   local dst="$2"            # e.g. <project>/CLAUDE.local.md
+
+  # Refuse to write a shim pointing at a source that doesn't exist (or
+  # is a broken symlink). `-e` resolves through symlinks, so a dangling
+  # link returns false — exactly the behavior we want.
+  if [[ ! -e "$overlay_path" ]]; then
+    warn "skip: overlay source $overlay_path does not exist; not writing $dst"
+    return
+  fi
 
   # Convert overlay_path to a @~/-prefixed form for portability across machines.
   local home_prefix="$HOME/"
