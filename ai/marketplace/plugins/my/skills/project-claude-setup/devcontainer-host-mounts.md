@@ -5,6 +5,16 @@
 > here as a deep-dive for the host-mount step of `my:project-claude-setup`.
 > No YAML frontmatter — this is not a separately-loaded skill.
 
+> **Implementation lives in `~/.dotfiles/bin/claude-merge-compose-override`.**
+> That helper is the canonical write/merge path: it builds the patch
+> document below from `--service` and `--user` flags, deep-merges it
+> into an existing `docker-compose.override.yml` with `yq` (mikefarah),
+> shows a unified diff, warns on tracked files, and backs up the original.
+> Everything else in this document is **reference** — what each mount is
+> for, why the parallel `${HOME}:${HOME}` mounts are needed, and how to
+> verify inside the container. Use the manual template at the bottom
+> only as a fallback when the helper can't run (e.g. yq unavailable).
+
 The user runs the same devcontainer pattern across most of their projects: a `.devcontainer/docker-compose.yml` that defines the dev container, plus a `.devcontainer/docker-compose.override.yml` that adds host-specific bind mounts so the container reuses what's already on the host (SSH keys, `gh` auth, Claude Code config + plugins + commands, OpenCode config, dotfiles). Compose auto-merges the override on top of the base file.
 
 This skill writes that override file. It is not for scaffolding a devcontainer from scratch — there must already be a `.devcontainer/` with a compose-based setup.
@@ -73,7 +83,10 @@ Optional, ask before adding:
 
 If a host directory doesn't exist, Docker creates an empty one when the container starts. That's not a failure mode — just means the tool isn't on the host yet. Don't add `if`-checks or skip mounts on this basis.
 
-## Step 4 — Write the override file
+## Step 4 — Manual fallback: write the override file by hand
+
+Prefer `claude-merge-compose-override` (see top of this doc). The
+template below is for the rare case where the helper can't run.
 
 Write to the same directory as the base compose file (per Step 1). If the base is `.devcontainer/docker-compose.yml`, the override is `.devcontainer/docker-compose.override.yml`; if the base lives at the project root, the override lives at the project root too. Compose's auto-merge of `*.override.yml` only kicks in when both files are siblings or both are listed in `dockerComposeFile` — putting the override in the wrong directory silently does nothing.
 
