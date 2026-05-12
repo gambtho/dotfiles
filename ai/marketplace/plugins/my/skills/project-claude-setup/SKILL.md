@@ -1,11 +1,11 @@
 ---
 name: project-claude-setup
-description: Set up a project for Claude Code without leaking personal config into the project's git history. Creates a per-project overlay in ~/.dotfiles/projects/<name>/ (CLAUDE.md, agents/, settings.json), symlinks it into the project worktree, and — for compose-based devcontainers — writes a docker-compose.override.yml that mounts host SSH/gh/Claude/dotfiles. Use when starting work on a new project, when an open-source project shouldn't carry your CLAUDE.md, when adding agent-teams support to an existing project, or when the user mentions "set up this project for Claude" / "bootstrap project Claude config" / "share host SSH/gh/dotfiles with the devcontainer".
+description: Set up a project for Claude Code without leaking personal config into the project's git history. Creates a per-project overlay in ~/.dotfiles/projects/<name>/ (CLAUDE.md, agents/, settings.local.json), symlinks it into the project worktree, and — for compose-based devcontainers — writes a docker-compose.override.yml that mounts host SSH/gh/Claude/dotfiles, or merges into an existing one. Use when starting work on a new project, when an open-source project shouldn't carry your CLAUDE.md, when adding agent-teams support to an existing project, or when the user mentions "set up this project for Claude" / "bootstrap project Claude config" / "share host SSH/gh/dotfiles with the devcontainer".
 ---
 
 # Project Claude setup
 
-The user keeps personal per-project Claude config (CLAUDE.md, settings.json, agents/) in their dotfiles repo at `~/.dotfiles/projects/<project-name>/`, not in the project repo. This skill scaffolds that overlay, symlinks it into the project worktree (the global gitignore catches the symlinks), and — when the project has a compose-based devcontainer — wires the host mounts that let the container see the user's Claude/dotfiles/SSH/gh.
+The user keeps personal per-project Claude config (CLAUDE.md, settings.local.json, agents/) in their dotfiles repo at `~/.dotfiles/projects/<project-name>/`, not in the project repo. This skill scaffolds that overlay, symlinks it into the project worktree (the global gitignore catches the symlinks), and — when the project has a compose-based devcontainer — wires the host mounts that let the container see the user's Claude/dotfiles/SSH/gh.
 
 It replaces the old narrower `devcontainer-host-mounts` skill. The host-mounts logic is still in here, just as one section of a longer flow.
 
@@ -27,16 +27,8 @@ It replaces the old narrower `devcontainer-host-mounts` skill. The host-mounts l
 1. **WSL host, not a devcontainer.** `uname -a` contains `microsoft` and `/.dockerenv` does NOT exist and `$REMOTE_CONTAINERS` is unset. If we're already in a container, the symlinks won't work — abort with: "Run this on the WSL host, not inside the container."
 2. **Project root.** `.git/` exists in the current dir. If not, ask the user to `cd` first.
 3. **Dotfiles repo present.** `~/.dotfiles/` exists with `core/git/gitignore.symlink` and `projects/` subdir. If not, point at `~/.dotfiles/projects/README.md` for the setup story.
-4. **Global gitignore wired.** `git config --global core.excludesFile` resolves to a real file that includes `.claude/` and `CLAUDE.md`. Without this, symlinking the overlay into the project will leak it to `git status`. Stop and tell the user to add those patterns.
-5. **Project doesn't already track CLAUDE.md or AGENTS.md.** Check `git ls-files CLAUDE.md AGENTS.md` and also a plain `ls`. If either file exists as a real (non-symlink) file:
-   - The project already has its own AI instructions checked in.
-   - Symlinking the overlay's CLAUDE.md/AGENTS.md on top would either fail (if the file exists) or shadow the project's version (bad).
-   - **Stop and ask** the user which they want:
-     - **(a) Skip the overlay's CLAUDE.md** — keep the project's version, only set up `.claude/agents/` + `.claude/settings.json` overlay. (Most common answer.)
-     - **(b) Move the project file out of the way** — `git mv CLAUDE.md CLAUDE-project.md` so it stays tracked but doesn't conflict, then symlink the overlay's CLAUDE.md on top.
-     - **(c) Abort** — do nothing.
-   - Don't auto-pick. The user must decide.
-   - If the file exists but is already a symlink into our overlay (re-run case), treat it as already-configured and continue.
+4. **Global gitignore wired.** `git config --global core.excludesFile` resolves to a real file that includes `.claude/`, `CLAUDE.md`, `CLAUDE.local.md`, and `AGENTS.local.md`. Without these, the symlinks and import shims this skill creates will leak to `git status` inside the project. Stop and tell the user to add the missing patterns.
+5. **`yq` (mikefarah/yq) and `jq` available.** `command -v yq` and `command -v jq` both resolve, and `yq --version` mentions `mikefarah`. If yq is missing, point the user at `~/.dotfiles/bin/setup-agent-teams` which installs it. (The Python `kislyuk/yq` has incompatible merge semantics — refuse rather than risk a silent mismerge.) `jq` should already be present on any host that ran `setup-agent-teams`; install via apt if not.
 
 Don't continue past failed prereqs — they're not auto-recoverable from inside this skill.
 
@@ -78,41 +70,80 @@ The overlay directory under `~/.dotfiles/projects/<slug>/` is the master copy. T
 
 Slug derivation: the basename of the project directory (e.g., for a project at `~/workspace/eveDMV`, `basename ~/workspace/eveDMV` yields `eveDMV` — that's the slug). Preserve case. Don't transform — the user's existing layout (`~/workspace/eveDMV`, `~/workspace/wanderer-kills`) uses verbatim directory names.
 
-Use the existing `~/.dotfiles/bin/claude-link-project --create <project-dir>` helper rather than inlining the logic. It:
-- Creates `~/.dotfiles/projects/<slug>/{CLAUDE.md,.claude/settings.json}` placeholders
-- Symlinks `<project>/CLAUDE.md` → overlay's CLAUDE.md
-- Symlinks `<project>/.claude` → overlay's `.claude` dir
-
-**If prereq 5 resolved as option (a)** — the project tracks its own CLAUDE.md/AGENTS.md and the user wants to keep it — pass `--no-claude-md`:
+Detect what the project tracks (or has on disk) before calling the helper:
 
 ```bash
-claude-link-project --create --no-claude-md <project-dir>
+cd <project>
+PROJ_HAS_CLAUDE_MD=0
+PROJ_HAS_AGENTS_MD=0
+PROJ_CLAUDE_DIR_NEEDS_PER_FILE=0
+git ls-files --error-unmatch CLAUDE.md   >/dev/null 2>&1 && PROJ_HAS_CLAUDE_MD=1
+git ls-files --error-unmatch AGENTS.md   >/dev/null 2>&1 && PROJ_HAS_AGENTS_MD=1
+# Per-file mode is required whenever a real .claude/ directory exists in
+# the project (tracked OR untracked). The legacy directory-symlink path
+# would fail with "exists as a real file/dir" — coexist via per-file
+# symlinks instead.
+if [[ -d .claude && ! -L .claude ]]; then PROJ_CLAUDE_DIR_NEEDS_PER_FILE=1; fi
 ```
 
-This skips the CLAUDE.md symlink (the project's own file stays untouched) but still scaffolds and links `.claude/agents/` + `.claude/settings.json`. The overlay's CLAUDE.md placeholder is still created in the dotfiles repo so the user has a private notes file *if* they want one later — it just doesn't get symlinked into the project tree.
+Pick the helper flags:
 
-If the overlay already exists (re-run), the helper detects this and skips the placeholder writes. That's fine — we'll merge into the existing files in later steps.
+| Detected | Flags to pass |
+|---|---|
+| Project tracks CLAUDE.md | `--local-md` (writes CLAUDE.local.md import shim) |
+| Project tracks AGENTS.md, user wants AGENTS.local.md too | `--local-md --agents-md` (AGENTS.local.md is opt-in via `--agents-md`; only fires if `~/.dotfiles/projects/<slug>/AGENTS.md` also exists) |
+| A real `.claude/` directory exists in the project (tracked or not) | `--claude-dir-per-file` |
+| None of the above | no extra flags — legacy symlink-the-whole-thing path |
 
-After running it, verify symlinks resolve:
+Then invoke:
 
 ```bash
-ls -L <project>/CLAUDE.md     # should resolve, may be empty
-ls -L <project>/.claude/settings.json
+flags=()
+(( PROJ_HAS_CLAUDE_MD )) && flags+=(--local-md)
+(( PROJ_HAS_AGENTS_MD )) && flags+=(--local-md --agents-md)   # --agents-md is opt-in; pair with --local-md
+(( PROJ_CLAUDE_DIR_NEEDS_PER_FILE )) && flags+=(--claude-dir-per-file)
+# Dedupe in case both CLAUDE.md and AGENTS.md triggered --local-md above.
+mapfile -t flags < <(printf '%s\n' "${flags[@]}" | awk '!seen[$0]++')
+claude-link-project --create "${flags[@]}" <project-dir>
 ```
 
-## Step 4 — CLAUDE.md: defer to /init
+`claude-link-project --create` scaffolds `~/.dotfiles/projects/<slug>/{CLAUDE.md,.claude/settings.local.json}` placeholders in the overlay if not already present, then links them into the project per the chosen flags:
 
-**If prereq 5 resolved as option (a)** — the project already has a CLAUDE.md or AGENTS.md it owns — **skip this step entirely**. Don't run `/init`. The project's existing file is what Claude will read.
+- Default: symlinks `<project>/CLAUDE.md` → overlay's CLAUDE.md, and `<project>/.claude` → overlay's `.claude` dir.
+- `--local-md`: writes a 1-line `<project>/CLAUDE.local.md` (gitignored globally) containing `@~/.dotfiles/projects/<slug>/CLAUDE.md`; the project's tracked CLAUDE.md is left untouched.
+- `--claude-dir-per-file`: walks the overlay's `.claude/` tree and symlinks each leaf into the project's `.claude/` at the same relative path. `settings.local.json` is merged via jq (with diff + confirmation) instead of symlinked. If a tracked file in the project would be shadowed, the helper refuses with a clear message — rename your overlay item and re-run.
 
-Otherwise, the placeholder CLAUDE.md created by `claude-link-project --create` is empty by design. Tell the user:
+If the overlay already exists (re-run), the helper detects this and skips the placeholder writes. Per-file mode and merges are idempotent.
 
-> The overlay's CLAUDE.md is a placeholder. Run `/init` from inside the project (`cd <project> && claude`) to generate the actual content — it reads the codebase the way you'd want. The output lands at the symlinked path, which routes back to your dotfiles overlay.
+After running it, verify the expected on-disk shapes:
 
-Don't write CLAUDE.md content from this skill. `/init` is purpose-built; reimplementing it here means two diverging code paths.
+```bash
+ls -L <project>/CLAUDE.md       # symlink (default) OR untouched real file (--local-md)
+ls -L <project>/CLAUDE.local.md # exists only in --local-md mode
+ls -L <project>/.claude/settings.local.json
+```
 
-## Step 5 — settings.json: grounded allowlist
+## Step 4 — CLAUDE.md content
 
-Edit `~/.dotfiles/projects/<slug>/.claude/settings.json` (the overlay file — the symlink in the project tree points here).
+**When the project tracks its own CLAUDE.md** (the `--local-md` path):
+
+The project's tracked CLAUDE.md is Claude Code's primary instruction file — leave its content alone, it's the team's shared agreement. The overlay's `~/.dotfiles/projects/<slug>/CLAUDE.md` is your *personal* extension, loaded alongside the tracked file via the `CLAUDE.local.md` import shim. Use it for things like:
+
+- Personal preferences ("use my custom test runner alias")
+- Local sandbox URLs or credentials hints (no actual secrets)
+- Reminders about decisions you keep making that the project doesn't document
+
+Don't put team-relevant rules here — if other contributors would benefit, propose them as a change to the tracked CLAUDE.md.
+
+**When the project does NOT track CLAUDE.md** (the legacy symlink path):
+
+The overlay's CLAUDE.md is the project's primary CLAUDE.md, surfaced into the project tree via symlink. Run `/init` from inside the project (`cd <project> && claude`) to generate content — Claude reads the codebase and writes a starting CLAUDE.md. The output lands at the symlinked path, which routes back to your dotfiles overlay.
+
+## Step 5 — settings.local.json: grounded allowlist
+
+Personal allowlist entries always land in `settings.local.json`, never in `settings.json`. Claude Code's documented settings layering puts `.local.json` on top of `.json`, and `.local.json` is gitignored by convention — keeping personal allows out of the project repo.
+
+Edit `~/.dotfiles/projects/<slug>/.claude/settings.local.json` (the overlay master; the file in the project tree is either a symlink to this, or a merged copy — see Step 3).
 
 Read the existing file (the placeholder is `{ "permissions": { "allow": [] } }`). Append + dedupe — never replace.
 
@@ -133,31 +164,37 @@ Build the allowlist **from inspected facts only**. For each entry, point at the 
 
 Don't add wildcards (`Bash(*)`, `Read(**)`). Don't add commands speculatively because "they might be useful."
 
-Show the diff before writing. The settings.json schema lives at the overlay path; the symlink makes it active in the project.
+Show the diff before writing.
+
+For projects that already track their own `.claude/settings.local.json` (rare; usually it's gitignored), `claude-link-project --claude-dir-per-file` merges your overlay's allows into the tracked file via jq, shows a diff, and warns that the change will appear in `git diff`. Decide whether to commit, stash, or revert.
+
+Never write to the project-shared `.claude/settings.json` from this skill — that file (when it exists) is the team's shared baseline. Personal additions go to `settings.local.json`.
 
 ## Step 6 — Compose host mounts (case a only)
 
-This is the section from the old `devcontainer-host-mounts` skill. The mounts give the container the user's host-side Claude/SSH/gh/dotfiles so the symlinked overlay actually resolves inside the container, and so `claude` inside the container reuses the host's auth/plugins/skills.
+The host mounts give the container the user's `~/.ssh`, `~/.config/gh`, `~/.claude`, `~/.config/opencode`, `~/.dotfiles` so the symlinked overlay actually resolves inside the container, and so `claude` inside the container reuses the host's auth/plugins/skills.
 
-Refer to `devcontainer-host-mounts.md` in this skill's directory for the full content. The short version:
+Use `~/.dotfiles/bin/claude-merge-compose-override` for both the create-new and merge-into-existing cases:
 
-1. Resolve service name and container user (see table at end).
-2. Find where the base compose file lives (read `dockerComposeFile` in devcontainer.json — sometimes `.devcontainer/docker-compose.yml`, sometimes project root).
-3. Write `docker-compose.override.yml` next to the base compose file (Compose only auto-merges siblings).
-4. Use the standard template with `~/.ssh`, `~/.config/gh`, `~/.claude`, `~/.config/opencode`, `~/.dotfiles` mounts — plus the **parallel `${HOME}:${HOME}` mounts** for `~/.claude`, `~/.config/opencode`, `~/.dotfiles` so absolute symlinks and absolute paths baked into JSON (e.g. `installed_plugins.json`'s `installPath`) resolve inside the container.
+```bash
+# Resolve service name and container user from devcontainer.json + base
+# compose file (see Step 2 inspection results).
+service=<from devcontainer.json or first key under services:>
+user=<remoteUser or USER from Dockerfile or base-image default>
 
-**One addition over the old skill:** include the agent-teams env var on the service:
+override="$(dirname "$(jq -r '.dockerComposeFile | if type=="array" then .[0] else . end' .devcontainer/devcontainer.json | sed 's|^./||')")/docker-compose.override.yml"
 
-```yaml
-services:
-  {SERVICE}:
-    environment:
-      CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: "1"
+claude-merge-compose-override --service "$service" --user "$user" "$override"
 ```
 
-If an override file already exists, parse it and merge. Don't clobber existing entries. Surface a one-line summary of what's already there before showing the proposed diff.
+The helper:
+1. Creates the file with our standard mounts if it doesn't exist.
+2. Merges our mounts and env var into an existing file, deduping volume mounts, showing a unified diff.
+3. Warns if the target is tracked in git ("this change will appear in `git diff`; decide whether to commit, stash, or revert").
+4. Refuses if `yq` is missing or is the wrong yq (Python kislyuk vs Go mikefarah).
+5. Backs up the original to `<file>.backup-<timestamp>`.
 
-See `devcontainer-host-mounts.md` for the full template, the absolute-path gotcha explanation, and the verification commands.
+See `devcontainer-host-mounts.md` for the mount table reference (what each mount is for, the parallel `${HOME}:${HOME}` mount explanation, verification commands inside the container).
 
 ## Step 7 — Starter agents (optional, ask)
 
@@ -224,9 +261,10 @@ If `remoteUser` in devcontainer.json is set, that wins. If you can't determine i
 
 ## Things to avoid
 
-- **Don't write CLAUDE.md content.** `/init` does it better.
-- **Don't auto-generate agents.** Ask, offer grounded candidates, generate the picked ones.
-- **Don't add wildcards to settings.json allowlist.** Per-tool, per-command, grounded in inspected facts.
+- **Don't write CLAUDE.md content.** `/init` does it better for projects that don't track CLAUDE.md. For projects that DO track CLAUDE.md, the overlay is just your personal notes — let the project's tracked CLAUDE.md drive the shared rules.
+- **Don't shadow tracked project files.** If the project tracks CLAUDE.md, AGENTS.md, or anything under `.claude/`, never propose renaming or symlinking on top. Use the `.local.md` import-shim and per-file symlink modes instead. This skill enforces this; `claude-link-project --claude-dir-per-file` will refuse on collision.
+- **Don't auto-generate agents.** Ask, offer grounded candidates from the inspected stack, generate only the picked ones. On collision with a tracked file, ask the user for a different name — don't auto-prefix.
+- **Don't add wildcards to settings.local.json allowlist.** Per-tool, per-command, grounded in inspected facts.
 - **Don't clobber existing files in the overlay.** Re-runs should merge or skip.
-- **Don't run installers.** `~/.dotfiles/bin/setup-agent-teams` handles host-side setup.
+- **Don't run installers.** `~/.dotfiles/bin/setup-agent-teams` handles host-side setup (tmux, win32yank, yq, settings.json merge).
 - **Don't commit changes.** Print commit commands; let the user run them.

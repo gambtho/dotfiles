@@ -16,6 +16,7 @@ DOTFILES="$HOME/.dotfiles"
 TMUX_CONF="$DOTFILES/tools/tmux/tmux.conf.symlink"
 CLAUDE_SETTINGS="$DOTFILES/ai/claude/settings.json"
 WIN32YANK_VER="v0.1.1"
+YQ_VER="v4.45.1"
 
 ASSUME_YES=0
 DRY_RUN=0
@@ -81,6 +82,41 @@ else
     sudo mv "$tmpdir/win32yank.exe" /usr/local/bin/win32yank
   fi
   ok "win32yank installed."
+fi
+
+# ── 3.5 yq ───────────────────────────────────────────────────────────────────
+if command -v yq >/dev/null; then
+  # Sanity-check it's the Go version (mikefarah), not the Python one — they
+  # have incompatible syntax and we rely on the Go one's merge semantics.
+  if yq --version 2>&1 | grep -qi 'mikefarah'; then
+    ok "yq already installed: $(yq --version)"
+  else
+    warn "Found a 'yq' on PATH but it isn't mikefarah/yq (likely the Python kislyuk/yq)."
+    warn "The project-claude-setup skill relies on mikefarah's merge semantics."
+    warn "Install mikefarah/yq to /usr/local/bin/yq or shadow the existing one in your PATH."
+    die  "Aborting to avoid silent breakage."
+  fi
+else
+  # Map uname -m to mikefarah/yq's asset suffix. Only the two architectures
+  # we actually run on; refuse cleanly on anything else.
+  arch="$(uname -m)"
+  case "$arch" in
+    x86_64)  yq_asset="yq_linux_amd64" ;;
+    aarch64|arm64) yq_asset="yq_linux_arm64" ;;
+    *) die "unsupported architecture for yq install: $arch (expected x86_64 or aarch64)" ;;
+  esac
+  url="https://github.com/mikefarah/yq/releases/download/${YQ_VER}/${yq_asset}"
+  info "yq not found. Will install ${YQ_VER} (${yq_asset}) from:"
+  info "  $url"
+  info "Steps: curl → chmod +x → sudo mv to /usr/local/bin/yq"
+  confirm "Proceed?" || die "Aborted."
+  if (( ! DRY_RUN )); then
+    tmpfile=$(mktemp); trap 'rm -f "$tmpfile"' EXIT
+    curl -fsSL "$url" -o "$tmpfile"
+    chmod +x "$tmpfile"
+    sudo mv "$tmpfile" /usr/local/bin/yq
+  fi
+  ok "yq installed: $(yq --version 2>/dev/null || echo '(dry-run)')"
 fi
 
 # ── 4. tmux.conf clipboard block ─────────────────────────────────────────────
@@ -167,6 +203,7 @@ echo
 info "──── verification ────"
 echo "tmux:      $(tmux -V 2>/dev/null || echo missing)"
 echo "win32yank: $(command -v win32yank || echo missing)"
+echo "yq:        $(command -v yq || echo missing)"
 echo "claude settings symlink: $(readlink -f "$HOME/.claude/settings.json")"
 echo "tmux.conf symlink:       $(readlink -f "$HOME/.tmux.conf")"
 echo
