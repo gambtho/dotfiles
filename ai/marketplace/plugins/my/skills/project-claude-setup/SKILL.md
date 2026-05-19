@@ -28,7 +28,12 @@ It replaces the old narrower `devcontainer-host-mounts` skill. The host-mounts l
 2. **Project root.** `.git/` exists in the current dir. If not, ask the user to `cd` first.
 3. **Dotfiles repo present.** `~/.dotfiles/` exists with `core/git/gitignore.symlink` and `projects/` subdir. If not, point at `~/.dotfiles/projects/README.md` for the setup story.
 4. **Global gitignore wired.** `git config --global core.excludesFile` resolves to a real file that includes `.claude/`, `CLAUDE.md`, `CLAUDE.local.md`, and `AGENTS.local.md`. Without these, the symlinks and import shims this skill creates will leak to `git status` inside the project. Stop and tell the user to add the missing patterns.
-5. **`yq` (mikefarah/yq) and `jq` available.** `command -v yq` and `command -v jq` both resolve, and `yq --version` mentions `mikefarah`. If yq is missing, point the user at `~/.dotfiles/bin/setup-agent-teams` which installs it. (The Python `kislyuk/yq` has incompatible merge semantics — refuse rather than risk a silent mismerge.) `jq` should already be present on any host that ran `setup-agent-teams`; install via apt if not.
+5. **`yq` (mikefarah/yq) and `jq` available.** Probe in order: `command -v yq` and, if that misses (PATH/cache lag in fresh shells), also `[ -x /usr/local/bin/yq ]` directly. Confirm flavor via `yq --version 2>&1 | grep -q mikefarah` — if it doesn't match, refuse. **Never suggest `apt install yq`** — Ubuntu/Debian ship the Python `kislyuk/yq`, which has incompatible merge semantics. Correct install:
+   ```bash
+   sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 \
+     && sudo chmod +x /usr/local/bin/yq
+   ```
+   Or run `~/.dotfiles/bin/setup-agent-teams` which installs yq plus the rest of the host-side toolchain. `jq` should already be present; `sudo apt install jq` is fine (only one flavor).
 
 Don't continue past failed prereqs — they're not auto-recoverable from inside this skill.
 
@@ -127,17 +132,24 @@ ls -L <project>/.claude/settings.local.json
 
 **When the project tracks its own CLAUDE.md** (the `--local-md` path):
 
-The project's tracked CLAUDE.md is Claude Code's primary instruction file — leave its content alone, it's the team's shared agreement. The overlay's `~/.dotfiles/projects/<slug>/CLAUDE.md` is your *personal* extension, loaded alongside the tracked file via the `CLAUDE.local.md` import shim. Use it for things like:
+The project's tracked CLAUDE.md is Claude Code's primary instruction file — leave its content alone, it's the team's shared agreement. The overlay's `~/.dotfiles/projects/<slug>/CLAUDE.md` is your *personal* extension, loaded alongside the tracked file via the `CLAUDE.local.md` import shim.
 
-- Personal preferences ("use my custom test runner alias")
-- Local sandbox URLs or credentials hints (no actual secrets)
-- Reminders about decisions you keep making that the project doesn't document
+The real use case for the overlay CLAUDE.md isn't "alias hints and credentials reminders" — it's **personal workflow opinions about how features get built** that you don't want to impose on contributors. Concretely, write things like:
 
-Don't put team-relevant rules here — if other contributors would benefit, propose them as a change to the tracked CLAUDE.md.
+- **Agent dispatch preferences** — "For non-trivial work, dispatch the `go-dev` / `frontend-dev` agents instead of executing in the main thread." Without this, Claude defaults to main-thread execution and the standing agents you scaffold in Step 7 sit unused.
+- **When to use the team flow** — "For features touching backend + frontend, run `/new-feature`. For one-line fixes, just do it." Codifies the threshold so Claude isn't second-guessing it per task.
+- **Personal scope/verification discipline** — "Cite test output before claiming done. Don't rename or restructure outside the asked scope. When unsure, stop and ask." These are global preferences but they bear repeating per-project because they shape every turn.
+- **Local sandbox/credentials hints** — e.g. "Use `SUPABASE_DB_URL` from `.env`, production API at `<host>`." Pointers, not actual secrets.
+
+What stays OUT of the overlay CLAUDE.md:
+- Anything other contributors would benefit from — propose a change to the tracked CLAUDE.md instead.
+- Detailed architecture rules — they belong with the team.
+
+A useful overlay CLAUDE.md after Step 7 is typically 30–80 lines: a workflow section, the standing-agent catalog with trigger conditions, and a "personal preferences" tail.
 
 **When the project does NOT track CLAUDE.md** (the legacy symlink path):
 
-The overlay's CLAUDE.md is the project's primary CLAUDE.md, surfaced into the project tree via symlink. Run `/init` from inside the project (`cd <project> && claude`) to generate content — Claude reads the codebase and writes a starting CLAUDE.md. The output lands at the symlinked path, which routes back to your dotfiles overlay.
+The overlay's CLAUDE.md is the project's primary CLAUDE.md, surfaced into the project tree via symlink. Run `/init` from inside the project (`cd <project> && claude`) to generate content — Claude reads the codebase and writes a starting CLAUDE.md. The output lands at the symlinked path, which routes back to your dotfiles overlay. After `/init` finishes, append the same workflow/agent-dispatch section described above so the standing agents get used.
 
 ## Step 5 — settings.local.json: grounded allowlist
 
@@ -196,33 +208,83 @@ The helper:
 
 See `devcontainer-host-mounts.md` for the mount table reference (what each mount is for, the parallel `${HOME}:${HOME}` mount explanation, verification commands inside the container).
 
-## Step 7 — Starter agents (optional, ask)
+## Step 7 — Agent scaffolding (ask, two tiers)
 
-Ask: "Want me to scaffold 2–3 starter agents for this project?"
+Agents in `.claude/agents/*.md` serve two roles:
 
-If no, create only `<overlay>/.claude/agents/README.md` pointing at `~/.dotfiles/ai/marketplace/plugins/my/agents/` for examples and exit this step.
+1. **Standalone subagents** — dispatched directly via the `Agent` tool for one-shot delegation.
+2. **Team member templates** — when you call `TeamCreate` and spawn members, the `subagent_type` you pass references the same `.md` files. The agent definition becomes the "role template" for that teammate.
 
-If yes, **offer concrete candidates from the inspected stack** — not generic ones. Examples:
+Both roles use the same files. So the question isn't "subagent or team member?" — it's "what roles does this project need standing on call?"
 
-| Detected | Candidate agent |
-|---|---|
-| Go + tests | `test-runner.md` (mode: subagent, tools: Read+Bash(go test:*)+Bash(git diff:*); paragraph anchored on the project's actual test command from Step 2) |
-| Go + golangci-lint | `lint-reviewer.md` (Read + Bash(golangci-lint:*); read-only, no Edit) |
-| Go + httpx adapters pattern (look for `internal/adapters/clients/httpx`) | `api-client-author.md` (refs your `my:new-api-client` skill) |
-| TypeScript + React | `ui-reviewer.md` (Read-only; ref `frontend-design` plugin) |
-| TS + jest/vitest | `test-runner.md` adapted to npm test/vitest |
-| Anything with `.github/workflows/` | `ci-checker.md` (Bash(gh run list:*), Bash(gh run view:*)) |
-| Python + pytest | `test-runner.md` with `pytest -xvs <path>` pattern |
+Ask the user:
 
-Show the user the candidate list with 1-line descriptions. Let them pick the ones they want. **Generate only what was picked.** Each agent gets:
+> "Want me to scaffold standing agents for this project? Two options:
+> **(a) Standing catalog** — 3–6 role-based agents (backend-dev, frontend-dev, code-reviewer, etc.) that double as team members. Recommended if you'll use the team-spawning flow.
+> **(b) Just a README** — pointer to examples, scaffold later.
+> **(c) Skip.**"
 
-- Frontmatter: `name`, `description` (one sentence, specific), `model: sonnet`, `tools: <restricted set>`
-- One short paragraph: what it owns, anchored on actual project paths from Step 2
-- A bulleted "priorities" list: 3–5 items, specific (not "be thorough")
+If **(b)** or **(c)**, create only `<overlay>/.claude/agents/README.md` pointing at `~/.dotfiles/ai/marketplace/plugins/my/agents/` and exit this step.
 
-For reviewer-type agents: `tools: Read, Grep, Glob, Bash(git diff:*), Bash(git log:*)`. **No Edit/Write.** Implementation agents can have wider tools.
+If **(a)**, offer **role-based candidates grounded in the inspected stack**:
 
-Files land at `<overlay>/.claude/agents/<name>.md`. The symlink at `<project>/.claude/agents` makes them active.
+| Detected | Candidate role | Tools | Notes |
+|---|---|---|---|
+| Go backend | `<lang>-dev` (e.g. `go-dev`) | full (Read/Edit/Write/Bash/Grep/Glob) | Anchored on project's architecture rules (hexagonal, file-size budget, mock pattern from CLAUDE.md) |
+| React/TS frontend | `frontend-dev` | full | Knows the dev proxy, type sync, API client; references `frontend-design`/`impeccable`/`slabledger-design` skills if present |
+| Database with migrations | merge into `<lang>-dev` (don't make a separate `db-migrator` unless migrations need their own review lens) | — | Narrow agents that overlap with the language dev waste a slot |
+| Data analysis surface (portfolio, billing, analytics dashboards) | `<domain>-analyst` (e.g. `profit-analyst`) | Read + Bash (psql/curl only) — **no Edit** | Read-only by design; cite data source |
+| Any project with reviewable PRs | `code-reviewer` | Read + Grep + Glob + Bash(git diff/log/make check) — **no Edit** | Anchored on the convention table from the tracked CLAUDE.md |
+| Frontend project with screenshots | `ux-polisher` | full, scoped to web/ | Drives `ui-screenshot-improve` and `impeccable` |
+
+A good baseline is **5 roles**: language-dev, frontend-dev (if applicable), code-reviewer, data-analyst (if applicable), ux-polisher (if frontend). Don't propose narrow one-offs (test-runner, lint-reviewer, single-skill wrappers) — they overlap with the language-dev role and waste slots in the catalog.
+
+**Agent file structure** (lands at `<overlay>/.claude/agents/<name>.md`):
+
+```yaml
+---
+name: <role>
+description: <one-sentence trigger description, mentions when to auto-dispatch; also acts as the template summary when spawned as a team member>
+model: sonnet
+tools: <restricted set — see table above>
+---
+
+<one short paragraph: what they own, anchored on project paths from Step 2>
+
+## Priorities
+
+- <3–6 specific, file-or-rule-anchored items from the tracked CLAUDE.md>
+```
+
+For **reviewer-type** agents: `tools: Read, Grep, Glob, Bash` with the Bash entries scoped to non-mutating commands. **No Edit/Write.** For **analyst-type** agents: same Read-only stance, Bash limited to `psql`, `curl`, etc.
+
+Files land at `<overlay>/.claude/agents/<name>.md`. Re-running `claude-link-project --claude-dir-per-file` walks the overlay tree and symlinks each new agent into the project's `.claude/agents/`.
+
+## Step 7b — Team-flow scaffolding (offer when standing catalog created)
+
+If the user accepted Step 7 (a), also offer:
+
+> "Want a `/new-feature` slash command that encodes the team-spawn ritual (brainstorm → plan → TeamCreate → seed TaskList → spawn role-typed members in parallel)?"
+
+If yes, create two files:
+
+**File 1: `<overlay>/.claude/commands/new-feature.md`** — a slash command that walks the user through:
+1. `superpowers:brainstorming` to clarify intent
+2. `superpowers:writing-plans` to write the plan
+3. `TeamCreate({ team_name, description })`
+4. `TaskCreate` per unit of work (with `addBlockedBy` dependencies)
+5. `Agent({ team_name, name, subagent_type })` for each role, in parallel (single message, multiple tool calls)
+6. Orchestrate via `TaskList` + `SendMessage`; run `code-reviewer` before declaring done
+7. `superpowers:verification-before-completion` before any "done" claim
+8. `TeamDelete` on completion
+
+The frontmatter is just `description:` and `argument-hint:`. Body uses `$ARGUMENTS` for the feature slug. See `references/new-feature-command-template.md` if it exists; otherwise model on the agent catalog you just created — each role in the catalog maps to one `subagent_type` in the spawn step.
+
+**File 2: workflow section appended to `<overlay>/CLAUDE.md`** — codifies when to use the team flow vs the main thread (see Step 4 for content guidance). Without this, Claude doesn't know it should reach for the agents on each new task and defaults to single-thread execution.
+
+`claude-link-project --claude-dir-per-file` walks the overlay tree, so `.claude/commands/*.md` get symlinked into the project the same way agents do. Re-run after creating the command file. **Verify the symlink lands**: `ls -L <project>/.claude/commands/new-feature.md` should resolve.
+
+Skip this step if the user only wants standalone subagents — the catalog still works for one-shot delegation without the team ritual.
 
 ## Step 8 — Final verification
 
@@ -263,7 +325,8 @@ If `remoteUser` in devcontainer.json is set, that wins. If you can't determine i
 
 - **Don't write CLAUDE.md content.** `/init` does it better for projects that don't track CLAUDE.md. For projects that DO track CLAUDE.md, the overlay is just your personal notes — let the project's tracked CLAUDE.md drive the shared rules.
 - **Don't shadow tracked project files.** If the project tracks CLAUDE.md, AGENTS.md, or anything under `.claude/`, never propose renaming or symlinking on top. Use the `.local.md` import-shim and per-file symlink modes instead. This skill enforces this; `claude-link-project --claude-dir-per-file` will refuse on collision.
-- **Don't auto-generate agents.** Ask, offer grounded candidates from the inspected stack, generate only the picked ones. On collision with a tracked file, ask the user for a different name — don't auto-prefix.
+- **Don't auto-generate agents.** Ask, offer the two-tier choice (standing catalog vs README-only), then offer the grounded role candidates from the inspected stack. Generate only what was picked. On collision with a tracked file, ask the user for a different name — don't auto-prefix.
+- **Don't scaffold the team-flow command without the catalog.** `/new-feature` references the agent catalog by `subagent_type` — without agents, the command is dead code.
 - **Don't add wildcards to settings.local.json allowlist.** Per-tool, per-command, grounded in inspected facts.
 - **Don't clobber existing files in the overlay.** Re-runs should merge or skip.
 - **Don't run installers.** `~/.dotfiles/bin/setup-agent-teams` handles host-side setup (tmux, win32yank, yq, settings.json merge).
