@@ -1,11 +1,10 @@
 model_list:
   # Claude
+  - { model_name: claude-opus-4-8,        litellm_params: { model: github_copilot/claude-opus-4.8 } }
   - { model_name: claude-opus-4-7,        litellm_params: { model: github_copilot/claude-opus-4.7 } }
-  - { model_name: claude-opus-4-7-high,   litellm_params: { model: github_copilot/claude-opus-4.7-high } }
-  - { model_name: claude-opus-4-7-xhigh,  litellm_params: { model: github_copilot/claude-opus-4.7-xhigh } }
-  - { model_name: claude-opus-4-7-1m,     litellm_params: { model: github_copilot/claude-opus-4.7-1m-internal } }
+  - { model_name: claude-opus-4-7-1m,     litellm_params: { model: github_copilot/claude-opus-4.7 } }  # alias; 4.7 has 1M ctx natively
   - { model_name: claude-opus-4-6,        litellm_params: { model: github_copilot/claude-opus-4.6 } }
-  - { model_name: claude-opus-4-6-1m,     litellm_params: { model: github_copilot/claude-opus-4.6-1m } }
+  - { model_name: claude-opus-4-6-1m,     litellm_params: { model: github_copilot/claude-opus-4.6 } }  # alias; 4.6 has 1M ctx natively
   - { model_name: claude-opus-4-5,        litellm_params: { model: github_copilot/claude-opus-4.5 } }
   - { model_name: claude-sonnet-4-6,      litellm_params: { model: github_copilot/claude-sonnet-4.6 } }
   - { model_name: claude-sonnet-4-5,      litellm_params: { model: github_copilot/claude-sonnet-4.5 } }
