@@ -5,10 +5,9 @@ model_list:
   - { model_name: claude-opus-4-7-1m,     litellm_params: { model: github_copilot/claude-opus-4.7 } }  # alias; 4.7 has 1M ctx natively
   - { model_name: claude-opus-4-6,        litellm_params: { model: github_copilot/claude-opus-4.6 } }
   - { model_name: claude-opus-4-6-1m,     litellm_params: { model: github_copilot/claude-opus-4.6 } }  # alias; 4.6 has 1M ctx natively
-  - { model_name: claude-opus-4-5,        litellm_params: { model: github_copilot/claude-opus-4.5 } }
+  - { model_name: claude-sonnet-5,        litellm_params: { model: github_copilot/claude-sonnet-5 } }    # 'sonnet' alias resolves here; 1M/64k
   - { model_name: claude-sonnet-4-6,      litellm_params: { model: github_copilot/claude-sonnet-4.6 } }
   - { model_name: claude-sonnet-4-5,      litellm_params: { model: github_copilot/claude-sonnet-4.5 } }
-  - { model_name: claude-sonnet-4,        litellm_params: { model: github_copilot/claude-sonnet-4 } }
   - { model_name: claude-haiku-4-5,       litellm_params: { model: github_copilot/claude-haiku-4.5 } }
   # Claude Code internal tools (WebFetch, WebSearch) pin a dated model ID — alias to undated.
   - { model_name: claude-haiku-4-5-20251001, litellm_params: { model: github_copilot/claude-haiku-4.5 } }
@@ -16,16 +15,17 @@ model_list:
   # OpenAI (400k ctx / 128k out unless noted)
   - { model_name: gpt-5-5,                litellm_params: { model: github_copilot/gpt-5.5 } }
   - { model_name: gpt-5-4,                litellm_params: { model: github_copilot/gpt-5.4 } }
-  - { model_name: gpt-5-3-codex,          litellm_params: { model: github_copilot/gpt-5.3-codex } }
-  - { model_name: gpt-5-2-codex,          litellm_params: { model: github_copilot/gpt-5.2-codex } }
-  - { model_name: gpt-5-2,                litellm_params: { model: github_copilot/gpt-5.2 } }
+  - { model_name: gpt-5-4-mini,           litellm_params: { model: github_copilot/gpt-5.4-mini } }   # 400k/128k, OpenAI
   - { model_name: gpt-5-mini,             litellm_params: { model: github_copilot/gpt-5-mini } }   # 264k/64k, Azure OpenAI
-  - { model_name: gpt-4-1,                litellm_params: { model: github_copilot/gpt-4.1 } }      # 128k/16k, Azure OpenAI
 
   # Google
   - { model_name: gemini-3-1-pro-preview, litellm_params: { model: github_copilot/gemini-3.1-pro-preview } }   # 200k/64k
+  - { model_name: gemini-3-5-flash,       litellm_params: { model: github_copilot/gemini-3.5-flash } }         # 1M/64k
   - { model_name: gemini-3-flash-preview, litellm_params: { model: github_copilot/gemini-3-flash-preview } }   # 128k/64k
   - { model_name: gemini-2-5-pro,         litellm_params: { model: github_copilot/gemini-2.5-pro } }            # 128k/64k
+
+  # Microsoft
+  - { model_name: mai-code-1-flash-picker, litellm_params: { model: github_copilot/mai-code-1-flash-picker } } # 256k/128k
 
 litellm_settings:
   disable_copilot_system_to_assistant: true
