@@ -38,3 +38,9 @@
 	defaultBranch = main
 [coderabbit]
 	machineId = cli/5bd04c69e8d44ee38277024221b4b453
+[credential "https://github.com"]
+	helper = 
+	helper = !/usr/bin/gh auth git-credential
+[credential "https://gist.github.com"]
+	helper = 
+	helper = !/usr/bin/gh auth git-credential

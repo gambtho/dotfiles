@@ -17,3 +17,5 @@ docker-compose.override.yaml
 # Other AI assistant scratch / config
 .aider*
 .cursor/
+
+**/.claude/settings.local.json
