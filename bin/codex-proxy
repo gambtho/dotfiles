@@ -1,0 +1,173 @@
+#!/usr/bin/env bash
+# Manage a local LiteLLM proxy that fronts OpenAI-compatible models for Codex.
+# Usage: codex-proxy [start|stop|restart|status|env|logs|models]
+#   (no args -> ensure running + print env)
+#
+# One-time setup (not done by this script)
+#
+# 1. Install LiteLLM:
+#      uv tool install --python 3.13 'litellm[proxy]'
+#      litellm --version
+#
+# 2. Ensure ~/.config/litellm/config.yaml is linked from:
+#      ~/.dotfiles/ai/litellm/config.yaml
+#    The existing dotfiles config already includes OpenAI-compatible models such as:
+#      - gpt-5-5
+#      - gpt-5-4
+#      - gpt-5-4-mini
+#      - gpt-5-mini
+#
+# 3. Authenticate the upstream LiteLLM provider as needed.
+#    For the current dotfiles config this means GitHub Copilot auth; see:
+#      bin/copilot-proxy header step 3
+#
+# 4. Create or update ~/.codex/config.toml using the snippet from:
+#      codex-proxy env
+
+set -euo pipefail
+
+CONFIG="${LITELLM_CODEX_CONFIG:-$HOME/.config/litellm/config.yaml}"
+PORT="${LITELLM_CODEX_PORT:-4001}"
+LOG="${LITELLM_CODEX_LOG:-$HOME/.config/litellm/codex-proxy.log}"
+PIDFILE="${LITELLM_CODEX_PIDFILE:-$HOME/.config/litellm/codex-proxy.pid}"
+HEALTH="http://127.0.0.1:${PORT}/health/liveliness"
+
+require_config() {
+  [[ -f "$CONFIG" ]] && return 0
+  echo "missing config: $CONFIG" >&2
+  echo "link ~/.config/litellm/config.yaml from ~/.dotfiles/ai/litellm/config.yaml first" >&2
+  return 1
+}
+
+master_key() {
+  require_config || return 1
+  awk '/^[[:space:]]*master_key:/ {print $2; exit}' "$CONFIG"
+}
+
+is_up() { curl -sf --max-time 2 "$HEALTH" >/dev/null 2>&1; }
+
+spawn_proxy() {
+  if command -v setsid >/dev/null 2>&1; then
+    setsid litellm --config "$CONFIG" --port "$PORT" </dev/null >"$LOG" 2>&1 &
+  else
+    nohup litellm --config "$CONFIG" --port "$PORT" </dev/null >"$LOG" 2>&1 &
+  fi
+}
+
+pid_of() {
+  [[ -f "$PIDFILE" ]] || return 1
+  local pid
+  pid=$(cat "$PIDFILE")
+  [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null && echo "$pid"
+}
+
+start() {
+  require_config || return 1
+  if is_up; then echo "proxy already running on :${PORT}"; return 0; fi
+  mkdir -p "$(dirname "$LOG")"
+  echo -n "starting proxy "
+  spawn_proxy
+  echo $! >"$PIDFILE"
+  disown || true
+  local deadline=$((SECONDS + 120))
+  until is_up; do
+    if ! kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+      echo " DIED"
+      tail -30 "$LOG" >&2
+      return 1
+    fi
+    if (( SECONDS > deadline )); then
+      echo " TIMEOUT after 120s - check $LOG" >&2
+      return 1
+    fi
+    echo -n "."
+    sleep 2
+  done
+  echo " UP (pid $(cat "$PIDFILE"))"
+}
+
+stop() {
+  local pid
+  pid=$(pid_of || true)
+  if [[ -n "${pid:-}" ]]; then
+    kill "$pid" 2>/dev/null || true
+    echo -n "stopping pid $pid "
+  else
+    pkill -f "litellm --config $CONFIG" 2>/dev/null || true
+    echo -n "no tracked pid; sent pkill "
+  fi
+  rm -f "$PIDFILE"
+  local deadline=$((SECONDS + 15))
+  while is_up; do
+    if (( SECONDS > deadline )); then
+      echo " still up - force killing"
+      pkill -9 -f "litellm --config $CONFIG" 2>/dev/null || true
+      sleep 1
+      break
+    fi
+    echo -n "."
+    sleep 1
+  done
+  echo " DOWN"
+}
+
+status() {
+  if is_up; then
+    echo "UP   port=${PORT} pid=$(pid_of || echo unknown)"
+  else
+    echo "DOWN"
+    return 1
+  fi
+}
+
+print_env() {
+  local key
+  key=$(master_key)
+  cat <<EOF
+# Export this in the shell where you run \`codex\`:
+export LITELLM_CODEX_API_KEY="${key}"
+
+# Add this to ~/.codex/config.toml:
+model = "gpt-5-6-sol"
+model_provider = "litellm"
+
+[model_providers.litellm]
+name = "LiteLLM"
+base_url = "http://127.0.0.1:${PORT}/v1"
+wire_api = "responses"
+env_key = "LITELLM_CODEX_API_KEY"
+
+# Available model tiers:
+#   gpt-5-6-sol    # strongest default
+#   gpt-5-6-terra  # balanced
+#   gpt-5-6-luna   # fastest / cheapest
+#
+# One-shot example:
+#   LITELLM_CODEX_API_KEY=${key} codex -c model_provider='"litellm"' -m gpt-5-6-sol
+
+# Inside a devcontainer (requires host.docker.internal):
+#   base_url = "http://host.docker.internal:${PORT}/v1"
+EOF
+}
+
+models() {
+  if ! is_up; then
+    echo "proxy is DOWN - start it first" >&2
+    return 1
+  fi
+  curl -sS "http://127.0.0.1:${PORT}/v1/models" \
+       -H "Authorization: Bearer $(master_key)" \
+    | jq -r '.data[].id' | sort
+}
+
+case "${1:-default}" in
+  start)   start ;;
+  stop)    stop ;;
+  restart) stop; start ;;
+  status)  status ;;
+  env)     print_env ;;
+  logs)    tail -n "${2:-50}" -f "$LOG" ;;
+  models)  models ;;
+  default) start; echo; print_env ;;
+  *) echo "usage: $0 [start|stop|restart|status|env|logs|models]" >&2; exit 2 ;;
+esac

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Manage the local LiteLLM proxy that fronts GitHub Copilot as an Anthropic API.
-# Usage: copilot-proxy [start|stop|restart|status|env|logs|models [--upstream]]
+# Usage: copilot-proxy [start|stop|restart|status|env|logs|models [--upstream [--all]]]
 #   (no args → ensure running + print env)
 #
 # ─── One-time setup (not done by this script) ─────────────────────────────────
@@ -33,9 +33,11 @@
 #    Tokens land in ~/.config/litellm/github_copilot/ and auto-refresh thereafter.
 #
 # 4. Discover available Copilot models:
-#      copilot-proxy models --upstream   # everything your account can see (ctx/out, vendor)
+#      copilot-proxy models --upstream   # picker-enabled models (ctx/out, vendor)
+#      copilot-proxy models --upstream --all   # raw upstream list, incl. hidden/non-picker models
 #      copilot-proxy models              # what the local proxy currently serves
-#    --upstream filters to picker-enabled models and auto-refreshes the IDE token on 401.
+#    --upstream filters to picker-enabled models by default; add --all to inspect the raw
+#    upstream list. Both modes auto-refresh the IDE token on 401.
 #    To add one, append to config.yaml and restart:
 #      - { model_name: <alias>, litellm_params: { model: github_copilot/<exact-id> } }
 #
@@ -156,7 +158,7 @@ models() {
   local tmp; tmp=$(mktemp)
   trap 'rm -f "$tmp"' RETURN
 
-  local attempt api_key api_base http_code
+  local attempt api_key api_base http_code show_all="${2:-}"
   for attempt in 1 2; do
     api_key=$(jq -r .token     "$api_key_file")
     api_base=$(jq -r .endpoints.api "$api_key_file")
@@ -167,14 +169,14 @@ models() {
                  "$api_base/models")
 
     if [[ "$http_code" == "200" ]]; then
-      jq -r '.data[]
-             | select(.policy.state == "enabled" and .model_picker_enabled == true)
-             | [ .id,
-                 "\(.capabilities.limits.max_context_window_tokens // "?")/\(.capabilities.limits.max_output_tokens // "?")",
-                 (.vendor // "?") ]
-             | @tsv' "$tmp" \
+      local jq_filter='.data[]'
+      if [[ "$show_all" != "--all" ]]; then
+        jq_filter+=$'\n             | select((.policy.state == "enabled" or .policy.state == null) and .model_picker_enabled == true)'
+      fi
+      jq_filter+=$'\n             | [ .id,\n                 "\\(.capabilities.limits.max_context_window_tokens // \"?\")/\\(.capabilities.limits.max_output_tokens // \"?\")",\n                 (.vendor // \"?\"),\n                 (.policy.state // \"?\"),\n                 (.model_picker_enabled // false) ]\n             | @tsv'
+      jq -r "$jq_filter" "$tmp" \
         | sort \
-        | column -ts $'\t' -N "id,ctx/out,vendor"
+        | column -ts $'\t' -N "id,ctx/out,vendor,policy,picker"
       return
     fi
 
@@ -205,5 +207,5 @@ case "${1:-default}" in
   logs)    tail -n "${2:-50}" -f "$LOG" ;;
   models)  models "${2:-}" ;;
   default) start; echo; print_env ;;
-  *) echo "usage: $0 [start|stop|restart|status|env|logs|models [--upstream]]" >&2; exit 2 ;;
+  *) echo "usage: $0 [start|stop|restart|status|env|logs|models [--upstream [--all]]]" >&2; exit 2 ;;
 esac
