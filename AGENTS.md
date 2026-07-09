@@ -21,13 +21,16 @@ ai/
     install.sh               # Symlink setup script (--check for dry-run)
   claude/                    # Claude Code (non-plugin config)
     install.sh
+  codex/                     # Codex CLI
+    config.toml             # Main config: default model + LiteLLM provider
+    install.sh
   copilot/                   # GitHub Copilot CLI
     agents/                  # Agent definitions (independent implementations)
     skills/                  # Skills
     install.sh
 ```
 
-Configuration is symlinked to `~/.config/opencode/`, `~/.claude/`, and `~/.copilot/` by the respective install scripts. Run `make ai` or individual `ai/*/install.sh` scripts.
+Configuration is symlinked to `~/.config/opencode/`, `~/.claude/`, `~/.codex/`, and `~/.copilot/` by the respective install scripts. Run `make ai` or individual `ai/*/install.sh` scripts.
 
 ## The `my` Plugin
 

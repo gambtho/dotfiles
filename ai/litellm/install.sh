@@ -86,8 +86,8 @@ main() {
     log_success "LiteLLM setup complete."
     log_info "First run needs a one-time GitHub Copilot OAuth device flow — see the"
     log_info "header of bin/copilot-proxy (step 3) for the command."
-    log_info "For Codex CLI, use bin/codex-proxy and add the provider snippet from:"
-    log_info "  codex-proxy env"
+    log_info "For Codex CLI, use bin/codex-proxy and link the repo-managed config with:"
+    log_info "  ~/.dotfiles/ai/codex/install.sh"
 }
 
 main "$@"

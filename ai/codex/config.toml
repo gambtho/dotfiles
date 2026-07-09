@@ -1,0 +1,13 @@
+model = "gpt-5-6-sol"
+model_provider = "litellm"
+model_reasoning_effort = "medium"
+personality = "pragmatic"
+
+[model_providers.litellm]
+name = "LiteLLM"
+base_url = "http://127.0.0.1:4001/v1"
+wire_api = "responses"
+env_key = "LITELLM_CODEX_API_KEY"
+
+[projects."/home/tng/.dotfiles"]
+trust_level = "trusted"

@@ -16,7 +16,7 @@ relink: ## Remove dead symlinks and re-create from current layout
 
 # ── AI tools ──────────────────────────────────────────────────────────────────
 
-ai: ## Install/update all AI tool configs (opencode, claude, copilot)
+ai: ## Install/update all AI tool configs (opencode, claude, codex, copilot, litellm)
 	@for installer in ai/*/install.sh; do \
 		echo "Running $$installer..."; \
 		bash "$$installer"; \
@@ -24,6 +24,7 @@ ai: ## Install/update all AI tool configs (opencode, claude, copilot)
 
 ai-check: ## Dry-run: show what AI install would do
 	bash ai/opencode/install.sh --check
+	bash ai/codex/install.sh --check
 
 validate: ## Validate AI config structure (agents, commands, skills)
 	bash bin/validate-ai --verbose

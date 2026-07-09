@@ -28,7 +28,7 @@ After bootstrap, run `bin/install` (or `bin/dot-update`) to install packages and
   tools/          # Tool configs: docker, kubernetes
   platforms/      # OS-specific: linux/, macos/, windows/
   work/           # Work context: only sourced when work profile is active
-  ai/             # AI tools: opencode/, claude/, copilot/
+  ai/             # AI tools: opencode/, claude/, codex/, copilot/, litellm/
   profiles/       # Machine profiles: personal.zsh, work.zsh
   config/         # XDG config files, symlinked to ~/.config/<name>
   archived/       # Dead code — never sourced, kept for reference
@@ -131,7 +131,9 @@ Three AI tools are configured under `ai/`, with OpenCode as the primary tool:
 ai/
   opencode/     # Primary — 18 agents, 9 commands, 3 skills, DCP, plugins
   claude/       # Claude Code — thin wrapper commands over OpenCode versions
+  codex/        # Codex CLI — config.toml symlinked to ~/.codex/config.toml
   copilot/      # GitHub Copilot CLI — independent MCP-based implementations
+  litellm/      # Shared LiteLLM proxy config used by Copilot + Codex proxies
 ```
 
 ### Setup
@@ -141,7 +143,7 @@ make ai          # install/update all AI tool configs
 make ai-check    # dry-run: show what would be linked
 ```
 
-Or run individually: `ai/opencode/install.sh`, `ai/claude/install.sh`, `ai/copilot/install.sh`.
+Or run individually: `ai/opencode/install.sh`, `ai/claude/install.sh`, `ai/codex/install.sh`, `ai/copilot/install.sh`, `ai/litellm/install.sh`.
 
 AI tools are also installed during `bin/install` (Phase 9).
 
