@@ -15,5 +15,26 @@ trust_level = "trusted"
 [projects."/workspaces/double-holo-ui"]
 trust_level = "trusted"
 
+[projects."/home/tng/workspace/double-holo-shopify-app"]
+trust_level = "trusted"
+
+[projects."/home/tng/workspace/double-holo-ui"]
+trust_level = "trusted"
+
+[projects."/home/tng"]
+trust_level = "trusted"
+
 [tui.model_availability_nux]
-"gpt-5.6-sol" = 1
+"gpt-5.5" = 4
+"gpt-5.6-sol" = 4
+
+[marketplaces.guarzo]
+last_updated = "2026-07-12T18:58:36Z"
+source_type = "local"
+source = "/home/tng/.dotfiles/ai/marketplace"
+
+[plugins."my@guarzo"]
+enabled = true
+
+[plugins."superpowers@openai-curated"]
+enabled = true

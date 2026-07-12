@@ -2,7 +2,7 @@
 
 Phase 3 of `/polish` runs through these categories. Each finding carries a **confidence** (HIGH or MEDIUM) and an **action** (`auto-fix` if `--fix` is set; `report` otherwise). The auto-fix bar is deliberately conservative — when in doubt between `auto-fix` and `report`, choose `report`. False positives in auto-fix erode trust.
 
-This file is read once at Phase 3 start. Skim the whole list, then keep findings grounded in actual Grep/Glob evidence — never report a finding you can't point at a specific line for.
+This file is read once at Phase 3 start. Skim the whole list, then keep findings grounded in actual repository-search evidence — never report a finding you can't point at a specific line for.
 
 ---
 
@@ -98,7 +98,7 @@ Preserve:
 
 ## 3g: Dead Code & Dead Abstractions
 
-Perform call-chain analysis beyond simple reachability. For each category, use Grep/Glob to search the full codebase — not just the diff — to verify liveness.
+Perform call-chain analysis beyond simple reachability. For each category, search the full codebase — not just the diff — to verify liveness.
 
 - **Dead exports** — functions, types, or constants exported but never imported anywhere in the codebase. Use Grep to search for import references across the project. **Action**: `report` (might be part of a public API).
 - **Dead parameters** — function parameters that are never read within the function body. **Action**: `report` by default. Only classify as `auto-fix` when ALL of: (1) the function is unexported/private, (2) Grep confirms a single call site in the codebase, and (3) the parameter is not part of an interface/trait/callback contract or public API surface.
