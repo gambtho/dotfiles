@@ -1,19 +1,20 @@
 ---
-name: polish
-description: Review code changes since a commit, classify correctness and maintainability findings, optionally apply only high-confidence safe fixes, and report remaining issues. Use when the user asks to polish changed code, review a commit range, run a pre-PR quality pass, or invokes $my:polish.
+name: polish-core
+description: Review code changes since a commit, classify correctness and maintainability findings, optionally apply only high-confidence safe fixes, and report remaining issues. Use when the user asks to polish changed code, review a commit range, run a pre-PR quality pass, or invokes $my:polish-core.
 ---
 
 # Polish — Review & Fix
 
 You are performing a thorough analysis of all changes since a specified commit, classifying findings by confidence and action type. By default, you report what would be fixed without making changes. With `--fix`, you apply high-confidence fixes and report the rest.
 
-**Invocation input**: Interpret text supplied with the skill invocation or the user's surrounding request. Default to `HEAD~1` when no commit reference is specified.
+**Invocation input**: Interpret text supplied with the skill invocation or the user's surrounding request. When no commit reference is specified, default to all changes on the current branch: the merge-base between `HEAD` and the default branch (see Phase 0).
 
 Parse arguments:
 - If `--fix` is present (in any position), set FIX_MODE=true and remove it from the commit reference.
 - If `--path <prefix>` is present, set PATH_FILTER to the given prefix and remove both tokens from the arguments. This limits analysis to files under that directory.
-- Remaining argument is the commit reference (default: `HEAD~1`).
-- Examples: `$my:polish`, `$my:polish HEAD~5`, `$my:polish abc123 --fix`, `$my:polish --fix --path src/api HEAD~3`
+- Remaining argument is the commit reference (default: merge-base with the default branch).
+- Natural-language mentions of `my:polish` refer to this skill via its `/polish` command wrapper.
+- Examples: `$my:polish-core`, `$my:polish-core HEAD~5`, `$my:polish-core abc123 --fix`, `$my:polish-core --fix --path src/api HEAD~3`
 - Natural-language equivalents are accepted, such as “use my:polish to review changes since HEAD~5 and apply safe fixes.”
 
 ---
@@ -21,7 +22,11 @@ Parse arguments:
 ## Phase 0: Validate Environment
 
 1. Run `git rev-parse --is-inside-work-tree` to confirm we're in a git repo. If not, print an error and **STOP**.
-2. Resolve the target commit (use `HEAD~1` if not specified). If resolution fails, **STOP**.
+2. Resolve the target commit. If no commit reference was specified, compute the default:
+   - Detect the default branch: `git symbolic-ref --short refs/remotes/origin/HEAD` (strip the `origin/` prefix); if that fails, use `main` if it exists, else `master`.
+   - Set BASE_COMMIT to `git merge-base HEAD <default-branch>`.
+   - If the current branch **is** the default branch (merge-base equals `HEAD`), fall back to `HEAD~1` and note this in the output.
+   If resolution fails, **STOP**.
 3. Run `git log --oneline BASE_COMMIT..HEAD` and `git diff --stat BASE_COMMIT..HEAD`.
 4. If there are no changes, print "No changes found since {BASE_COMMIT}" and **STOP**.
 5. If the range includes merge commits (visible in the `git log` output), warn: "This range includes merge commits — the diff may include changes from merged branches. Consider a specific commit range that excludes merges."
@@ -51,7 +56,7 @@ Convention sources (in priority order):
 3. `CONTRIBUTING.md`, `STYLE.md`, or similar docs
 4. Patterns sampled from surrounding (unchanged) files
 
-**Load language rules** for the detected languages. Map file extensions from the diff to language rule files and read them from `~/.dotfiles/ai/opencode/skills/code-simplifier/rules/`:
+**Load language rules** for the detected languages. Map file extensions from the diff to language rule files and read them from `references/rules/` relative to this skill directory:
 
 - `.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, `.cjs` → `rules/typescript.md`
 - `.py`, `.pyi` → `rules/python.md`
@@ -84,7 +89,7 @@ Language rules loaded: go.md, typescript.md
 8. Apply large diff tiers:
    - **Under 30 source files**: full analysis of all files.
    - **30-80 source files**: full diff for all, but only read full file contents for the top 20 files by lines changed. Note in the report which files had abbreviated analysis.
-   - **Over 80 source files**: warn the user ("This diff spans N files. Analyzing the top 40 by change size. Run `$my:polish` with `--path` for targeted analysis of specific directories."). Analyze the top 40 files only.
+   - **Over 80 source files**: warn the user ("This diff spans N files. Analyzing the top 40 by change size. Run `$my:polish-core` with `--path` for targeted analysis of specific directories."). Analyze the top 40 files only.
 
 ---
 
@@ -113,12 +118,12 @@ Walk through each of 3a-3h from the reference and produce findings, classifying 
 
 ### 3i: Dispatch Subagents
 
-Dispatch the following specialized subagents **in parallel** using available subagent tools in parallel. If the current Codex session does not expose the named agents, use generic read-only subagents with the same assigned roles. If subagents are unavailable or their use is not authorized, perform these checks locally and note that in the report:
+Dispatch read-only review subagents **in parallel** using whatever subagent mechanism the platform provides (e.g. the Agent tool in Claude Code). For each role below, prefer a dedicated agent if one with that specialty is available in the session; otherwise dispatch a generic read-only subagent (e.g. `general-purpose` or `Explore`) with the role assigned in its prompt. If subagents are unavailable or their use is not authorized, perform these checks locally and note that in the report:
 
-1. **code-reviewer** (`subagent_type: "feature-dev:code-reviewer"`) — read-only, confidence-filtered general review. Scope to quality/fragility and suggestions — Phase 3a already covers bugs and security.
-2. **silent-failure-hunter** (`subagent_type: "pr-review-toolkit:silent-failure-hunter"`) — finds swallowed errors and silent fallbacks
-3. **comment-analyzer** (`subagent_type: "pr-review-toolkit:comment-analyzer"`) — focus exclusively on cross-referencing comment claims against actual code behavior. Skip tautological/noise/stale comment checks (Phase 3f handles those).
-4. **type-design-analyzer** (`subagent_type: "pr-review-toolkit:type-design-analyzer"`) — reviews type/interface/struct design
+1. **code-reviewer** — confidence-filtered general review. Prefer a dedicated review agent when available (e.g. `coderabbit:code-reviewer`). Scope to quality/fragility and suggestions — Phase 3a already covers bugs and security.
+2. **silent-failure-hunter** — generic subagent with this role: finds swallowed errors and silent fallbacks.
+3. **comment-analyzer** — generic subagent with this role: focus exclusively on cross-referencing comment claims against actual code behavior. Skip tautological/noise/stale comment checks (Phase 3f handles those).
+4. **type-design-analyzer** — generic subagent with this role: reviews type/interface/struct design.
 
 Each subagent receives:
 - The list of changed files and their paths

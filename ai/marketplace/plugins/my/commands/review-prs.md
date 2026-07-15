@@ -305,14 +305,14 @@ For each PR, provide the agent with:
 
 ### Specialized Agent Augmentation (Medium/Large PRs only)
 
-For PRs in the **Medium**, **Large**, or **Very Large** size categories, each review agent should also dispatch specialized sub-agents in parallel to deepen the analysis. These run alongside the agent's own review and their findings are merged into the agent's output.
+For PRs in the **Medium**, **Large**, or **Very Large** size categories, each review agent should also dispatch specialized sub-agents in parallel to deepen the analysis. These run alongside the agent's own review and their findings are merged into the agent's output. For each role, prefer a dedicated agent if one with that specialty is available in the session (e.g. `coderabbit:code-reviewer` for the code reviewer role); otherwise dispatch a generic read-only sub-agent (e.g. `general-purpose`) with the role assigned in its prompt.
 
-| Sub-agent | subagent_type | When to use |
-|-----------|---------------|-------------|
-| Silent failure hunter | `pr-review-toolkit:silent-failure-hunter` | PR touches error handling, catch blocks, or fallback logic |
-| Comment analyzer | `pr-review-toolkit:comment-analyzer` | PR adds or modifies comments/docstrings |
-| Type design analyzer | `pr-review-toolkit:type-design-analyzer` | PR introduces new types, interfaces, or structs |
-| Code reviewer | `feature-dev:code-reviewer` | Always — catches bugs and security issues with confidence filtering |
+| Sub-agent role | When to use |
+|----------------|-------------|
+| Silent failure hunter | PR touches error handling, catch blocks, or fallback logic |
+| Comment analyzer | PR adds or modifies comments/docstrings |
+| Type design analyzer | PR introduces new types, interfaces, or structs |
+| Code reviewer | Always — catches bugs and security issues with confidence filtering |
 
 **Instructions for review agents:**
 - Only dispatch sub-agents relevant to the PR's changes — skip those that don't apply

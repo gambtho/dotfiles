@@ -282,14 +282,14 @@ Identify connections:
 
 When `DEEP_MODE` is set, dispatch specialized agents in parallel to surface issues that reviewers and CI may have missed. These findings enrich the plan with preemptive fixes.
 
-**Launch these agents in parallel on the PR's changed files using the `Agent` tool (make all calls in a single message):**
+**Launch these agents in parallel on the PR's changed files using the `Agent` tool (make all calls in a single message).** For each role, prefer a dedicated agent if one with that specialty is available in the session (e.g. `coderabbit:code-reviewer` for the code reviewer role, `Explore` for the code explorer role); otherwise dispatch a generic read-only subagent (e.g. `general-purpose`) with the role assigned in its prompt:
 
-| Agent | subagent_type | Purpose |
-|-------|---------------|---------|
-| Silent failure hunter | `pr-review-toolkit:silent-failure-hunter` | Finds swallowed errors, empty catch blocks, fallbacks that hide failures |
-| Code reviewer | `feature-dev:code-reviewer` | Catches bugs, logic errors, and security issues with confidence filtering |
-| Code explorer | `feature-dev:code-explorer` | Traces execution paths and maps dependencies to understand impact of changes |
-| Test analyzer | `pr-review-toolkit:pr-test-analyzer` | Reviews test coverage quality and completeness |
+| Agent role | Purpose |
+|------------|---------|
+| Silent failure hunter | Finds swallowed errors, empty catch blocks, fallbacks that hide failures |
+| Code reviewer | Catches bugs, logic errors, and security issues with confidence filtering |
+| Code explorer | Traces execution paths and maps dependencies to understand impact of changes |
+| Test analyzer | Reviews test coverage quality and completeness |
 
 For each agent, provide:
 - The list of changed files and their paths

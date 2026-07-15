@@ -179,7 +179,7 @@ Why merge-base rather than the first PR commit: `/polish` treats its argument as
 
 Invoke the polish command via the Skill tool:
 
-- **Skill**: `my:polish`
+- **Skill**: `my:polish-core`
 - **Args**: `{BASE} --fix`
 
 Capture polish's output — specifically the **FIXED** section (items it applied) and the **NEEDS REVIEW** section (items it deferred). Both are needed for the final summary.
