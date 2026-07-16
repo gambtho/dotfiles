@@ -1,6 +1,6 @@
 ---
 name: project-claude-setup
-description: Set up a project for Claude Code without leaking personal config into the project's git history. Creates a per-project overlay in ~/.dotfiles/projects/<name>/ (CLAUDE.md, agents/, settings.local.json), symlinks it into the project worktree, and — for compose-based devcontainers — writes a docker-compose.override.yml that mounts host SSH/gh/Claude/dotfiles, or merges into an existing one. Use when starting work on a new project, when an open-source project shouldn't carry your CLAUDE.md, when adding agent-teams support to an existing project, or when the user mentions "set up this project for Claude" / "bootstrap project Claude config" / "share host SSH/gh/dotfiles with the devcontainer".
+description: Set up a project for Claude Code without leaking personal config into the project's git history. Creates a per-project overlay under ~/.dotfiles/projects/ (CLAUDE.md, agents/, settings.local.json), symlinks it into the project worktree, and — for compose-based devcontainers — writes a local seed-and-copy override for host SSH/gh/Claude/dotfiles. Also detects and repairs legacy writable or dual-home Claude mounts. Use when starting work on a new project, when an open-source project shouldn't carry your CLAUDE.md, when adding agent-teams support to an existing project, or when the user mentions "set up this project for Claude" / "bootstrap project Claude config" / "share host SSH/gh/dotfiles with the devcontainer".
 ---
 
 # Project Claude setup
@@ -184,29 +184,45 @@ Never write to the project-shared `.claude/settings.json` from this skill — th
 
 ## Step 6 — Compose host mounts (case a only)
 
-The host mounts give the container the user's `~/.ssh`, `~/.config/gh`, `~/.claude`, `~/.config/opencode`, `~/.dotfiles` so the symlinked overlay actually resolves inside the container, and so `claude` inside the container reuses the host's auth/plugins/skills.
+Keep `~/.ssh` and `~/.config/gh` read-only at the container user's home. Mount `~/.claude` and `~/.dotfiles` read-only under `/host-seed`, then copy the authored Claude subset and dotfiles into container-local named volumes at the user's home with a gitignored `.devcontainer/local-seed.sh`. The named-volume targets also replace any inherited host binds with the same container targets during Compose merge. This lets Claude Code write runtime state without any write path back to the host. OpenCode is not seeded; the seed script links Codex through `ai/codex/install.sh`.
 
-Use `~/.dotfiles/bin/claude-merge-compose-override` for both the create-new and merge-into-existing cases:
+Write or merge the gitignored `docker-compose.override.yml` directly. The override must:
 
-```bash
-# Resolve service name and container user from devcontainer.json + base
-# compose file (see Step 2 inspection results).
-service=<from devcontainer.json or first key under services:>
-user=<remoteUser or USER from Dockerfile or base-image default>
+1. Target the actual devcontainer service and home directory found in Step 2.
+2. Mount `~/.ssh` and `~/.config/gh` read-only at the container home.
+3. Mount `~/.claude` at `/host-seed/.claude:ro,cached` and `~/.dotfiles` at `/host-seed/.dotfiles:ro,cached`.
+4. Mount project-scoped named volumes at the container user's `~/.claude` and `~/.dotfiles`. Because Compose volume entries merge by container target, these replace legacy host binds inherited from the base compose file.
+5. If the merged base still exposes host OpenCode config, shadow that target with an empty project-scoped named volume; do not seed or install OpenCode.
+6. Override `command` to run `.devcontainer/local-seed.sh`, then `exec` the base service's original foreground command.
+7. Preserve unrelated existing override keys and show the diff before writing.
+8. Back up an existing override to `<file>.backup-<timestamp>` before replacing legacy mounts.
 
-override="$(dirname "$(jq -r '.dockerComposeFile | if type=="array" then .[0] else . end' .devcontainer/devcontainer.json | sed 's|^./||')")/docker-compose.override.yml"
+Do **not** use `claude-merge-compose-override` for this step until that helper emits the seed model; its current output contains writable and dual-home mounts.
 
-claude-merge-compose-override --service "$service" --user "$user" "$override"
-```
+Keep both files local. Verify they are ignored with `git check-ignore`; if the project does not already ignore them, add them to `.git/info/exclude` rather than changing tracked project files.
 
-The helper:
-1. Creates the file with our standard mounts if it doesn't exist.
-2. Merges our mounts and env var into an existing file, deduping volume mounts, showing a unified diff.
-3. Warns if the target is tracked in git ("this change will appear in `git diff`; decide whether to commit, stash, or revert").
-4. Refuses if `yq` is missing or is the wrong yq (Python kislyuk vs Go mikefarah).
-5. Backs up the original to `<file>.backup-<timestamp>`.
+See `devcontainer-host-mounts.md` for the copy-pasteable override and seed script, service/user/path substitutions, and verification commands.
 
-See `devcontainer-host-mounts.md` for the mount table reference (what each mount is for, the parallel `${HOME}:${HOME}` mount explanation, verification commands inside the container).
+## Step 6b — Repair an existing corrupted rw-mount setup
+
+Detect the old pattern before converting. Signals (any one → offer repair):
+
+1. rw `~/.claude` mount in a compose file:
+   `grep -rnE '~/\.claude:/home/[^:]+:cached' .devcontainer/`
+2. parallel dual-mount lines:
+   `grep -rn '${HOME}:${HOME}' .devcontainer/ 2>/dev/null || grep -rnE '\$\{HOME\}/\.claude:\$\{HOME\}/\.claude' .devcontainer/`
+3. container-user paths written back into HOST config:
+   `grep -rl '/home/vscode\|/home/node' ~/.claude/plugins/*.json 2>/dev/null`
+4. foreign home symlinks the shim created:
+   `ls -l /home/*/ 2>/dev/null | grep -- '-> /home/'` (inside a container only)
+
+Remediation (confirm with user before each write):
+
+- Rewrite the override to read-only seed mounts, container-local named-volume targets, the `command` override, and `local-seed.sh` from Step 6. Back up the old override to `<file>.backup-<timestamp>`.
+- Remove the `${HOME}:${HOME}` dual-mount lines.
+- Inspect the fully merged Compose config, not only the override. Shadow any legacy base-file binds targeting the container user's `~/.claude`, `~/.dotfiles`, or OpenCode directory with project-scoped named volumes.
+- Optional host cleanup: rewrite `/home/<container-user>` to the host home in `~/.claude/plugins/{known_marketplaces,installed_plugins}.json`, and delete broken `~/.claude` symlinks whose target starts with `/home/<container-user>`. Show a diff or list first; never bulk-delete without confirmation.
+- Tell the user to rebuild the container to apply the repair.
 
 ## Step 7 — Agent scaffolding (ask, two tiers)
 
