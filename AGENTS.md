@@ -17,16 +17,18 @@ ai/
     CLAUDE.md                # Global always-loaded working agreement
     install.sh
   codex/                     # Codex CLI
-    config.toml              # Default model + LiteLLM provider
+    config.toml              # Default Vekil model
     AGENTS.md                # Global always-loaded working agreement (Codex)
     install.sh
-  litellm/                   # Shared LiteLLM proxy config (Codex + Copilot-model routing)
-    config.yaml
-    install.sh
+  vekil/                     # Shared Copilot model proxy for Claude Code + Codex
+    env.zsh                  # Auto-selects host/devcontainer endpoint
+    install.sh               # Pinned install, managed auth, lifecycle startup
 ```
 
-Configuration is symlinked into `~/.claude/`, `~/.codex/`, and `~/.config/litellm/`
-by the respective install scripts. Run `make ai` or individual `ai/*/install.sh`.
+Configuration is symlinked into `~/.claude/` and `~/.codex/` by the respective
+install scripts. Run `make ai` or individual `ai/*/install.sh` scripts.
+
+Vekil is installed and started only through `ai/vekil/install.sh` and `bin/vekil-proxy`. Its credentials and runtime state are machine-local under `~/.config/vekil/` and `~/.local/state/vekil/`, but their lifecycle is repository-managed. The proxy binds to the Docker bridge when available so devcontainers can use `host.docker.internal` without exposing it on every interface.
 
 ## The `my` Plugin
 

@@ -16,7 +16,7 @@ relink: ## Remove dead symlinks and re-create from current layout
 
 # ── AI tools ──────────────────────────────────────────────────────────────────
 
-ai: ## Install/update all AI tool configs (claude, codex, litellm)
+ai: ## Install/update all AI tool configs and the Vekil proxy
 	@for installer in ai/*/install.sh; do \
 		echo "Running $$installer..."; \
 		bash "$$installer"; \
