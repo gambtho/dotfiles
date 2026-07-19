@@ -31,12 +31,12 @@ install_apt_packages() {
   local -a apt_packages
 
   log_info "Updating APT packages from $apt_file..."
-  sudo apt update >/dev/null 2>&1 &&
+  sudo apt update >/dev/null &&
     mapfile -t apt_packages <"$DOTFILES_ROOT/platforms/linux/$apt_file" &&
-    sudo apt install -y "${apt_packages[@]}" >/dev/null 2>&1 &&
-    sudo apt upgrade -y >/dev/null 2>&1 &&
-    sudo apt autoremove -y >/dev/null 2>&1 &&
-    sudo apt autoclean -y >/dev/null 2>&1
+    sudo apt install -y "${apt_packages[@]}" >/dev/null &&
+    sudo apt upgrade -y >/dev/null &&
+    sudo apt autoremove -y >/dev/null &&
+    sudo apt autoclean -y >/dev/null
 }
 
 install_platform_packages() {
