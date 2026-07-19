@@ -96,6 +96,17 @@ SCRIPT
   [ "$output" = "1" ]
 }
 
+@test "non-interactive bootstrap accepts existing local git config" {
+  local configured_root="$TEST_ROOT/configured-dotfiles"
+  mkdir -p "$configured_root/core/git"
+  touch "$configured_root/core/git/gitconfig.local.symlink"
+
+  run env BOOTSTRAP_SOURCE_ONLY=1 HOME="$HOME" bash -c \
+    'source "$1/bin/bootstrap"; DOTFILES_ROOT="$2"; parse_bootstrap_args --non-interactive --profile personal; validate_bootstrap_options' \
+    _ "$REPO_ROOT" "$configured_root"
+  [ "$status" -eq 0 ]
+}
+
 @test "work kubectl shortcuts use maintained krew plugins" {
   run rg -n 'raw\.githubusercontent\.com/blendle/kns' "$REPO_ROOT/work"
   [ "$status" -eq 1 ]

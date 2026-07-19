@@ -56,6 +56,9 @@ validate_bootstrap_options() {
     printf '%s\n' "--profile is required with --non-interactive." >&2
     return 1
   fi
+  if [[ -f "$DOTFILES_ROOT/core/git/gitconfig.local.symlink" ]]; then
+    return 0
+  fi
   BOOTSTRAP_GIT_NAME=$(git config --global --get user.name 2>/dev/null || true)
   BOOTSTRAP_GIT_EMAIL=$(git config --global --get user.email 2>/dev/null || true)
   if [[ -z "$BOOTSTRAP_GIT_NAME" || -z "$BOOTSTRAP_GIT_EMAIL" ]]; then
