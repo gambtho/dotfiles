@@ -6,7 +6,6 @@ source "$(dirname "$0")/../../bin/common.sh"
 
 DOTFILES_ROOT="$(cd "$(dirname "$0")/../.." && pwd -P)"
 MARKETPLACE_DIR="$DOTFILES_ROOT/ai/marketplace"
-PLUGIN_DIR="$MARKETPLACE_DIR/plugins/my"
 
 remove_legacy_commands_symlink() {
     if [ -L "$HOME/.claude/commands" ]; then
@@ -70,48 +69,9 @@ install_marketplace_and_plugin() {
     log_success "Marketplace + plugin ready."
 }
 
-bridge_to_tool() {
-    local tool_name="$1"
-    local target_root="$2"
-
-    if [ ! -d "$target_root" ]; then
-        log_info "${tool_name} not detected at $target_root — skipping bridge."
-        return 0
-    fi
-
-    if [ ! -w "$target_root" ]; then
-        log_warning "${tool_name} dir $target_root is not writable (owned by another user?) — skipping bridge."
-        return 0
-    fi
-
-    for d in skills agents; do
-        local plugin_subdir="$PLUGIN_DIR/$d"
-        local target_subdir="$target_root/$d"
-        [ -d "$plugin_subdir" ] || continue
-        mkdir -p "$target_subdir"
-        for item in "$plugin_subdir"/*; do
-            [ -e "$item" ] || continue
-            local name
-            name=$(basename "$item")
-            local link="$target_subdir/$name"
-            if [ -L "$link" ] && [ "$(readlink "$link")" = "$item" ]; then
-                continue
-            fi
-            if [ -e "$link" ] && [ ! -L "$link" ]; then
-                log_warning "${tool_name} ${d}/${name} exists and is not a symlink — leaving alone."
-                continue
-            fi
-            ln -snf "$item" "$link"
-            log_success "${tool_name}: linked ${d}/${name}"
-        done
-    done
-}
-
 main() {
     remove_legacy_commands_symlink
     install_marketplace_and_plugin
-    bridge_to_tool "OpenCode" "$HOME/.config/opencode"
-    bridge_to_tool "Copilot"  "$HOME/.copilot"
 }
 
 main "$@"

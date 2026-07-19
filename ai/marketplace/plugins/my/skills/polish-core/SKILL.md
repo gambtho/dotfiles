@@ -56,7 +56,7 @@ Convention sources (in priority order):
 3. `CONTRIBUTING.md`, `STYLE.md`, or similar docs
 4. Patterns sampled from surrounding (unchanged) files
 
-**Load language rules** for the detected languages. Map file extensions from the diff to language rule files and read them from `references/rules/` relative to this skill directory:
+**Load language rules** for the detected languages. Map file extensions from the diff to language rule files and read them from `rules/` relative to this skill directory:
 
 - `.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, `.cjs` → `rules/typescript.md`
 - `.py`, `.pyi` → `rules/python.md`

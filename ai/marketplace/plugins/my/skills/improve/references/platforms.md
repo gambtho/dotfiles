@@ -15,7 +15,7 @@ This skill runs on Claude Code, OpenCode, and Pi. Read this file when the skill 
 | Project conventions file | `CLAUDE.md` | `CLAUDE.md` or `AGENTS.md` | `AGENTS.md` (fall back to `CLAUDE.md`) |
 | Parallel agents | `Agent` tool with `explore` | `task` tool with `subagent_type: "explore"` | `subagent` tool with one task per agent (each task prompt fully self-contained) |
 | Memory path | `~/.claude/projects/<project>/memory/improve_findings.md` | `memory_set` / `memory_list` (scope: `project`, label: `improve-findings`) | `.pi/memory/improve_findings.md` in project root |
-| Code-simplifier rules | `~/.claude/plugins/cache/.../code-simplifier/*/rules/` | `~/.config/opencode/skills/code-simplifier/rules/` or `~/.dotfiles/ai/opencode/skills/code-simplifier/rules/` | Same as OpenCode paths if present; otherwise skip |
+| Code-simplifier rules | `~/.claude/plugins/cache/.../my/skills/polish-core/rules/` | `~/.config/opencode/skills/code-simplifier/rules/` if present | Same as OpenCode paths if present; otherwise skip |
 
 ---
 
