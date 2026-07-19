@@ -82,12 +82,24 @@ SCRIPT
   assert_check_is_immutable ai/claude/install.sh
 }
 
-@test "litellm check mode changes no files" {
-  assert_check_is_immutable ai/litellm/install.sh
+@test "vekil check mode changes no files" {
+  assert_check_is_immutable ai/vekil/install.sh
 }
 
 @test "marketplace check mode changes no files" {
   assert_check_is_immutable ai/marketplace/install.sh
+}
+
+@test "vekil proxy rejects unsafe access-token entries" {
+  run bash "$REPO_ROOT/tests/vekil-proxy-token-safety.sh"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"PASS: Vekil proxy rejects unsafe access-token entries"* ]]
+}
+
+@test "vekil installer safely cleans legacy LiteLLM processes" {
+  run bash "$REPO_ROOT/tests/vekil-installer-legacy-cleanup.sh"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"PASS: Vekil installer safely cleans up legacy LiteLLM processes"* ]]
 }
 
 @test "claude installer failure still links settings and exits nonzero" {

@@ -2,14 +2,16 @@
 
 ## Status
 
-This branch is a work in progress. It contains the recovered implementation
-state from July 14, 2026, before the final security and migration-cleanup review
-findings were addressed. Do not merge it as-is.
+This branch contains the recovered implementation state from July 14, 2026,
+plus the security and migration-cleanup hardening completed on July 19, 2026.
+Live validation still needs to be repeated on the current machine before merge.
 
 The approved design and execution plan are:
 
 - `docs/superpowers/specs/2026-07-14-vekil-proxy-migration-design.md`
 - `docs/superpowers/plans/2026-07-14-vekil-proxy-migration.md`
+- `docs/superpowers/specs/2026-07-19-vekil-migration-hardening-design.md`
+- `docs/superpowers/plans/2026-07-19-vekil-migration-hardening.md`
 
 ## Implemented
 
@@ -26,6 +28,15 @@ The approved design and execution plan are:
   LiteLLM provider block.
 - Removed the repository-managed LiteLLM installer/configuration and the old
   `codex-proxy` and `copilot-proxy` lifecycle scripts.
+- Hardened public Vekil lifecycle commands to reject symlinked or non-regular
+  `access-token` entries before invoking Vekil, revalidate resulting token
+  state, and enforce mode `0600` on valid token files.
+- Added installer-time migration cleanup for the two known legacy LiteLLM PID
+  files. Cleanup stops a process only when its PID start identity and arguments
+  match LiteLLM, the legacy config path, and the expected port; ambiguous state
+  is warned about and preserved.
+- Kept legacy LiteLLM binaries, configuration, logs, and credentials untouched
+  so rollback data is not removed implicitly.
 - Updated `Makefile`, `README.md`, and `AGENTS.md` for Vekil ownership and
   standard `make ai` / `bin/install` discovery.
 - Deferred full inference-response caching as documented in the design.
@@ -49,36 +60,20 @@ The following passed on the original machine before this handoff:
   `git diff --check`, targeted installer dry runs, and Codex strict config
   parsing passed.
 
+The following focused regression harnesses passed on the current machine after
+the July 19 hardening:
+
+- `tests/vekil-proxy-token-safety.sh`
+- `tests/vekil-installer-legacy-cleanup.sh`
+
+Current-machine static validation also passed for Bash/zsh syntax, ShellCheck
+with the repository's dynamic-source notice excluded, tracked and new-file
+whitespace checks, Linux/macOS Vekil installer dry runs, and the Codex installer
+dry run.
+
 ## Unresolved Findings
 
-1. **High: lifecycle token symlink hardening**
-   - `bin/vekil-proxy` validates the token directory but does not validate
-     `$VEKIL_TOKEN_DIR/access-token` before the public `login`, `start`, and
-     `logout` commands.
-   - A malicious symlink can cause Vekil to overwrite the symlink target.
-   - Centralize access-token validation and permission enforcement. Call it
-     before and after `login`, before `start`, and around `logout` as
-     appropriate. Add an isolated regression harness proving symlinks are
-     rejected without invoking Vekil.
-
-2. **Medium: legacy LiteLLM daemons survive repository deletion**
-   - Existing LiteLLM processes on ports `4000` and `4001` can remain running
-     after their scripts are removed.
-   - Add an idempotent, identity-checked migration cleanup or retain a temporary
-     stop path. Do not kill by loose name matching. Clean only known PID files
-     whose process command matches the expected LiteLLM config and port.
-   - Removing obsolete machine-local LiteLLM configuration and credentials
-     should remain explicit and conservative.
-
-3. **Medium, pre-existing: `make ai-check` is not side-effect free**
-   - `ai/opencode/install.sh --check` attempts to remove existing OpenCode
-     symlinks before its dry-run branch, so `make ai-check` can mutate state or
-     fail on a read-only filesystem.
-   - This predates the Vekil migration. Either fix the OpenCode installer as a
-     separate focused change or avoid using the aggregate target for migration
-     validation; the Codex and Vekil targeted `--check` commands pass.
-
-4. **Operational caveat: device-flow browser launcher**
+1. **Operational caveat: device-flow browser launcher**
    - On the original Linux desktop, Vekil's `xdg-open` child blocked the device
      flow until the code expired. Prepending a no-op `xdg-open` allowed the
      documented URL/code flow to complete.
@@ -96,12 +91,11 @@ Do not copy tokens into the repository or the handoff.
 
 ## Recommended Next Steps
 
-1. Fix the lifecycle access-token symlink vulnerability test-first.
-2. Add identity-checked shutdown of legacy LiteLLM processes.
-3. Re-run syntax, ShellCheck, installer harnesses, host/container networking,
-   model catalog assertions, and both client smoke tests.
-4. Run a final specification and security review.
-5. Only then mark the migration complete and open a merge-ready pull request.
+1. Re-run host/container networking, model catalog assertions, and both client
+   smoke tests with machine-local Vekil authentication.
+2. Reproduce the device-flow browser behavior on this machine.
+3. Run a final specification and security review.
+4. Only then mark the migration complete.
 
 ## Suggested Skills
 

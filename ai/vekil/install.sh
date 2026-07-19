@@ -15,6 +15,9 @@ RELEASE_BASE="https://github.com/sozercan/vekil/releases/download/$VEKIL_VERSION
 TOKEN_DIR="${VEKIL_TOKEN_DIR:-$HOME/.config/vekil}"
 ACCESS_TOKEN_FILE="$TOKEN_DIR/access-token"
 LIFECYCLE_BIN="$DOTFILES_ROOT/bin/vekil-proxy"
+LEGACY_LITELLM_DIR="${LITELLM_CONFIG_DIR:-$HOME/.config/litellm}"
+LEGACY_LITELLM_CONFIG="$LEGACY_LITELLM_DIR/config.yaml"
+LEGACY_STOP_TIMEOUT="${VEKIL_LEGACY_STOP_TIMEOUT:-15}"
 DOWNLOAD_DIR=""
 STAGED_BIN=""
 STAGED_VERSION=""
@@ -43,8 +46,8 @@ detect_platform() {
   esac
 
   case "$arch" in
-    x86_64|amd64) arch="amd64" ;;
-    arm64|aarch64) arch="arm64" ;;
+    x86_64 | amd64) arch="amd64" ;;
+    arm64 | aarch64) arch="arm64" ;;
     *) log_error "Unsupported Vekil architecture: $arch" >&2 ;;
   esac
 
@@ -65,7 +68,7 @@ calculate_checksum() {
 
 installed_version() {
   [[ -x "$VEKIL_BIN" && -f "$VERSION_FILE" ]] || return 1
-  tr -d '[:space:]' < "$VERSION_FILE"
+  tr -d '[:space:]' <"$VERSION_FILE"
 }
 
 validate_regular_target() {
@@ -76,6 +79,176 @@ validate_regular_target() {
     printf 'Vekil destination must be absent or a regular file: %s\n' "$path" >&2
     return 1
   }
+}
+
+validate_legacy_stop_timeout() {
+  if [[ ! "$LEGACY_STOP_TIMEOUT" =~ ^(0|[1-9][0-9]*)$ ]] || ((10#$LEGACY_STOP_TIMEOUT > 300)); then
+    printf 'Invalid VEKIL_LEGACY_STOP_TIMEOUT: %s\n' "$LEGACY_STOP_TIMEOUT" >&2
+    return 1
+  fi
+  LEGACY_STOP_TIMEOUT=$((10#$LEGACY_STOP_TIMEOUT))
+}
+
+legacy_process_is_running() {
+  local pid="$1" state
+  kill -0 "$pid" 2>/dev/null || return 1
+  if [[ -r "/proc/$pid/stat" ]]; then
+    state=$(awk '{print $3}' "/proc/$pid/stat" 2>/dev/null || true)
+  else
+    state=$(ps -p "$pid" -o stat= 2>/dev/null | awk 'NR == 1 {print substr($1, 1, 1)}')
+  fi
+  [[ "$state" != "Z" ]]
+}
+
+legacy_process_start_id() {
+  local pid="$1"
+  if [[ -r "/proc/$pid/stat" ]]; then
+    awk '{print $22}' "/proc/$pid/stat" 2>/dev/null
+  else
+    ps -ww -p "$pid" -o lstart= 2>/dev/null | awk '{$1=$1; print}'
+  fi
+}
+
+read_legacy_pid() {
+  local pid_file="$1" value
+  [[ -e "$pid_file" || -L "$pid_file" ]] || return 1
+  if [[ -L "$pid_file" || ! -f "$pid_file" ]]; then
+    log_warning "Unsafe legacy LiteLLM PID file; leaving it untouched: $pid_file" >&2
+    return 2
+  fi
+  value=$(cat -- "$pid_file")
+  if [[ ! "$value" =~ ^[1-9][0-9]*$ ]]; then
+    log_warning "Invalid legacy LiteLLM PID file; leaving it untouched: $pid_file" >&2
+    return 2
+  fi
+  printf '%s\n' "$value"
+}
+
+resolved_legacy_config() {
+  local resolved=""
+  if command -v realpath >/dev/null 2>&1; then
+    resolved=$(realpath "$LEGACY_LITELLM_CONFIG" 2>/dev/null || true)
+  elif readlink -f "$LEGACY_LITELLM_CONFIG" >/dev/null 2>&1; then
+    resolved=$(readlink -f "$LEGACY_LITELLM_CONFIG" 2>/dev/null || true)
+  fi
+  [[ -n "$resolved" ]] && printf '%s\n' "$resolved"
+}
+
+load_legacy_process_args() {
+  local pid="$1" command_line
+  LEGACY_PROCESS_ARGS=()
+  if [[ -r "/proc/$pid/cmdline" ]]; then
+    while IFS= read -r -d '' argument; do
+      LEGACY_PROCESS_ARGS+=("$argument")
+    done <"/proc/$pid/cmdline"
+  else
+    command_line=$(ps -ww -p "$pid" -o command= 2>/dev/null || true)
+    [[ -n "$command_line" ]] || return 1
+    read -r -a LEGACY_PROCESS_ARGS <<<"$command_line"
+  fi
+  ((${#LEGACY_PROCESS_ARGS[@]} > 0))
+}
+
+legacy_process_matches() {
+  local pid="$1" expected_port="$2" resolved_config="" argument previous=""
+  local has_litellm=0 has_config=0 has_port=0
+  legacy_process_is_running "$pid" || return 1
+  load_legacy_process_args "$pid" || return 1
+  resolved_config=$(resolved_legacy_config || true)
+
+  for argument in "${LEGACY_PROCESS_ARGS[@]}"; do
+    if [[ "${argument##*/}" == "litellm" ]]; then
+      has_litellm=1
+    fi
+    if [[ "$previous" == "--config" ]] && {
+      [[ "$argument" == "$LEGACY_LITELLM_CONFIG" ]] || [[ -n "$resolved_config" && "$argument" == "$resolved_config" ]]
+    }; then
+      has_config=1
+    fi
+    if [[ "$argument" == "--config=$LEGACY_LITELLM_CONFIG" || (-n "$resolved_config" && "$argument" == "--config=$resolved_config") ]]; then
+      has_config=1
+    fi
+    if [[ "$previous" == "--port" && "$argument" == "$expected_port" ]] || [[ "$argument" == "--port=$expected_port" ]]; then
+      has_port=1
+    fi
+    previous="$argument"
+  done
+
+  ((has_litellm && has_config && has_port))
+}
+
+remove_legacy_pid_file() {
+  local pid_file="$1" expected_pid="$2" current
+  if [[ -L "$pid_file" || ! -f "$pid_file" ]]; then
+    log_warning "Legacy LiteLLM PID file changed during cleanup; leaving it untouched: $pid_file"
+    return 1
+  fi
+  current=$(cat -- "$pid_file")
+  if [[ "$current" != "$expected_pid" ]]; then
+    log_warning "Legacy LiteLLM PID file changed during cleanup; leaving it untouched: $pid_file"
+    return 1
+  fi
+  rm -f -- "$pid_file"
+}
+
+cleanup_legacy_litellm_process() {
+  local pid_file="$1" expected_port="$2" pid start_id current_start_id deadline
+  if pid=$(read_legacy_pid "$pid_file"); then
+    :
+  else
+    return 0
+  fi
+
+  if ! legacy_process_is_running "$pid"; then
+    log_info "Removing stale legacy LiteLLM PID file: $pid_file"
+    remove_legacy_pid_file "$pid_file" "$pid" || true
+    return 0
+  fi
+
+  if ! legacy_process_matches "$pid" "$expected_port"; then
+    log_warning "Legacy process $pid does not match LiteLLM config $LEGACY_LITELLM_CONFIG on port $expected_port; refusing to stop it."
+    return 0
+  fi
+  start_id=$(legacy_process_start_id "$pid" || true)
+  if [[ -z "$start_id" ]]; then
+    log_warning "Could not determine identity for legacy LiteLLM process $pid; refusing to stop it."
+    return 0
+  fi
+
+  log_info "Stopping legacy LiteLLM process $pid on port $expected_port..."
+  current_start_id=$(legacy_process_start_id "$pid" || true)
+  if [[ "$current_start_id" != "$start_id" ]] || ! legacy_process_matches "$pid" "$expected_port"; then
+    log_warning "Legacy PID $pid changed identity before shutdown; refusing to stop it."
+    return 0
+  fi
+  kill "$pid" 2>/dev/null || true
+  deadline=$((SECONDS + LEGACY_STOP_TIMEOUT))
+  while legacy_process_is_running "$pid" && ((SECONDS < deadline)); do
+    sleep 0.1
+  done
+
+  if legacy_process_is_running "$pid"; then
+    current_start_id=$(legacy_process_start_id "$pid" || true)
+    if [[ "$current_start_id" == "$start_id" ]] && legacy_process_matches "$pid" "$expected_port"; then
+      log_warning "Legacy LiteLLM process $pid did not stop gracefully; forcing shutdown."
+      kill -9 "$pid" 2>/dev/null || true
+      sleep 0.1
+    else
+      log_warning "Legacy PID $pid changed identity during shutdown; refusing to force kill it."
+      return 0
+    fi
+  fi
+
+  if legacy_process_is_running "$pid"; then
+    log_warning "Legacy LiteLLM process $pid is still running; preserving $pid_file."
+    return 0
+  fi
+  remove_legacy_pid_file "$pid_file" "$pid" || true
+}
+
+cleanup_legacy_litellm() {
+  cleanup_legacy_litellm_process "$LEGACY_LITELLM_DIR/proxy.pid" 4000
+  cleanup_legacy_litellm_process "$LEGACY_LITELLM_DIR/codex-proxy.pid" 4001
 }
 
 prepare_destination_directory() {
@@ -99,7 +272,7 @@ prepare_destination_directory() {
 persist_restart_required() {
   validate_regular_target "$RESTART_REQUIRED_FILE"
   STAGED_RESTART_REQUIRED=$(mktemp "$STATE_DIR/.restart-required.XXXXXX")
-  printf '%s\n' "$VEKIL_VERSION" > "$STAGED_RESTART_REQUIRED"
+  printf '%s\n' "$VEKIL_VERSION" >"$STAGED_RESTART_REQUIRED"
   validate_regular_target "$RESTART_REQUIRED_FILE"
   command mv -f "$STAGED_RESTART_REQUIRED" "$RESTART_REQUIRED_FILE"
   STAGED_RESTART_REQUIRED=""
@@ -125,7 +298,10 @@ prepare_token_directory() {
       return 1
     }
   else
-    (umask 077; mkdir -p "$TOKEN_DIR")
+    (
+      umask 077
+      mkdir -p "$TOKEN_DIR"
+    )
   fi
 
   [[ ! -L "$TOKEN_DIR" && -d "$TOKEN_DIR" ]] || {
@@ -202,7 +378,7 @@ install_vekil() {
   STAGED_VERSION=$(mktemp "$STATE_DIR/.installed-version.XXXXXX")
   command cp "$DOWNLOAD_DIR/$asset" "$STAGED_BIN"
   command chmod 0755 "$STAGED_BIN"
-  printf '%s\n' "$VEKIL_VERSION" > "$STAGED_VERSION"
+  printf '%s\n' "$VEKIL_VERSION" >"$STAGED_VERSION"
 
   prepare_destination_directory "$bin_dir"
   prepare_destination_directory "$STATE_DIR"
@@ -240,7 +416,10 @@ authenticate_vekil() {
     forced_auth=1
   fi
 
-  if ! (umask 077; "$VEKIL_BIN" "${login_args[@]}"); then
+  if ! (
+    umask 077
+    "$VEKIL_BIN" "${login_args[@]}"
+  ); then
     printf 'Vekil authentication failed for token directory: %s\n' "$TOKEN_DIR" >&2
     return 1
   fi
@@ -272,11 +451,14 @@ start_vekil() {
 }
 
 main() {
+  validate_legacy_stop_timeout
   if [[ "${1:-}" == "--check" ]]; then
     local platform os arch
     platform=$(detect_platform)
     read -r os arch <<<"$platform"
     log_info "[dry-run] Would install $VEKIL_VERSION asset vekil-${os}-${arch} to $VEKIL_BIN"
+    log_info "[dry-run] Would inspect $LEGACY_LITELLM_DIR/proxy.pid for legacy LiteLLM on port 4000"
+    log_info "[dry-run] Would inspect $LEGACY_LITELLM_DIR/codex-proxy.pid for legacy LiteLLM on port 4001"
     log_info "[dry-run] Would authenticate Vekil using token directory $TOKEN_DIR and start it through bin/vekil-proxy"
     return 0
   fi
@@ -284,6 +466,7 @@ main() {
   require_lifecycle_helper
   log_info "Setting up Vekil..."
   install_vekil
+  cleanup_legacy_litellm
   authenticate_vekil
   start_vekil
   log_success "Vekil setup complete."
