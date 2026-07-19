@@ -17,9 +17,17 @@ path=$(printf '%s' "$input" |
 
 # Resolve symlinks (including a symlinked final component, e.g. the live
 # ~/.claude/settings.json) so the write is attributed to the repo it lands in.
-# -m tolerates not-yet-created components; on failure keep the original path.
-canonical=$(readlink -m -- "$path" 2>/dev/null) &&
-  [ -n "$canonical" ] && path="$canonical"
+# GNU readlink -m tolerates missing components; realpath and Python provide
+# portable fallbacks for macOS/BSD. On failure, keep the original path.
+canonical=$(readlink -m -- "$path" 2>/dev/null) || canonical=""
+if [ -z "$canonical" ] && command -v realpath >/dev/null 2>&1; then
+  canonical=$(realpath "$path" 2>/dev/null) || canonical=""
+fi
+if [ -z "$canonical" ] && command -v python3 >/dev/null 2>&1; then
+  canonical=$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' \
+    "$path" 2>/dev/null) || canonical=""
+fi
+[ -n "$canonical" ] && path="$canonical"
 
 # Nearest existing ancestor (the file or its directories may not exist yet).
 dir="$path"

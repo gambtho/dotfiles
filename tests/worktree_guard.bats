@@ -103,6 +103,43 @@ write_input() {
   [ -z "$output" ]
 }
 
+@test "fails open when git is unavailable" {
+  tool_bin="$TEST_ROOT/no-git-bin"
+  mkdir -p "$tool_bin"
+  for tool in cat dirname jq readlink; do
+    ln -s "$(command -v "$tool")" "$tool_bin/$tool"
+  done
+
+  write_input "$REPO/file.txt"
+  run env PATH="$tool_bin" /bin/bash "$GUARD" <"$INPUT_FILE"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "uses a portable fallback when readlink -m is unsupported" {
+  mkdir -p "$TEST_ROOT/outside"
+  printf 'x\n' >"$REPO/target.txt"
+  ln -s "$REPO/target.txt" "$TEST_ROOT/outside/link.txt"
+  cat >"$STUB_BIN/readlink" <<'SCRIPT'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "-m" ]]; then
+  exit 1
+fi
+exec /usr/bin/readlink "$@"
+SCRIPT
+  cat >"$STUB_BIN/realpath" <<'SCRIPT'
+#!/usr/bin/env bash
+exit 1
+SCRIPT
+  chmod +x "$STUB_BIN/readlink"
+  chmod +x "$STUB_BIN/realpath"
+
+  write_input "$TEST_ROOT/outside/link.txt"
+  run env PATH="$PATH" /bin/bash "$GUARD" <"$INPUT_FILE"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"deny"'* ]]
+}
+
 @test "denies edit through a symlink into a primary checkout" {
   mkdir -p "$TEST_ROOT/outside"
   printf 'x\n' >"$REPO/target.txt"
