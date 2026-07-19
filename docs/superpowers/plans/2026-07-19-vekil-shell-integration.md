@@ -10,7 +10,7 @@
 
 ---
 
-### Task 1: Automatically Load the Vekil Environment
+## Task 1: Automatically Load the Vekil Environment
 
 **Files:**
 - Modify: `tests/shell_loading.bats`
@@ -60,7 +60,7 @@ Run: `bats tests/shell_loading.bats --filter 'shell loader configures healthy Ve
 
 Expected: PASS.
 
-### Task 2: Add Direct Client Commands
+## Task 2: Add Direct Client Commands
 
 **Files:**
 - Modify: `tests/ai_installers.bats`
@@ -85,13 +85,14 @@ SCRIPT
   run env PATH="$PATH" /usr/bin/zsh -dfc '
     source "$1"
     export ANTHROPIC_BASE_URL=proxy ANTHROPIC_API_KEY=dummy ANTHROPIC_MODEL=proxy-model
-    export VEKIL_MANAGED_ANTHROPIC_API_KEY=dummy VEKIL_MANAGED_ANTHROPIC_MODEL=proxy-model
-    export OPENAI_BASE_URL=proxy OPENAI_API_KEY=dummy VEKIL_MANAGED_OPENAI_API_KEY=dummy
+    export VEKIL_MANAGED_ANTHROPIC_BASE_URL=proxy VEKIL_MANAGED_ANTHROPIC_API_KEY=dummy VEKIL_MANAGED_ANTHROPIC_MODEL=proxy-model
+    export OPENAI_BASE_URL=proxy OPENAI_API_KEY=dummy VEKIL_MANAGED_OPENAI_BASE_URL=proxy VEKIL_MANAGED_OPENAI_API_KEY=dummy
     claude-direct --model direct-model
     codex-direct exec prompt
-    unset VEKIL_MANAGED_ANTHROPIC_API_KEY VEKIL_MANAGED_ANTHROPIC_MODEL VEKIL_MANAGED_OPENAI_API_KEY
-    export ANTHROPIC_BASE_URL=proxy ANTHROPIC_API_KEY=real-anthropic ANTHROPIC_MODEL=direct-model
-    export OPENAI_BASE_URL=proxy OPENAI_API_KEY=real-openai
+    unset VEKIL_MANAGED_ANTHROPIC_BASE_URL VEKIL_MANAGED_ANTHROPIC_API_KEY VEKIL_MANAGED_ANTHROPIC_MODEL
+    unset VEKIL_MANAGED_OPENAI_BASE_URL VEKIL_MANAGED_OPENAI_API_KEY
+    export ANTHROPIC_BASE_URL=custom-anthropic ANTHROPIC_API_KEY=real-anthropic ANTHROPIC_MODEL=direct-model
+    export OPENAI_BASE_URL=custom-openai OPENAI_API_KEY=real-openai
     claude-direct direct-prompt
     codex-direct direct-prompt
   ' _ "$REPO_ROOT/ai/vekil/env.zsh"
@@ -99,8 +100,8 @@ SCRIPT
   [ "$status" -eq 0 ]
   [[ "$output" == *"claude:--model direct-model|unset|unset|unset"* ]]
   [[ "$output" == *"codex:exec prompt|unset|unset"* ]]
-  [[ "$output" == *"claude:direct-prompt|unset|real-anthropic|direct-model"* ]]
-  [[ "$output" == *"codex:direct-prompt|unset|real-openai"* ]]
+  [[ "$output" == *"claude:direct-prompt|custom-anthropic|real-anthropic|direct-model"* ]]
+  [[ "$output" == *"codex:direct-prompt|custom-openai|real-openai"* ]]
 }
 ```
 
@@ -117,7 +118,10 @@ Define these functions before the readiness-dependent anonymous function so they
 ```zsh
 function claude-direct {
   emulate -L zsh
-  local -a direct_env=(-u ANTHROPIC_BASE_URL)
+  local -a direct_env=()
+  if [[ -n ${VEKIL_MANAGED_ANTHROPIC_BASE_URL:-} && ${ANTHROPIC_BASE_URL:-} == $VEKIL_MANAGED_ANTHROPIC_BASE_URL ]]; then
+    direct_env+=(-u ANTHROPIC_BASE_URL)
+  fi
   if [[ -n ${VEKIL_MANAGED_ANTHROPIC_API_KEY:-} && ${ANTHROPIC_API_KEY:-} == $VEKIL_MANAGED_ANTHROPIC_API_KEY ]]; then
     direct_env+=(-u ANTHROPIC_API_KEY)
   fi
@@ -129,7 +133,10 @@ function claude-direct {
 
 function codex-direct {
   emulate -L zsh
-  local -a direct_env=(-u OPENAI_BASE_URL)
+  local -a direct_env=()
+  if [[ -n ${VEKIL_MANAGED_OPENAI_BASE_URL:-} && ${OPENAI_BASE_URL:-} == $VEKIL_MANAGED_OPENAI_BASE_URL ]]; then
+    direct_env+=(-u OPENAI_BASE_URL)
+  fi
   if [[ -n ${VEKIL_MANAGED_OPENAI_API_KEY:-} && ${OPENAI_API_KEY:-} == $VEKIL_MANAGED_OPENAI_API_KEY ]]; then
     direct_env+=(-u OPENAI_API_KEY)
   fi
@@ -141,9 +148,9 @@ function codex-direct {
 
 Run: `bats tests/ai_installers.bats --filter 'vekil environment provides direct client commands'`
 
-Expected: PASS with both fake executables receiving unchanged arguments and unset proxy variables.
+Expected: PASS with both fake executables receiving unchanged arguments, managed proxy values removed, and custom values preserved.
 
-### Task 3: Document and Validate the Workflow
+## Task 3: Document and Validate the Workflow
 
 **Files:**
 - Modify: `README.md`

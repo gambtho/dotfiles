@@ -68,6 +68,30 @@ run_loader() {
   [[ "$output" == *"http://127.0.0.1:1337/v1|http://127.0.0.1:1337"* ]]
 }
 
+@test "localrc endpoint overrides the managed Codex wrapper" {
+  local state_dir="$HOME/.local/state/vekil"
+  mkdir -p "$state_dir"
+  printf '127.0.0.1\n' >"$state_dir/proxy-host"
+  : >"$state_dir/proxy-ready"
+  chmod 0700 "$HOME/.local" "$HOME/.local/state" "$state_dir"
+  chmod 0600 "$state_dir/proxy-host" "$state_dir/proxy-ready"
+  printf 'export OPENAI_BASE_URL=https://custom.example/v1\n' >"$HOME/.localrc"
+  stub_command curl 'exit 0'
+  cat >"$STUB_BIN/codex" <<'SCRIPT'
+#!/bin/bash
+printf '%s|%s\n' "$*" "$OPENAI_BASE_URL"
+SCRIPT
+  chmod +x "$STUB_BIN/codex"
+
+  run env HOME="$HOME" DOTFILES="$REPO_ROOT" PATH="$PATH" zsh -dfc '
+    source "$DOTFILES/core/shell/load-custom.zsh" || exit 1
+    codex exec prompt
+  '
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"exec prompt|https://custom.example/v1"* ]]
+}
+
 @test "core path never places the current directory on PATH" {
   run zsh -fc 'PATH=./bin:/usr/bin:/bin; ZSH="$1"; HOME="$2"; source "$1/core/path.zsh"; print -r -- "$PATH"' _ "$REPO_ROOT" "$HOME"
   [ "$status" -eq 0 ]

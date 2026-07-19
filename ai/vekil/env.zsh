@@ -1,6 +1,9 @@
 function claude-direct {
   emulate -L zsh
-  local -a direct_env=(-u ANTHROPIC_BASE_URL)
+  local -a direct_env=()
+  if [[ -n ${VEKIL_MANAGED_ANTHROPIC_BASE_URL:-} && ${ANTHROPIC_BASE_URL:-} == $VEKIL_MANAGED_ANTHROPIC_BASE_URL ]]; then
+    direct_env+=(-u ANTHROPIC_BASE_URL)
+  fi
   if [[ -n ${VEKIL_MANAGED_ANTHROPIC_API_KEY:-} && ${ANTHROPIC_API_KEY:-} == $VEKIL_MANAGED_ANTHROPIC_API_KEY ]]; then
     direct_env+=(-u ANTHROPIC_API_KEY)
   fi
@@ -12,7 +15,10 @@ function claude-direct {
 
 function codex-direct {
   emulate -L zsh
-  local -a direct_env=(-u OPENAI_BASE_URL)
+  local -a direct_env=()
+  if [[ -n ${VEKIL_MANAGED_OPENAI_BASE_URL:-} && ${OPENAI_BASE_URL:-} == $VEKIL_MANAGED_OPENAI_BASE_URL ]]; then
+    direct_env+=(-u OPENAI_BASE_URL)
+  fi
   if [[ -n ${VEKIL_MANAGED_OPENAI_API_KEY:-} && ${OPENAI_API_KEY:-} == $VEKIL_MANAGED_OPENAI_API_KEY ]]; then
     direct_env+=(-u OPENAI_API_KEY)
   fi
@@ -231,7 +237,7 @@ function codex-direct {
 
   if (( ! ${+functions[codex]} )) || [[ ${VEKIL_MANAGED_CODEX_FUNCTION:-0} == 1 ]]; then
     function codex {
-      if [[ -n ${VEKIL_MANAGED_OPENAI_BASE_URL:-} ]]; then
+      if [[ -n ${VEKIL_MANAGED_OPENAI_BASE_URL:-} && ${OPENAI_BASE_URL:-} == $VEKIL_MANAGED_OPENAI_BASE_URL ]]; then
         command codex -c "openai_base_url=\"${VEKIL_MANAGED_OPENAI_BASE_URL}\"" "$@"
       else
         command codex "$@"
