@@ -9,7 +9,7 @@ setup() {
 @test "versions list shows mise and non-mise pins" {
   run bash "$REPO_ROOT/bin/versions" list
   [ "$status" -eq 0 ]
-  [[ "$output" == *"mise go 1.25.7"* ]]
+  [[ "$output" == *"mise go 1.25.12"* ]]
   [[ "$output" == *"git prezto 9739c8bdc9c288ffc134c209225543180e32ff69"* ]]
   [[ "$output" == *"channel kubernetes v1.28"* ]]
 }
