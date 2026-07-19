@@ -126,8 +126,10 @@ assert_symlink_target() {
 check: syntax lint test validate
 
 syntax:
-	@bash -n $$(find bin -type f -not -name '*.zsh'; find ai core fonts languages platforms work -type f -name '*.sh')
-	@zsh -n $$(find core languages platforms profiles tools work -type f \( -name '*.zsh' -o -name '*.symlink' \))
+	@{ find bin -type f -not -name '*.zsh' -print0; find ai core fonts languages platforms work -type f -name '*.sh' -print0; } | \
+		bash -c 'while IFS= read -r -d "" file; do bash -n "$$file" || exit 1; done'
+	@find core languages platforms profiles tools work -type f \( -name '*.zsh' -o -path 'core/shell/*.symlink' \) -print0 | \
+		bash -c 'while IFS= read -r -d "" file; do zsh -n "$$file" || exit 1; done'
 
 lint:
 	shellcheck -x $$(find bin -type f -not -name '*.zsh'; find ai core fonts languages platforms work -type f -name '*.sh')
@@ -241,14 +243,24 @@ usage() {
 
 list_mise() {
   awk '
+    function trim(value) {
+      sub(/^[[:space:]]+/, "", value)
+      sub(/[[:space:]]+$/, "", value)
+      return value
+    }
+
     /^\[tools\]$/ { in_tools=1; next }
     /^\[/ { in_tools=0 }
     in_tools && /^[[:space:]]*[^#].*=/ {
-      key=$1
+      key=$0
       value=$0
+      sub(/=.*/, "", key)
       sub(/^[^=]+=[[:space:]]*/, "", value)
-      gsub(/["[:space:]]/, "", key)
-      gsub(/["[:space:]].*$/, "", value)
+      sub(/[[:space:]]+#.*$/, "", value)
+      key=trim(key)
+      value=trim(value)
+      gsub(/^"|"$/, "", key)
+      gsub(/^"|"$/, "", value)
       print "mise", key, value
     }
   ' "$MISE_FILE"
@@ -1042,8 +1054,17 @@ source "$ROOT/config/versions.env"
 Verify the recorded commits still match the currently tested repositories with:
 
 ```bash
-git -C "$HOME/.zprezto" rev-parse HEAD
-git -C "$HOME/.zsh-defer" rev-parse HEAD
+prezto_head=$(git -C "$HOME/.zprezto" rev-parse HEAD)
+[[ "$prezto_head" == "$PREZTO_REF" ]] || {
+  printf 'Prezto revision mismatch: expected %s, got %s\n' "$PREZTO_REF" "$prezto_head" >&2
+  exit 1
+}
+
+zsh_defer_head=$(git -C "$HOME/.zsh-defer" rev-parse HEAD)
+[[ "$zsh_defer_head" == "$ZSH_DEFER_REF" ]] || {
+  printf 'zsh-defer revision mismatch: expected %s, got %s\n' "$ZSH_DEFER_REF" "$zsh_defer_head" >&2
+  exit 1
+}
 ```
 
 Clone only during install (using `$PREZTO_REPO`/`$ZSH_DEFER_REPO`), then `git checkout --detach "$PREZTO_REF"` / `"$ZSH_DEFER_REF"`. Do not replace the concrete hashes with symbolic branches, and do not hardcode them in this installer.
@@ -1309,7 +1330,7 @@ Expected: no uncommitted changes, no whitespace errors, and one focused commit p
 - [ ] **Step 5: Commit final documentation or formatting fixes**
 
 ```bash
-git add README.md bin ai core fonts languages platforms profiles tests tools work
+git add README.md .github/ ai/ bin/ config/ core/ docs/ fonts/ languages/ platforms/ profiles/ tests/ tools/ work/
 git commit -m "docs: add dotfiles modernization migration guide"
 ```
 

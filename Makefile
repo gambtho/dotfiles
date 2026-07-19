@@ -45,8 +45,10 @@ validate: ## Validate AI config structure (agents, commands, skills)
 check: syntax lint test validate
 
 syntax:
-	@bash -n $$(find bin -type f -not -name '*.zsh'; find ai core fonts languages platforms work -type f -name '*.sh')
-	@zsh -n $$(find core languages platforms profiles tools work -type f \( -name '*.zsh' -o -name '*.symlink' \))
+	@{ find bin -type f -not -name '*.zsh' -print0; find ai core fonts languages platforms work -type f -name '*.sh' -print0; } | \
+		bash -c 'while IFS= read -r -d "" file; do bash -n "$$file" || exit 1; done'
+	@find core languages platforms profiles tools work -type f \( -name '*.zsh' -o -path 'core/shell/*.symlink' \) -print0 | \
+		bash -c 'while IFS= read -r -d "" file; do zsh -n "$$file" || exit 1; done'
 
 lint:
 	shellcheck -x -S warning -e SC1091 $$(find bin -type f -not -name '*.zsh'; find ai core fonts languages platforms work -type f -name '*.sh')
