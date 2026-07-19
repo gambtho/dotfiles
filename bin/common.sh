@@ -94,7 +94,7 @@ validate_vekil_access_token() {
     return 1
   }
 
-  chmod 0600 "$access_token_file"
+  chmod 0600 "$access_token_file" || return 1
   [[ ! -L "$access_token_file" && -f "$access_token_file" ]] || {
     printf 'Vekil access token must be a regular file: %s\n' "$access_token_file" >&2
     return 1

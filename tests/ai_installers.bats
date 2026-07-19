@@ -206,6 +206,22 @@ SCRIPT
   [[ "$output" == *"PASS: Vekil proxy rejects unsafe access-token entries"* ]]
 }
 
+@test "vekil access-token validation propagates chmod failure" {
+  local token_file="$HOME/access-token"
+  : >"$token_file"
+  cat >"$STUB_BIN/chmod" <<'SCRIPT'
+#!/bin/bash
+exit 1
+SCRIPT
+  /usr/bin/chmod +x "$STUB_BIN/chmod"
+
+  run /usr/bin/env PATH="$PATH" bash -c \
+    'source "$1"; validate_vekil_access_token "$2"' _ \
+    "$REPO_ROOT/bin/common.sh" "$token_file"
+
+  [ "$status" -ne 0 ]
+}
+
 @test "vekil installer safely cleans legacy LiteLLM processes" {
   run bash "$REPO_ROOT/tests/vekil-installer-legacy-cleanup.sh"
   [ "$status" -eq 0 ]
