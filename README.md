@@ -28,7 +28,7 @@ After bootstrap, run `bin/install` (or `bin/dot-update`) to install packages and
   tools/          # Tool configs: docker, kubernetes
   platforms/      # OS-specific: linux/, macos/, windows/
   work/           # Work context: only sourced when work profile is active
-  ai/             # AI tools: claude/, codex/, marketplace/, litellm/
+  ai/             # AI tools: claude/, codex/, marketplace/, vekil/
   profiles/       # Machine profiles: personal.zsh, work.zsh
   config/         # XDG config files, symlinked to ~/.config/<name>
   archived/       # Dead code — never sourced, kept for reference
@@ -155,14 +155,14 @@ test suite, and display the resulting version diff for review.
 ## AI Coding Assistants
 
 Two AI tools are configured under `ai/` — Claude Code (primary) and Codex CLI —
-plus a shared LiteLLM proxy:
+plus a shared Vekil proxy:
 
 ```text
 ai/
   marketplace/  # Claude Code plugin marketplace — the 'my' plugin (commands + skills)
   claude/       # Claude Code — settings.json + global CLAUDE.md
   codex/        # Codex CLI — generated config.toml + global AGENTS.md
-  litellm/      # Shared LiteLLM proxy config (Codex + Copilot-model routing)
+  vekil/        # Shared GitHub Copilot model proxy for Claude Code + Codex
 ```
 
 ### Setup
@@ -173,7 +173,19 @@ make ai-check    # dry-run: show what would be linked
 ```
 
 Or run individually: `ai/claude/install.sh`, `ai/codex/install.sh`,
-`ai/marketplace/install.sh`, `ai/litellm/install.sh`.
+`ai/marketplace/install.sh`, `ai/vekil/install.sh`. The Vekil installer
+authenticates and starts the proxy through `bin/vekil-proxy`, binding to the
+Docker bridge when available and falling back to loopback on macOS or when the
+bridge cannot be detected.
+
+Fresh zsh sessions automatically configure both clients when Vekil is ready:
+
+```bash
+claude          # through Vekil
+codex           # through Vekil
+claude-direct   # bypass Vekil for this invocation
+codex-direct    # bypass Vekil for this invocation
+```
 
 AI tools are also installed during `bin/install` (Phase 9).
 

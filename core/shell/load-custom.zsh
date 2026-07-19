@@ -16,6 +16,8 @@ for directory in "$DOTFILES/core" "$DOTFILES/languages" "$DOTFILES/tools"; do
   done
 done
 
+[[ -r "$DOTFILES/ai/vekil/env.zsh" ]] && source "$DOTFILES/ai/vekil/env.zsh"
+
 case "$(uname)" in
   Linux) platform=linux ;;
   Darwin) platform=macos ;;

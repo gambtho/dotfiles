@@ -1,0 +1,847 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+umask 077
+
+DOTFILES_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+source "$DOTFILES_ROOT/bin/common.sh"
+VEKIL_BIN="${VEKIL_BIN:-$HOME/.local/bin/vekil}"
+STATE_DIR="${VEKIL_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/vekil}"
+TOKEN_DIR="${VEKIL_TOKEN_DIR:-$HOME/.config/vekil}"
+ACCESS_TOKEN_FILE="$TOKEN_DIR/access-token"
+PORT="${VEKIL_PORT:-1337}"
+START_TIMEOUT="${VEKIL_START_TIMEOUT:-90}"
+STOP_TIMEOUT="${VEKIL_STOP_TIMEOUT:-15}"
+PIDFILE="$STATE_DIR/proxy.pid"
+LOG="$STATE_DIR/proxy.log"
+HOSTFILE="$STATE_DIR/proxy-host"
+READYFILE="$STATE_DIR/proxy-ready"
+LOCKDIR="$STATE_DIR/.proxy.lock"
+LOCK_OWNER="$LOCKDIR/owner"
+START_RECORD=""
+START_PID=""
+START_VERIFIED=0
+STARTING=0
+LOCK_HELD=0
+LOCK_RECORD=""
+
+require_command() {
+  command -v "$1" >/dev/null 2>&1 || {
+    echo "required command not found: $1" >&2
+    return 127
+  }
+}
+
+require_vekil() {
+  [[ -x "$VEKIL_BIN" ]] || {
+    echo "Vekil is not installed at $VEKIL_BIN" >&2
+    echo "run: $DOTFILES_ROOT/ai/vekil/install.sh" >&2
+    return 127
+  }
+}
+
+normalize_uint() {
+  local variable="$1" label="$2" minimum="$3" maximum="$4" value
+  value=${!variable}
+  if [[ ! "$value" =~ ^(0|[1-9][0-9]*)$ ]]; then
+    echo "invalid $label: $value" >&2
+    return 2
+  fi
+  value=$((10#$value))
+  if (( value < minimum || value > maximum )); then
+    echo "invalid $label: $value" >&2
+    return 2
+  fi
+  printf -v "$variable" '%d' "$value"
+}
+
+is_ipv4() {
+  local value="$1" part
+  local -a parts
+  IFS=. read -r -a parts <<< "$value"
+  [[ ${#parts[@]} -eq 4 ]] || return 1
+  for part in "${parts[@]}"; do
+    [[ "$part" =~ ^(0|[1-9][0-9]{0,2})$ ]] || return 1
+    (( 10#$part <= 255 )) || return 1
+  done
+}
+
+is_ipv6() {
+  local value="$1" left right part count=0
+  [[ "$value" == *:* && "$value" =~ ^[0-9A-Fa-f:]+$ ]] || return 1
+  [[ "$value" != *:::* ]] || return 1
+  if [[ "$value" == *::* ]]; then
+    [[ "${value#*::}" != *::* ]] || return 1
+    left=${value%%::*}
+    right=${value#*::}
+    for part in ${left//:/ }; do [[ "$part" =~ ^[0-9A-Fa-f]{1,4}$ ]] || return 1; count=$((count + 1)); done
+    for part in ${right//:/ }; do [[ "$part" =~ ^[0-9A-Fa-f]{1,4}$ ]] || return 1; count=$((count + 1)); done
+    (( count < 8 ))
+    return
+  fi
+  IFS=: read -r -a parts <<< "$value"
+  [[ ${#parts[@]} -eq 8 ]] || return 1
+  for part in "${parts[@]}"; do [[ "$part" =~ ^[0-9A-Fa-f]{1,4}$ ]] || return 1; done
+}
+
+is_hostname() {
+  local value="$1" label
+  [[ ${#value} -le 253 && "$value" != .* && "$value" != *. && "$value" != *..* ]] || return 1
+  IFS=. read -r -a labels <<< "$value"
+  for label in "${labels[@]}"; do
+    [[ ${#label} -le 63 && "$label" =~ ^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?$ ]] || return 1
+  done
+}
+
+normalize_host() {
+  local host="$1"
+  if [[ "$host" == \[*\] ]]; then host=${host:1:${#host}-2}; fi
+  if [[ "$host" == *[[:space:]]* ]]; then
+    echo "invalid Vekil host: $1" >&2
+    return 2
+  fi
+  if is_ipv4 "$host" || is_ipv6 "$host" || is_hostname "$host"; then
+    printf '%s\n' "$host"
+    return 0
+  fi
+  echo "invalid Vekil host: $1" >&2
+  return 2
+}
+
+validate_configuration() {
+  normalize_uint PORT VEKIL_PORT 1 65535
+  normalize_uint START_TIMEOUT VEKIL_START_TIMEOUT 0 86400
+  normalize_uint STOP_TIMEOUT VEKIL_STOP_TIMEOUT 0 86400
+  if [[ -n "${VEKIL_HOST:-}" ]]; then
+    VEKIL_HOST=$(normalize_host "$VEKIL_HOST")
+  fi
+  if [[ -n "${VEKIL_HOST:-}" ]] && is_wildcard_host "$VEKIL_HOST"; then
+    echo "warning: VEKIL_HOST=$VEKIL_HOST exposes Vekil's unauthenticated API on every interface" >&2
+  fi
+}
+
+secure_directory() {
+  local directory="$1"
+  if [[ -L "$directory" || ( -e "$directory" && ! -d "$directory" ) ]]; then
+    echo "unsafe directory: $directory" >&2
+    return 1
+  fi
+  mkdir -p -- "$directory"
+  chmod 700 -- "$directory"
+}
+
+require_safe_regular() {
+  local path="$1"
+  if [[ -L "$path" || ( -e "$path" && ! -f "$path" ) ]]; then
+    echo "unsafe state entry: $path" >&2
+    return 1
+  fi
+}
+
+validate_state_entries() {
+  require_safe_regular "$PIDFILE" || return
+  require_safe_regular "$HOSTFILE" || return
+  require_safe_regular "$LOG" || return
+  require_safe_regular "$READYFILE" || return
+}
+
+remove_ready_marker() {
+  require_safe_regular "$READYFILE" || return
+  rm -f -- "$READYFILE"
+}
+
+publish_ready_marker() {
+  atomic_write "$READYFILE" ready
+}
+
+atomic_write() {
+  local path="$1" value="$2" temporary
+  require_safe_regular "$path" || return
+  temporary=$(mktemp "$(dirname "$path")/.${path##*/}.XXXXXX")
+  printf '%s\n' "$value" > "$temporary"
+  chmod 600 "$temporary"
+  mv -f -- "$temporary" "$path"
+}
+
+create_safe_log() {
+  local temporary
+  require_safe_regular "$LOG" || return
+  temporary=$(mktemp "$STATE_DIR/.proxy.log.XXXXXX")
+  chmod 600 "$temporary"
+  mv -f -- "$temporary" "$LOG"
+}
+
+is_wildcard_host() {
+  [[ "$1" == "0.0.0.0" || "$1" == "::" || "$1" == "[::]" ]]
+}
+
+is_local_address() {
+  local candidate="$1"
+  if command -v ip >/dev/null 2>&1; then
+    ip -o addr show 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | grep -Fxq "$candidate"
+    return
+  fi
+  if command -v ifconfig >/dev/null 2>&1; then
+    ifconfig 2>/dev/null | awk '/inet / {print $2}' | grep -Fxq "$candidate"
+    return
+  fi
+  return 1
+}
+
+docker_bridge_host() {
+  command -v docker >/dev/null 2>&1 || return 1
+  local candidate
+  candidate=$(docker network inspect bridge --format '{{(index .IPAM.Config 0).Gateway}}' 2>/dev/null || true)
+  [[ -n "$candidate" ]] || return 1
+  candidate=$(normalize_host "$candidate") || return 1
+  is_local_address "$candidate" || return 1
+  printf '%s\n' "$candidate"
+}
+
+detect_host() {
+  if [[ -n "${VEKIL_HOST:-}" ]]; then
+    printf '%s\n' "$VEKIL_HOST"
+    return 0
+  fi
+
+  if [[ "$(uname -s)" != "Darwin" ]]; then
+    local bridge
+    bridge=$(docker_bridge_host || true)
+    if [[ -n "$bridge" ]]; then
+      printf '%s\n' "$bridge"
+      return 0
+    fi
+  fi
+
+  echo "warning: Docker bridge unavailable; binding Vekil to loopback only" >&2
+  echo "warning: restart vekil-proxy after Docker starts to enable devcontainer access" >&2
+  printf '%s\n' "127.0.0.1"
+}
+
+runtime_host() {
+  local host
+  require_safe_regular "$HOSTFILE" || return
+  if [[ -e "$HOSTFILE" ]]; then
+    host=$(cat -- "$HOSTFILE")
+    [[ -n "$host" ]] || { echo "invalid recorded Vekil host in $HOSTFILE" >&2; return 1; }
+    host=$(normalize_host "$host") || { echo "invalid recorded Vekil host in $HOSTFILE" >&2; return 1; }
+    printf '%s\n' "$host"
+    return 0
+  fi
+  detect_host
+}
+
+url_host() {
+  local host="$1"
+  if [[ "$host" == *:* && "$host" != \[*\] ]]; then
+    printf '[%s]\n' "$host"
+  else
+    printf '%s\n' "$host"
+  fi
+}
+
+health_url() {
+  printf 'http://%s:%s/healthz\n' "$(url_host "$(runtime_host)")" "$PORT"
+}
+
+ready_url() {
+  printf 'http://%s:%s/readyz\n' "$(url_host "$(runtime_host)")" "$PORT"
+}
+
+curl_probe() {
+  local url="$1" remaining="${2:-3}" cap
+  (( remaining > 0 )) || return 1
+  cap=$remaining
+  (( cap > 3 )) && cap=3
+  curl -fsS --connect-timeout "$cap" --max-time "$cap" "$url" >/dev/null 2>&1
+}
+
+is_healthy() {
+  curl_probe "$(health_url)" "${1:-2}"
+}
+
+is_ready() {
+  curl_probe "$(ready_url)" "${1:-3}"
+}
+
+process_start_id() {
+  local pid="$1" start_id
+  if [[ -r "/proc/$pid/stat" ]]; then
+    awk '{print $22}' "/proc/$pid/stat" 2>/dev/null
+    return
+  fi
+  start_id=$(ps -p "$pid" -o lstart= 2>/dev/null || true)
+  start_id=${start_id#"${start_id%%[![:space:]]*}"}
+  start_id=${start_id%"${start_id##*[![:space:]]}"}
+  [[ -n "$start_id" ]] || return 1
+  printf '%s\n' "$start_id"
+}
+
+canonical_path() {
+  local path="$1" directory base
+  if command -v readlink >/dev/null 2>&1 && readlink -f "$path" >/dev/null 2>&1; then
+    readlink -f "$path"
+    return
+  fi
+  directory=$(cd -P "$(dirname "$path")" 2>/dev/null && pwd -P) || return 1
+  base=${path##*/}
+  printf '%s/%s\n' "$directory" "$base"
+}
+
+process_is_vekil() {
+  local pid="$1" expected actual script_arg interpreter expected_interpreter expected_id actual_id
+  expected=$(canonical_path "$VEKIL_BIN") || return 1
+  interpreter=""
+  if [[ -r "$VEKIL_BIN" ]]; then IFS= read -r interpreter < "$VEKIL_BIN" || true; fi
+  if [[ "$interpreter" == '#!'* && -r "/proc/$pid/cmdline" ]]; then
+    script_arg=$(tr '\0' '\n' < "/proc/$pid/cmdline" 2>/dev/null | sed -n '2p')
+    if [[ "$(canonical_path "$script_arg" 2>/dev/null || true)" == "$expected" ]]; then
+      return 0
+    fi
+  fi
+  actual=$(readlink "/proc/$pid/exe" 2>/dev/null || true)
+  if [[ -n "$actual" ]]; then actual=$(canonical_path "${actual% (deleted)}" 2>/dev/null || true); fi
+  if [[ -n "$actual" ]]; then
+    [[ "$actual" == "$expected" ]] && return 0
+    [[ "$interpreter" == '#!'* ]] || return 1
+    interpreter=${interpreter#\#!}
+    interpreter=$(printf '%s' "$interpreter" | sed 's/^[[:space:]]*//')
+    if [[ "$interpreter" == "/usr/bin/env "* ]]; then interpreter=${interpreter#/usr/bin/env }; fi
+    interpreter=${interpreter%% *}
+    expected_interpreter=$(canonical_path "$(command -v "$interpreter" 2>/dev/null || printf '%s' "$interpreter")" || true)
+    script_arg=$(tr '\0' '\n' < "/proc/$pid/cmdline" 2>/dev/null | sed -n '2p')
+    [[ "$actual" == "$expected_interpreter" && "$(canonical_path "$script_arg" 2>/dev/null || true)" == "$expected" ]]
+    return
+  fi
+  expected_id=$(stat -Lc '%d:%i' "$expected" 2>/dev/null || true)
+  actual_id=$(stat -Lc '%d:%i' "/proc/$pid/exe" 2>/dev/null || true)
+  if [[ -n "$expected_id" && "$actual_id" == "$expected_id" ]]; then
+    return 0
+  fi
+  if command -v lsof >/dev/null 2>&1; then
+    actual=$(lsof -a -p "$pid" -d txt -Fn 2>/dev/null | sed -n 's/^n//p' | head -1)
+  else
+    actual=$(ps -p "$pid" -o comm= 2>/dev/null || true)
+  fi
+  [[ -n "$actual" && "$(canonical_path "$actual" 2>/dev/null || true)" == "$expected" ]]
+}
+
+read_pid_record() {
+  require_safe_regular "$PIDFILE" || return
+  [[ -e "$PIDFILE" ]] || return 1
+  local record pid start_id extra
+  IFS='|' read -r pid start_id extra < "$PIDFILE" || return 1
+  [[ "$pid" =~ ^[0-9]+$ && -n "$start_id" && -z "${extra:-}" ]] || return 1
+  printf '%s|%s\n' "$pid" "$start_id"
+}
+
+process_matches_record() {
+  local record="$1" pid expected_start actual_start
+  pid=${record%%|*}
+  expected_start=${record#*|}
+  kill -0 "$pid" 2>/dev/null || return 1
+  actual_start=$(process_start_id "$pid" || true)
+  [[ -n "$actual_start" && "$actual_start" == "$expected_start" ]] || return 1
+  process_is_vekil "$pid"
+}
+
+process_matches_start_id() {
+  local record="$1" pid expected_start actual_start
+  pid=${record%%|*}
+  expected_start=${record#*|}
+  kill -0 "$pid" 2>/dev/null || return 1
+  actual_start=$(process_start_id "$pid" || true)
+  [[ -n "$actual_start" && "$actual_start" == "$expected_start" ]]
+}
+
+pid_record() {
+  local record
+  record=$(read_pid_record || true)
+  [[ -n "$record" ]] || return 1
+  process_matches_record "$record" || return 1
+  printf '%s\n' "$record"
+}
+
+pid_of() {
+  local record
+  record=$(pid_record) || return 1
+  printf '%s\n' "${record%%|*}"
+}
+
+write_pid_record() {
+  local pid="$1" start_id
+  start_id=$(process_start_id "$pid") || return 1
+  atomic_write "$PIDFILE" "$pid|$start_id"
+}
+
+spawn_vekil() {
+  local host="$1"
+  if command -v setsid >/dev/null 2>&1; then
+    setsid "$VEKIL_BIN" --host "$host" --port "$PORT" --token-dir "$TOKEN_DIR" </dev/null >"$LOG" 2>&1 &
+  else
+    nohup "$VEKIL_BIN" --host "$host" --port "$PORT" --token-dir "$TOKEN_DIR" </dev/null >"$LOG" 2>&1 &
+  fi
+}
+
+show_failure_log() {
+  if [[ -s "$LOG" ]]; then
+    echo "last 50 lines from $LOG:" >&2
+    tail -n 50 "$LOG" >&2 || true
+  else
+    echo "Vekil wrote no startup log; expected log path: $LOG" >&2
+  fi
+}
+
+wait_for_probe() {
+  local record="$1" phase="$2" deadline="$3" probe="$4" remaining
+  while :; do
+    if ! process_matches_record "$record"; then
+      echo "$phase DIED"
+      show_failure_log
+      return 1
+    fi
+    remaining=$((deadline - SECONDS))
+    if (( remaining <= 0 )); then
+      echo "$phase TIMEOUT"
+      show_failure_log
+      return 1
+    fi
+    "$probe" "$remaining" && return 0
+    echo -n "."
+    sleep 1
+  done
+}
+
+wait_until_healthy() {
+  wait_for_probe "$1" "HEALTH" "$2" is_healthy
+}
+
+wait_until_ready() {
+  wait_for_probe "$1" "READY" "$2" is_ready
+}
+
+terminate_record() {
+  local record="$1" pid deadline pgid target
+  pid=${record%%|*}
+  target=$pid
+  pgid=$(ps -p "$pid" -o pgid= 2>/dev/null | tr -d '[:space:]' || true)
+  [[ "$pgid" == "$pid" ]] && target="-$pid"
+  if process_matches_record "$record"; then
+    kill -- "$target" 2>/dev/null || true
+  fi
+  deadline=$((SECONDS + STOP_TIMEOUT))
+  while process_matches_record "$record"; do
+    if (( SECONDS >= deadline )); then
+      if process_matches_record "$record"; then
+        kill -9 -- "$target" 2>/dev/null || true
+      fi
+      return 0
+    fi
+    sleep 1
+  done
+}
+
+terminate_verified_start() {
+  local record="$1" pid deadline pgid target
+  pid=${record%%|*}
+  target=$pid
+  pgid=$(ps -p "$pid" -o pgid= 2>/dev/null | tr -d '[:space:]' || true)
+  [[ "$pgid" == "$pid" ]] && target="-$pid"
+  if process_matches_start_id "$record"; then kill -- "$target" 2>/dev/null || true; fi
+  deadline=$((SECONDS + STOP_TIMEOUT))
+  while process_matches_start_id "$record"; do
+    if (( SECONDS >= deadline )); then
+      if process_matches_start_id "$record"; then kill -9 -- "$target" 2>/dev/null || true; fi
+      break
+    fi
+    sleep 1
+  done
+}
+
+remove_pid_if_recorded() {
+  local record="$1" current
+  require_safe_regular "$PIDFILE" || return 0
+  current=$(read_pid_record 2>/dev/null || true)
+  [[ "$current" == "$record" ]] && rm -f -- "$PIDFILE"
+}
+
+read_lock_record_from() {
+  local owner_path="$1" record pid start_id extra
+  require_safe_regular "$owner_path" || return 1
+  [[ -e "$owner_path" ]] || return 1
+  IFS='|' read -r pid start_id extra < "$owner_path" || return 1
+  [[ "$pid" =~ ^[1-9][0-9]*$ && -n "$start_id" && -z "${extra:-}" ]] || return 1
+  printf '%s|%s\n' "$pid" "$start_id"
+}
+
+read_lock_record() {
+  read_lock_record_from "$LOCK_OWNER"
+}
+
+lock_record_is_live() {
+  local record="$1" pid expected_start actual_start
+  pid=${record%%|*}
+  expected_start=${record#*|}
+  kill -0 "$pid" 2>/dev/null || return 1
+  actual_start=$(process_start_id "$pid" || true)
+  [[ -n "$actual_start" && "$actual_start" == "$expected_start" ]]
+}
+
+classify_existing_lock() {
+  local record pid expected_start actual_start
+  if [[ -L "$LOCKDIR" || ! -d "$LOCKDIR" ]]; then
+    printf '%s\n' partial
+    return
+  fi
+  record=$(read_lock_record 2>/dev/null || true)
+  if [[ -z "$record" ]]; then
+    printf '%s\n' partial
+    return
+  fi
+  pid=${record%%|*}
+  expected_start=${record#*|}
+  if lock_record_is_live "$record"; then
+    printf 'live:%s\n' "$pid"
+    return
+  fi
+  printf '%s\n' stale
+}
+
+wait_for_lock_initialization() {
+  local attempt state
+  for attempt in {1..10}; do
+    state=$(classify_existing_lock)
+    [[ "$state" != partial ]] && return 0
+    sleep 0.2
+  done
+  return 0
+}
+
+release_lock() {
+  local current
+  if (( LOCK_HELD )); then
+    current=$(read_lock_record 2>/dev/null || true)
+    if [[ -n "$LOCK_RECORD" && "$current" == "$LOCK_RECORD" ]]; then
+      rm -f -- "$LOCK_OWNER"
+      rmdir -- "$LOCKDIR" 2>/dev/null || true
+    fi
+    LOCK_HELD=0
+    LOCK_RECORD=""
+  fi
+}
+
+cleanup_on_exit() {
+  local exit_code=$? start_id record
+  trap - EXIT INT TERM HUP
+  if [[ -n "$START_RECORD" ]]; then
+    if (( START_VERIFIED )); then terminate_verified_start "$START_RECORD"; else terminate_record "$START_RECORD"; fi
+    remove_pid_if_recorded "$START_RECORD"
+    START_RECORD=""
+  elif [[ -n "$START_PID" ]] && process_is_vekil "$START_PID"; then
+    start_id=$(process_start_id "$START_PID" || true)
+    if [[ -n "$start_id" ]]; then
+      record="$START_PID|$start_id"
+      terminate_record "$record"
+      remove_pid_if_recorded "$record"
+    fi
+  fi
+  START_PID=""
+  START_VERIFIED=0
+  if (( STARTING )); then remove_ready_marker || true; fi
+  STARTING=0
+  release_lock
+  exit "$exit_code"
+}
+
+interrupt_startup() {
+  exit 130
+}
+
+acquire_lock() {
+  local start_id attempt state owner_pid stale_path quarantined_record
+  start_id=$(process_start_id "$$") || {
+    echo "could not determine lifecycle lock owner identity" >&2
+    return 1
+  }
+  LOCK_RECORD="$$|$start_id"
+
+  for attempt in 1 2 3; do
+    if mkdir -- "$LOCKDIR" 2>/dev/null; then
+      chmod 700 -- "$LOCKDIR"
+      if ! atomic_write "$LOCK_OWNER" "$LOCK_RECORD"; then
+        rmdir -- "$LOCKDIR" 2>/dev/null || true
+        LOCK_RECORD=""
+        return 1
+      fi
+      LOCK_HELD=1
+      trap cleanup_on_exit EXIT
+      trap interrupt_startup INT TERM HUP
+      return 0
+    fi
+
+    state=$(classify_existing_lock)
+    if [[ "$state" == live:* ]]; then
+      owner_pid=${state#live:}
+      echo "Vekil lifecycle operation already in progress: $LOCKDIR (owned by live pid $owner_pid)" >&2
+      LOCK_RECORD=""
+      return 1
+    fi
+    if [[ "$state" == partial ]]; then
+      wait_for_lock_initialization
+      state=$(classify_existing_lock)
+      if [[ "$state" == live:* ]]; then
+        owner_pid=${state#live:}
+        echo "Vekil lifecycle operation already in progress: $LOCKDIR (owned by live pid $owner_pid)" >&2
+        LOCK_RECORD=""
+        return 1
+      fi
+    fi
+
+    state=$(classify_existing_lock)
+    if [[ "$state" == live:* ]]; then
+      owner_pid=${state#live:}
+      echo "Vekil lifecycle operation already in progress: $LOCKDIR (owned by live pid $owner_pid)" >&2
+      LOCK_RECORD=""
+      return 1
+    fi
+
+    stale_path="$STATE_DIR/.proxy.lock.stale.$$.$attempt"
+    if mv -- "$LOCKDIR" "$stale_path" 2>/dev/null; then
+      quarantined_record=$(read_lock_record_from "$stale_path/owner" 2>/dev/null || true)
+      if [[ -n "$quarantined_record" ]] && lock_record_is_live "$quarantined_record"; then
+        if mv -- "$stale_path" "$LOCKDIR" 2>/dev/null; then
+          owner_pid=${quarantined_record%%|*}
+          echo "Vekil lifecycle operation already in progress: $LOCKDIR (owned by live pid $owner_pid)" >&2
+        else
+          echo "live Vekil lifecycle lock changed during recovery; refusing to proceed" >&2
+        fi
+        LOCK_RECORD=""
+        return 1
+      fi
+      rm -rf -- "$stale_path"
+    fi
+  done
+
+  echo "could not reclaim stale Vekil lifecycle lock: $LOCKDIR" >&2
+  LOCK_RECORD=""
+  return 1
+}
+
+start() {
+  secure_directory "$STATE_DIR"
+  secure_directory "$TOKEN_DIR"
+  validate_vekil_access_token "$ACCESS_TOKEN_FILE"
+  validate_state_entries
+  STARTING=1
+  remove_ready_marker
+  require_command curl
+  require_vekil
+
+  local existing_record existing_pid host pid record deadline remaining
+  deadline=$((SECONDS + START_TIMEOUT))
+  existing_record=$(pid_record || true)
+  if [[ -n "$existing_record" ]]; then
+    existing_pid=${existing_record%%|*}
+    remaining=$((deadline - SECONDS))
+    if (( remaining > 0 )) && is_healthy "$remaining"; then
+      remaining=$((deadline - SECONDS))
+      if (( remaining > 0 )) && is_ready "$remaining"; then
+        publish_ready_marker
+        STARTING=0
+        echo "Vekil already ready on $(runtime_host):$PORT (pid $existing_pid)"
+        return 0
+      fi
+    else
+      echo -n "waiting for Vekil health on $(runtime_host):$PORT (pid $existing_pid) "
+      wait_until_healthy "$existing_record" "$deadline"
+    fi
+    echo -n "waiting for Vekil readiness on $(runtime_host):$PORT (pid $existing_pid) "
+    wait_until_ready "$existing_record" "$deadline"
+    publish_ready_marker
+    STARTING=0
+    echo " READY"
+    return 0
+  fi
+
+  remaining=$((deadline - SECONDS))
+  if (( remaining > 0 )) && is_healthy "$remaining"; then
+    echo "Vekil endpoint $(runtime_host):$PORT is responding without an owned PID; refusing to start another process" >&2
+    echo "stop the existing service or remove stale state after verifying its owner" >&2
+    return 1
+  fi
+
+  rm -f -- "$PIDFILE"
+  host=$(detect_host)
+  host=$(normalize_host "$host")
+  atomic_write "$HOSTFILE" "$host"
+  create_safe_log
+  echo -n "starting Vekil on $host:$PORT "
+  spawn_vekil "$host"
+  pid=$!
+  START_PID=$pid
+  if ! write_pid_record "$pid"; then
+    echo "FAILED"
+    echo "could not record Vekil process identity for pid $pid" >&2
+    kill "$pid" 2>/dev/null || true
+    return 1
+  fi
+  record=$(read_pid_record)
+  START_RECORD=$record
+  process_matches_record "$record" || { echo "FAILED"; return 1; }
+  START_VERIFIED=1
+  disown "$pid" 2>/dev/null || true
+
+  if ! wait_until_healthy "$record" "$deadline" || ! wait_until_ready "$record" "$deadline"; then
+    return 1
+  fi
+  START_RECORD=""
+  START_PID=""
+  START_VERIFIED=0
+  publish_ready_marker
+  STARTING=0
+  echo " READY (pid $pid)"
+}
+
+stop() {
+  secure_directory "$STATE_DIR"
+  validate_state_entries
+  remove_ready_marker
+  local record pid deadline
+  record=$(pid_record || true)
+  if [[ -z "$record" ]]; then
+    rm -f -- "$PIDFILE"
+    echo "Vekil is not running"
+    return 0
+  fi
+
+  pid=${record%%|*}
+  echo -n "stopping Vekil pid $pid "
+  if process_matches_record "$record"; then
+    kill "$pid" 2>/dev/null || true
+  fi
+  deadline=$((SECONDS + STOP_TIMEOUT))
+  while process_matches_record "$record"; do
+    if (( SECONDS >= deadline )); then
+      echo -n "force "
+      if process_matches_record "$record"; then
+        kill -9 "$pid" 2>/dev/null || true
+      fi
+      break
+    fi
+    echo -n "."
+    sleep 1
+  done
+  rm -f -- "$PIDFILE"
+  echo " STOPPED"
+}
+
+status() {
+  local host pid
+  validate_state_entries
+  host=$(runtime_host)
+  pid=$(pid_of || true)
+  if is_ready; then
+    echo "READY host=$host port=$PORT pid=${pid:-unknown}"
+    return 0
+  fi
+  remove_ready_marker
+  if is_healthy; then
+    echo "HEALTHY_NOT_READY host=$host port=$PORT pid=${pid:-unknown}"
+    return 1
+  fi
+  if [[ -n "$pid" ]]; then
+    echo "UNHEALTHY host=$host port=$PORT pid=$pid"
+    return 1
+  fi
+  echo "DOWN host=$host port=$PORT"
+  return 1
+}
+
+print_env() {
+  local host formatted_host
+  host=$(runtime_host)
+  formatted_host=$(url_host "$host")
+  cat <<'EOF'
+# Host shell
+EOF
+  printf 'export OPENAI_BASE_URL="%s"\n' "http://${formatted_host}:${PORT}/v1"
+  printf 'export OPENAI_API_KEY="dummy"\n'
+  printf 'export ANTHROPIC_BASE_URL="%s"\n' "http://${formatted_host}:${PORT}"
+  printf 'export ANTHROPIC_API_KEY="dummy"\n'
+  printf 'export ANTHROPIC_MODEL="claude-opus-4.8"\n'
+  cat <<'EOF'
+
+# Devcontainer shell
+EOF
+  printf 'export OPENAI_BASE_URL="http://host.docker.internal:%s/v1"\n' "$PORT"
+  printf 'export OPENAI_API_KEY="dummy"\n'
+  printf 'export ANTHROPIC_BASE_URL="http://host.docker.internal:%s"\n' "$PORT"
+  printf 'export ANTHROPIC_API_KEY="dummy"\n'
+  printf 'export ANTHROPIC_MODEL="claude-opus-4.8"\n'
+}
+
+models() {
+  require_command curl
+  require_command jq
+  is_ready || {
+    echo "Vekil is not ready; run: vekil-proxy start" >&2
+    return 1
+  }
+  curl -fsS --connect-timeout 2 --max-time 5 "http://$(url_host "$(runtime_host)"):$PORT/v1/models" | jq -r '.data[].id' | sort
+}
+
+login() {
+  require_vekil
+  secure_directory "$TOKEN_DIR"
+  validate_vekil_access_token "$ACCESS_TOKEN_FILE"
+  "$VEKIL_BIN" login --token-dir "$TOKEN_DIR" "${@:1}"
+  validate_vekil_access_token "$ACCESS_TOKEN_FILE"
+}
+
+logout() {
+  require_vekil
+  secure_directory "$TOKEN_DIR"
+  validate_vekil_access_token "$ACCESS_TOKEN_FILE"
+  "$VEKIL_BIN" logout --token-dir "$TOKEN_DIR"
+  validate_vekil_access_token "$ACCESS_TOKEN_FILE"
+}
+
+logs() {
+  local lines="${1:-50}"
+  [[ "$lines" =~ ^[0-9]+$ ]] || {
+    echo "log line count must be a non-negative integer: $lines" >&2
+    return 2
+  }
+  secure_directory "$STATE_DIR"
+  validate_state_entries
+  if [[ ! -e "$LOG" ]]; then create_safe_log; fi
+  tail -n "$lines" -f "$LOG"
+}
+
+validate_configuration
+
+case "${1:-default}" in
+  start|stop|restart|default)
+    secure_directory "$STATE_DIR"
+    validate_state_entries
+    acquire_lock
+    ;;
+esac
+
+case "${1:-default}" in
+  install) exec "$DOTFILES_ROOT/ai/vekil/install.sh" "${@:2}" ;;
+  login) login "${@:2}" ;;
+  logout) logout ;;
+  start) start ;;
+  stop) stop ;;
+  restart) stop; start ;;
+  status) status ;;
+  env) print_env ;;
+  logs) logs "${2:-50}" ;;
+  models) models ;;
+  default) start; echo; print_env ;;
+  *)
+    echo "usage: vekil-proxy [install|login|logout|start|stop|restart|status|env|logs [lines]|models]" >&2
+    exit 2
+    ;;
+esac
