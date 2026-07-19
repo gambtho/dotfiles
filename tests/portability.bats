@@ -7,15 +7,18 @@ setup() {
 }
 
 @test "tracked symlinks are relative" {
-  while IFS= read -r path; do
-    [ -L "$REPO_ROOT/$path" ] || continue
+  while IFS= read -r -d '' entry; do
+    mode="${entry%% *}"
+    [[ "$mode" == 120000 ]] || continue
+    path="${entry#*$'\t'}"
+    [ -L "$REPO_ROOT/$path" ]
     target="$(readlink "$REPO_ROOT/$path")"
     [[ "$target" != /* ]]
-  done < <(git -C "$REPO_ROOT" ls-files -s | awk '$1 == 120000 {print $4}')
+  done < <(git -C "$REPO_ROOT" ls-files -s -z)
 }
 
 @test "portable config contains no personal home paths" {
-  run rg -n '/home/tng|/Users/tng' "$REPO_ROOT/ai" \
+  run rg -n '/(home|Users)/[^/[:space:]\"]+' "$REPO_ROOT/ai" \
     --glob '!*.md' --glob '!*.example.*' --glob '!*backup*'
   [ "$status" -eq 1 ]
 }

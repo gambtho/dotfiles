@@ -50,7 +50,7 @@
       "Bash(claude:*)",
       "Read(//workspaces/**)",
       "Read(//tmp/**)",
-      "Read(//home/node/.claude/**)",
+      "Read(~/.claude/**)",
       "WebSearch",
       "WebFetch(domain:github.com)",
       "WebFetch(domain:supabase.com)",

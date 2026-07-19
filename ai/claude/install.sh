@@ -19,7 +19,7 @@ update_claude() {
 }
 
 # Rewrite stale paths in ~/.claude/plugins/{installed_plugins,known_marketplaces}.json
-# that point into another user's home (e.g. /home/node, /home/vscode, /Users/foo)
+# that point into another user's home from a previous machine or container
 # after the dotfiles repo has been moved between machines. The plugin/marketplace
 # cache gets re-fetched locally but the JSON still references the old paths,
 # causing /plugins to show everything as broken.
