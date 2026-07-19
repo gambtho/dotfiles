@@ -28,7 +28,7 @@ After bootstrap, run `bin/install` (or `bin/dot-update`) to install packages and
   tools/          # Tool configs: docker, kubernetes
   platforms/      # OS-specific: linux/, macos/, windows/
   work/           # Work context: only sourced when work profile is active
-  ai/             # AI tools: opencode/, claude/, codex/, copilot/, litellm/
+  ai/             # AI tools: claude/, codex/, marketplace/, litellm/
   profiles/       # Machine profiles: personal.zsh, work.zsh
   config/         # XDG config files, symlinked to ~/.config/<name>
   archived/       # Dead code — never sourced, kept for reference
@@ -125,15 +125,15 @@ in `languages/mise/mise.local.toml.symlink` (symlinked to `~/.mise.local.toml`).
 
 ## AI Coding Assistants
 
-Three AI tools are configured under `ai/`, with OpenCode as the primary tool:
+Two AI tools are configured under `ai/` — Claude Code (primary) and Codex CLI —
+plus a shared LiteLLM proxy:
 
 ```
 ai/
-  opencode/     # Primary — 18 agents, 9 commands, 3 skills, DCP, plugins
-  claude/       # Claude Code — thin wrapper commands over OpenCode versions
-  codex/        # Codex CLI — config.toml symlinked to ~/.codex/config.toml
-  copilot/      # GitHub Copilot CLI — independent MCP-based implementations
-  litellm/      # Shared LiteLLM proxy config used by Copilot + Codex proxies
+  marketplace/  # Claude Code plugin marketplace — the 'my' plugin (commands + skills)
+  claude/       # Claude Code — settings.json + global CLAUDE.md
+  codex/        # Codex CLI — config.toml + global AGENTS.md, symlinked to ~/.codex/
+  litellm/      # Shared LiteLLM proxy config (Codex + Copilot-model routing)
 ```
 
 ### Setup
@@ -143,42 +143,30 @@ make ai          # install/update all AI tool configs
 make ai-check    # dry-run: show what would be linked
 ```
 
-Or run individually: `ai/opencode/install.sh`, `ai/claude/install.sh`, `ai/codex/install.sh`, `ai/copilot/install.sh`, `ai/litellm/install.sh`.
+Or run individually: `ai/claude/install.sh`, `ai/codex/install.sh`,
+`ai/marketplace/install.sh`, `ai/litellm/install.sh`.
 
 AI tools are also installed during `bin/install` (Phase 9).
 
-### OpenCode Agents
+### The `my` plugin (Claude Code)
 
-**Review agents** (read-only, hidden from agent list):
-`code-reviewer`, `reviewer`, `comment-analyzer`, `silent-failure-hunter`,
-`code-explorer`, `type-design-analyzer`, `cr-reviewer`,
-`react-reviewer`, `frontend-reviewer`, `ts-patterns`, `go-idioms`,
-`ruby-conventions`, `elixir-otp`, `python-reviewer`, `rust-reviewer`
+The personal plugin is the single source of truth for commands and skills. See
+`AGENTS.md` for the full inventory. In brief:
 
-**Implementation agents** (can edit files):
-`implementer` (fast, Haiku-based), `react-developer`, `frontend-developer`
+- **Commands:** `/fix-pr`, `/polish`, `/polish-pr`, `/review-prs`.
+- **Skills:** `improve`, `overnight-improve`, `polish-core`, `project-claude-setup`,
+  and the deliberately-invoked `blindspot-pass`, `implementation-plan`,
+  `change-explainer`.
 
-### OpenCode Commands
+### Global working agreement
 
-| Command | Description |
-|---------|-------------|
-| `/brainstorm` | Structured brainstorm -> spec -> plan -> implement workflow |
-| `/polish` | Review and simplify changes; dispatches specialized agents for feedback |
-| `/review-prs` | Batch-review open PRs with learning and persistent knowledge |
-| `/fix-pr` | Analyze PR comments/CI failures, produce implementation plan |
-| `/cr-review` | Run CodeRabbit CLI review with fix-and-verify loop |
-| `/ai-firstify` | Audit/re-engineer a project for AI-first design |
-| `/prereqs` | Check tool availability for current project |
-| `/status` | Health check: symlinks, auth, plugins, runtimes |
+`ai/claude/CLAUDE.md` and `ai/codex/AGENTS.md` hold always-loaded default guidance
+(inspect before implementing, blind-spot analysis, evidence-based planning,
+thorough verification). Both defer to repository-specific instructions.
 
-### OpenCode Skills
+### Validation
 
-- **code-simplifier** — Language-specific simplification rules (7 languages)
-- **ai-firstify** — AI-first design principles with audit/bootstrap/re-engineer modes
-- **prereq-checker** — Tool availability checking with install suggestions
+```bash
+bash bin/validate-ai --verbose   # checks plugin command/skill frontmatter
+```
 
-### Per-Project Config
-
-OpenCode automatically merges project-level `opencode.json` with the global config.
-Drop an `opencode.json` in any project root to override model, permissions, or plugins
-for that project. See [OpenCode config docs](https://opencode.ai/docs/config/) for details.
