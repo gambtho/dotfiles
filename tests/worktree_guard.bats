@@ -103,12 +103,52 @@ write_input() {
   [ -z "$output" ]
 }
 
+@test "denies edit through a symlink into a primary checkout" {
+  mkdir -p "$TEST_ROOT/outside"
+  printf 'x\n' >"$REPO/target.txt"
+  ln -s "$REPO/target.txt" "$TEST_ROOT/outside/link.txt"
+  write_input "$TEST_ROOT/outside/link.txt"
+  run bash "$GUARD" <"$INPUT_FILE"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"deny"'* ]]
+}
+
+@test "allows edit through a symlink into a linked worktree" {
+  linked="$TEST_ROOT/linked-sym"
+  git -C "$REPO" worktree add --quiet -b sym-feature "$linked"
+  printf 'x\n' >"$linked/target.txt"
+  mkdir -p "$TEST_ROOT/outside"
+  ln -s "$linked/target.txt" "$TEST_ROOT/outside/wt-link.txt"
+  write_input "$TEST_ROOT/outside/wt-link.txt"
+  run bash "$GUARD" <"$INPUT_FILE"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
 @test "denies via notebook_path for NotebookEdit" {
   printf '{"tool_name":"NotebookEdit","tool_input":{"notebook_path":"%s"}}' \
     "$REPO/nb.ipynb" >"$INPUT_FILE"
   run bash "$GUARD" <"$INPUT_FILE"
   [ "$status" -eq 0 ]
   [[ "$output" == *'"deny"'* ]]
+}
+
+@test "denies edit in an existing subdirectory of a primary checkout" {
+  mkdir -p "$REPO/sub/deeper"
+  write_input "$REPO/sub/deeper/file.txt"
+  run bash "$GUARD" <"$INPUT_FILE"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"deny"'* ]]
+}
+
+@test "allows edit in an existing subdirectory of a linked worktree" {
+  linked="$TEST_ROOT/linked-sub"
+  git -C "$REPO" worktree add --quiet -b sub-feature "$linked"
+  mkdir -p "$linked/sub/deeper"
+  write_input "$linked/sub/deeper/file.txt"
+  run bash "$GUARD" <"$INPUT_FILE"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
 }
 
 @test "denies for a new file in a not-yet-created subdirectory" {

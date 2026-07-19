@@ -15,6 +15,12 @@ path=$(printf '%s' "$input" |
     2>/dev/null) || allow
 [ -n "$path" ] || allow
 
+# Resolve symlinks (including a symlinked final component, e.g. the live
+# ~/.claude/settings.json) so the write is attributed to the repo it lands in.
+# -m tolerates not-yet-created components; on failure keep the original path.
+canonical=$(readlink -m -- "$path" 2>/dev/null) &&
+  [ -n "$canonical" ] && path="$canonical"
+
 # Nearest existing ancestor (the file or its directories may not exist yet).
 dir="$path"
 while [ ! -d "$dir" ]; do
@@ -42,9 +48,11 @@ fi
 
 git_dir=$(git -C "$dir" rev-parse --absolute-git-dir 2>/dev/null) || allow
 common_dir=$(git -C "$dir" rev-parse --git-common-dir 2>/dev/null) || allow
+# A relative --git-common-dir is relative to the `git -C` directory, not the
+# repo root (e.g. ../../.git from a subdirectory).
 case "$common_dir" in
   /*) ;;
-  *) common_dir="$repo_root/$common_dir" ;;
+  *) common_dir="$dir/$common_dir" ;;
 esac
 git_dir=$(cd "$git_dir" 2>/dev/null && pwd -P) || allow
 common_dir=$(cd "$common_dir" 2>/dev/null && pwd -P) || allow
