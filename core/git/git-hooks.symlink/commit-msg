@@ -1,0 +1,14 @@
+#!/bin/sh
+
+set -eu
+
+message_file=$1
+temporary_file="${message_file}.without-coauthors.$$"
+
+trap 'rm -f "$temporary_file"' 0 1 2 3 15
+
+awk '
+  tolower($0) !~ /^[[:space:]]*co-authored-by:[[:space:]]*/
+' "$message_file" >"$temporary_file"
+
+cat "$temporary_file" >"$message_file"
