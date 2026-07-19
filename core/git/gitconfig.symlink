@@ -10,6 +10,7 @@
         ui = true
 [core]
 	excludesfile = ~/.gitignore
+	hooksPath = ~/.git-hooks
         editor = nvim
 [apply]
         whitespace = nowarn
