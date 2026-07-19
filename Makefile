@@ -23,9 +23,6 @@ ai: ## Install/update all AI tool configs (claude, codex, litellm)
 	done
 
 ai-check: ## Dry-run: show what AI install would do
-<<<<<<< HEAD
-	bash ai/codex/install.sh --check
-=======
 	@for installer in ai/*/install.sh; do \
 		echo "Checking $$installer..."; \
 		bash "$$installer" --check; \
@@ -39,7 +36,6 @@ pins-check: ## Check managed dependency pins for updates
 
 pins-update: ## Interactively update managed dependency pins
 	bash bin/versions update
->>>>>>> f7cdf82 (refactor: modernize dotfiles installation)
 
 validate: ## Validate AI config structure (agents, commands, skills)
 	bash bin/validate-ai --verbose
