@@ -35,14 +35,25 @@ EOF
   cmp "$EXPECTED_FILE" "$MESSAGE_FILE"
 }
 
-@test "commit-msg preserves non-trailer co-author text" {
+@test "commit-msg preserves co-author text in the body" {
   cat >"$MESSAGE_FILE" <<'EOF'
-Document Co-authored-by: as ordinary prose
+Document attribution behavior
 
-X-Co-authored-by: This is not the Git trailer
+Co-authored-by: This body line documents the trailer format.
+Keep this body line too.
+
+Reviewed-by: Reviewer <reviewer@example.com>
+Co-authored-by: Actual Author <author@example.com>
 EOF
 
-  cp "$MESSAGE_FILE" "$EXPECTED_FILE"
+  cat >"$EXPECTED_FILE" <<'EOF'
+Document attribution behavior
+
+Co-authored-by: This body line documents the trailer format.
+Keep this body line too.
+
+Reviewed-by: Reviewer <reviewer@example.com>
+EOF
 
   run "$HOOK" "$MESSAGE_FILE"
 
@@ -50,9 +61,43 @@ EOF
   cmp "$EXPECTED_FILE" "$MESSAGE_FILE"
 }
 
+@test "commit-msg atomically replaces the message file" {
+  printf 'Commit subject\n' >"$MESSAGE_FILE"
+  original_inode=$(ls -i "$MESSAGE_FILE" | awk '{print $1}')
+
+  run "$HOOK" "$MESSAGE_FILE"
+
+  [ "$status" -eq 0 ]
+  replacement_inode=$(ls -i "$MESSAGE_FILE" | awk '{print $1}')
+  [ "$replacement_inode" != "$original_inode" ]
+}
+
 @test "gitconfig uses the managed global hooks directory" {
   run git config --file "$REPO_ROOT/core/git/gitconfig.symlink" --get core.hooksPath
 
   [ "$status" -eq 0 ]
   [ "$output" = "~/.git-hooks" ]
+
+  run bash "$REPO_ROOT/bin/relink"
+  [ "$status" -eq 0 ]
+
+  local repository="$TEST_ROOT/repository"
+  run git init --quiet "$repository"
+  [ "$status" -eq 0 ]
+
+  run git -C "$repository" config --path --get core.hooksPath
+  [ "$status" -eq 0 ]
+  local hooks_path="$output"
+  [ "$hooks_path" = "$HOME/.git-hooks" ]
+  [ -x "$hooks_path/commit-msg" ]
+
+  cat >"$MESSAGE_FILE" <<'EOF'
+Verify installed hook
+
+Co-authored-by: Installed Author <author@example.com>
+EOF
+
+  run "$hooks_path/commit-msg" "$MESSAGE_FILE"
+  [ "$status" -eq 0 ]
+  ! grep -qi '^[[:space:]]*co-authored-by:' "$MESSAGE_FILE"
 }
