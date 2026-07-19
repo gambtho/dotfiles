@@ -57,6 +57,20 @@ run_loader() {
   [[ ":$output:" == *":$REPO_ROOT/bin:"* ]]
 }
 
+@test "core path changes persist after function-scoped loading" {
+  run env HOME="$HOME" PATH="/usr/bin:/bin" zsh -dfc '
+    load_path() {
+      ZSH="$1"
+      source "$1/core/path.zsh"
+    }
+    load_path "$1"
+    print -r -- "$PATH"
+  ' _ "$REPO_ROOT"
+  [ "$status" -eq 0 ]
+  [[ ":$output:" == *":$REPO_ROOT/bin:"* ]]
+  [[ ":$output:" == *":/usr/bin:"* ]]
+}
+
 @test "zshrc loads customizations from configured DOTFILES root" {
   local custom_root="$TEST_ROOT/custom-dotfiles"
   mkdir -p "$custom_root/core/shell"
