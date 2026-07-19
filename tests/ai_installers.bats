@@ -50,6 +50,19 @@ SCRIPT
   assert_check_is_immutable ai/codex/install.sh
 }
 
+@test "codex install generates config with local marketplace" {
+  local codex_home="$HOME/generated-codex"
+  local config="$codex_home/config.toml"
+
+  run env HOME="$HOME" CODEX_HOME="$codex_home" PATH="/usr/bin:/bin" bash "$REPO_ROOT/ai/codex/install.sh"
+  [ "$status" -eq 0 ]
+  [ -f "$config" ]
+  grep -Fq '[marketplaces.guarzo]' "$config"
+  grep -Fq 'source_type = "local"' "$config"
+  grep -Fq "source = \"$REPO_ROOT/ai/marketplace\"" "$config"
+  assert_symlink_target "$codex_home/AGENTS.md" "$REPO_ROOT/ai/codex/AGENTS.md"
+}
+
 @test "claude check mode changes no files" {
   assert_check_is_immutable ai/claude/install.sh
 }
