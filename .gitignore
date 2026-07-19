@@ -13,6 +13,8 @@ docs/*
 docs/superpowers/*
 !docs/superpowers/plans/
 !docs/superpowers/plans/*.md
+!docs/superpowers/specs/
+!docs/superpowers/specs/*.md
 platforms/macos/brewfile.lock.json
 core/git/gitconfig.local.symlink
 .dotfiles-profile
