@@ -131,6 +131,7 @@ main() {
     fi
 
     link_file "$DOTFILES_ROOT/claude/settings.json" "$HOME/.claude/settings.json" "settings"
+    link_file "$DOTFILES_ROOT/claude/CLAUDE.md" "$HOME/.claude/CLAUDE.md" "global CLAUDE.md"
 }
 
 main "$@"

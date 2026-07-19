@@ -39,11 +39,13 @@ main() {
     if [[ "$check_only" == true ]]; then
         log_info "[dry-run] Would ensure \$HOME/.codex exists"
         log_info "[dry-run] Would link $DOTFILES_ROOT/codex/config.toml -> $HOME/.codex/config.toml"
+        log_info "[dry-run] Would link $DOTFILES_ROOT/codex/AGENTS.md -> $HOME/.codex/AGENTS.md"
         return
     fi
 
     mkdir -p "$HOME/.codex"
     link_file "$DOTFILES_ROOT/codex/config.toml" "$HOME/.codex/config.toml" "config"
+    link_file "$DOTFILES_ROOT/codex/AGENTS.md" "$HOME/.codex/AGENTS.md" "global AGENTS.md"
 }
 
 main "$@"
