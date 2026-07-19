@@ -34,3 +34,25 @@ setup() {
   run rg -n 'exec .*bin/install|exec .*dirname.*install' "$REPO_ROOT/bin/dot-update"
   [ "$status" -eq 0 ]
 }
+
+@test "tracked files do not contain editor or generated backups" {
+  run git -C "$REPO_ROOT" ls-files '*backup*' '*.bak' '*.orig'
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "tracked blobs stay below five megabytes" {
+  run bash -c '
+    root="$1"
+    while IFS=$'\''\t'\'' read -r -d "" metadata path; do
+      object="${metadata#* }"
+      object="${object%% *}"
+      size=$(git -C "$root" cat-file -s "$object")
+      if [ "$size" -gt 5242880 ]; then
+        echo "$size $path"
+      fi
+    done < <(git -C "$root" ls-files -s -z)
+  ' _ "$REPO_ROOT"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}

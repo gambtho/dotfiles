@@ -130,6 +130,13 @@ test suite, and display the resulting version diff for review.
 - `localrc` — ssh-agent + goms.io environment
 - `script-bootstrap`, `script-install` — old install scripts (replaced by `bin/bootstrap` and `bin/install`)
 
+## Repository Hygiene
+
+- Active configuration must not discover files under `archived/`.
+- Machine-local files use a `.local` suffix and remain ignored.
+- Generated backups and binaries larger than 5 MiB are not tracked.
+- Historical artifacts belong in release storage or a dedicated archive repository.
+
 ## AI Coding Assistants
 
 Two AI tools are configured under `ai/` — Claude Code (primary) and Codex CLI —
