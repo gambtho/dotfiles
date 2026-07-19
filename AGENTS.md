@@ -7,7 +7,7 @@ Personal dotfiles for Linux, macOS, and WSL. Built around zsh + Prezto + Powerle
 This repository manages configuration for two AI coding assistants (Claude Code
 and Codex CLI) plus a shared model proxy, under `ai/`:
 
-```
+```text
 ai/
   marketplace/               # Claude Code plugin marketplace (canonical for commands/skills)
     install.sh               # Registers 'guarzo' marketplace, installs the 'my' plugin

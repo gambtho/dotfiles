@@ -128,7 +128,7 @@ in `languages/mise/mise.local.toml.symlink` (symlinked to `~/.mise.local.toml`).
 Two AI tools are configured under `ai/` — Claude Code (primary) and Codex CLI —
 plus a shared LiteLLM proxy:
 
-```
+```text
 ai/
   marketplace/  # Claude Code plugin marketplace — the 'my' plugin (commands + skills)
   claude/       # Claude Code — settings.json + global CLAUDE.md
