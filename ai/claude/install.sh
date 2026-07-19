@@ -124,6 +124,7 @@ link_file() {
 
 main() {
   check_only=false
+  local install_failed=false
   if [[ "${1:-}" == "--check" ]]; then
     check_only=true
     log_info "Dry-run mode: showing what would be installed, updated, fixed, and linked"
@@ -145,7 +146,10 @@ main() {
     update_claude
   else
     if command_exists curl; then
-      install_claude || log_warning "Claude Code install skipped or failed; continuing with settings linking."
+      if ! install_claude; then
+        log_warning "Claude Code install skipped or failed; continuing with settings linking."
+        install_failed=true
+      fi
     else
       log_warning "curl not found. Install curl first, then re-run."
       return 1
@@ -154,6 +158,10 @@ main() {
 
   link_file "$DOTFILES_ROOT/claude/settings.json" "$HOME/.claude/settings.json" "settings"
   link_file "$DOTFILES_ROOT/claude/CLAUDE.md" "$HOME/.claude/CLAUDE.md" "global CLAUDE.md"
+
+  if [[ "$install_failed" == true ]]; then
+    return 1
+  fi
 }
 
 main "$@"
