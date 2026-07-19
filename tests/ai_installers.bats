@@ -63,6 +63,21 @@ SCRIPT
   assert_symlink_target "$codex_home/AGENTS.md" "$REPO_ROOT/ai/codex/AGENTS.md"
 }
 
+@test "codex install refreshes the personal plugin from the local marketplace" {
+  local codex_home="$HOME/generated-codex"
+  cat >"$STUB_BIN/codex" <<'SCRIPT'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >"$HOME/codex-invocation"
+SCRIPT
+  chmod +x "$STUB_BIN/codex"
+
+  run env HOME="$HOME" CODEX_HOME="$codex_home" PATH="$PATH" \
+    bash "$REPO_ROOT/ai/codex/install.sh"
+
+  [ "$status" -eq 0 ]
+  grep -Fxq "plugin add my@guarzo" "$HOME/codex-invocation"
+}
+
 @test "claude check mode changes no files" {
   assert_check_is_immutable ai/claude/install.sh
 }

@@ -32,6 +32,32 @@ implementing, track discoveries and deviations, and verify comprehensively.
 Match the effort to the risk. Do not impose heavy process on trivial tasks, and
 do not skip it on consequential ones.
 
+## Automatic feature workflow
+
+For repository-changing work, inspect and clarify in the current checkout, then
+enter a linked worktree before the first feature-related write. Use
+`superpowers:using-git-worktrees` when available, and reuse an existing linked
+worktree rather than nesting another. Specs, plans, tests, source, configuration,
+and documentation all count as writes.
+
+- During discovery, before the design is locked in, run `my:blindspot-pass` for
+  non-trivial work. Summarize material findings and continue automatically for
+  routine work. Pause only when unresolved high-impact decisions involving
+  architecture, public interfaces, persisted data, migrations, security,
+  compatibility, deployment, or similarly consequential behavior could
+  materially change the implementation.
+- Continue with the normal Superpowers brainstorming, planning, TDD, review, and
+  verification workflow. The personal skills complement rather than replace
+  those phases.
+- After implementation, run `my:polish-core --fix`, inspect the resulting edits,
+  and re-run the affected verification before making completion claims.
+- Then run `my:change-explainer` for non-trivial completed work. Include its five
+  knowledge-check questions only for substantial changes; omit them for routine
+  non-trivial changes.
+
+Trivial edits may skip blindspot-pass and change-explainer, but they do not skip
+the linked-worktree-before-writing rule.
+
 ## Repository inspection
 
 Before substantial implementation, inspect what is relevant: source, tests,
