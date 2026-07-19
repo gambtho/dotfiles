@@ -57,6 +57,16 @@ run_loader() {
   [[ ":$output:" == *":$REPO_ROOT/bin:"* ]]
 }
 
+@test "zshrc loads customizations from configured DOTFILES root" {
+  local custom_root="$TEST_ROOT/custom-dotfiles"
+  mkdir -p "$custom_root/core/shell"
+  printf 'print CUSTOM_DOTFILES_LOADED\n' >"$custom_root/core/shell/load-custom.zsh"
+
+  run env HOME="$HOME" DOTFILES="$custom_root" PATH="$PATH" zsh -dfc 'source "$1/core/shell/zshrc.symlink"' _ "$REPO_ROOT"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"CUSTOM_DOTFILES_LOADED"* ]]
+}
+
 @test "zshrc performs no network or git operations" {
   stub_command git 'echo git-called >&2; exit 99'
   stub_command curl 'echo curl-called >&2; exit 99'

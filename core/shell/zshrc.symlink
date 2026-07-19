@@ -13,7 +13,7 @@ fi
 
 # Load my customizations
 function load_custom() {
-  source "$HOME/.dotfiles/core/shell/load-custom.zsh"
+  source "${DOTFILES:-$HOME/.dotfiles}/core/shell/load-custom.zsh"
 }
 
 if [[ -r "$HOME/.zsh-defer/zsh-defer.plugin.zsh" ]]; then
