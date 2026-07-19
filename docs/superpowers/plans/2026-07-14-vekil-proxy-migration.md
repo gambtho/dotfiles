@@ -139,8 +139,8 @@ install_vekil() {
   DOWNLOAD_DIR="$tmpdir"
 
   log_info "Downloading Vekil $VEKIL_VERSION for $os/$arch..."
-  curl -fsSL --retry 3 "$RELEASE_BASE/$asset" -o "$tmpdir/$asset"
-  curl -fsSL --retry 3 "$RELEASE_BASE/checksums.txt" -o "$tmpdir/checksums.txt"
+  curl -fsSL --connect-timeout 10 --max-time 120 --retry 3 "$RELEASE_BASE/$asset" -o "$tmpdir/$asset"
+  curl -fsSL --connect-timeout 10 --max-time 120 --retry 3 "$RELEASE_BASE/checksums.txt" -o "$tmpdir/checksums.txt"
 
   expected=$(awk -v asset="$asset" '$2 == asset { print $1; exit }' "$tmpdir/checksums.txt")
   [[ -n "$expected" ]] || {
@@ -166,22 +166,34 @@ install_vekil() {
 }
 
 authenticate_vekil() {
+  AUTH_CHANGED=0
   [[ "${VEKIL_SKIP_AUTH:-0}" == "1" ]] && return 0
+
+  local before="" after="" authenticated=0 checksum_cmd
+  checksum_cmd=$(checksum_command)
+  [[ ! -s "$TOKEN_DIR/access-token" ]] || before=$(eval "$checksum_cmd \"$TOKEN_DIR/access-token\"" | awk '{print $1}')
 
   if command -v gh >/dev/null 2>&1 && gh auth status --hostname github.com >/dev/null 2>&1; then
     log_info "Trying Vekil login with the authenticated GitHub CLI account..."
     if "$VEKIL_BIN" login --token-dir "$TOKEN_DIR" --github-cli; then
-      return 0
+      authenticated=1
+    else
+      log_warning "GitHub CLI login could not access Copilot; falling back to device login."
     fi
-    log_warning "GitHub CLI login could not access Copilot; falling back to device login."
   fi
 
-  "$VEKIL_BIN" login --token-dir "$TOKEN_DIR"
+  [[ "$authenticated" == "1" ]] || "$VEKIL_BIN" login --token-dir "$TOKEN_DIR"
+  after=$(eval "$checksum_cmd \"$TOKEN_DIR/access-token\"" | awk '{print $1}')
+  [[ "$before" == "$after" ]] || AUTH_CHANGED=1
 }
 
 start_vekil() {
   [[ "${VEKIL_SKIP_START:-0}" == "1" ]] && return 0
-  "$DOTFILES_ROOT/bin/vekil-proxy" start
+  if [[ "$AUTH_CHANGED" == "1" ]]; then
+    "$DOTFILES_ROOT/bin/vekil-proxy" restart
+  else
+    "$DOTFILES_ROOT/bin/vekil-proxy" start
+  fi
 }
 
 main() {
@@ -739,7 +751,7 @@ unset vekil_state_dir vekil_host vekil_port
 Change the beginning of `ai/codex/config.toml` from:
 
 ```toml
-model = "gpt-5-6-sol"
+model = "gpt-5.6-sol"
 model_provider = "litellm"
 model_reasoning_effort = "medium"
 personality = "pragmatic"
@@ -754,7 +766,7 @@ env_key = "LITELLM_CODEX_API_KEY"
 to:
 
 ```toml
-model = "gpt-5-6-sol"
+model = "gpt-5.6-sol"
 model_reasoning_effort = "medium"
 personality = "pragmatic"
 ```
@@ -821,7 +833,7 @@ http://host.docker.internal:1337/v1|http://host.docker.internal:1337
 Run:
 
 ```bash
-rg -n 'litellm|LITELLM|model_provider' ai/codex/config.toml && exit 1 || true
+! rg -n 'litellm|LITELLM|model_provider' ai/codex/config.toml
 git diff --check -- ai/vekil/env.zsh ai/codex/config.toml
 ```
 
@@ -870,7 +882,7 @@ Run:
 
 ```bash
 bin/vekil-proxy models | tee /tmp/vekil-models.txt
-rg '^gpt-5-6-sol$' /tmp/vekil-models.txt
+rg '^gpt-5\.6-sol$' /tmp/vekil-models.txt
 rg '^claude-opus-4\.8$' /tmp/vekil-models.txt
 ```
 
@@ -1129,7 +1141,7 @@ Run:
 ```bash
 claude --model claude-opus-4.8 --print --output-format text \
   'Reply with exactly VEKIL_CLAUDE_FINAL_OK'
-codex exec --skip-git-repo-check -m gpt-5-6-sol \
+codex exec --skip-git-repo-check -m gpt-5.6-sol \
   'Reply with exactly VEKIL_CODEX_FINAL_OK'
 ```
 

@@ -348,8 +348,8 @@ install_vekil() {
   DOWNLOAD_DIR=$(mktemp -d)
 
   log_info "Downloading Vekil $VEKIL_VERSION for $os/$arch..."
-  curl -fsSL --retry 3 "$RELEASE_BASE/$asset" -o "$DOWNLOAD_DIR/$asset"
-  curl -fsSL --retry 3 "$RELEASE_BASE/checksums.txt" -o "$DOWNLOAD_DIR/checksums.txt"
+  curl -fsSL --connect-timeout 10 --max-time 120 --retry 3 "$RELEASE_BASE/$asset" -o "$DOWNLOAD_DIR/$asset"
+  curl -fsSL --connect-timeout 10 --max-time 120 --retry 3 "$RELEASE_BASE/checksums.txt" -o "$DOWNLOAD_DIR/checksums.txt"
 
   expected=$(awk -v asset="$asset" '$2 == asset { print $1; exit }' "$DOWNLOAD_DIR/checksums.txt")
   [[ -n "$expected" ]] || {
@@ -397,9 +397,11 @@ authenticate_vekil() {
   validate_vekil_access_token "$ACCESS_TOKEN_FILE"
 
   local -a login_args=(login --token-dir "$TOKEN_DIR")
+  local token_before="" token_after=""
   local forced_auth=0
   if [[ -s "$ACCESS_TOKEN_FILE" ]]; then
     log_info "Refreshing Vekil-managed authentication..."
+    token_before=$(calculate_checksum "$ACCESS_TOKEN_FILE")
   else
     log_info "Creating Vekil-managed authentication..."
     login_args+=(--force)
@@ -417,7 +419,8 @@ authenticate_vekil() {
   prepare_token_directory
   validate_vekil_access_token "$ACCESS_TOKEN_FILE"
   require_nonempty_access_token
-  if [[ "$forced_auth" == "1" ]]; then
+  token_after=$(calculate_checksum "$ACCESS_TOKEN_FILE")
+  if [[ "$forced_auth" == "1" || "$token_before" != "$token_after" ]]; then
     persist_restart_required
     AUTH_CHANGED=1
   fi

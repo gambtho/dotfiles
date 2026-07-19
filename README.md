@@ -174,7 +174,9 @@ make ai-check    # dry-run: show what would be linked
 
 Or run individually: `ai/claude/install.sh`, `ai/codex/install.sh`,
 `ai/marketplace/install.sh`, `ai/vekil/install.sh`. The Vekil installer
-authenticates and starts the bridge-bound proxy through `bin/vekil-proxy`.
+authenticates and starts the proxy through `bin/vekil-proxy`, binding to the
+Docker bridge when available and falling back to loopback on macOS or when the
+bridge cannot be detected.
 
 AI tools are also installed during `bin/install` (Phase 9).
 

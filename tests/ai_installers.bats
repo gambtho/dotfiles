@@ -16,9 +16,26 @@ setup() {
 
 snapshot_home() {
   {
-    find "$HOME" -mindepth 1 -printf '%y %P -> %l\n'
+    find "$HOME" -mindepth 1 -printf '%y %m %P -> %l\n'
     find "$HOME" -type f -exec sha256sum {} +
   } | sort
+}
+
+@test "home snapshots include file and directory modes" {
+  mkdir -p "$HOME/mode-check"
+  : >"$HOME/mode-check/file"
+  chmod 0700 "$HOME/mode-check"
+  chmod 0600 "$HOME/mode-check/file"
+
+  local before after
+  before="$(snapshot_home)"
+  [[ "$before" == *"d 700 mode-check -> "* ]]
+  [[ "$before" == *"f 600 mode-check/file -> "* ]]
+
+  chmod 0755 "$HOME/mode-check"
+  chmod 0644 "$HOME/mode-check/file"
+  after="$(snapshot_home)"
+  [ "$before" != "$after" ]
 }
 
 assert_check_is_immutable() {
@@ -44,6 +61,85 @@ done
 exit 1
 SCRIPT
   chmod +x "$STUB_BIN/curl"
+}
+
+@test "vekil release downloads use bounded retries" {
+  mkdir -p "$HOME/.local/bin" "$HOME/.local/state/vekil"
+  cat >"$STUB_BIN/curl" <<'SCRIPT'
+#!/bin/bash
+set -euo pipefail
+printf '%s\n' "$*" >>"$VEKIL_CURL_LOG"
+output=""
+url=""
+while (($# > 0)); do
+  case "$1" in
+    -o) output="$2"; shift 2 ;;
+    http*) url="$1"; shift ;;
+    *) shift ;;
+  esac
+done
+if [[ "$url" == */checksums.txt ]]; then
+  checksum=$(/usr/bin/sha256sum "${output%/*}/vekil-linux-amd64" | /usr/bin/awk '{print $1}')
+  printf '%s  vekil-linux-amd64\n' "$checksum" >"$output"
+else
+  printf '#!/bin/bash\nexit 0\n' >"$output"
+fi
+SCRIPT
+  chmod +x "$STUB_BIN/curl"
+
+  run /usr/bin/env \
+    HOME="$HOME" \
+    PATH="$PATH" \
+    VEKIL_CURL_LOG="$HOME/curl.log" \
+    VEKIL_OS=Linux \
+    VEKIL_ARCH=x86_64 \
+    VEKIL_SKIP_AUTH=1 \
+    VEKIL_SKIP_START=1 \
+    bash "$REPO_ROOT/ai/vekil/install.sh"
+
+  [ "$status" -eq 0 ]
+  [ "$(grep -c -- '--connect-timeout 10 --max-time 120 --retry 3' "$HOME/curl.log")" -eq 2 ]
+}
+
+@test "vekil installer restarts only when refreshed credentials change" {
+  mkdir -p "$HOME/.local/bin" "$HOME/.local/state/vekil" "$HOME/.config/vekil"
+  printf 'v0.13.3\n' >"$HOME/.local/state/vekil/installed-version"
+  printf 'old-token\n' >"$HOME/.config/vekil/access-token"
+  chmod 0600 "$HOME/.config/vekil/access-token"
+  cat >"$HOME/.local/bin/vekil" <<'SCRIPT'
+#!/bin/bash
+set -euo pipefail
+token_dir=""
+while (($# > 0)); do
+  if [[ "$1" == "--token-dir" ]]; then token_dir="$2"; shift 2; else shift; fi
+done
+printf '%s\n' "$VEKIL_TEST_TOKEN" >"$token_dir/access-token"
+chmod 0600 "$token_dir/access-token"
+SCRIPT
+  chmod +x "$HOME/.local/bin/vekil"
+  cat >"$STUB_BIN/env" <<'SCRIPT'
+#!/bin/bash
+printf '%s\n' "${*: -1}" >"$VEKIL_ACTION_FILE"
+SCRIPT
+  chmod +x "$STUB_BIN/env"
+
+  run /usr/bin/env \
+    HOME="$HOME" \
+    PATH="$PATH" \
+    VEKIL_TEST_TOKEN=new-token \
+    VEKIL_ACTION_FILE="$HOME/action" \
+    bash "$REPO_ROOT/ai/vekil/install.sh"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$HOME/action")" = "restart" ]
+
+  run /usr/bin/env \
+    HOME="$HOME" \
+    PATH="$PATH" \
+    VEKIL_TEST_TOKEN=new-token \
+    VEKIL_ACTION_FILE="$HOME/action" \
+    bash "$REPO_ROOT/ai/vekil/install.sh"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$HOME/action")" = "start" ]
 }
 
 @test "codex check mode changes no files" {
