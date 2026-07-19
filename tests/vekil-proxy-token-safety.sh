@@ -4,6 +4,7 @@ set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 PROXY="$ROOT/bin/vekil-proxy"
+INSTALLER="$ROOT/ai/vekil/install.sh"
 TMP=$(mktemp -d)
 
 cleanup() {
@@ -55,6 +56,8 @@ assert_symlink_rejected() {
     fail "$command accepted a symlinked access token"
   fi
   [[ ! -s "$case_dir/invocations" ]] || fail "$command invoked Vekil before rejecting the token symlink"
+  grep -Fq "Vekil access token must be absent or a regular file: $case_dir/token/access-token" "$case_dir/output" ||
+    fail "$command did not use the shared access-token error message"
 }
 
 for command in login start logout; do
@@ -85,5 +88,35 @@ for command in login logout; do
   fi
   [[ -s "$post_dir/invocations" ]] || fail "post-$command validation case did not invoke fake Vekil"
 done
+
+installer_dir="$TMP/installer-directory-race"
+mkdir -p "$installer_dir/bin" "$installer_dir/home/.local/state/vekil" "$installer_dir/token" "$installer_dir/token-target"
+: >"$installer_dir/invocations"
+printf 'v0.13.3\n' >"$installer_dir/home/.local/state/vekil/installed-version"
+cat >"$installer_dir/bin/chmod" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+/usr/bin/chmod "$@"
+if [[ "${1:-}" == "0700" && "${2:-}" == "$VEKIL_TOKEN_DIR" ]]; then
+  rm -rf -- "$VEKIL_TOKEN_DIR"
+  ln -s "$VEKIL_TEST_TOKEN_TARGET" "$VEKIL_TOKEN_DIR"
+fi
+EOF
+chmod +x "$installer_dir/bin/chmod"
+if env \
+  HOME="$installer_dir/home" \
+  PATH="$installer_dir/bin:/usr/bin:/bin" \
+  VEKIL_BIN="$TMP/bin/vekil" \
+  VEKIL_STATE_DIR="$installer_dir/home/.local/state/vekil" \
+  VEKIL_TOKEN_DIR="$installer_dir/token" \
+  VEKIL_TEST_TOKEN_TARGET="$installer_dir/token-target" \
+  VEKIL_TEST_LOG="$installer_dir/invocations" \
+  VEKIL_SKIP_START=1 \
+  bash "$INSTALLER" >"$installer_dir/output" 2>&1; then
+  fail "installer accepted a token directory replaced after chmod"
+fi
+[[ ! -s "$installer_dir/invocations" ]] || fail "installer invoked Vekil after the token directory was replaced"
+grep -Fq "Vekil token directory must be a real directory: $installer_dir/token" "$installer_dir/output" ||
+  fail "installer did not report the replaced token directory"
 
 echo "PASS: Vekil proxy rejects unsafe access-token entries"

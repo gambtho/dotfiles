@@ -309,18 +309,8 @@ prepare_token_directory() {
     return 1
   }
   chmod 0700 "$TOKEN_DIR"
-}
-
-validate_access_token() {
-  [[ -e "$ACCESS_TOKEN_FILE" || -L "$ACCESS_TOKEN_FILE" ]] || return 0
-  [[ ! -L "$ACCESS_TOKEN_FILE" && -f "$ACCESS_TOKEN_FILE" ]] || {
-    printf 'Vekil access token must be absent or a regular file: %s\n' "$ACCESS_TOKEN_FILE" >&2
-    return 1
-  }
-
-  chmod 0600 "$ACCESS_TOKEN_FILE"
-  [[ ! -L "$ACCESS_TOKEN_FILE" && -f "$ACCESS_TOKEN_FILE" ]] || {
-    printf 'Vekil access token must be a regular file: %s\n' "$ACCESS_TOKEN_FILE" >&2
+  [[ ! -L "$TOKEN_DIR" && -d "$TOKEN_DIR" ]] || {
+    printf 'Vekil token directory must be a real directory: %s\n' "$TOKEN_DIR" >&2
     return 1
   }
 }
@@ -404,7 +394,7 @@ authenticate_vekil() {
   [[ "${VEKIL_SKIP_AUTH:-0}" == "1" ]] && return 0
 
   prepare_token_directory
-  validate_access_token
+  validate_vekil_access_token "$ACCESS_TOKEN_FILE"
 
   local -a login_args=(login --token-dir "$TOKEN_DIR")
   local forced_auth=0
@@ -425,7 +415,7 @@ authenticate_vekil() {
   fi
 
   prepare_token_directory
-  validate_access_token
+  validate_vekil_access_token "$ACCESS_TOKEN_FILE"
   require_nonempty_access_token
   if [[ "$forced_auth" == "1" ]]; then
     persist_restart_required

@@ -4,11 +4,10 @@
 
   local _vekil_env_state_dir _vekil_env_host_file _vekil_env_ready_file
   local _vekil_env_host _vekil_env_url_host _vekil_env_port _vekil_env_mode
-  local _vekil_env_part _vekil_env_left _vekil_env_right _vekil_env_lookup
+  local _vekil_env_part _vekil_env_left _vekil_env_right
   local -a _vekil_env_parts
   local -i _vekil_env_valid=0 _vekil_env_count=0
   local -i _vekil_env_openai_managed=0 _vekil_env_anthropic_managed=0
-  local -i _vekil_env_resolved=0
 
   if [[ -n ${VEKIL_MANAGED_OPENAI_BASE_URL:-} ]]; then
     if (( ! ${+OPENAI_BASE_URL} )) || [[ $OPENAI_BASE_URL != $VEKIL_MANAGED_OPENAI_BASE_URL ]]; then
@@ -43,20 +42,6 @@
     (( _vekil_env_port >= 1 && _vekil_env_port <= 65535 )) || return 1
 
     if [[ -e /.dockerenv || -n ${REMOTE_CONTAINERS:-} || -n ${CODESPACES:-} ]]; then
-      if command -v getent >/dev/null 2>&1 && command getent hosts host.docker.internal >/dev/null 2>&1; then
-        _vekil_env_resolved=1
-      fi
-      if (( ! _vekil_env_resolved )) && command -v dscacheutil >/dev/null 2>&1; then
-        _vekil_env_lookup=$(command dscacheutil -q host -a name host.docker.internal 2>/dev/null) || _vekil_env_lookup=
-        [[ $_vekil_env_lookup == *ip_address:* ]] && _vekil_env_resolved=1
-      fi
-      if (( ! _vekil_env_resolved )) && command -v host >/dev/null 2>&1 && command host host.docker.internal >/dev/null 2>&1; then
-        _vekil_env_resolved=1
-      fi
-      if (( ! _vekil_env_resolved )) && command -v nslookup >/dev/null 2>&1 && command nslookup host.docker.internal >/dev/null 2>&1; then
-        _vekil_env_resolved=1
-      fi
-      (( _vekil_env_resolved )) || return 1
       _vekil_env_host=host.docker.internal
     else
       if (( ${+VEKIL_STATE_DIR} )); then

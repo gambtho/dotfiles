@@ -86,6 +86,20 @@ SCRIPT
   assert_check_is_immutable ai/vekil/install.sh
 }
 
+@test "vekil container readiness relies on bounded curl without DNS utilities" {
+  cat >"$STUB_BIN/curl" <<'SCRIPT'
+#!/bin/bash
+[[ "${*: -1}" == "http://host.docker.internal:1337/readyz" ]]
+SCRIPT
+  chmod +x "$STUB_BIN/curl"
+
+  run env PATH="$STUB_BIN" REMOTE_CONTAINERS=1 /usr/bin/zsh -f -c \
+    'source "$1"; printf "%s\n" "${OPENAI_BASE_URL:-}"' _ "$REPO_ROOT/ai/vekil/env.zsh"
+
+  [ "$status" -eq 0 ]
+  [ "$output" = "http://host.docker.internal:1337/v1" ]
+}
+
 @test "marketplace check mode changes no files" {
   assert_check_is_immutable ai/marketplace/install.sh
 }

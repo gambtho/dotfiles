@@ -4,6 +4,7 @@ set -euo pipefail
 umask 077
 
 DOTFILES_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+source "$DOTFILES_ROOT/bin/common.sh"
 VEKIL_BIN="${VEKIL_BIN:-$HOME/.local/bin/vekil}"
 STATE_DIR="${VEKIL_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/vekil}"
 TOKEN_DIR="${VEKIL_TOKEN_DIR:-$HOME/.config/vekil}"
@@ -127,19 +128,6 @@ secure_directory() {
   fi
   mkdir -p -- "$directory"
   chmod 700 -- "$directory"
-}
-
-validate_access_token() {
-  [[ -e "$ACCESS_TOKEN_FILE" || -L "$ACCESS_TOKEN_FILE" ]] || return 0
-  if [[ -L "$ACCESS_TOKEN_FILE" || ! -f "$ACCESS_TOKEN_FILE" ]]; then
-    echo "unsafe Vekil access token: $ACCESS_TOKEN_FILE" >&2
-    return 1
-  fi
-  chmod 600 -- "$ACCESS_TOKEN_FILE"
-  [[ ! -L "$ACCESS_TOKEN_FILE" && -f "$ACCESS_TOKEN_FILE" ]] || {
-    echo "unsafe Vekil access token: $ACCESS_TOKEN_FILE" >&2
-    return 1
-  }
 }
 
 require_safe_regular() {
@@ -642,7 +630,7 @@ acquire_lock() {
 start() {
   secure_directory "$STATE_DIR"
   secure_directory "$TOKEN_DIR"
-  validate_access_token
+  validate_vekil_access_token "$ACCESS_TOKEN_FILE"
   validate_state_entries
   STARTING=1
   remove_ready_marker
@@ -805,17 +793,17 @@ models() {
 login() {
   require_vekil
   secure_directory "$TOKEN_DIR"
-  validate_access_token
+  validate_vekil_access_token "$ACCESS_TOKEN_FILE"
   "$VEKIL_BIN" login --token-dir "$TOKEN_DIR" "${@:1}"
-  validate_access_token
+  validate_vekil_access_token "$ACCESS_TOKEN_FILE"
 }
 
 logout() {
   require_vekil
   secure_directory "$TOKEN_DIR"
-  validate_access_token
+  validate_vekil_access_token "$ACCESS_TOKEN_FILE"
   "$VEKIL_BIN" logout --token-dir "$TOKEN_DIR"
-  validate_access_token
+  validate_vekil_access_token "$ACCESS_TOKEN_FILE"
 }
 
 logs() {

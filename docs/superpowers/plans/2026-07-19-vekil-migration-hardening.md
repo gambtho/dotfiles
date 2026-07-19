@@ -10,7 +10,7 @@
 
 ---
 
-### Task 1: Record Implementation Context
+## Task 1: Record Implementation Context
 
 **Files:**
 - Create: `implementation-notes.md`
@@ -19,7 +19,7 @@
 
 Record the approved scope, the literal-versus-resolved LiteLLM config-path discovery, the no-broad-`pkill` rule, and the verification commands from this plan. Do not include transient command output.
 
-### Task 2: Add Failing Token-Safety Harness
+## Task 2: Add Failing Token-Safety Harness
 
 **Files:**
 - Create: `tests/vekil-proxy-token-safety.sh`
@@ -77,7 +77,7 @@ Run: `bash tests/vekil-proxy-token-safety.sh`
 
 Expected: PASS with no fake-Vekil invocation for unsafe pre-existing token entries.
 
-### Task 3: Add Failing Legacy-Cleanup Harness
+## Task 3: Add Failing Legacy-Cleanup Harness
 
 **Files:**
 - Create: `tests/vekil-installer-legacy-cleanup.sh`
@@ -141,7 +141,7 @@ Run: `bash tests/vekil-installer-legacy-cleanup.sh`
 
 Expected: PASS for matching, stale, unsafe, mismatched, idempotent, and dry-run cases.
 
-### Task 4: Update Migration Status
+## Task 4: Update Migration Status
 
 **Files:**
 - Modify: `VEKIL_MIGRATION_HANDOFF.md`
@@ -156,7 +156,7 @@ Move the token-symlink and legacy-daemon findings from unresolved to completed, 
 
 Record the literal legacy config path requirement and all completed test commands in `implementation-notes.md`.
 
-### Task 5: Verify the Complete Change
+## Task 5: Verify the Complete Change
 
 **Files:**
 - Verify all changed files.
@@ -206,7 +206,7 @@ Expected: only approved hardening, tests, and migration documentation are presen
 
 Do not claim host bridge, devcontainer, device authentication, model catalog, Claude, or Codex live smoke tests passed on this machine unless they are actually run. Keep them documented as final operational verification if unavailable.
 
-### Task 6: Remove Temporary Notes
+## Task 6: Remove Temporary Notes
 
 **Files:**
 - Delete: `implementation-notes.md`
