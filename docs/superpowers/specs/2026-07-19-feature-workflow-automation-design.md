@@ -70,6 +70,11 @@ Update the shared personal skills under `ai/marketplace/plugins/my/skills/`:
   the knowledge check conditional on substantial scope.
 
 These descriptions are shared by Claude Code and Codex through the `my` plugin.
+Because Codex installs local plugins into a versioned cache, changing canonical
+skill files is not sufficient by itself: the plugin manifest needs a fresh
+Codex cachebuster, and `ai/codex/install.sh` must refresh `my@guarzo` after
+registering the local marketplace. Claude continues reading the local
+marketplace source directly on its next session.
 
 ### 3. Claude Linked-Worktree Guard
 
@@ -120,6 +125,9 @@ The implementation and documentation must not claim otherwise.
   and fail-open cases remain covered.
 - Tests verify the Claude hook registration and the presence of matching policy
   markers in both global guidance files.
+- Installer tests verify that Codex refreshes `my@guarzo`, and an isolated real
+  Codex installation confirms that blindspot-pass, polish-core, and
+  change-explainer are present in the resulting plugin cache.
 - Run focused Bats tests, `bash bin/validate-ai --verbose`, formatting/linting,
   and the full `bats tests` suite.
 

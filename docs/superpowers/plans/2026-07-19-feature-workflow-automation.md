@@ -96,7 +96,25 @@ hooks.
    allowlist or a redundant SessionStart contract.
 4. Re-run the focused test and installer tests.
 
-## Task 5: Polish and Verify
+## Task 5: Refresh the Codex Plugin Cache
+
+**Files:**
+
+- Modify: `ai/codex/install.sh`
+- Modify: `ai/marketplace/plugins/my/.codex-plugin/plugin.json`
+- Extend: `tests/ai_installers.bats`
+
+1. Add a failing installer test requiring `codex plugin add my@guarzo` after
+   the local marketplace configuration is generated.
+2. Add a best-effort installer step that refreshes the plugin when the Codex CLI
+   is available and logs a warning when it is not.
+3. Use the plugin-creator cachebuster helper rather than hand-editing the
+   manifest version.
+4. Run an isolated real install with a temporary `CODEX_HOME` and confirm all
+   seven canonical skills, especially blindspot-pass, polish-core, and
+   change-explainer, exist in the installed cache.
+
+## Task 6: Polish and Verify
 
 1. Inspect the complete diff against `main` and compare it to the corrected
    spec.

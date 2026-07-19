@@ -59,6 +59,17 @@ EOF
   log_success "Generated Codex config at $dst"
 }
 
+refresh_personal_plugin() {
+  local codex_home="$1"
+  if ! command_exists codex; then
+    log_warning "Codex CLI not found; skipping personal plugin refresh."
+    return 0
+  fi
+
+  CODEX_HOME="$codex_home" codex plugin add my@guarzo
+  log_success "Refreshed my@guarzo from the local marketplace."
+}
+
 main() {
   check_only=false
   if [[ "${1:-}" == "--check" ]]; then
@@ -76,12 +87,14 @@ main() {
     fi
     log_info "[dry-run] Would register the local marketplace at $MARKETPLACE_DIR"
     log_info "[dry-run] Would link $DOTFILES_ROOT/codex/AGENTS.md -> $codex_home/AGENTS.md"
+    log_info "[dry-run] Would refresh my@guarzo from the local marketplace"
     return
   fi
 
   mkdir -p "$codex_home"
   render_config "$codex_home"
   link_file "$DOTFILES_ROOT/codex/AGENTS.md" "$codex_home/AGENTS.md" "global AGENTS.md"
+  refresh_personal_plugin "$codex_home"
 }
 
 main "$@"
