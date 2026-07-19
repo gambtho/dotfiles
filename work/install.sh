@@ -4,17 +4,6 @@ set -e
 
 source "$(dirname "$0")/../bin/common.sh"
 
-install_tool() {
-  local tool=$1
-  local url=$2
-  if ! command_exists "$tool"; then
-    log_info "Installing $tool..."
-    sudo curl -L "$url" -o /usr/local/bin/$tool
-    sudo chmod +x /usr/local/bin/$tool
-    log_success "$tool installed successfully."
-  fi
-}
-
 install_docker() {
   if ! command_exists docker; then
     log_info "Installing Docker"
@@ -35,7 +24,7 @@ install_docker() {
 install_azcli() {
   if ! command_exists az; then
     log_info "Installing Azure CLI"
-    curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+    run_remote_installer https://aka.ms/InstallAzureCLIDeb sudo bash
     log_success "Azure CLI installed"
   fi
 }
@@ -54,6 +43,17 @@ install_kubectl() {
   fi
 }
 
+install_krew_plugins() {
+  if ! kubectl krew version >/dev/null 2>&1; then
+    log_warning "kubectl krew is not available; install Krew before installing ctx and ns."
+    return 1
+  fi
+
+  log_info "Installing kubectl ctx and ns plugins via Krew"
+  kubectl krew install ctx ns
+  log_success "kubectl ctx and ns plugins installed"
+}
+
 main() {
   detect_os
 
@@ -67,8 +67,7 @@ main() {
       ;;
   esac
 
-  install_tool ktx "https://raw.githubusercontent.com/blendle/kns/master/bin/ktx"
-  install_tool kns "https://raw.githubusercontent.com/blendle/kns/master/bin/kns"
+  install_krew_plugins
 }
 
 main "$@"

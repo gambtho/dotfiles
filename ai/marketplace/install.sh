@@ -102,6 +102,14 @@ install_marketplace_and_plugin() {
 }
 
 main() {
+    if [[ "${1:-}" == "--check" ]]; then
+        log_info "Dry-run mode: showing marketplace and bridge actions"
+        log_info "[dry-run] Would remove the legacy Claude commands symlink if present"
+        log_info "[dry-run] Would ensure the guarzo marketplace and my plugin are installed"
+        log_info "[dry-run] Would bridge plugin skills and agents to OpenCode and Copilot"
+        return 0
+    fi
+
     remove_legacy_commands_symlink
     remove_stale_bridge_symlinks
     install_marketplace_and_plugin

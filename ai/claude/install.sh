@@ -8,7 +8,7 @@ DOTFILES_ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
 
 install_claude() {
     log_info "Installing Claude Code (native)..."
-    curl -fsSL https://claude.ai/install.sh | bash
+    run_remote_installer https://claude.ai/install.sh bash || return
     log_success "Claude Code installed."
 }
 
@@ -96,6 +96,11 @@ link_file() {
     local dst="$2"
     local label="$3"
 
+    if [[ "$check_only" == true ]]; then
+        log_info "[dry-run] Would ensure Claude $label is linked: $src -> $dst"
+        return 0
+    fi
+
     if [ -L "$dst" ]; then
         local current
         current=$(readlink "$dst")
@@ -117,6 +122,20 @@ link_file() {
 }
 
 main() {
+    check_only=false
+    if [[ "${1:-}" == "--check" ]]; then
+        check_only=true
+        log_info "Dry-run mode: showing what would be installed, updated, fixed, and linked"
+        if command_exists claude; then
+            log_info "[dry-run] Claude Code is installed; would update it"
+        else
+            log_info "[dry-run] Claude Code is not installed; would run the native installer"
+        fi
+        log_info "[dry-run] Would fix stale plugin paths under $HOME/.claude/plugins"
+        link_file "$DOTFILES_ROOT/claude/settings.json" "$HOME/.claude/settings.json" "settings"
+        return 0
+    fi
+
     # Fixup must run before any `claude` invocation — see comment on the function.
     fixup_stale_plugin_paths
 
@@ -125,7 +144,7 @@ main() {
         update_claude
     else
         if command_exists curl; then
-            install_claude
+            install_claude || log_warning "Claude Code install skipped or failed; continuing with settings linking."
         else
             log_warning "curl not found. Install curl first, then re-run."
             return 1

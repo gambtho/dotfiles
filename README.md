@@ -100,7 +100,14 @@ symlinked to `~/.config/nvim`. Plugins are bootstrapped via lazy.nvim on first l
 ## Runtime Manager
 
 All language runtimes are managed by [mise](https://mise.jdx.dev/). Versions are defined
-in `languages/mise/mise.local.toml.symlink` (symlinked to `~/.mise.local.toml`).
+in `config/mise/config.toml` (linked to `~/.config/mise/config.toml`).
+
+## Dependency Pins
+
+Run `make pins` to list every managed version and Git ref. Run `make pins-check`
+to query upstreams without changing files. Run `make pins-update` to select mise
+upgrades interactively, refresh Git refs and the Kubernetes channel, run the full
+test suite, and display the resulting version diff for review.
 
 ## Key Symlinks
 
@@ -109,7 +116,7 @@ in `languages/mise/mise.local.toml.symlink` (symlinked to `~/.mise.local.toml`).
 | `~/.zshrc` | `core/shell/zshrc.symlink` |
 | `~/.gitconfig` | `core/git/gitconfig.symlink` |
 | `~/.gitconfig.local` | `core/git/gitconfig.local.symlink` (machine-local, gitignored) |
-| `~/.mise.local.toml` | `languages/mise/mise.local.toml.symlink` |
+| `~/.config/mise/config.toml` | `config/mise/config.toml` |
 | `~/.config/nvim` | `config/nvim/` |
 
 ## Archived

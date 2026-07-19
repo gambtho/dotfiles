@@ -1,3 +1,4 @@
+bats
 build-essential
 ca-certificates
 curl
@@ -12,9 +13,10 @@ libreadline-dev
 libssl-dev
 libyaml-dev
 mise
-neovim
 pass
 ripgrep
+shellcheck
+shfmt
 sudo
 wget
 yq

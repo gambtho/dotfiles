@@ -11,6 +11,11 @@ link_config() {
     local dst_dir="$HOME/.config/litellm"
     local dst="$dst_dir/config.yaml"
 
+    if [[ "$check_only" == true ]]; then
+        log_info "[dry-run] Would ensure LiteLLM config is linked: $src -> $dst"
+        return 0
+    fi
+
     mkdir -p "$dst_dir"
 
     if [ -L "$dst" ]; then
@@ -46,7 +51,7 @@ install_uv() {
         return 1
     fi
     log_info "Installing uv (Python package manager)..."
-    curl -LsSf https://astral.sh/uv/install.sh | sh
+    run_remote_installer https://astral.sh/uv/install.sh sh
     # The installer drops uv in ~/.local/bin; put it on PATH for the rest of this script.
     export PATH="$HOME/.local/bin:$PATH"
     if command_exists uv; then
@@ -77,6 +82,20 @@ install_litellm() {
 }
 
 main() {
+    check_only=false
+    if [[ "${1:-}" == "--check" ]]; then
+        check_only=true
+        log_info "Dry-run mode: showing what would be installed and linked"
+        if command_exists uv; then
+            log_info "[dry-run] uv is installed; no uv installation needed"
+        else
+            log_info "[dry-run] uv is not installed; would run the uv installer"
+        fi
+        log_info "[dry-run] Would ensure litellm[proxy] is installed via uv"
+        link_config
+        return 0
+    fi
+
     log_info "Setting up LiteLLM proxy..."
 
     install_uv || log_warning "uv install failed; litellm step will be skipped."

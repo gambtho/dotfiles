@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
-# `dot-update` handles installation, updates, things like that. Run it periodically
-# to make sure you're on the latest and greatest.
 
-set -e
+set -euo pipefail
 
-"$(dirname "$0")/install"
+exec "$(dirname "$0")/install" "$@"
