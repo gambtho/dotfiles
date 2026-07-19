@@ -79,7 +79,12 @@ ssh -T git@github-work
 
 ```bash
 bin/dot-update    # update packages, language runtimes, neovim plugins
+make check        # run syntax, lint, tests, and AI config validation
 ```
+
+Run `make check` before pushing changes. Installer tests use temporary home
+directories and stubbed commands, so they verify behavior without changing the
+developer machine.
 
 ## After Pulling a Restructure
 

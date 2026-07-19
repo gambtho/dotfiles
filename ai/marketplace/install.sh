@@ -49,10 +49,10 @@ remove_stale_bridge_symlinks() {
 }
 
 marketplace_already_added() {
-    local f="$HOME/.claude/plugins/known_marketplaces.json"
-    [ -f "$f" ] || return 1
-    command_exists python3 || return 1
-    python3 - "$f" "$MARKETPLACE_DIR" <<'PY'
+  local f="$HOME/.claude/plugins/known_marketplaces.json"
+  [ -f "$f" ] || return 1
+  command_exists python3 || return 1
+  python3 - "$f" "$MARKETPLACE_DIR" <<'PY'
 import json, sys
 try:
     with open(sys.argv[1]) as fh:
@@ -67,10 +67,10 @@ PY
 }
 
 write_marketplace_registry() {
-    local registry="$HOME/.claude/plugins/known_marketplaces.json"
-    command_exists python3 || log_error "python3 is required to update the Claude marketplace registry."
-    mkdir -p "$(dirname "$registry")"
-    python3 - "$registry" "$MARKETPLACE_DIR" <<'PY'
+  local registry="$HOME/.claude/plugins/known_marketplaces.json"
+  command_exists python3 || log_error "python3 is required to update the Claude marketplace registry."
+  mkdir -p "$(dirname "$registry")"
+  python3 - "$registry" "$MARKETPLACE_DIR" <<'PY'
 import datetime
 import json
 import os
@@ -118,12 +118,12 @@ install_marketplace_and_plugin() {
     return 1
   fi
 
-    if marketplace_already_added; then
-        log_info "Marketplace 'guarzo' already registered at $MARKETPLACE_DIR."
-    else
-        log_info "Registering 'guarzo' marketplace at $MARKETPLACE_DIR"
-        write_marketplace_registry
-    fi
+  if marketplace_already_added; then
+    log_info "Marketplace 'guarzo' already registered at $MARKETPLACE_DIR."
+  else
+    log_info "Registering 'guarzo' marketplace at $MARKETPLACE_DIR"
+    write_marketplace_registry
+  fi
 
   if plugin_already_installed; then
     log_info "Plugin 'my@guarzo' already installed — skipping install."

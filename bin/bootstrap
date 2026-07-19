@@ -82,8 +82,8 @@ setup_gitconfig() {
     fi
 
     sed -e "s|AUTHORNAME|$git_authorname|g" \
-        -e "s|AUTHOREMAIL|$git_authoremail|g" \
-        "$DOTFILES_ROOT/core/git/gitconfig.local.symlink.example" > "$DOTFILES_ROOT/core/git/gitconfig.local.symlink"
+      -e "s|AUTHOREMAIL|$git_authoremail|g" \
+      "$DOTFILES_ROOT/core/git/gitconfig.local.symlink.example" >"$DOTFILES_ROOT/core/git/gitconfig.local.symlink"
 
     log_success "Gitconfig setup completed"
   else
@@ -110,20 +110,20 @@ setup_profile() {
   read -r -e -p "Enter choice [1/2/3]: " profile_choice
 
   case "$profile_choice" in
-    1|personal)
-      echo "personal" > "$HOME/.dotfiles-profile"
+    1 | personal)
+      echo "personal" >"$HOME/.dotfiles-profile"
       log_success "Profile set to: personal"
       ;;
-    2|work)
-      echo "work" > "$HOME/.dotfiles-profile"
+    2 | work)
+      echo "work" >"$HOME/.dotfiles-profile"
       log_success "Profile set to: work"
       ;;
-    3|server)
-      echo "server" > "$HOME/.dotfiles-profile"
+    3 | server)
+      echo "server" >"$HOME/.dotfiles-profile"
       log_success "Profile set to: server"
       ;;
     *)
-      echo "personal" > "$HOME/.dotfiles-profile"
+      echo "personal" >"$HOME/.dotfiles-profile"
       log_warning "Unknown choice, defaulting to: personal"
       ;;
   esac
@@ -132,7 +132,7 @@ setup_profile() {
 link_file() {
   local src=$1 dst=$2
 
-  local overwrite= backup= skip=
+  local overwrite='' backup='' skip=''
   local action=
 
   if [ -f "$dst" ] || [ -d "$dst" ] || [ -L "$dst" ]; then
@@ -151,13 +151,13 @@ link_file() {
         echo
 
         case "$action" in
-          o ) overwrite=true ;;
-          O ) overwrite_all=true ;;
-          b ) backup=true ;;
-          B ) backup_all=true ;;
-          s ) skip=true ;;
-          S ) skip_all=true ;;
-          * ) ;;
+          o) overwrite=true ;;
+          O) overwrite_all=true ;;
+          b) backup=true ;;
+          B) backup_all=true ;;
+          s) skip=true ;;
+          S) skip_all=true ;;
+          *) ;;
         esac
       fi
     fi

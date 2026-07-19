@@ -12,8 +12,8 @@ install_docker() {
     sudo chmod a+r /etc/apt/keyrings/docker.gpg
     echo \
       "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
-      $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
-      sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+      $(. /etc/os-release && echo "$VERSION_CODENAME") stable" |
+      sudo tee /etc/apt/sources.list.d/docker.list >/dev/null
     sudo apt update
     sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
     sudo usermod -aG docker "$USER"
@@ -28,7 +28,6 @@ install_azcli() {
     log_success "Azure CLI installed"
   fi
 }
-
 
 install_kubectl() {
   if ! command_exists kubectl; then
@@ -63,8 +62,7 @@ main() {
       install_kubectl
       install_azcli
       ;;
-    *)
-      ;;
+    *) ;;
   esac
 
   install_krew_plugins

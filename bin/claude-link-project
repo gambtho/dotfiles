@@ -27,43 +27,87 @@ set -euo pipefail
 DOTFILES="${DOTFILES:-$HOME/.dotfiles}"
 OVERLAY_ROOT="$DOTFILES/projects"
 
-MODE=link
+MODE="link"
 PROJECT_DIR=""
 SKIP_CLAUDE_MD=0
 MODE_LOCAL_MD=0
-SKIP_AGENTS_MD=1   # default: skip AGENTS.local.md (opt-in)
+SKIP_AGENTS_MD=1 # default: skip AGENTS.local.md (opt-in)
 MODE_CLAUDE_PER_FILE=0
 
-usage() { sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+usage() {
+  sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'
+  exit "${1:-0}"
+}
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    -u|--unlink)      MODE=unlink; shift ;;
-    -c|--create)      MODE=create; shift ;;
-    --no-claude-md)   SKIP_CLAUDE_MD=1; shift ;;
-    --local-md)       MODE_LOCAL_MD=1; shift ;;
-    --agents-md)      SKIP_AGENTS_MD=0; shift ;;
-    --claude-dir-per-file) MODE_CLAUDE_PER_FILE=1; shift ;;
-    -h|--help)        usage 0 ;;
-    -*)               echo "unknown flag: $1" >&2; usage 1 ;;
-    *)                PROJECT_DIR="$1"; shift ;;
+    -u | --unlink)
+      MODE="unlink"
+      shift
+      ;;
+    -c | --create)
+      MODE="create"
+      shift
+      ;;
+    --no-claude-md)
+      SKIP_CLAUDE_MD=1
+      shift
+      ;;
+    --local-md)
+      MODE_LOCAL_MD=1
+      shift
+      ;;
+    --agents-md)
+      SKIP_AGENTS_MD=0
+      shift
+      ;;
+    --claude-dir-per-file)
+      MODE_CLAUDE_PER_FILE=1
+      shift
+      ;;
+    -h | --help) usage 0 ;;
+    -*)
+      echo "unknown flag: $1" >&2
+      usage 1
+      ;;
+    *)
+      PROJECT_DIR="$1"
+      shift
+      ;;
   esac
 done
 
-[[ -n "$PROJECT_DIR" ]] || { echo "missing project dir" >&2; usage 1; }
-PROJECT_DIR="$(cd "$PROJECT_DIR" && pwd -P)" || { echo "no such dir: $PROJECT_DIR" >&2; exit 1; }
+[[ -n "$PROJECT_DIR" ]] || {
+  echo "missing project dir" >&2
+  usage 1
+}
+PROJECT_DIR="$(cd "$PROJECT_DIR" && pwd -P)" || {
+  echo "no such dir: $PROJECT_DIR" >&2
+  exit 1
+}
 NAME="$(basename "$PROJECT_DIR")"
 OVERLAY="$OVERLAY_ROOT/$NAME"
 
 if [[ -t 1 ]]; then
-  C_INFO=$'\033[36m'; C_OK=$'\033[32m'; C_WARN=$'\033[33m'; C_ERR=$'\033[31m'; C_OFF=$'\033[0m'
+  C_INFO=$'\033[36m'
+  C_OK=$'\033[32m'
+  C_WARN=$'\033[33m'
+  C_ERR=$'\033[31m'
+  C_OFF=$'\033[0m'
 else
-  C_INFO=""; C_OK=""; C_WARN=""; C_ERR=""; C_OFF=""
+  C_INFO=""
+  C_OK=""
+  C_WARN=""
+  C_ERR=""
+  C_OFF=""
 fi
 info() { printf '%s%s%s\n' "$C_INFO" "$*" "$C_OFF"; }
-ok()   { printf '%s%s%s\n' "$C_OK"   "$*" "$C_OFF"; }
+ok() { printf '%s%s%s\n' "$C_OK" "$*" "$C_OFF"; }
 warn() { printf '%s%s%s\n' "$C_WARN" "$*" "$C_OFF" >&2; }
-die()  { printf '%s%s%s\n' "$C_ERR"  "$*" "$C_OFF" >&2; exit 1; }
+die() {
+  printf '%s%s%s\n' "$C_ERR" "$*" "$C_OFF" >&2
+  exit 1
+}
 
 # ── unlink ───────────────────────────────────────────────────────────────────
 unlink_one() {
@@ -81,11 +125,11 @@ unlink_one() {
 # additions, hand-edited content) is left in place.
 unlink_local_md_shim() {
   local dst="$1"
-  [[ -e "$dst" && ! -L "$dst" ]] || return 0   # nothing to do
+  [[ -e "$dst" && ! -L "$dst" ]] || return 0 # nothing to do
   local first_line
   first_line="$(head -n1 "$dst" 2>/dev/null || true)"
   local line_count
-  line_count="$(wc -l < "$dst" 2>/dev/null || echo 0)"
+  line_count="$(wc -l <"$dst" 2>/dev/null || echo 0)"
   # Expected shim: single line "@~/.dotfiles/projects/<slug>/..." (with a
   # trailing newline, so wc -l reports 1).
   if [[ "$line_count" == "1" && "$first_line" =~ ^@~?/.dotfiles/projects/ ]]; then
@@ -100,12 +144,13 @@ unlink_local_md_shim() {
 # overlay. Skips real files (project's own). Removes now-empty
 # directories on the way back up so we don't leave bare empty trees.
 unlink_claude_dir_per_file() {
-  local project_dir="$1"   # <project>/.claude
+  local project_dir="$1" # <project>/.claude
   [[ -d "$project_dir" ]] || return 0
 
   # Phase 1: remove every symlink whose target sits under our OVERLAY.
   while IFS= read -r -d '' link; do
-    local target; target="$(readlink "$link")"
+    local target
+    target="$(readlink "$link")"
     if [[ "$target" == "$OVERLAY/.claude/"* || "$target" == "$OVERLAY/.claude" ]]; then
       rm "$link"
       ok "removed symlink: $link"
@@ -137,7 +182,7 @@ if [[ "$MODE" == "create" ]]; then
   # Refuse to scaffold/link a personal CLAUDE.md if the project already has
   # one (unless --no-claude-md skips that part). The symlink would clobber.
   # AGENTS.md is also checked since some projects use it instead.
-  if (( ! SKIP_CLAUDE_MD && ! MODE_LOCAL_MD )); then
+  if ((!SKIP_CLAUDE_MD && !MODE_LOCAL_MD)); then
     for f in CLAUDE.md AGENTS.md; do
       target="$PROJECT_DIR/$f"
       if [[ -e "$target" && ! -L "$target" ]]; then
@@ -153,8 +198,8 @@ if [[ "$MODE" == "create" ]]; then
     # CLAUDE.md is intentionally empty — the project-claude-setup skill defers
     # CLAUDE.md content generation to `/init`, which reads the codebase. We
     # only create the file so the symlink target exists.
-    : > "$OVERLAY/CLAUDE.md"
-    cat > "$OVERLAY/.claude/settings.json" <<'EOF'
+    : >"$OVERLAY/CLAUDE.md"
+    cat >"$OVERLAY/.claude/settings.json" <<'EOF'
 {
   "permissions": {
     "allow": []
@@ -170,9 +215,13 @@ fi
 
 link_one() {
   local src="$1" dst="$2"
-  [[ -e "$src" ]] || { warn "skip: $src does not exist in overlay"; return; }
+  [[ -e "$src" ]] || {
+    warn "skip: $src does not exist in overlay"
+    return
+  }
   if [[ -L "$dst" ]]; then
-    local cur; cur="$(readlink "$dst")"
+    local cur
+    cur="$(readlink "$dst")"
     if [[ "$cur" == "$src" ]]; then
       ok "already linked: $dst"
       return
@@ -181,10 +230,12 @@ link_one() {
     return
   elif [[ -e "$dst" ]]; then
     case "$(basename "$dst")" in
-      CLAUDE.md|AGENTS.md)
-        die "$dst exists as a real file (project tracks it). Re-run with --local-md to write a CLAUDE.local.md import shim alongside it instead." ;;
+      CLAUDE.md | AGENTS.md)
+        die "$dst exists as a real file (project tracks it). Re-run with --local-md to write a CLAUDE.local.md import shim alongside it instead."
+        ;;
       *)
-        die "$dst exists as a real file/dir. Move or delete it first." ;;
+        die "$dst exists as a real file/dir. Move or delete it first."
+        ;;
     esac
   fi
   ln -s "$src" "$dst"
@@ -195,8 +246,8 @@ link_one() {
 # file via Claude Code's @~/ import syntax. Idempotent: if the file
 # already exists with the correct import line, do nothing.
 write_import_shim() {
-  local overlay_path="$1"   # e.g. ~/.dotfiles/projects/foo/CLAUDE.md
-  local dst="$2"            # e.g. <project>/CLAUDE.local.md
+  local overlay_path="$1" # e.g. ~/.dotfiles/projects/foo/CLAUDE.md
+  local dst="$2"          # e.g. <project>/CLAUDE.local.md
 
   # Refuse to write a shim pointing at a source that doesn't exist (or
   # is a broken symlink). `-e` resolves through symlinks, so a dangling
@@ -230,7 +281,7 @@ write_import_shim() {
     return
   fi
 
-  printf '%s\n' "$desired" > "$dst"
+  printf '%s\n' "$desired" >"$dst"
   ok "wrote import shim: $dst -> $desired"
 }
 
@@ -240,8 +291,8 @@ write_import_shim() {
 # tracked, the merge still happens but the function warns that the
 # change will appear in 'git diff'.
 merge_settings_local_json() {
-  local src="$1"  # overlay master
-  local dst="$2"  # project file (may not exist)
+  local src="$1" # overlay master
+  local dst="$2" # project file (may not exist)
 
   if [[ ! -f "$src" ]]; then
     info "no overlay settings.local.json at $src, skipping"
@@ -273,8 +324,14 @@ merge_settings_local_json() {
       allow: ((($dst.permissions.allow // []) + ($src.permissions.allow // []))
               | reduce .[] as $x ([]; if index($x) then . else . + [$x] end))
     })
-  ' "$dst" "$src" > "$merged" || { rm -f "$merged"; die "jq merge failed for $dst"; }
-  jq -e . "$merged" >/dev/null 2>&1 || { rm -f "$merged"; die "jq produced invalid JSON merging $dst"; }
+  ' "$dst" "$src" >"$merged" || {
+    rm -f "$merged"
+    die "jq merge failed for $dst"
+  }
+  jq -e . "$merged" >/dev/null 2>&1 || {
+    rm -f "$merged"
+    die "jq produced invalid JSON merging $dst"
+  }
 
   if diff -q "$dst" "$merged" >/dev/null; then
     ok "$dst already up to date"
@@ -285,7 +342,7 @@ merge_settings_local_json() {
   info "──── proposed diff (settings.local.json) ────"
   diff -u "$dst" "$merged" || true
   echo
-  if (( tracked )); then
+  if ((tracked)); then
     warn "Note: $dst is tracked in git — this change will appear in 'git diff' in the project."
     warn "Decide whether to commit, stash, or revert after reviewing."
   fi
@@ -309,10 +366,13 @@ merge_settings_local_json() {
 # symlinked, because the project may have its own untracked
 # settings.local.json the user wants preserved.
 link_claude_dir_per_file() {
-  local overlay_dir="$1"     # ~/.dotfiles/projects/<slug>/.claude
-  local project_dir="$2"     # <project>/.claude
+  local overlay_dir="$1" # ~/.dotfiles/projects/<slug>/.claude
+  local project_dir="$2" # <project>/.claude
 
-  [[ -d "$overlay_dir" ]] || { warn "no overlay .claude/ at $overlay_dir, nothing to link"; return; }
+  [[ -d "$overlay_dir" ]] || {
+    warn "no overlay .claude/ at $overlay_dir, nothing to link"
+    return
+  }
   command -v jq >/dev/null || die "jq required for --claude-dir-per-file (settings.local.json merge)"
 
   mkdir -p "$project_dir"
@@ -334,7 +394,8 @@ link_claude_dir_per_file() {
     mkdir -p "$(dirname "$dst")"
 
     if [[ -L "$dst" ]]; then
-      local cur; cur="$(readlink "$dst")"
+      local cur
+      cur="$(readlink "$dst")"
       if [[ "$cur" == "$src" ]]; then
         ok "already linked: $dst"
         continue
@@ -360,9 +421,9 @@ link_claude_dir_per_file() {
 #   --local-md   → write CLAUDE.local.md import shim (project tracks its own CLAUDE.md)
 #   --no-claude-md → skip entirely (legacy; equivalent to "user doesn't want a personal CLAUDE.md")
 #   default      → symlink overlay's CLAUDE.md into project (no tracked file in the way)
-if (( MODE_LOCAL_MD )); then
+if ((MODE_LOCAL_MD)); then
   write_import_shim "$OVERLAY/CLAUDE.md" "$PROJECT_DIR/CLAUDE.local.md"
-elif (( SKIP_CLAUDE_MD )); then
+elif ((SKIP_CLAUDE_MD)); then
   info "Skipping CLAUDE.md symlink (--no-claude-md). Project keeps its own."
 else
   link_one "$OVERLAY/CLAUDE.md" "$PROJECT_DIR/CLAUDE.md"
@@ -370,14 +431,14 @@ fi
 
 # AGENTS.md handling: only when --local-md AND user opted into AGENTS too.
 # Default off — most users don't keep an AGENTS overlay separately.
-if (( MODE_LOCAL_MD && ! SKIP_AGENTS_MD )); then
+if ((MODE_LOCAL_MD && !SKIP_AGENTS_MD)); then
   if [[ -f "$OVERLAY/AGENTS.md" ]]; then
     write_import_shim "$OVERLAY/AGENTS.md" "$PROJECT_DIR/AGENTS.local.md"
   else
     info "Skipping AGENTS.local.md — no overlay AGENTS.md at $OVERLAY/AGENTS.md."
   fi
 fi
-if (( MODE_CLAUDE_PER_FILE )); then
+if ((MODE_CLAUDE_PER_FILE)); then
   link_claude_dir_per_file "$OVERLAY/.claude" "$PROJECT_DIR/.claude"
 else
   link_one "$OVERLAY/.claude" "$PROJECT_DIR/.claude"

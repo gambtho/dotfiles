@@ -26,14 +26,12 @@ install_macos_dependencies() {
   brew install curl
 }
 
-
-
 main() {
 
   if [ -x "$HOME/.cargo/bin/rustc" ]; then
-      source "$HOME/.cargo/env"
-      log_info "Rust is already installed. Version: $(rustc --version)"
-      exit 0
+    source "$HOME/.cargo/env"
+    log_info "Rust is already installed. Version: $(rustc --version)"
+    exit 0
   fi
 
   detect_os

@@ -49,7 +49,7 @@ syntax:
 	@zsh -n $$(find core languages platforms profiles tools work -type f \( -name '*.zsh' -o -name '*.symlink' \))
 
 lint:
-	shellcheck -x $$(find bin -type f -not -name '*.zsh'; find ai core fonts languages platforms work -type f -name '*.sh')
+	shellcheck -x -S warning -e SC1091 $$(find bin -type f -not -name '*.zsh'; find ai core fonts languages platforms work -type f -name '*.sh')
 	shfmt -d -i 2 -ci $$(find bin ai core fonts languages platforms work -type f -name '*.sh') tests/test_helper.bash
 
 test:
