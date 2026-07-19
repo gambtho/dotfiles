@@ -21,31 +21,33 @@ remove_legacy_commands_symlink() {
 # dotfiles repo (ai/opencode, ai/copilot, or a removed plugin agent/skill) — an
 # unrelated user symlink is never touched.
 remove_stale_bridge_symlinks() {
-    local roots=(
-        "$HOME/.config/opencode/skills" "$HOME/.config/opencode/agents"
-        "$HOME/.config/opencode/commands"
-        "$HOME/.copilot/skills" "$HOME/.copilot/agents"
-    )
-    local dir link target
-    for dir in "${roots[@]}"; do
-        [ -d "$dir" ] || continue
-        for link in "$dir"/* "$dir"; do
-            [ -L "$link" ] || continue
-            target=$(readlink "$link")
-            # Stale if it points into the deleted opencode/copilot trees, or is a
-            # broken link into this repo (e.g. a bridged plugin agent we removed).
-            case "$target" in
-                *"$DOTFILES_ROOT/ai/opencode/"*|*"$DOTFILES_ROOT/ai/copilot/"*)
-                    log_info "Removing stale bridge symlink: $link -> $target"
-                    rm "$link" ;;
-                "$DOTFILES_ROOT"/*)
-                    if [ ! -e "$link" ]; then
-                        log_info "Removing dangling repo symlink: $link -> $target"
-                        rm "$link"
-                    fi ;;
-            esac
-        done
+  local roots=(
+    "$HOME/.config/opencode/skills" "$HOME/.config/opencode/agents"
+    "$HOME/.config/opencode/commands"
+    "$HOME/.copilot/skills" "$HOME/.copilot/agents"
+  )
+  local dir link target
+  for dir in "${roots[@]}"; do
+    [ -d "$dir" ] || continue
+    for link in "$dir"/* "$dir"; do
+      [ -L "$link" ] || continue
+      target=$(readlink "$link")
+      # Stale if it points into the deleted opencode/copilot trees, or is a
+      # broken link into this repo (e.g. a bridged plugin agent we removed).
+      case "$target" in
+        *"$DOTFILES_ROOT/ai/opencode/"* | *"$DOTFILES_ROOT/ai/copilot/"*)
+          log_info "Removing stale bridge symlink: $link -> $target"
+          rm "$link"
+          ;;
+        "$DOTFILES_ROOT"/*)
+          if [ ! -e "$link" ]; then
+            log_info "Removing dangling repo symlink: $link -> $target"
+            rm "$link"
+          fi
+          ;;
+      esac
     done
+  done
 }
 
 marketplace_already_added() {
