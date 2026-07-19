@@ -11,3 +11,7 @@ platforms/macos/brewfile.lock.json
 core/git/gitconfig.local.symlink
 .dotfiles-profile
 .opencode/
+
+# The global ~/.gitignore ignores all CLAUDE.md files (project-local instructions).
+# Our repo-managed global CLAUDE.md is an intentional tracked exception.
+!ai/claude/CLAUDE.md
