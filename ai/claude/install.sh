@@ -7,19 +7,19 @@ source "$(dirname "$0")/../../bin/common.sh"
 DOTFILES_ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
 
 install_claude() {
-    log_info "Installing Claude Code (native)..."
-    curl -fsSL https://claude.ai/install.sh | bash
-    log_success "Claude Code installed."
+  log_info "Installing Claude Code (native)..."
+  run_remote_installer https://claude.ai/install.sh bash || return
+  log_success "Claude Code installed."
 }
 
 update_claude() {
-    log_info "Updating Claude Code..."
-    claude update
-    log_success "Claude Code updated."
+  log_info "Updating Claude Code..."
+  claude update
+  log_success "Claude Code updated."
 }
 
 # Rewrite stale paths in ~/.claude/plugins/{installed_plugins,known_marketplaces}.json
-# that point into another user's home (e.g. /home/node, /home/vscode, /Users/foo)
+# that point into another user's home from a previous machine or container
 # after the dotfiles repo has been moved between machines. The plugin/marketplace
 # cache gets re-fetched locally but the JSON still references the old paths,
 # causing /plugins to show everything as broken.
@@ -28,16 +28,17 @@ update_claude() {
 # fails to find plugins/marketplaces, and rewrites entries with version="unknown"
 # and orphaned cache directories that the regex-based fixup can no longer recover.
 fixup_stale_plugin_paths() {
-    local plugins_file="$HOME/.claude/plugins/installed_plugins.json"
-    local markets_file="$HOME/.claude/plugins/known_marketplaces.json"
-    [ -f "$plugins_file" ] || [ -f "$markets_file" ] || return 0
-    if ! command_exists python3; then
-        log_info "python3 not available; skipping plugin path fixup."
-        return 0
-    fi
+  local plugins_file="$HOME/.claude/plugins/installed_plugins.json"
+  local markets_file="$HOME/.claude/plugins/known_marketplaces.json"
+  [ -f "$plugins_file" ] || [ -f "$markets_file" ] || return 0
+  if ! command_exists python3; then
+    log_info "python3 not available; skipping plugin path fixup."
+    return 0
+  fi
 
-    local changed
-    changed=$(python3 - "$plugins_file" "$markets_file" <<'PY'
+  local changed
+  changed=$(
+    python3 - "$plugins_file" "$markets_file" <<'PY'
 import json, os, re, sys
 home = os.path.expanduser("~")
 pattern = re.compile(r"^(/home|/Users)/[^/]+/")
@@ -85,55 +86,82 @@ def walk_markets(data):
 total = fix_file(sys.argv[1], walk_plugins) + fix_file(sys.argv[2], walk_markets)
 print(total)
 PY
-)
-    if [ "${changed:-0}" -gt 0 ]; then
-        log_success "Rewrote $changed stale plugin/marketplace path(s) to \$HOME."
-    fi
+  )
+  if [ "${changed:-0}" -gt 0 ]; then
+    log_success "Rewrote $changed stale plugin/marketplace path(s) to \$HOME."
+  fi
 }
 
 link_file() {
-    local src="$1"
-    local dst="$2"
-    local label="$3"
+  local src="$1"
+  local dst="$2"
+  local label="$3"
 
-    if [ -L "$dst" ]; then
-        local current
-        current=$(readlink "$dst")
-        if [ "$current" == "$src" ]; then
-            log_info "Claude $label already linked."
-            return
-        fi
-        log_info "Removing existing $label symlink -> $current"
-        rm "$dst"
-    elif [ -f "$dst" ]; then
-        local backup="${dst}.backup"
-        [ -e "$backup" ] && backup="${dst}.backup.$(date +%Y%m%d%H%M%S)"
-        log_info "Backing up existing $label to $backup"
-        mv "$dst" "$backup"
+  if [[ "$check_only" == true ]]; then
+    log_info "[dry-run] Would ensure Claude $label is linked: $src -> $dst"
+    return 0
+  fi
+
+  if [ -L "$dst" ]; then
+    local current
+    current=$(readlink "$dst")
+    if [ "$current" == "$src" ]; then
+      log_info "Claude $label already linked."
+      return
     fi
+    log_info "Removing existing $label symlink -> $current"
+    rm "$dst"
+  elif [ -f "$dst" ]; then
+    local backup="${dst}.backup"
+    [ -e "$backup" ] && backup="${dst}.backup.$(date +%Y%m%d%H%M%S)"
+    log_info "Backing up existing $label to $backup"
+    mv "$dst" "$backup"
+  fi
 
-    ln -s "$src" "$dst"
-    log_success "Linked $src to $dst"
+  ln -s "$src" "$dst"
+  log_success "Linked $src to $dst"
 }
 
 main() {
-    # Fixup must run before any `claude` invocation — see comment on the function.
-    fixup_stale_plugin_paths
-
+  check_only=false
+  local install_failed=false
+  if [[ "${1:-}" == "--check" ]]; then
+    check_only=true
+    log_info "Dry-run mode: showing what would be installed, updated, fixed, and linked"
     if command_exists claude; then
-        log_info "Claude Code is already installed. Version: $(claude --version)"
-        update_claude
+      log_info "[dry-run] Claude Code is installed; would update it"
     else
-        if command_exists curl; then
-            install_claude
-        else
-            log_warning "curl not found. Install curl first, then re-run."
-            return 1
-        fi
+      log_info "[dry-run] Claude Code is not installed; would run the native installer"
     fi
-
+    log_info "[dry-run] Would fix stale plugin paths under $HOME/.claude/plugins"
     link_file "$DOTFILES_ROOT/claude/settings.json" "$HOME/.claude/settings.json" "settings"
-    link_file "$DOTFILES_ROOT/claude/CLAUDE.md" "$HOME/.claude/CLAUDE.md" "global CLAUDE.md"
+    return 0
+  fi
+
+  # Fixup must run before any `claude` invocation — see comment on the function.
+  fixup_stale_plugin_paths
+
+  if command_exists claude; then
+    log_info "Claude Code is already installed. Version: $(claude --version)"
+    update_claude
+  else
+    if command_exists curl; then
+      if ! install_claude; then
+        log_warning "Claude Code install skipped or failed; continuing with settings linking."
+        install_failed=true
+      fi
+    else
+      log_warning "curl not found. Install curl first, then re-run."
+      return 1
+    fi
+  fi
+
+  link_file "$DOTFILES_ROOT/claude/settings.json" "$HOME/.claude/settings.json" "settings"
+  link_file "$DOTFILES_ROOT/claude/CLAUDE.md" "$HOME/.claude/CLAUDE.md" "global CLAUDE.md"
+
+  if [[ "$install_failed" == true ]]; then
+    return 1
+  fi
 }
 
 main "$@"

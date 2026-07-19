@@ -7,10 +7,17 @@ core/git/git_updated
 tmp/
 cache/
 docs/
+!docs/
+docs/*
+!docs/superpowers/
+docs/superpowers/*
+!docs/superpowers/plans/
+!docs/superpowers/plans/*.md
 platforms/macos/brewfile.lock.json
 core/git/gitconfig.local.symlink
 .dotfiles-profile
 .opencode/
+ai/codex/projects.local.toml
 
 # The global ~/.gitignore ignores all CLAUDE.md files (project-local instructions).
 # Our repo-managed global CLAUDE.md is an intentional tracked exception.

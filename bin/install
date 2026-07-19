@@ -10,7 +10,7 @@ DOTFILES_ROOT=$(pwd -P)
 # Determine active profile
 PROFILE="personal"
 if [[ -f "$HOME/.dotfiles-profile" ]]; then
-  PROFILE=$(tr -d '[:space:]' < "$HOME/.dotfiles-profile")
+  PROFILE=$(tr -d '[:space:]' <"$HOME/.dotfiles-profile")
 fi
 
 log_info "Running install for profile: $PROFILE"
@@ -19,31 +19,46 @@ log_info "Running install for profile: $PROFILE"
 
 update_homebrew() {
   log_info "Updating Homebrew packages..."
-  brew update
-  brew upgrade
-  brew cleanup
-  brew bundle --file="$DOTFILES_ROOT/platforms/macos/brewfile"
-  brew bundle dump --all --force --file="$DOTFILES_ROOT/tmp/brewfile"
+  brew update &&
+    brew upgrade &&
+    brew cleanup &&
+    brew bundle --file="$DOTFILES_ROOT/platforms/macos/brewfile" &&
+    brew bundle dump --all --force --file="$DOTFILES_ROOT/tmp/brewfile"
 }
 
 install_apt_packages() {
   local apt_file=$1
+  local -a apt_packages
+
   log_info "Updating APT packages from $apt_file..."
-  {
-    sudo apt update > /dev/null 2>&1
-  } || log_warning "Error during apt update. Continuing..."
+  sudo apt update >/dev/null &&
+    mapfile -t apt_packages <"$DOTFILES_ROOT/platforms/linux/$apt_file" &&
+    sudo apt install -y "${apt_packages[@]}" >/dev/null &&
+    sudo apt upgrade -y >/dev/null &&
+    sudo apt autoremove -y >/dev/null &&
+    sudo apt autoclean -y >/dev/null
+}
 
-  {
-    mapfile -t apt_packages < "$DOTFILES_ROOT/platforms/linux/$apt_file"
-    sudo apt install -y "${apt_packages[@]}" > /dev/null 2>&1
-  } || log_warning "Error during apt install. Continuing..."
-
-  {
-    sudo apt upgrade -y > /dev/null 2>&1
-  } || log_warning "Error during apt upgrade. Continuing..."
-
-  sudo apt autoremove -y > /dev/null 2>&1
-  sudo apt autoclean -y > /dev/null 2>&1
+install_platform_packages() {
+  case "$OS" in
+    macOS)
+      update_homebrew
+      ;;
+    Ubuntu)
+      if [[ "$PROFILE" == "server" ]]; then
+        install_apt_packages "server_apt"
+      else
+        install_apt_packages "ubuntu_apt"
+      fi
+      ;;
+    WSL)
+      install_apt_packages "wsl_apt"
+      ;;
+    *)
+      log_warning "Unsupported OS: $OS"
+      return 1
+      ;;
+  esac
 }
 
 check_unsaved_apt_packages() {
@@ -53,7 +68,7 @@ check_unsaved_apt_packages() {
     return
   fi
   mkdir -p "$DOTFILES_ROOT/tmp"
-  apt-mark showmanual | sort -u > "$DOTFILES_ROOT/tmp/$apt_file"
+  apt-mark showmanual | sort -u >"$DOTFILES_ROOT/tmp/$apt_file"
   local apt_diff
   set +e
   apt_diff=$(comm -23 "$DOTFILES_ROOT/tmp/$apt_file" "$DOTFILES_ROOT/platforms/linux/$apt_file")
@@ -69,11 +84,7 @@ check_unsaved_apt_packages() {
 
 install_languages() {
   log_info "Installing language runtimes via mise..."
-  if [[ "$PROFILE" == "server" ]]; then
-    bash "$DOTFILES_ROOT/languages/mise/lang.sh" --langs "node python"
-  else
-    bash "$DOTFILES_ROOT/languages/mise/lang.sh"
-  fi
+  DOTFILES_PROFILE="$PROFILE" bash "$DOTFILES_ROOT/languages/mise/install.sh"
 }
 
 # ── Phase 3: Shell setup ──────────────────────────────────────────────────────
@@ -96,7 +107,7 @@ setup_neovim() {
     return
   fi
   log_info "Bootstrapping neovim plugins..."
-  nvim --headless "+Lazy! sync" +qa 2>/dev/null || true
+  nvim --headless "+Lazy! sync" +qa 2>/dev/null || return
   log_success "Neovim plugins synced."
 }
 
@@ -133,8 +144,7 @@ setup_ai() {
     [ -f "$installer" ] || continue
     local tool_name
     tool_name=$(basename "$(dirname "$installer")")
-    log_info "Running $tool_name install..."
-    bash "$installer" || log_warning "$tool_name install failed. Continuing..."
+    run_phase optional "ai-$tool_name" bash "$installer"
   done
   log_success "AI tools setup complete."
 }
@@ -144,40 +154,33 @@ setup_ai() {
 main() {
   detect_os
 
+  run_phase required packages install_platform_packages
+
   case "$OS" in
-    macOS)
-      update_homebrew
-      ;;
     Ubuntu)
       if [[ "$PROFILE" == "server" ]]; then
-        install_apt_packages "server_apt"
-        check_unsaved_apt_packages "server_apt"
+        run_phase optional package-audit check_unsaved_apt_packages "server_apt"
       else
-        install_apt_packages "ubuntu_apt"
-        check_unsaved_apt_packages "ubuntu_apt"
-        setup_flatpak
+        run_phase optional package-audit check_unsaved_apt_packages "ubuntu_apt"
+        run_phase optional flatpak setup_flatpak
       fi
       ;;
     WSL)
-      install_apt_packages "wsl_apt"
-      check_unsaved_apt_packages "wsl_apt"
-      ;;
-    *)
-      log_warning "Unsupported OS: $OS"
-      exit 1
+      run_phase optional package-audit check_unsaved_apt_packages "wsl_apt"
       ;;
   esac
 
-  setup_shell
-  setup_git
-  install_languages
-  setup_neovim
+  run_phase required shell setup_shell
+  run_phase required git setup_git
+  run_phase required runtimes install_languages
+  run_phase optional neovim setup_neovim
   if [[ "$PROFILE" != "server" ]]; then
-    setup_fonts
+    run_phase optional fonts setup_fonts
   fi
-  setup_work
+  run_phase optional work setup_work
   setup_ai
 
+  finish_phases || exit 1
   log_success "Install complete."
 }
 

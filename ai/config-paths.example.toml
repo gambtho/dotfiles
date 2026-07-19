@@ -1,0 +1,5 @@
+# Copy project entries from this file to ai/codex/projects.local.toml.
+# The local file is ignored and merged into ~/.codex/config.toml by the installer.
+
+[projects."/absolute/path/to/project"]
+trust_level = "trusted"

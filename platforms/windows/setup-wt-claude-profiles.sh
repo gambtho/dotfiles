@@ -57,16 +57,43 @@ usage() {
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    -r|--project-root) PROJECT_ROOT="$2"; shift 2 ;;
-    -s|--shell)        LOGIN_SHELL="$2"; shift 2 ;;
-    -n|--dry-run)      DRY_RUN=1; shift ;;
-    -y|--yes)          ASSUME_YES=1; shift ;;
-    --flavors)         FLAVORS="$2"; shift 2 ;;
-    --include)         INCLUDE_GLOBS+=("$2"); shift 2 ;;
-    --exclude)         EXTRA_EXCLUDES+=("$2"); shift 2 ;;
-    --include-all)     INCLUDE_ALL=1; shift ;;
-    -h|--help)         usage 0 ;;
-    *) echo "unknown arg: $1" >&2; usage 1 ;;
+    -r | --project-root)
+      PROJECT_ROOT="$2"
+      shift 2
+      ;;
+    -s | --shell)
+      LOGIN_SHELL="$2"
+      shift 2
+      ;;
+    -n | --dry-run)
+      DRY_RUN=1
+      shift
+      ;;
+    -y | --yes)
+      ASSUME_YES=1
+      shift
+      ;;
+    --flavors)
+      FLAVORS="$2"
+      shift 2
+      ;;
+    --include)
+      INCLUDE_GLOBS+=("$2")
+      shift 2
+      ;;
+    --exclude)
+      EXTRA_EXCLUDES+=("$2")
+      shift 2
+      ;;
+    --include-all)
+      INCLUDE_ALL=1
+      shift
+      ;;
+    -h | --help) usage 0 ;;
+    *)
+      echo "unknown arg: $1" >&2
+      usage 1
+      ;;
   esac
 done
 
@@ -75,27 +102,46 @@ WANT_PLAIN=0
 for f in ${FLAVORS//,/ }; do
   case "$f" in
     devcontainer) WANT_DEVCONTAINER=1 ;;
-    plain)        WANT_PLAIN=1 ;;
-    *) echo "unknown flavor: $f (valid: devcontainer, plain)" >&2; exit 2 ;;
+    plain) WANT_PLAIN=1 ;;
+    *)
+      echo "unknown flavor: $f (valid: devcontainer, plain)" >&2
+      exit 2
+      ;;
   esac
 done
-(( WANT_DEVCONTAINER || WANT_PLAIN )) || { echo "--flavors selected nothing" >&2; exit 2; }
+((WANT_DEVCONTAINER || WANT_PLAIN)) || {
+  echo "--flavors selected nothing" >&2
+  exit 2
+}
 
 # ── Colors ───────────────────────────────────────────────────────────────────
 if [[ -t 1 ]]; then
-  C_INFO=$'\033[36m'; C_OK=$'\033[32m'; C_WARN=$'\033[33m'; C_ERR=$'\033[31m'; C_DIM=$'\033[2m'; C_OFF=$'\033[0m'
+  C_INFO=$'\033[36m'
+  C_OK=$'\033[32m'
+  C_WARN=$'\033[33m'
+  C_ERR=$'\033[31m'
+  C_DIM=$'\033[2m'
+  C_OFF=$'\033[0m'
 else
-  C_INFO=""; C_OK=""; C_WARN=""; C_ERR=""; C_DIM=""; C_OFF=""
+  C_INFO=""
+  C_OK=""
+  C_WARN=""
+  C_ERR=""
+  C_DIM=""
+  C_OFF=""
 fi
-info()  { printf '%s%s%s\n' "$C_INFO" "$*" "$C_OFF"; }
-ok()    { printf '%s%s%s\n' "$C_OK"   "$*" "$C_OFF"; }
-warn()  { printf '%s%s%s\n' "$C_WARN" "$*" "$C_OFF" >&2; }
-die()   { printf '%s%s%s\n' "$C_ERR"  "$*" "$C_OFF" >&2; exit 1; }
-dim()   { printf '%s%s%s\n' "$C_DIM"  "$*" "$C_OFF"; }
+info() { printf '%s%s%s\n' "$C_INFO" "$*" "$C_OFF"; }
+ok() { printf '%s%s%s\n' "$C_OK" "$*" "$C_OFF"; }
+warn() { printf '%s%s%s\n' "$C_WARN" "$*" "$C_OFF" >&2; }
+die() {
+  printf '%s%s%s\n' "$C_ERR" "$*" "$C_OFF" >&2
+  exit 1
+}
+dim() { printf '%s%s%s\n' "$C_DIM" "$*" "$C_OFF"; }
 
 # ── Sanity checks ────────────────────────────────────────────────────────────
 [[ -n "${WSL_DISTRO_NAME:-}" ]] || die "Not inside WSL (\$WSL_DISTRO_NAME unset). Run this from a WSL shell."
-command -v jq      >/dev/null || die "jq is required (sudo apt install jq)."
+command -v jq >/dev/null || die "jq is required (sudo apt install jq)."
 command -v python3 >/dev/null || die "python3 is required."
 command -v uuidgen >/dev/null || die "uuidgen is required (util-linux)."
 
@@ -123,7 +169,10 @@ UNPACKAGED="/mnt/c/Users/$WIN_USER/AppData/Local/Microsoft/Windows Terminal/sett
 
 SETTINGS=""
 for p in "$STABLE" "$PREVIEW" "$UNPACKAGED"; do
-  [[ -f "$p" ]] && { SETTINGS="$p"; break; }
+  [[ -f "$p" ]] && {
+    SETTINGS="$p"
+    break
+  }
 done
 [[ -n "$SETTINGS" ]] || die "Couldn't find Windows Terminal settings.json. Checked stable, Preview, and unpackaged paths."
 info "settings.json: $SETTINGS"
@@ -147,10 +196,11 @@ info "Scanning $PROJECT_ROOT …"
 # .devcontainer/devcontainer.json or .devcontainer.json. Flavors filtered
 # out by --flavors are dropped here, not at prompt time.
 matches_any() {
-  local name="$1"; shift
+  local name="$1"
+  shift
   local pat
   for pat in "$@"; do
-    # shellcheck disable=SC2053 — glob matching is intentional
+    # shellcheck disable=SC2053  # glob matching is intentional
     [[ "$name" == $pat ]] && return 0
   done
   return 1
@@ -169,20 +219,20 @@ for d in "$PROJECT_ROOT"/*/; do
   [[ -e "$proj/.git" ]] || continue
 
   # Default skip patterns (disabled with --include-all).
-  if (( ! INCLUDE_ALL )) && matches_any "$name" "${DEFAULT_EXCLUDES[@]}"; then
+  if ((!INCLUDE_ALL)) && matches_any "$name" "${DEFAULT_EXCLUDES[@]}"; then
     continue
   fi
   # Extra excludes from CLI always apply.
-  if (( ${#EXTRA_EXCLUDES[@]} )) && matches_any "$name" "${EXTRA_EXCLUDES[@]}"; then
+  if ((${#EXTRA_EXCLUDES[@]})) && matches_any "$name" "${EXTRA_EXCLUDES[@]}"; then
     continue
   fi
 
   if [[ -f "$proj/.devcontainer/devcontainer.json" || -f "$proj/.devcontainer.json" ]]; then
     flavor="devcontainer"
-    (( WANT_DEVCONTAINER )) || continue
+    ((WANT_DEVCONTAINER)) || continue
   else
     flavor="plain"
-    (( WANT_PLAIN )) || continue
+    ((WANT_PLAIN)) || continue
   fi
 
   PROJ_PATHS+=("$proj")
@@ -212,8 +262,8 @@ ALL_MODE=""
 #   - its name matches any --include glob.
 auto_yes() {
   local name="$1"
-  (( ASSUME_YES )) && return 0
-  if (( ${#INCLUDE_GLOBS[@]} )) && matches_any "$name" "${INCLUDE_GLOBS[@]}"; then
+  ((ASSUME_YES)) && return 0
+  if ((${#INCLUDE_GLOBS[@]})) && matches_any "$name" "${INCLUDE_GLOBS[@]}"; then
     return 0
   fi
   return 1
@@ -234,19 +284,28 @@ for i in "${!PROJ_PATHS[@]}"; do
   while true; do
     read -r -p "Add profile for \"$name\" ($flavor)? [y/N/a/s/q] " ans
     case "${ans:-N}" in
-      y|Y)
+      y | Y)
         PICKED_PATHS+=("${PROJ_PATHS[$i]}")
         PICKED_NAMES+=("$name")
         PICKED_FLAVORS+=("$flavor")
-        break ;;
-      n|N|"") break ;;
-      a|A)
+        break
+        ;;
+      n | N | "") break ;;
+      a | A)
         PICKED_PATHS+=("${PROJ_PATHS[$i]}")
         PICKED_NAMES+=("$name")
         PICKED_FLAVORS+=("$flavor")
-        ALL_MODE="a"; break ;;
-      s|S) ALL_MODE="s"; break ;;
-      q|Q) ALL_MODE="q"; break ;;
+        ALL_MODE="a"
+        break
+        ;;
+      s | S)
+        ALL_MODE="s"
+        break
+        ;;
+      q | Q)
+        ALL_MODE="q"
+        break
+        ;;
       *) echo "  (y=yes, N=no [default], a=yes-to-all, s=skip-rest, q=quit)" ;;
     esac
   done
@@ -259,7 +318,10 @@ if [[ "$ALL_MODE" == "q" ]]; then
   exit 0
 fi
 
-[[ ${#PICKED_PATHS[@]} -gt 0 ]] || { warn "Nothing selected; settings.json untouched."; exit 0; }
+[[ ${#PICKED_PATHS[@]} -gt 0 ]] || {
+  warn "Nothing selected; settings.json untouched."
+  exit 0
+}
 
 echo
 info "Selected ${#PICKED_PATHS[@]} project(s) for profile generation."
@@ -279,7 +341,7 @@ WSLEXE='C:\WINDOWS\system32\wsl.exe'
 # settings.json from regenerated GUIDs each invocation).
 EXISTING_NAMES_JSON="$(mktemp)"
 trap 'rm -f "$EXISTING_NAMES_JSON"' EXIT
-jq '.profiles.list // [] | map({(.name): .guid}) | add // {}' "$SETTINGS" > "$EXISTING_NAMES_JSON"
+jq '.profiles.list // [] | map({(.name): .guid}) | add // {}' "$SETTINGS" >"$EXISTING_NAMES_JSON"
 
 guid_for_name() {
   local name="$1"
@@ -345,7 +407,7 @@ trap 'rm -f "$EXISTING_NAMES_JSON" "$NEW_PROFILES_JSON"' EXIT
     suppressApplicationTitle: true
   }'
   echo "]"
-} > "$NEW_PROFILES_JSON"
+} >"$NEW_PROFILES_JSON"
 
 jq empty "$NEW_PROFILES_JSON" || die "Generated profile JSON is invalid (bug)."
 
@@ -365,10 +427,10 @@ jq --indent "$INDENT" --slurpfile new "$NEW_PROFILES_JSON" '
     (.profiles.list // [])
     | map(select(.name as $n | ($new[0] | map(.name) | index($n)) | not))
   ) + $new[0]
-' "$SETTINGS" > "$MERGED"
+' "$SETTINGS" >"$MERGED"
 
-python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$MERGED" \
-  || die "Merged settings.json failed JSON validation."
+python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$MERGED" ||
+  die "Merged settings.json failed JSON validation."
 
 # ── Diff + confirm ───────────────────────────────────────────────────────────
 echo
@@ -381,12 +443,12 @@ if diff -q "$SETTINGS" "$MERGED" >/dev/null; then
   exit 0
 fi
 
-if (( DRY_RUN )); then
+if ((DRY_RUN)); then
   warn "--dry-run set; not writing. Merged file at: $MERGED (will be cleaned up on exit)"
   exit 0
 fi
 
-if (( ! ASSUME_YES )); then
+if ((!ASSUME_YES)); then
   read -r -p "Apply these changes? [y/N] " ans
   [[ "${ans:-N}" =~ ^[Yy]$ ]] || die "Aborted."
 fi

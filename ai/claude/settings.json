@@ -50,7 +50,7 @@
       "Bash(claude:*)",
       "Read(//workspaces/**)",
       "Read(//tmp/**)",
-      "Read(//home/node/.claude/**)",
+      "Read(~/.claude/**)",
       "WebSearch",
       "WebFetch(domain:github.com)",
       "WebFetch(domain:supabase.com)",
@@ -100,14 +100,6 @@
     "ai-firstify@techwolf-ai-first": false,
     "shopify@claude-plugins-official": false,
     "vercel@claude-plugins-official": false
-  },
-  "extraKnownMarketplaces": {
-    "guarzo": {
-      "source": {
-        "source": "directory",
-        "path": "/home/tng/.dotfiles/ai/marketplace"
-      }
-    }
   },
   "effortLevel": "medium",
   "tui": "fullscreen",

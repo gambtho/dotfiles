@@ -6,14 +6,12 @@ source "$(dirname "$0")/../../bin/common.sh"
 
 MARKER_FILE="$(dirname "$0")/git_updated"
 
-
 # Function to use git ppa for latest version
 git_ppa() {
   sudo apt-add-repository ppa:git-core/ppa
   sudo apt-get update
   sudo apt-get install -y git
 }
-
 
 # Main function
 main() {
@@ -23,7 +21,7 @@ main() {
   fi
 
   detect_os
-  
+
   case "$OS" in
     Ubuntu | WSL)
       git_ppa

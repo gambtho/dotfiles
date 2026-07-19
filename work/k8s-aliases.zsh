@@ -5,6 +5,8 @@
 alias kneg='kubectl -n eventgrid'
 alias kncs='kubectl -n containerservice'
 alias kncsa='kubectl -n containerservicei-async'
+alias ktx='kubectl ctx'
+alias kns='kubectl ns'
 
 # AKS prod tools aliases — only loaded with work profile
 alias aks='aks-prod-tools'

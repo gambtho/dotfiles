@@ -79,18 +79,33 @@ ssh -T git@github-work
 
 ```bash
 bin/dot-update    # update packages, language runtimes, neovim plugins
+make check        # run syntax, lint, tests, and AI config validation
 ```
 
-## After Pulling a Restructure
+Run `make check` before pushing changes. Installer tests use temporary home
+directories and stubbed commands, so they verify behavior without changing the
+developer machine.
 
-If you pull changes that moved `.symlink` files to new directories, run:
+## Migrating an Existing Installation
+
+After pulling this modernization, verify the repository, refresh symlinks, and
+run the installer:
 
 ```bash
+git pull
+make check
 bin/relink
+bin/install
+exec zsh
 ```
 
-This removes dead symlinks (pointing to paths that no longer exist) and re-creates all
-symlinks from the current repo layout.
+`bin/relink` removes dead symlinks and recreates links from the current layout.
+Remote installer scripts remain disabled by default. After reviewing their
+sources, explicitly opt in when a missing tool requires one:
+
+```bash
+ALLOW_REMOTE_INSTALLERS=1 bin/install
+```
 
 ## Neovim
 
@@ -100,7 +115,14 @@ symlinked to `~/.config/nvim`. Plugins are bootstrapped via lazy.nvim on first l
 ## Runtime Manager
 
 All language runtimes are managed by [mise](https://mise.jdx.dev/). Versions are defined
-in `languages/mise/mise.local.toml.symlink` (symlinked to `~/.mise.local.toml`).
+in `config/mise/config.toml` (linked to `~/.config/mise/config.toml`).
+
+## Dependency Pins
+
+Run `make pins` to list every managed version and Git ref. Run `make pins-check`
+to query upstreams without changing files. Run `make pins-update` to select mise
+upgrades interactively, refresh Git refs and the Kubernetes channel, run the full
+test suite, and display the resulting version diff for review.
 
 ## Key Symlinks
 
@@ -109,7 +131,7 @@ in `languages/mise/mise.local.toml.symlink` (symlinked to `~/.mise.local.toml`).
 | `~/.zshrc` | `core/shell/zshrc.symlink` |
 | `~/.gitconfig` | `core/git/gitconfig.symlink` |
 | `~/.gitconfig.local` | `core/git/gitconfig.local.symlink` (machine-local, gitignored) |
-| `~/.mise.local.toml` | `languages/mise/mise.local.toml.symlink` |
+| `~/.config/mise/config.toml` | `config/mise/config.toml` |
 | `~/.config/nvim` | `config/nvim/` |
 
 ## Archived
@@ -123,6 +145,13 @@ in `languages/mise/mise.local.toml.symlink` (symlinked to `~/.mise.local.toml`).
 - `localrc` — ssh-agent + goms.io environment
 - `script-bootstrap`, `script-install` — old install scripts (replaced by `bin/bootstrap` and `bin/install`)
 
+## Repository Hygiene
+
+- Active configuration must not discover files under `archived/`.
+- Machine-local files use a `.local` suffix and remain ignored.
+- Generated backups and binaries larger than 5 MiB are not tracked.
+- Historical artifacts belong in release storage or a dedicated archive repository.
+
 ## AI Coding Assistants
 
 Two AI tools are configured under `ai/` — Claude Code (primary) and Codex CLI —
@@ -132,7 +161,7 @@ plus a shared LiteLLM proxy:
 ai/
   marketplace/  # Claude Code plugin marketplace — the 'my' plugin (commands + skills)
   claude/       # Claude Code — settings.json + global CLAUDE.md
-  codex/        # Codex CLI — config.toml + global AGENTS.md, symlinked to ~/.codex/
+  codex/        # Codex CLI — generated config.toml + global AGENTS.md
   litellm/      # Shared LiteLLM proxy config (Codex + Copilot-model routing)
 ```
 
@@ -147,6 +176,11 @@ Or run individually: `ai/claude/install.sh`, `ai/codex/install.sh`,
 `ai/marketplace/install.sh`, `ai/litellm/install.sh`.
 
 AI tools are also installed during `bin/install` (Phase 9).
+
+Codex project trust paths are machine-local. Copy entries from
+`ai/config-paths.example.toml` to the ignored
+`ai/codex/projects.local.toml`; `ai/codex/install.sh` merges them into the
+generated user config.
 
 ### The `my` plugin (Claude Code)
 
@@ -169,4 +203,3 @@ thorough verification). Both defer to repository-specific instructions.
 ```bash
 bash bin/validate-ai --verbose   # checks plugin command/skill frontmatter
 ```
-

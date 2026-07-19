@@ -1,4 +1,13 @@
-export PATH="./bin:/usr/local/bin:/usr/local/sbin:$ZSH/bin:$PATH"
-export MANPATH="/usr/local/man:/usr/local/mysql/man:/usr/local/git/man:$MANPATH"
-export PATH="${PATH}:${HOME}/bin"
-export PATH="${PATH}:${HOME}/.dotfiles/bin"
+typeset -U path PATH
+path=(${path:#.})
+path=(${path:#./bin})
+path=(
+  "${ZSH:-$HOME/.dotfiles}/bin"
+  "$HOME/.local/bin"
+  "$HOME/bin"
+  /usr/local/bin
+  /usr/local/sbin
+  $path
+)
+export PATH
+export MANPATH="/usr/local/man:/usr/local/mysql/man:/usr/local/git/man:${MANPATH:-}"

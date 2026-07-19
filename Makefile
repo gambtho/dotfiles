@@ -1,4 +1,4 @@
-.PHONY: install bootstrap update relink ai ai-check
+.PHONY: install bootstrap update relink ai ai-check pins pins-check pins-update check syntax lint test validate
 
 # ── Main targets ──────────────────────────────────────────────────────────────
 
@@ -23,10 +23,39 @@ ai: ## Install/update all AI tool configs (claude, codex, litellm)
 	done
 
 ai-check: ## Dry-run: show what AI install would do
-	bash ai/codex/install.sh --check
+	@for installer in ai/*/install.sh; do \
+		echo "Checking $$installer..."; \
+		bash "$$installer" --check; \
+	done
+
+pins: ## List managed dependency versions and refs
+	bash bin/versions list
+
+pins-check: ## Check managed dependency pins for updates
+	bash bin/versions check
+
+pins-update: ## Interactively update managed dependency pins
+	bash bin/versions update
 
 validate: ## Validate AI config structure (agents, commands, skills)
 	bash bin/validate-ai --verbose
+
+# ── Verification ───────────────────────────────────────────────────────────────
+
+check: syntax lint test validate
+
+syntax:
+	@{ find bin -type f -not -name '*.zsh' -print0; find ai core fonts languages platforms work -type f -name '*.sh' -print0; } | \
+		bash -c 'while IFS= read -r -d "" file; do bash -n "$$file" || exit 1; done'
+	@find core languages platforms profiles tools work -type f \( -name '*.zsh' -o -path 'core/shell/*.symlink' \) -print0 | \
+		bash -c 'while IFS= read -r -d "" file; do zsh -n "$$file" || exit 1; done'
+
+lint:
+	shellcheck -x -S warning -e SC1091 $$(find bin -type f -not -name '*.zsh'; find ai core fonts languages platforms work -type f -name '*.sh')
+	shfmt -d -i 2 -ci $$(find bin ai core fonts languages platforms work -type f -name '*.sh') tests/test_helper.bash
+
+test:
+	bats tests
 
 # ── Help ──────────────────────────────────────────────────────────────────────
 

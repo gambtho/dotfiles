@@ -1,0 +1,124 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
+PINS_FILE="$ROOT/config/versions.env"
+MISE_FILE="$ROOT/config/mise/config.toml"
+export MISE_CONFIG_DIR="$ROOT/config/mise"
+
+# shellcheck source=config/versions.env
+source "$PINS_FILE"
+
+usage() {
+  echo "Usage: bin/versions {list|check|update}" >&2
+}
+
+list_mise() {
+  awk '
+    function trim(value) {
+      sub(/^[[:space:]]+/, "", value)
+      sub(/[[:space:]]+$/, "", value)
+      return value
+    }
+
+    /^\[tools\]$/ { in_tools=1; next }
+    /^\[/ { in_tools=0 }
+    in_tools && /^[[:space:]]*[^#].*=/ {
+      key=$0
+      value=$0
+      sub(/=.*/, "", key)
+      sub(/^[^=]+=[[:space:]]*/, "", value)
+      sub(/[[:space:]]+#.*$/, "", value)
+      key=trim(key)
+      value=trim(value)
+      gsub(/^"|"$/, "", key)
+      gsub(/^"|"$/, "", value)
+      print "mise", key, value
+    }
+  ' "$MISE_FILE"
+}
+
+list_pins() {
+  list_mise
+  printf 'git prezto %s\n' "$PREZTO_REF"
+  printf 'git zsh-defer %s\n' "$ZSH_DEFER_REF"
+  printf 'channel kubernetes %s\n' "$KUBERNETES_CHANNEL"
+}
+
+with_mise_config() {
+  local mode="$1"
+  shift
+  local config_dir
+  config_dir="$(mktemp -d)"
+  cp "$MISE_FILE" "$config_dir/config.toml"
+
+  if ! MISE_CONFIG_DIR="$config_dir" mise "$@"; then
+    rm -rf "$config_dir"
+    return 1
+  fi
+
+  if [[ "$mode" == write ]]; then
+    cp "$config_dir/config.toml" "$MISE_FILE"
+  fi
+  rm -rf "$config_dir"
+}
+
+check_git_ref() {
+  local name="$1" repo="$2" current="$3" latest
+  latest="$(git ls-remote "$repo" HEAD | awk 'NR == 1 { print $1 }')"
+  if [[ "$current" == "$latest" ]]; then
+    printf 'current git %s %s\n' "$name" "$current"
+  else
+    printf 'outdated git %s %s -> %s\n' "$name" "$current" "$latest"
+  fi
+}
+
+latest_kubernetes_channel() {
+  local stable
+  stable="$(curl --fail --silent --show-error --location https://dl.k8s.io/release/stable.txt)"
+  printf '%s\n' "${stable%.*}"
+}
+
+check_pins() {
+  with_mise_config read outdated --bump
+  check_git_ref prezto "$PREZTO_REPO" "$PREZTO_REF"
+  check_git_ref zsh-defer "$ZSH_DEFER_REPO" "$ZSH_DEFER_REF"
+  local latest_channel
+  latest_channel="$(latest_kubernetes_channel)"
+  if [[ "$KUBERNETES_CHANNEL" == "$latest_channel" ]]; then
+    printf 'current channel kubernetes %s\n' "$KUBERNETES_CHANNEL"
+  else
+    printf 'outdated channel kubernetes %s -> %s\n' "$KUBERNETES_CHANNEL" "$latest_channel"
+  fi
+}
+
+update_pin() {
+  local key="$1" value="$2" temporary
+  temporary="$(mktemp "${PINS_FILE}.XXXXXX")"
+  awk -F= -v key="$key" -v value="$value" '
+    $1 == key { print key "=" value; next }
+    { print }
+  ' "$PINS_FILE" >"$temporary"
+  mv "$temporary" "$PINS_FILE"
+}
+
+update_pins() {
+  with_mise_config write upgrade --bump --interactive
+  update_pin PREZTO_REF "$(git ls-remote "$PREZTO_REPO" HEAD | awk 'NR == 1 { print $1 }')"
+  update_pin ZSH_DEFER_REF "$(git ls-remote "$ZSH_DEFER_REPO" HEAD | awk 'NR == 1 { print $1 }')"
+  update_pin KUBERNETES_CHANNEL "$(latest_kubernetes_channel)"
+  "$0" list
+  make -C "$ROOT" check
+  git -C "$ROOT" diff -- "$PINS_FILE" "$MISE_FILE"
+}
+
+case "${1:-}" in
+  list) list_pins ;;
+  check) check_pins ;;
+  update) update_pins ;;
+  *)
+    usage
+    exit 2
+    ;;
+esac

@@ -1,6 +1,7 @@
 1password
 apt-transport-https
 azure-cli
+bats
 bsdutils
 build-essential
 ca-certificates
@@ -64,11 +65,11 @@ microsoft-identity-broker
 mise
 ncurses-base
 ncurses-bin
-neovim
 nvidia-driver-535
-openjdk-11-jre
 pass
 ripgrep
+shellcheck
+shfmt
 shim-signed
 sudo
 ubuntu-desktop-minimal

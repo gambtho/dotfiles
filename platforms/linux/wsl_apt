@@ -3,6 +3,7 @@ azure-cli
 base-files
 base-passwd
 bash
+bats
 bsdutils
 build-essential
 ca-certificates
@@ -43,10 +44,10 @@ lsb-release
 mise
 ncurses-base
 ncurses-bin
-neovim
-openjdk-8-jdk
 pass
 ripgrep
+shellcheck
+shfmt
 sudo
 sysvinit-utils
 ubuntu-minimal
