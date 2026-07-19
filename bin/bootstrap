@@ -11,7 +11,6 @@ BOOTSTRAP_PROFILE=""
 NON_INTERACTIVE=false
 BOOTSTRAP_GIT_NAME=""
 BOOTSTRAP_GIT_EMAIL=""
-unset ALLOW_REMOTE_INSTALLERS
 
 # sudo -v  # disabled: prompts on passwordless accounts; NOPASSWD sudoers covers later calls
 
@@ -57,7 +56,6 @@ validate_bootstrap_options() {
     printf '%s\n' "--profile is required with --non-interactive." >&2
     return 1
   fi
-
   BOOTSTRAP_GIT_NAME=$(git config --global --get user.name 2>/dev/null || true)
   BOOTSTRAP_GIT_EMAIL=$(git config --global --get user.email 2>/dev/null || true)
   if [[ -z "$BOOTSTRAP_GIT_NAME" || -z "$BOOTSTRAP_GIT_EMAIL" ]]; then

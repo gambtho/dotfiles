@@ -89,6 +89,13 @@ SCRIPT
   [ "$output" = "true work 1" ]
 }
 
+@test "bootstrap preserves remote installer consent from environment" {
+  run env ALLOW_REMOTE_INSTALLERS=1 BOOTSTRAP_SOURCE_ONLY=1 HOME="$HOME" bash -c \
+    'source "$1/bin/bootstrap"; printf "%s\n" "$ALLOW_REMOTE_INSTALLERS"' _ "$REPO_ROOT"
+  [ "$status" -eq 0 ]
+  [ "$output" = "1" ]
+}
+
 @test "work kubectl shortcuts use maintained krew plugins" {
   run rg -n 'raw\.githubusercontent\.com/blendle/kns' "$REPO_ROOT/work"
   [ "$status" -eq 1 ]
