@@ -56,3 +56,13 @@ run_loader() {
   [[ ":$output:" != *":./bin:"* ]]
   [[ ":$output:" == *":$REPO_ROOT/bin:"* ]]
 }
+
+@test "zshrc performs no network or git operations" {
+  stub_command git 'echo git-called >&2; exit 99'
+  stub_command curl 'echo curl-called >&2; exit 99'
+  ln -s "$REPO_ROOT" "$HOME/.dotfiles"
+
+  run env HOME="$HOME" PATH="$PATH" zsh -dfc 'source "$1/core/shell/zshrc.symlink"' _ "$REPO_ROOT"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"called"* ]]
+}
