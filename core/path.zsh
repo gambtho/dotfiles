@@ -1,4 +1,4 @@
-typeset -U path PATH
+typeset -gU path PATH
 path=(${path:#.})
 path=(${path:#./bin})
 path=(
