@@ -81,7 +81,7 @@ latest_kubernetes_channel() {
 }
 
 check_pins() {
-  with_mise_config read outdated --bump || true
+  with_mise_config read outdated --bump
   check_git_ref prezto "$PREZTO_REPO" "$PREZTO_REF"
   check_git_ref zsh-defer "$ZSH_DEFER_REPO" "$ZSH_DEFER_REF"
   local latest_channel
