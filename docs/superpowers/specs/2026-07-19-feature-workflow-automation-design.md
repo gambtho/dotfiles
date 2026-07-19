@@ -1,116 +1,132 @@
-# Feature-workflow automation overlay — design
+# Feature-Workflow Automation Overlay — Design
 
 **Date:** 2026-07-19
-**Status:** Approved
+**Status:** Approved with corrections
 
 ## Problem
 
-In a normal feature session the user must manually ask for the same steps every
-time: `my:blindspot-pass` before implementation, `my:polish-core` and
-`my:change-explainer` after, and creating a git worktree before edits. The
-skills never auto-fire because their descriptions restrict them to "when the
-user explicitly asks", and nothing enforces worktree use.
+Normal feature work repeatedly requires the same manual prompts: create a linked
+git worktree before writing, run `my:blindspot-pass` during discovery, run
+`my:polish-core --fix` after implementation, verify again, and finish with
+`my:change-explainer`. The personal skill descriptions currently make those
+steps mostly opt-in, and the global guidance does not define their exact place
+in the Superpowers lifecycle.
 
 ## Goal
 
-Superpowers keeps providing the spine (brainstorming → writing-plans →
-implementation → finishing-a-development-branch). This overlay makes the three
-personal skills fire at the correct phases without being asked, and makes
-worktree use a hard guarantee rather than a convention.
+Keep Superpowers as the workflow spine while adding a shared personal policy:
 
-Superpowers is not replaced or modified. `/using-superpowers` remains
-auto-injected at SessionStart by the plugin; typing it stays optional.
+```text
+inspect and clarify
+→ enter a linked worktree before the first feature-related write
+→ run a risk-scaled blind-spot pass during discovery
+→ use the normal Superpowers design, planning, TDD, and review flow
+→ run my:polish-core --fix
+→ re-run relevant verification
+→ explain the completed change
+→ finish the development branch
+```
+
+The overlay must work as guidance in both Claude Code and Codex. Claude Code
+also gets a deterministic edit-tool guard. Superpowers plugin files remain
+unchanged.
 
 ## Components
 
-### 1. Worktree guard (hard enforcement)
+### 1. Shared Workflow Policy
 
-- New executable `ai/claude/hooks/worktree-guard.sh`.
-- Wired in `ai/claude/settings.json` (symlinked to `~/.claude/settings.json`)
-  as a **PreToolUse** hook matching `Edit|Write|NotebookEdit`.
-- Behavior per invocation:
-  1. Resolve the target file path from the tool input; find the git repository
-     containing it (or the cwd when no file path applies).
-  2. If the path is not inside a git work tree → **allow** (scratchpad,
-     `~/.claude` memory, etc.).
-  3. Determine the repo's default branch: `git symbolic-ref
-     refs/remotes/origin/HEAD` (strip `origin/`), falling back to `main` if it
-     exists, else `master`.
-  4. If the currently checked-out branch equals the default branch → **deny**
-     (PreToolUse `permissionDecision: deny`) with a message instructing Claude
-     to create a worktree first via `superpowers:using-git-worktrees`.
-  5. Otherwise → allow.
-- Escape hatches:
-  - `~/.claude/worktree-guard-allow`: one repo path per line; listed repos are
-    always allowed. Seeded with `~/.dotfiles` (edited directly on main by
-    design).
-  - `CLAUDE_WORKTREE_GUARD=off` disables the guard for a session.
-- Tested with bats in `tests/` following existing test conventions
-  (`tests/*.bats`).
+Add matching feature-workflow sections to `ai/claude/CLAUDE.md` and
+`ai/codex/AGENTS.md`.
 
-### 2. Skill description rewrites (auto-triggering)
+The policy requires:
 
-Rewrite the `description:` frontmatter of three skills under
-`ai/marketplace/plugins/my/skills/` so they trigger on workflow phase instead
-of explicit request:
+- Repository inspection and clarification may happen in the current checkout.
+- Before writing a spec, plan, source, test, config, or documentation for new
+  work, enter a linked worktree using `superpowers:using-git-worktrees`.
+- If already inside a linked worktree, reuse it rather than nesting another.
+- Run `my:blindspot-pass` after initial discovery and requirements clarification,
+  but before presenting or locking in the design. This placement avoids
+  conflicting with the Superpowers rule that `writing-plans` follows an
+  approved brainstorming spec.
+- For routine work, summarize blind-spot findings and continue. Pause only when
+  unresolved architecture, public-interface, data, migration, security,
+  compatibility, deployment, or similarly high-impact decisions could change
+  the implementation materially.
+- After implementation, run `my:polish-core --fix`, then re-run affected tests
+  and other relevant verification before making completion claims.
+- Run `my:change-explainer` for non-trivial completed work. Include its five
+  knowledge-check questions only for substantial changes.
 
-- **blindspot-pass** — trigger after requirements are understood (e.g. after
-  brainstorming) and before writing an implementation plan or starting
-  substantial implementation; run proactively without being asked. Explicit
-  requests still trigger it.
-- **polish-core** — additionally trigger proactively with `--fix` after
-  completing implementation, before change-explainer or a PR.
-- **change-explainer** — trigger after completing a non-trivial change, before
-  finishing the branch or opening a PR; run proactively.
+### 2. Personal Skill Trigger and Behavior Updates
 
-Skill bodies are unchanged except where a sentence assumes explicit invocation.
+Update the shared personal skills under `ai/marketplace/plugins/my/skills/`:
 
-### 3. Injected workflow contract
+- `blindspot-pass`: trigger proactively during discovery for non-trivial work;
+  distinguish automatic workflow use from a standalone read-only request; and
+  encode the risk-scaled pause rule.
+- `polish-core`: trigger proactively with `--fix` after non-trivial
+  implementation and before final verification or branch completion.
+- `change-explainer`: trigger proactively after polish and verification; make
+  the knowledge check conditional on substantial scope.
 
-- New `ai/claude/hooks/feature-workflow-contract.sh` wired as a **SessionStart**
-  hook in `ai/claude/settings.json`, emitting a ~10-line contract as
-  additional context (same mechanism superpowers uses):
+These descriptions are shared by Claude Code and Codex through the `my` plugin.
 
-  > For non-trivial feature work: worktree before edits (hook-enforced) →
-  > `my:blindspot-pass` between brainstorming and writing-plans → implement →
-  > `my:polish-core --fix` → `my:change-explainer` →
-  > `superpowers:finishing-a-development-branch`. Trivial changes (typos,
-  > small fixes) skip blindspot-pass and change-explainer.
+### 3. Claude Linked-Worktree Guard
 
-- Contract text lives in `ai/claude/feature-workflow.md` so it can be edited
-  without touching the script.
+Add `ai/claude/hooks/worktree-guard.sh` as a Claude Code `PreToolUse` hook for
+`Edit|Write|NotebookEdit`.
 
-## Decisions
+The guard determines whether the target repository checkout is a linked
+worktree by comparing its resolved git directory and common git directory:
 
-- **Polish runs with `--fix`** in the pipeline (matches `my:polish-pr`
-  behavior), not report-only.
-- **Scaling rule:** trivial changes skip blindspot-pass and change-explainer,
-  mirroring the global CLAUDE.md "scale the workflow to the task" principle.
-- **Extend superpowers, don't wrap it:** no `/feature` orchestrator command; the
-  overlay hooks into phases superpowers already sequences.
-- **Two reinforcing soft signals** (descriptions + injected contract) for skill
-  triggering; hard enforcement only for the worktree rule, where a
-  deterministic hook is possible.
+- Primary checkout: git directory equals common directory → deny.
+- Linked worktree: git directory differs from common directory → allow,
+  regardless of branch name or detached-HEAD state.
+- Outside a git repository or on an unexpected detection error → allow.
 
-## Error handling
+This intentionally checks worktree topology rather than branch names. A feature
+branch in the primary checkout is still denied, while a detached linked
+worktree is allowed.
 
-- The guard fails **open** on unexpected errors (e.g. git not available,
-  detached HEAD): a broken hook must not lock the user out of editing. Detached
-  HEAD counts as "not on the default branch" → allow.
-- Deny messages must name the exact remedy (create a worktree; or add the repo
-  to `~/.claude/worktree-guard-allow` if it is intentionally edited on its
-  default branch).
+Escape hatches remain available for exceptional recovery:
 
-## Testing / verification
+- `CLAUDE_WORKTREE_GUARD=off` disables the guard for one process/session.
+- `~/.claude/worktree-guard-allow` may list explicitly exempted repository
+  roots, with `~` expansion and `#` comments.
 
-- Bats tests for `worktree-guard.sh`: deny on default branch, allow on feature
-  branch, allow outside a repo, allow via allowlist, allow via env var,
-  fail-open on git errors.
-- Manual: start a new session, confirm the contract appears; attempt an edit on
-  a main-branch repo, confirm denial message; confirm ~/.dotfiles is exempt.
+The installer does not seed exemptions. In particular, `~/.dotfiles` is not
+automatically exempted.
 
-## Out of scope
+The hook is a strong Claude edit-tool guard, not a universal filesystem
+sandbox: shell commands and Codex are governed by the shared workflow policy.
+The implementation and documentation must not claim otherwise.
 
-- No Stop-gate hook forcing polish/change-explainer before ending a turn.
-- No changes to superpowers plugin files or its SessionStart injection.
-- No changes to the `/polish`, `/polish-pr`, `/fix-pr`, `/review-prs` commands.
+## Scaling Rules
+
+- **Trivial:** typo-only or similarly mechanical edits still require a linked
+  worktree before writing, but may skip blindspot-pass and change-explainer.
+- **Routine non-trivial:** run all phases, continue automatically after a concise
+  blind-spot summary, and omit knowledge-check questions.
+- **Substantial or high-risk:** run all phases, pause on material unresolved
+  decisions, and include exactly five knowledge-check questions in the final
+  explanation.
+
+## Verification
+
+- Bats tests prove that primary checkouts are denied even on feature branches.
+- Bats tests prove that linked worktrees are allowed on branches and detached
+  HEADs.
+- Existing allowlist, environment override, new-file, notebook, outside-repo,
+  and fail-open cases remain covered.
+- Tests verify the Claude hook registration and the presence of matching policy
+  markers in both global guidance files.
+- Run focused Bats tests, `bash bin/validate-ai --verbose`, formatting/linting,
+  and the full `bats tests` suite.
+
+## Out of Scope
+
+- Modifying or forking the Superpowers plugin.
+- Pretending Claude hooks can hard-enforce writes made through arbitrary shell
+  commands or other tools.
+- A `/feature` command or separate orchestrator that duplicates Superpowers.
+- A Stop hook that prevents a session from ending.

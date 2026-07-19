@@ -1,6 +1,6 @@
 ---
 name: polish-core
-description: Review code changes since a commit, classify correctness and maintainability findings, optionally apply only high-confidence safe fixes, and report remaining issues. Use when the user asks to polish changed code, review a commit range, run a pre-PR quality pass, or invokes $my:polish-core.
+description: Review code changes since a commit, classify correctness and maintainability findings, apply only high-confidence safe fixes when enabled, and report remaining issues. Run proactively with --fix after non-trivial implementation, before fresh verification, change explanation, or branch completion. Also use for explicit polish, changed-code review, commit-range review, or pre-PR quality requests.
 ---
 
 # Polish — Review & Fix
@@ -10,6 +10,8 @@ You are performing a thorough analysis of all changes since a specified commit, 
 **Invocation input**: Interpret text supplied with the skill invocation or the user's surrounding request. When no commit reference is specified, default to all changes on the current branch: the merge-base between `HEAD` and the default branch (see Phase 0).
 
 Parse arguments:
+- When invoked proactively as the automatic post-implementation workflow phase,
+  set FIX_MODE=true unless the user explicitly requested report-only behavior.
 - If `--fix` is present (in any position), set FIX_MODE=true and remove it from the commit reference.
 - If `--path <prefix>` is present, set PATH_FILTER to the given prefix and remove both tokens from the arguments. This limits analysis to files under that directory.
 - Remaining argument is the commit reference (default: merge-base with the default branch).

@@ -1,6 +1,6 @@
 ---
 name: change-explainer
-description: Inspect the final diff, relevant code, tests, and implementation-notes.md, then produce a reviewer-facing explanation of a completed change — what changed, how it works, key decisions, deviations, edge cases, verification actually performed, where reviewers should focus, plus five knowledge-check questions. Use when the user explicitly asks to explain, write up, or summarize a completed change for review.
+description: Inspect the final diff, relevant code, tests, and implementation-notes.md, then produce a reviewer-facing explanation of a completed change — what changed, how it works, key decisions, deviations, edge cases, verification actually performed, and reviewer focus. Use proactively after polish and fresh verification for non-trivial work, before branch completion or a PR. Also use for explicit explanation, write-up, or review-summary requests. Include knowledge-check questions only for substantial changes.
 ---
 
 # Change explainer
@@ -16,6 +16,11 @@ claim on evidence you can see; never assert a check ran unless it actually did.
    fits and behaves.
 3. **Read `implementation-notes.md`** if present, for decisions, deviations, and
    unresolved risks recorded during the work.
+4. **Classify the change scope.** Treat work as substantial when it is
+   architectural, cross-cutting, security-sensitive, migration-related, changes
+   public interfaces or persisted data, affects deployment, or otherwise needs
+   deeper reviewer understanding. Other meaningful completed work is routine
+   non-trivial work.
 
 ## Output
 
@@ -30,6 +35,8 @@ claim on evidence you can see; never assert a check ran unless it actually did.
   results. For anything not run, state which check, why, and the remaining
   uncertainty.
 - **Reviewer focus** — the areas most worth scrutiny.
-- **Knowledge check** — exactly five questions about the change, without answers.
+- **Knowledge check** — For substantial changes, include exactly five questions
+  about the change, without answers. For routine non-trivial changes, omit the
+  knowledge check.
 
 Keep it accurate and specific. Do not hide uncertainty behind confident wording.

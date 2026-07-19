@@ -17,7 +17,7 @@ write_input() {
   printf '{"tool_name":"Edit","tool_input":{"file_path":"%s"}}' "$1" >"$INPUT_FILE"
 }
 
-@test "denies edit on the default branch" {
+@test "denies edit in the primary worktree on the default branch" {
   write_input "$REPO/file.txt"
   run bash "$GUARD" <"$INPUT_FILE"
   [ "$status" -eq 0 ]
@@ -26,9 +26,18 @@ write_input() {
   [[ "$output" == *'worktree'* ]]
 }
 
-@test "allows edit on a feature branch" {
+@test "denies edit in the primary worktree on a feature branch" {
   git -C "$REPO" checkout --quiet -b feature
   write_input "$REPO/file.txt"
+  run bash "$GUARD" <"$INPUT_FILE"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"deny"'* ]]
+}
+
+@test "allows edit in a linked worktree on a feature branch" {
+  linked="$TEST_ROOT/linked-feature"
+  git -C "$REPO" worktree add --quiet -b feature "$linked"
+  write_input "$linked/file.txt"
   run bash "$GUARD" <"$INPUT_FILE"
   [ "$status" -eq 0 ]
   [ -z "$output" ]
@@ -70,9 +79,18 @@ write_input() {
   [ -z "$output" ]
 }
 
-@test "allows on detached HEAD" {
+@test "denies detached HEAD in the primary worktree" {
   git -C "$REPO" checkout --quiet --detach
   write_input "$REPO/file.txt"
+  run bash "$GUARD" <"$INPUT_FILE"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"deny"'* ]]
+}
+
+@test "allows detached HEAD in a linked worktree" {
+  linked="$TEST_ROOT/linked-detached"
+  git -C "$REPO" worktree add --quiet --detach "$linked" HEAD
+  write_input "$linked/file.txt"
   run bash "$GUARD" <"$INPUT_FILE"
   [ "$status" -eq 0 ]
   [ -z "$output" ]

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # PreToolUse hook: deny Edit/Write/NotebookEdit when the target file's repo is
-# checked out on its default branch, so implementation happens in a worktree.
+# the primary checkout, so implementation happens in a linked worktree.
 # Fails open: any unexpected condition allows the edit.
 set -u
 
@@ -10,8 +10,8 @@ allow() { exit 0; }
 
 input=$(cat 2>/dev/null) || allow
 command -v jq >/dev/null 2>&1 || allow
-path=$(printf '%s' "$input" \
-  | jq -r '.tool_input.file_path // .tool_input.notebook_path // empty' \
+path=$(printf '%s' "$input" |
+  jq -r '.tool_input.file_path // .tool_input.notebook_path // empty' \
     2>/dev/null) || allow
 [ -n "$path" ] || allow
 
@@ -40,27 +40,20 @@ if [ -f "$allowfile" ]; then
   done <"$allowfile"
 fi
 
-# Detached HEAD counts as "not on the default branch".
-branch=$(git -C "$dir" symbolic-ref --quiet --short HEAD 2>/dev/null) || allow
+git_dir=$(git -C "$dir" rev-parse --absolute-git-dir 2>/dev/null) || allow
+common_dir=$(git -C "$dir" rev-parse --git-common-dir 2>/dev/null) || allow
+case "$common_dir" in
+  /*) ;;
+  *) common_dir="$repo_root/$common_dir" ;;
+esac
+git_dir=$(cd "$git_dir" 2>/dev/null && pwd -P) || allow
+common_dir=$(cd "$common_dir" 2>/dev/null && pwd -P) || allow
 
-default=$(git -C "$dir" symbolic-ref --quiet --short \
-  refs/remotes/origin/HEAD 2>/dev/null || true)
-default=${default#origin/}
-if [ -z "$default" ]; then
-  if git -C "$dir" show-ref --verify --quiet refs/heads/main; then
-    default=main
-  elif git -C "$dir" show-ref --verify --quiet refs/heads/master; then
-    default=master
-  else
-    allow
-  fi
-fi
+[ "$git_dir" = "$common_dir" ] || allow
 
-[ "$branch" = "$default" ] || allow
-
-reason="Edits are blocked on the default branch ($default) of $repo_root. \
-Create a worktree first (superpowers:using-git-worktrees skill). If this repo \
-is intentionally edited on its default branch, add its path to \
+reason="Edits are blocked in the primary checkout of $repo_root. Create a \
+linked worktree first (superpowers:using-git-worktrees skill). If this repo \
+must exceptionally be edited in place, add its path to \
 ~/.claude/worktree-guard-allow."
 jq -n --arg r "$reason" \
   '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}'
