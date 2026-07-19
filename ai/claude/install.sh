@@ -106,8 +106,10 @@ link_file() {
         log_info "Removing existing $label symlink -> $current"
         rm "$dst"
     elif [ -f "$dst" ]; then
-        log_info "Backing up existing $label to ${dst}.backup"
-        mv "$dst" "${dst}.backup"
+        local backup="${dst}.backup"
+        [ -e "$backup" ] && backup="${dst}.backup.$(date +%Y%m%d%H%M%S)"
+        log_info "Backing up existing $label to $backup"
+        mv "$dst" "$backup"
     fi
 
     ln -s "$src" "$dst"

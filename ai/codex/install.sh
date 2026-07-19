@@ -21,8 +21,10 @@ link_file() {
         log_info "Removing existing $label symlink -> $current"
         rm "$dst"
     elif [ -f "$dst" ]; then
-        log_info "Backing up existing $label to ${dst}.backup"
-        mv "$dst" "${dst}.backup"
+        local backup="${dst}.backup"
+        [ -e "$backup" ] && backup="${dst}.backup.$(date +%Y%m%d%H%M%S)"
+        log_info "Backing up existing $label to $backup"
+        mv "$dst" "$backup"
     fi
 
     ln -s "$src" "$dst"
@@ -36,16 +38,18 @@ main() {
         log_info "Dry-run mode: showing what would be linked"
     fi
 
+    local codex_home="${CODEX_HOME:-$HOME/.codex}"
+
     if [[ "$check_only" == true ]]; then
-        log_info "[dry-run] Would ensure \$HOME/.codex exists"
-        log_info "[dry-run] Would link $DOTFILES_ROOT/codex/config.toml -> $HOME/.codex/config.toml"
-        log_info "[dry-run] Would link $DOTFILES_ROOT/codex/AGENTS.md -> $HOME/.codex/AGENTS.md"
+        log_info "[dry-run] Would ensure $codex_home exists"
+        log_info "[dry-run] Would link $DOTFILES_ROOT/codex/config.toml -> $codex_home/config.toml"
+        log_info "[dry-run] Would link $DOTFILES_ROOT/codex/AGENTS.md -> $codex_home/AGENTS.md"
         return
     fi
 
-    mkdir -p "$HOME/.codex"
-    link_file "$DOTFILES_ROOT/codex/config.toml" "$HOME/.codex/config.toml" "config"
-    link_file "$DOTFILES_ROOT/codex/AGENTS.md" "$HOME/.codex/AGENTS.md" "global AGENTS.md"
+    mkdir -p "$codex_home"
+    link_file "$DOTFILES_ROOT/codex/config.toml" "$codex_home/config.toml" "config"
+    link_file "$DOTFILES_ROOT/codex/AGENTS.md" "$codex_home/AGENTS.md" "global AGENTS.md"
 }
 
 main "$@"
