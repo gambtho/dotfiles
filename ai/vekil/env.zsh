@@ -1,3 +1,24 @@
+function claude-direct {
+  emulate -L zsh
+  local -a direct_env=(-u ANTHROPIC_BASE_URL)
+  if [[ -n ${VEKIL_MANAGED_ANTHROPIC_API_KEY:-} && ${ANTHROPIC_API_KEY:-} == $VEKIL_MANAGED_ANTHROPIC_API_KEY ]]; then
+    direct_env+=(-u ANTHROPIC_API_KEY)
+  fi
+  if [[ -n ${VEKIL_MANAGED_ANTHROPIC_MODEL:-} && ${ANTHROPIC_MODEL:-} == $VEKIL_MANAGED_ANTHROPIC_MODEL ]]; then
+    direct_env+=(-u ANTHROPIC_MODEL)
+  fi
+  command env "${direct_env[@]}" claude "$@"
+}
+
+function codex-direct {
+  emulate -L zsh
+  local -a direct_env=(-u OPENAI_BASE_URL)
+  if [[ -n ${VEKIL_MANAGED_OPENAI_API_KEY:-} && ${OPENAI_API_KEY:-} == $VEKIL_MANAGED_OPENAI_API_KEY ]]; then
+    direct_env+=(-u OPENAI_API_KEY)
+  fi
+  command env "${direct_env[@]}" codex "$@"
+}
+
 () {
   emulate -L zsh
   setopt extendedglob

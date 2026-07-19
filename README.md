@@ -178,6 +178,15 @@ authenticates and starts the proxy through `bin/vekil-proxy`, binding to the
 Docker bridge when available and falling back to loopback on macOS or when the
 bridge cannot be detected.
 
+Fresh zsh sessions automatically configure both clients when Vekil is ready:
+
+```bash
+claude          # through Vekil
+codex           # through Vekil
+claude-direct   # bypass Vekil for this invocation
+codex-direct    # bypass Vekil for this invocation
+```
+
 AI tools are also installed during `bin/install` (Phase 9).
 
 Codex project trust paths are machine-local. Copy entries from

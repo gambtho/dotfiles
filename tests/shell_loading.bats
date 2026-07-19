@@ -50,6 +50,24 @@ run_loader() {
   [[ "$output" != *"goms.io"* ]]
 }
 
+@test "shell loader configures healthy Vekil endpoints" {
+  local state_dir="$HOME/.local/state/vekil"
+  mkdir -p "$state_dir"
+  printf '127.0.0.1\n' >"$state_dir/proxy-host"
+  : >"$state_dir/proxy-ready"
+  chmod 0700 "$HOME/.local" "$HOME/.local/state" "$state_dir"
+  chmod 0600 "$state_dir/proxy-host" "$state_dir/proxy-ready"
+  stub_command curl 'exit 0'
+
+  run env HOME="$HOME" DOTFILES="$REPO_ROOT" PATH="$PATH" zsh -dfc '
+    source "$DOTFILES/core/shell/load-custom.zsh" || exit 1
+    print -r -- "$OPENAI_BASE_URL|$ANTHROPIC_BASE_URL"
+  '
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"http://127.0.0.1:1337/v1|http://127.0.0.1:1337"* ]]
+}
+
 @test "core path never places the current directory on PATH" {
   run zsh -fc 'PATH=./bin:/usr/bin:/bin; ZSH="$1"; HOME="$2"; source "$1/core/path.zsh"; print -r -- "$PATH"' _ "$REPO_ROOT" "$HOME"
   [ "$status" -eq 0 ]

@@ -28,7 +28,8 @@ readiness:
 
 Both functions forward arguments unchanged and affect only the launched child
 process. The current shell remains configured for proxied `claude` and `codex`
-commands.
+commands. User-supplied real API keys and custom Claude model values are
+preserved; only values marked as Vekil-managed are removed.
 
 ## Compatibility and Failure Behavior
 

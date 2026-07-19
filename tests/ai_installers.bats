@@ -196,6 +196,38 @@ SCRIPT
   [ "$output" = "http://host.docker.internal:1337/v1" ]
 }
 
+@test "vekil environment provides direct client commands without proxy variables" {
+  cat >"$STUB_BIN/claude" <<'SCRIPT'
+#!/bin/bash
+printf 'claude:%s|%s|%s|%s\n' "$*" "${ANTHROPIC_BASE_URL-unset}" "${ANTHROPIC_API_KEY-unset}" "${ANTHROPIC_MODEL-unset}"
+SCRIPT
+  cat >"$STUB_BIN/codex" <<'SCRIPT'
+#!/bin/bash
+printf 'codex:%s|%s|%s\n' "$*" "${OPENAI_BASE_URL-unset}" "${OPENAI_API_KEY-unset}"
+SCRIPT
+  chmod +x "$STUB_BIN/claude" "$STUB_BIN/codex"
+
+  run env PATH="$PATH" /usr/bin/zsh -dfc '
+    source "$1"
+    export ANTHROPIC_BASE_URL=proxy ANTHROPIC_API_KEY=dummy ANTHROPIC_MODEL=proxy-model
+    export VEKIL_MANAGED_ANTHROPIC_API_KEY=dummy VEKIL_MANAGED_ANTHROPIC_MODEL=proxy-model
+    export OPENAI_BASE_URL=proxy OPENAI_API_KEY=dummy VEKIL_MANAGED_OPENAI_API_KEY=dummy
+    claude-direct --model direct-model
+    codex-direct exec prompt
+    unset VEKIL_MANAGED_ANTHROPIC_API_KEY VEKIL_MANAGED_ANTHROPIC_MODEL VEKIL_MANAGED_OPENAI_API_KEY
+    export ANTHROPIC_BASE_URL=proxy ANTHROPIC_API_KEY=real-anthropic ANTHROPIC_MODEL=direct-model
+    export OPENAI_BASE_URL=proxy OPENAI_API_KEY=real-openai
+    claude-direct direct-prompt
+    codex-direct direct-prompt
+  ' _ "$REPO_ROOT/ai/vekil/env.zsh"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"claude:--model direct-model|unset|unset|unset"* ]]
+  [[ "$output" == *"codex:exec prompt|unset|unset"* ]]
+  [[ "$output" == *"claude:direct-prompt|unset|real-anthropic|direct-model"* ]]
+  [[ "$output" == *"codex:direct-prompt|unset|real-openai"* ]]
+}
+
 @test "marketplace check mode changes no files" {
   assert_check_is_immutable ai/marketplace/install.sh
 }
