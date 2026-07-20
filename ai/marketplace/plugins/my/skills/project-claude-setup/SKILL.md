@@ -57,6 +57,7 @@ Read concrete files. **Don't infer**; cite the file you read.
 | Build/test/lint commands | `Makefile` (parse target names), `package.json` scripts, `justfile`, `Taskfile.yml`, `.github/workflows/*.yml` |
 | Container user | `remoteUser` in `devcontainer.json` → Dockerfile `USER` → base image default (see table at the bottom of this skill) |
 | Container service name | `service` in `devcontainer.json` if set, else the first key under `services:` in the base compose file |
+| Seed privilege (Compose, non-root user) | Standard devcontainer image or Dockerfile passwordless-`sudo` setup; verify a running container with `sudo -n true` when available |
 
 Summarize in 4–6 lines:
 
@@ -66,6 +67,8 @@ Language: <lang> (from <file>)
 Build: <cmd> | Test: <cmd> | Lint: <cmd>  (from <Makefile/scripts/CI>)
 Devcontainer: <flavor> | service=<name> | user=<user>
 ```
+
+For a Compose devcontainer with a non-root user, do not generate the seed model unless passwordless `sudo` is established by the image/Dockerfile or verified in a running container. Docker named volumes can be mounted as `root:root`, and the seed must repair both destination trees before checking its sentinel. If passwordless `sudo` is unavailable, stop and offer a root-run Compose init service instead. Root container users do not need this check.
 
 Wait for the user to confirm before generating anything.
 
@@ -196,6 +199,7 @@ Write or merge the gitignored `docker-compose.override.yml` directly. The overri
 6. Override `command` to run `.devcontainer/local-seed.sh`, then `exec` the base service's original foreground command.
 7. Preserve unrelated existing override keys and show the diff before writing.
 8. Back up an existing override to `<file>.backup-<timestamp>` before replacing legacy mounts.
+9. In the seed script, repair both named-volume trees' ownership before checking `.seeded`; the sentinel may skip copies and installers, never ownership recovery.
 
 Do **not** use `claude-merge-compose-override` for this step until that helper emits the seed model; its current output contains writable and dual-home mounts.
 

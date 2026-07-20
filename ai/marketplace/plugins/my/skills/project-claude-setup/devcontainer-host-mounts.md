@@ -52,6 +52,8 @@ If you can't determine the user from any of these signals, ask. Do not guess bet
 
 **Base foreground command.** Read the base service's `command`. The override replaces this scalar, so the seed wrapper must `exec` the original foreground command after seeding. If the base command is `sleep infinity`, preserve that exact command.
 
+**Volume ownership privilege.** Docker can create the named-volume mountpoints as `root:root`. For a non-root container user, confirm the image provides passwordless `sudo` (standard devcontainer images do, or the Dockerfile must configure it). If an existing container is available, verify with `sudo -n true`. If neither the image nor the Dockerfile establishes passwordless `sudo`, stop and offer a root-run Compose init service; the non-root seed script cannot safely initialize the volumes by itself. Root containers do not need `sudo`.
+
 ## Step 3 — Decide which mounts to include
 
 The default set, in order:
@@ -149,6 +151,13 @@ SEED_CLAUDE="/host-seed/.claude"
 SEED_DOTFILES="/host-seed/.dotfiles"
 SENTINEL="$HOME/.claude/.seeded"
 
+# Named-volume mountpoints can start as root:root. Repair them on every launch,
+# even when the sentinel exists, so stale volumes remain recoverable.
+echo "🌱 seed: repairing container-local volume ownership"
+if [ "$(id -u)" -ne 0 ]; then
+  sudo chown -R "$(id -u):$(id -g)" "$HOME/.claude" "$HOME/.dotfiles"
+fi
+
 if [ -f "$SENTINEL" ]; then
   echo "🌱 seed: already seeded ($SENTINEL) — skipping"
   exit 0
@@ -171,8 +180,10 @@ else
 fi
 
 # 2. Copy dotfiles container-local (shell sourcing + marketplace/codex installers).
-if [ -d "$SEED_DOTFILES" ] && [ ! -d "$HOME/.dotfiles" ]; then
-  cp -a "$SEED_DOTFILES" "$HOME/.dotfiles"
+# The named-volume mountpoint already exists, so seed it only while it is empty.
+if [ -d "$SEED_DOTFILES" ] &&
+   [ -z "$(find "$HOME/.dotfiles" -mindepth 1 -maxdepth 1 -print -quit)" ]; then
+  cp -a "$SEED_DOTFILES/." "$HOME/.dotfiles/"
   echo "🌱 seed: copied ~/.dotfiles ($(du -sh "$HOME/.dotfiles" | cut -f1))"
 fi
 
