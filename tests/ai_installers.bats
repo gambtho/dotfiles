@@ -159,6 +159,30 @@ SCRIPT
   assert_symlink_target "$codex_home/AGENTS.md" "$REPO_ROOT/ai/codex/AGENTS.md"
 }
 
+@test "codex install writes placeholder auth when none exists" {
+  local codex_home="$HOME/generated-codex"
+  local auth="$codex_home/auth.json"
+
+  run env HOME="$HOME" CODEX_HOME="$codex_home" PATH="/usr/bin:/bin" bash "$REPO_ROOT/ai/codex/install.sh"
+  [ "$status" -eq 0 ]
+  [ -f "$auth" ]
+  grep -Fq '"auth_mode": "apikey"' "$auth"
+  grep -Fq '"OPENAI_API_KEY": "dummy"' "$auth"
+  [ "$(stat -c '%a' "$auth")" = "600" ]
+}
+
+@test "codex install preserves an existing auth file" {
+  local codex_home="$HOME/generated-codex"
+  local auth="$codex_home/auth.json"
+  mkdir -p "$codex_home"
+  printf '{"auth_mode":"chatgpt","real":true}\n' >"$auth"
+
+  run env HOME="$HOME" CODEX_HOME="$codex_home" PATH="/usr/bin:/bin" bash "$REPO_ROOT/ai/codex/install.sh"
+  [ "$status" -eq 0 ]
+  grep -Fq '"auth_mode":"chatgpt"' "$auth"
+  grep -Fq '"real":true' "$auth"
+}
+
 @test "codex install refreshes the personal plugin from the local marketplace" {
   local codex_home="$HOME/generated-codex"
   cat >"$STUB_BIN/codex" <<'SCRIPT'
