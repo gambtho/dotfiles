@@ -245,6 +245,7 @@ Once written:
 4. After the user rebuilds, verify container-local files and read-only seed mounts:
 
 ```bash
+docker compose exec {SERVICE} sh -c 'test "$(stat -c %u:%g /home/{USER}/.claude)" = "$(id -u):$(id -g)" && test "$(stat -c %u:%g /home/{USER}/.dotfiles)" = "$(id -u):$(id -g)"'
 docker compose exec {SERVICE} test -f /home/{USER}/.claude/.seeded
 docker compose exec {SERVICE} test -f /home/{USER}/.claude/settings.json
 docker compose exec {SERVICE} test -f /home/{USER}/.codex/config.toml
