@@ -202,6 +202,7 @@ install_dotfiles() {
   done < <(find -H "$DOTFILES_ROOT" \
     -not -path '*/archived/*' \
     -not -path '*/.git/*' \
+    -not -path '*/.claude/worktrees/*' \
     -name '*.symlink' -print0)
 
   # Link config/ subdirectories to ~/.config/<name>
