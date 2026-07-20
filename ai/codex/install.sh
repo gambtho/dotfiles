@@ -59,6 +59,33 @@ EOF
   log_success "Generated Codex config at $dst"
 }
 
+ensure_auth() {
+  # Codex shows its interactive "Sign in" onboarding whenever auth.json is
+  # absent, even though the Vekil shell function supplies OPENAI_API_KEY=dummy
+  # at launch. Write a placeholder apikey auth file so onboarding is skipped and
+  # requests flow through the proxy. Never overwrite an existing file: it may
+  # hold a real ChatGPT/API login the user established themselves.
+  local codex_home="$1"
+  local auth_file="$codex_home/auth.json"
+
+  if [ -e "$auth_file" ]; then
+    log_info "Codex auth already present at $auth_file; leaving untouched."
+    return
+  fi
+
+  local temporary
+  temporary=$(mktemp "$codex_home/auth.json.XXXXXX")
+  chmod 600 "$temporary"
+  cat >"$temporary" <<'EOF'
+{
+  "auth_mode": "apikey",
+  "OPENAI_API_KEY": "dummy"
+}
+EOF
+  mv "$temporary" "$auth_file"
+  log_success "Wrote placeholder Codex auth at $auth_file (routed via Vekil)."
+}
+
 refresh_personal_plugin() {
   local codex_home="$1"
   if ! command_exists codex; then
@@ -86,6 +113,11 @@ main() {
       log_info "[dry-run] Would merge machine-local projects from $LOCAL_PROJECTS"
     fi
     log_info "[dry-run] Would register the local marketplace at $MARKETPLACE_DIR"
+    if [ -e "$codex_home/auth.json" ]; then
+      log_info "[dry-run] Would leave existing Codex auth at $codex_home/auth.json untouched"
+    else
+      log_info "[dry-run] Would write placeholder Codex auth at $codex_home/auth.json"
+    fi
     log_info "[dry-run] Would link $DOTFILES_ROOT/codex/AGENTS.md -> $codex_home/AGENTS.md"
     log_info "[dry-run] Would refresh my@guarzo from the local marketplace"
     return
@@ -93,6 +125,7 @@ main() {
 
   mkdir -p "$codex_home"
   render_config "$codex_home"
+  ensure_auth "$codex_home"
   link_file "$DOTFILES_ROOT/codex/AGENTS.md" "$codex_home/AGENTS.md" "global AGENTS.md"
   refresh_personal_plugin "$codex_home"
 }
