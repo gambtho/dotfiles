@@ -68,9 +68,17 @@ Build: <cmd> | Test: <cmd> | Lint: <cmd>  (from <Makefile/scripts/CI>)
 Devcontainer: <flavor> | service=<name> | user=<user>
 ```
 
-**Tracked devcontainer boundary.** Dockerfile, devcontainer.json, and base Compose files are inspection-only. Never edit a project Dockerfile, `.devcontainer/devcontainer.json`, or a base Compose file. The only permitted devcontainer writes are the gitignored `docker-compose.override.yml`, `local-seed.sh`, and `.git/info/exclude` entries needed for those two local files.
+**Tracked devcontainer boundary.** Dockerfile, devcontainer.json, and base Compose files are inspection-only.
 
-Capture the initial `git status --short` output before any write. At final verification, compare it with the current output; they must match because all skill-created project files are ignored. If a new tracked devcontainer modification appears, stop and report it without staging, reverting, or attempting to repair it.
+Never edit a project Dockerfile, `.devcontainer/devcontainer.json`, or a base Compose file.
+
+The only permitted devcontainer writes are the gitignored `docker-compose.override.yml`, `local-seed.sh`, and `.git/info/exclude` entries needed for those two local files.
+
+Capture the initial `git status --short` output before any write.
+
+At final verification, run `git status --short` and compare its output byte-for-byte with the initial snapshot.
+
+They must match because all skill-created project files are ignored. If a new tracked devcontainer modification appears, stop and report it without staging, reverting, or attempting to repair it.
 
 For a Compose devcontainer with a non-root user, do not generate the seed model unless passwordless `sudo` is already provided by the image or existing Dockerfile, or verified in a running container. The Dockerfile is evidence only; never add users, packages, directories, ownership changes, or sudo configuration to it. Docker named volumes can be mounted as `root:root`, and the seed must repair both destination trees before checking its sentinel. If passwordless `sudo` is unavailable, stop and offer only a solution implemented entirely in the gitignored local Compose override; otherwise report the container setup as unsupported. Root container users do not need this check.
 
@@ -315,10 +323,10 @@ Skip this step if the user only wants standalone subagents — the catalog still
 
 ```bash
 cd <project>
-git status
+git status --short
 ```
 
-The short status output must match the initial `git status --short` snapshot exactly. If `.claude/` or `CLAUDE.md` appears, the global gitignore is not catching it. If any tracked devcontainer file appears as newly modified, stop and report the boundary violation; never stage or revert it on the user's behalf.
+Compare the output byte-for-byte with the initial `git status --short` snapshot. If `.claude/` or `CLAUDE.md` appears, the global gitignore is not catching it. If any tracked devcontainer file appears as newly modified, stop and report the boundary violation; never stage or revert it on the user's behalf.
 
 Report to the user:
 - Files created/updated in `~/.dotfiles/projects/<slug>/`

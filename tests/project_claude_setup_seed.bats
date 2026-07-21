@@ -20,6 +20,7 @@ setup() {
 set -euo pipefail
 printf '%s\n' "$*" >>"$SUDO_LOG"
 [ "${1:-}" = chown ] || exit 64
+printf 'test-event: ownership repaired\n'
 shift
 [ "${1:-}" = -R ] && shift
 shift
@@ -68,7 +69,7 @@ extract_seed_script() {
   touch "$HOME/.claude/.seeded"
   printf '{}\n' >"$TEST_ROOT/host-seed/.claude/settings.json"
   touch "$TEST_ROOT/host-seed/.dotfiles/ai/marketplace/marker"
-  chmod 500 "$HOME/.claude" "$HOME/.dotfiles"
+  chmod 000 "$HOME/.claude" "$HOME/.dotfiles"
 
   run bash "$SEED_SCRIPT"
 
@@ -76,7 +77,7 @@ extract_seed_script() {
   grep -F "chown -R $(id -u):$(id -g)" "$SUDO_LOG"
   [ ! -e "$HOME/.claude/settings.json" ]
   [ ! -e "$HOME/.dotfiles/ai/marketplace/marker" ]
-  [[ "$output" == *"already seeded"* ]]
+  [[ "$output" == *"test-event: ownership repaired"*"already seeded"* ]]
 
   run bash "$SEED_SCRIPT"
 
@@ -110,11 +111,18 @@ extract_seed_script() {
 }
 
 @test "tracked devcontainer files are explicitly inspection-only" {
-  grep -F "Dockerfile, devcontainer.json, and base Compose files are inspection-only" \
-    "$SKILL_DOC" "$REFERENCE"
-  grep -F "The only permitted devcontainer writes are" "$SKILL_DOC"
-  grep -F 'Capture the initial `git status --short` output' "$SKILL_DOC"
-  grep -F "Never edit a project Dockerfile" "$SKILL_DOC" "$REFERENCE"
+  local permitted='The only permitted devcontainer writes are the gitignored `docker-compose.override.yml`, `local-seed.sh`, and `.git/info/exclude` entries needed for those two local files.'
+  local initial='Capture the initial `git status --short` output before any write.'
+  local final='At final verification, run `git status --short` and compare its output byte-for-byte with the initial snapshot.'
+  local dockerfile='Never edit a project Dockerfile, `.devcontainer/devcontainer.json`, or a base Compose file.'
+  local document
+
+  for document in "$SKILL_DOC" "$REFERENCE"; do
+    grep -Fqx "$permitted" "$document"
+    grep -Fqx "$initial" "$document"
+    grep -Fqx "$final" "$document"
+    grep -Fqx "$dockerfile" "$document"
+  done
 }
 
 @test "login-shell troubleshooting excludes tracked rc and retry-loop changes" {

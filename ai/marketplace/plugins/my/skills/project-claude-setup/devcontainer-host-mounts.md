@@ -27,7 +27,17 @@ Confirm these exist:
 
 If a `docker-compose.override.yml` already exists at that location, read it before doing anything else. Preserve unrelated keys and show the diff before writing. Back it up to `<file>.backup-<timestamp>` before replacing legacy mounts.
 
-Dockerfile, devcontainer.json, and base Compose files are inspection-only. Never edit a project Dockerfile, `.devcontainer/devcontainer.json`, or base Compose file. This workflow may write only the gitignored override, `local-seed.sh`, and `.git/info/exclude` entries for those local files. Capture `git status --short` before writing and require the final output to match; report any new tracked devcontainer change without staging or reverting it.
+Dockerfile, devcontainer.json, and base Compose files are inspection-only.
+
+Never edit a project Dockerfile, `.devcontainer/devcontainer.json`, or a base Compose file.
+
+The only permitted devcontainer writes are the gitignored `docker-compose.override.yml`, `local-seed.sh`, and `.git/info/exclude` entries needed for those two local files.
+
+Capture the initial `git status --short` output before any write.
+
+At final verification, run `git status --short` and compare its output byte-for-byte with the initial snapshot.
+
+Report any new tracked devcontainer change without staging or reverting it.
 
 ## Step 2 — Discover the service name and container user
 
