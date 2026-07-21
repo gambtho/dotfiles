@@ -318,3 +318,61 @@ git add tests/project_claude_setup_seed.bats \
 git commit -m "fix: keep tracked devcontainer files inspection-only"
 git push
 ```
+
+### Task 7: Carry over safe login-shell troubleshooting from main
+
+**Files:**
+- Modify: `tests/project_claude_setup_seed.bats`
+- Modify: `ai/marketplace/plugins/my/skills/project-claude-setup/SKILL.md`
+- Modify: `ai/marketplace/plugins/my/skills/project-claude-setup/devcontainer-host-mounts.md`
+
+- [ ] **Step 1: Add a failing selective-copy policy test**
+
+Require both skill documents to use `zsh -lic` for runtime verification and to
+explain that empty endpoints or a raw Codex binary indicate a missing hook or
+failed readiness probe. Assert that neither document contains the proposed
+30-attempt readiness loop or a manual `$DOTFILES/**/*.zsh` glob loader.
+
+- [ ] **Step 2: Run the focused test to verify RED**
+
+Run: `bats tests/project_claude_setup_seed.bats`
+
+Expected: FAIL because the reference currently uses `zsh -ic` and `SKILL.md`
+does not include the runtime troubleshooting command.
+
+- [ ] **Step 3: Add login-shell verification and bounded troubleshooting**
+
+Use this command in both documents:
+
+```bash
+docker compose exec <service> zsh -lic 'print "OPENAI_BASE_URL=$OPENAI_BASE_URL"; print "ANTHROPIC_BASE_URL=$ANTHROPIC_BASE_URL"; whence -v codex'
+```
+
+Explain that empty variables or a raw Codex binary mean the local zsh hook did
+not load or Vekil's readiness probe failed. Direct diagnosis back to the local
+seed hook and proxy `/readyz`; explicitly forbid editing a Dockerfile/baked rc,
+loading all dotfiles by glob, or adding an unproven shell-startup retry loop.
+
+- [ ] **Step 4: Run focused and full verification**
+
+Run:
+
+```bash
+bats tests/project_claude_setup_seed.bats
+bats tests
+bash bin/validate-ai --verbose
+shellcheck -x -S warning tests/project_claude_setup_seed.bats tests/shell_loading.bats
+git diff --check
+```
+
+Expected: all commands exit 0 and main's uncommitted files remain unchanged.
+
+- [ ] **Step 5: Commit and push the PR update**
+
+```bash
+git add tests/project_claude_setup_seed.bats \
+  ai/marketplace/plugins/my/skills/project-claude-setup/SKILL.md \
+  ai/marketplace/plugins/my/skills/project-claude-setup/devcontainer-host-mounts.md
+git commit -m "docs: add Vekil login-shell troubleshooting"
+git push
+```
