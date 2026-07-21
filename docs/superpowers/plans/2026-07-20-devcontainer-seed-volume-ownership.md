@@ -259,3 +259,62 @@ Expected: the focused test passes and the full suite reports zero failures.
 git add tests/shell_loading.bats
 git commit -m "test: isolate Vekil loader from mise activation"
 ```
+
+### Task 6: Enforce the tracked devcontainer inspection-only boundary
+
+**Files:**
+- Modify: `tests/project_claude_setup_seed.bats`
+- Modify: `ai/marketplace/plugins/my/skills/project-claude-setup/SKILL.md`
+- Modify: `ai/marketplace/plugins/my/skills/project-claude-setup/devcontainer-host-mounts.md`
+
+- [ ] **Step 1: Add a failing policy regression test**
+
+Add a Bats test that requires both skill documents to state that Dockerfiles,
+`devcontainer.json`, and base Compose files are inspection-only, and requires
+`SKILL.md` to contain both the local-write allowlist and the initial/final Git
+status comparison.
+
+- [ ] **Step 2: Run the focused test to verify RED**
+
+Run: `bats tests/project_claude_setup_seed.bats`
+
+Expected: the seed behavior tests pass and the new policy test fails because
+the current sudo wording does not forbid Dockerfile edits.
+
+- [ ] **Step 3: Tighten the skill boundary**
+
+Replace wording that says the Dockerfile "must configure" sudo with wording
+that permits only inspection of existing image/Dockerfile behavior. Add these
+rules to `SKILL.md` and the reference:
+
+- Never edit the Dockerfile, `devcontainer.json`, or base Compose files.
+- Limit devcontainer writes to the ignored override, `local-seed.sh`, and
+  `.git/info/exclude` entries for those files.
+- Capture `git status --short` before writes and require the final status to
+  match; report any new tracked devcontainer modification without reverting it.
+- If passwordless sudo is absent, use only a local-override solution or report
+  the setup as unsupported.
+
+- [ ] **Step 4: Run focused and full verification**
+
+Run:
+
+```bash
+bats tests/project_claude_setup_seed.bats
+bats tests
+bash bin/validate-ai --verbose
+shellcheck -x -S warning tests/project_claude_setup_seed.bats tests/shell_loading.bats
+git diff --check
+```
+
+Expected: all commands exit 0 and the full Bats suite has zero failures.
+
+- [ ] **Step 5: Commit and push the PR update**
+
+```bash
+git add tests/project_claude_setup_seed.bats \
+  ai/marketplace/plugins/my/skills/project-claude-setup/SKILL.md \
+  ai/marketplace/plugins/my/skills/project-claude-setup/devcontainer-host-mounts.md
+git commit -m "fix: keep tracked devcontainer files inspection-only"
+git push
+```
