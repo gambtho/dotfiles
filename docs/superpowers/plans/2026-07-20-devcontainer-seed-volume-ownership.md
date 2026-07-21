@@ -129,10 +129,84 @@ Expected: only the design, plan, focused test, and two skill documents change; n
 
 Run: `bats tests`
 
-Expected: all Bats tests pass with zero failures.
+Expected: all change-specific tests pass. Record the known unrelated
+`shell loader configures healthy Vekil endpoints` isolation failure separately
+if mise moves the real `curl` ahead of that test's stub.
 
 - [ ] **Step 3: Run final AI validation**
 
 Run: `bash bin/validate-ai --verbose`
 
 Expected: `Errors: 0`, `Warnings: 0`, and `PASSED`.
+
+### Task 4: Load the Vekil shell integration in container zsh sessions
+
+**Files:**
+- Modify: `tests/project_claude_setup_seed.bats`
+- Modify: `ai/marketplace/plugins/my/skills/project-claude-setup/devcontainer-host-mounts.md`
+- Modify: `ai/marketplace/plugins/my/skills/project-claude-setup/SKILL.md`
+
+- [ ] **Step 1: Add failing tests for sentinel recovery and shell behavior**
+
+Extend the stale-sentinel test to run the extracted seed twice and assert this
+exact line appears once in the container-local `~/.zshrc`:
+
+```zsh
+[[ -r "$HOME/.dotfiles/ai/vekil/env.zsh" ]] && source "$HOME/.dotfiles/ai/vekil/env.zsh"
+```
+
+Add a test that seeds a minimal copy of the real `ai/vekil/env.zsh`, stubs the
+readiness probe, launches zsh with `REMOTE_CONTAINERS=true`, and asserts:
+
+```text
+OPENAI_BASE_URL=http://host.docker.internal:1337/v1
+ANTHROPIC_BASE_URL=http://host.docker.internal:1337
+codex: function
+```
+
+- [ ] **Step 2: Run the focused test to verify RED**
+
+Run: `bats tests/project_claude_setup_seed.bats`
+
+Expected: the ownership/copy tests pass, while the new assertions fail because
+the current seed template never writes `~/.zshrc`.
+
+- [ ] **Step 3: Install the idempotent hook before the sentinel check**
+
+After ownership repair and before the sentinel check, add:
+
+```bash
+VEKIL_ENV_HOOK='[[ -r "$HOME/.dotfiles/ai/vekil/env.zsh" ]] && source "$HOME/.dotfiles/ai/vekil/env.zsh"'
+ZSHRC="$HOME/.zshrc"
+
+touch "$ZSHRC"
+if ! grep -Fqx "$VEKIL_ENV_HOOK" "$ZSHRC"; then
+  printf '\n%s\n' "$VEKIL_ENV_HOOK" >>"$ZSHRC"
+  echo "🌱 seed: configured Vekil shell integration"
+fi
+```
+
+Document that the hook is container-local, loads both endpoint variables and
+the `codex` function, and must be installed even when `.seeded` exists.
+
+- [ ] **Step 4: Run focused and structural verification**
+
+Run:
+
+```bash
+bats tests/project_claude_setup_seed.bats
+shellcheck -x -S warning tests/project_claude_setup_seed.bats
+bash bin/validate-ai --verbose
+git diff --check
+```
+
+Expected: all commands exit 0; the focused suite reports all tests passing.
+
+- [ ] **Step 5: Commit the Vekil integration**
+
+```bash
+git add tests/project_claude_setup_seed.bats \
+  ai/marketplace/plugins/my/skills/project-claude-setup/SKILL.md \
+  ai/marketplace/plugins/my/skills/project-claude-setup/devcontainer-host-mounts.md
+git commit -m "fix: load Vekil environment in devcontainers"
+```
