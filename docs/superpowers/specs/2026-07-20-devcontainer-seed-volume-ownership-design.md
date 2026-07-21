@@ -41,6 +41,20 @@ The test does not exercise runtime activation, and allowing the real `mise`
 activation to reorder `PATH` can select a real curl ahead of the test stub.
 Production loader ordering and Vekil behavior remain unchanged.
 
+## Tracked devcontainer boundary
+
+The skill may inspect the project Dockerfile, `devcontainer.json`, and base
+Compose files to discover the user, service, paths, and existing privileges,
+but it must never edit them. Devcontainer writes are restricted to the
+gitignored Compose override, `local-seed.sh`, and `.git/info/exclude` entries
+needed to keep those two files local.
+
+The skill will capture the project's initial Git status and compare it with the
+final status. Any new modification to a tracked devcontainer file is a failure
+to report, not something to stage, revert, or repair automatically. Existing
+Dockerfile sudo configuration may be used as evidence; missing configuration
+must be handled through the local override design or reported as unsupported.
+
 ## Verification
 
 Add a focused shell regression test that extracts and executes the documented
@@ -56,3 +70,5 @@ seed template with controlled seed and home directories. Cover:
 Run the focused regression test and the repository's AI structure validator.
 Run the complete Bats suite to confirm the isolated loader test and all seed
 tests pass together.
+Add a policy regression test that requires the inspection-only Dockerfile rule,
+the local-write allowlist, and the final tracked-file status comparison.
