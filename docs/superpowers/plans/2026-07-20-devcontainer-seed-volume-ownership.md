@@ -210,3 +210,52 @@ git add tests/project_claude_setup_seed.bats \
   ai/marketplace/plugins/my/skills/project-claude-setup/devcontainer-host-mounts.md
 git commit -m "fix: load Vekil environment in devcontainers"
 ```
+
+### Task 5: Isolate the existing Vekil shell-loader test from mise
+
+**Files:**
+- Modify: `tests/shell_loading.bats`
+
+- [ ] **Step 1: Confirm the existing test is RED**
+
+Run:
+
+```bash
+bats tests/shell_loading.bats \
+  --filter "shell loader configures healthy Vekil endpoints" \
+  --print-output-on-failure
+```
+
+Expected: FAIL with empty endpoint output because real mise activation moves
+`/usr/local/bin/curl` ahead of the test's curl stub.
+
+- [ ] **Step 2: Stub the unrelated runtime manager**
+
+Immediately before the existing curl stub in that test, add:
+
+```bash
+stub_command mise 'exit 0'
+stub_command curl 'exit 0'
+```
+
+This preserves the test's synthetic `PATH` while leaving production loader
+ordering unchanged.
+
+- [ ] **Step 3: Verify the isolated test and full suite**
+
+Run:
+
+```bash
+bats tests/shell_loading.bats \
+  --filter "shell loader configures healthy Vekil endpoints"
+bats tests
+```
+
+Expected: the focused test passes and the full suite reports zero failures.
+
+- [ ] **Step 4: Commit the test isolation fix**
+
+```bash
+git add tests/shell_loading.bats
+git commit -m "test: isolate Vekil loader from mise activation"
+```
