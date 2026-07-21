@@ -6,9 +6,10 @@ setup() {
   setup_dotfiles_test
 
   REFERENCE="$REPO_ROOT/ai/marketplace/plugins/my/skills/project-claude-setup/devcontainer-host-mounts.md"
+  SKILL_DOC="$REPO_ROOT/ai/marketplace/plugins/my/skills/project-claude-setup/SKILL.md"
   SEED_SCRIPT="$TEST_ROOT/local-seed.sh"
   SUDO_LOG="$TEST_ROOT/sudo.log"
-  export REFERENCE SEED_SCRIPT SUDO_LOG
+  export REFERENCE SKILL_DOC SEED_SCRIPT SUDO_LOG
 
   mkdir -p "$TEST_ROOT/host-seed/.claude" \
     "$TEST_ROOT/host-seed/.dotfiles/ai/marketplace" \
@@ -106,4 +107,12 @@ extract_seed_script() {
   [[ "$output" == *"OPENAI_BASE_URL=http://host.docker.internal:1337/v1"* ]]
   [[ "$output" == *"ANTHROPIC_BASE_URL=http://host.docker.internal:1337"* ]]
   [[ "$output" == *"codex: function"* ]]
+}
+
+@test "tracked devcontainer files are explicitly inspection-only" {
+  grep -F "Dockerfile, devcontainer.json, and base Compose files are inspection-only" \
+    "$SKILL_DOC" "$REFERENCE"
+  grep -F "The only permitted devcontainer writes are" "$SKILL_DOC"
+  grep -F 'Capture the initial `git status --short` output' "$SKILL_DOC"
+  grep -F "Never edit a project Dockerfile" "$SKILL_DOC" "$REFERENCE"
 }
