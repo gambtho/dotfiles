@@ -57,7 +57,7 @@ Read concrete files. **Don't infer**; cite the file you read.
 | Build/test/lint commands | `Makefile` (parse target names), `package.json` scripts, `justfile`, `Taskfile.yml`, `.github/workflows/*.yml` |
 | Container user | `remoteUser` in `devcontainer.json` → Dockerfile `USER` → base image default (see table at the bottom of this skill) |
 | Container service name | `service` in `devcontainer.json` if set, else the first key under `services:` in the base compose file |
-| Seed privilege (Compose, non-root user) | Standard devcontainer image or Dockerfile passwordless-`sudo` setup; verify a running container with `sudo -n true` when available |
+| Seed privilege (Compose, non-root user) | Passwordless `sudo` already supplied by the image or existing Dockerfile; inspect only, and verify a running container with `sudo -n true` when available |
 
 Summarize in 4–6 lines:
 
@@ -68,7 +68,11 @@ Build: <cmd> | Test: <cmd> | Lint: <cmd>  (from <Makefile/scripts/CI>)
 Devcontainer: <flavor> | service=<name> | user=<user>
 ```
 
-For a Compose devcontainer with a non-root user, do not generate the seed model unless passwordless `sudo` is established by the image/Dockerfile or verified in a running container. Docker named volumes can be mounted as `root:root`, and the seed must repair both destination trees before checking its sentinel. If passwordless `sudo` is unavailable, stop and offer a root-run Compose init service instead. Root container users do not need this check.
+**Tracked devcontainer boundary.** Dockerfile, devcontainer.json, and base Compose files are inspection-only. Never edit a project Dockerfile, `.devcontainer/devcontainer.json`, or a base Compose file. The only permitted devcontainer writes are the gitignored `docker-compose.override.yml`, `local-seed.sh`, and `.git/info/exclude` entries needed for those two local files.
+
+Capture the initial `git status --short` output before any write. At final verification, compare it with the current output; they must match because all skill-created project files are ignored. If a new tracked devcontainer modification appears, stop and report it without staging, reverting, or attempting to repair it.
+
+For a Compose devcontainer with a non-root user, do not generate the seed model unless passwordless `sudo` is already provided by the image or existing Dockerfile, or verified in a running container. The Dockerfile is evidence only; never add users, packages, directories, ownership changes, or sudo configuration to it. Docker named volumes can be mounted as `root:root`, and the seed must repair both destination trees before checking its sentinel. If passwordless `sudo` is unavailable, stop and offer only a solution implemented entirely in the gitignored local Compose override; otherwise report the container setup as unsupported. Root container users do not need this check.
 
 Wait for the user to confirm before generating anything.
 
@@ -314,7 +318,7 @@ cd <project>
 git status
 ```
 
-Should show **no new files**. If `.claude/` or `CLAUDE.md` shows up, the global gitignore isn't catching them — diagnose before declaring done.
+The short status output must match the initial `git status --short` snapshot exactly. If `.claude/` or `CLAUDE.md` appears, the global gitignore is not catching it. If any tracked devcontainer file appears as newly modified, stop and report the boundary violation; never stage or revert it on the user's behalf.
 
 Report to the user:
 - Files created/updated in `~/.dotfiles/projects/<slug>/`
@@ -348,6 +352,7 @@ If `remoteUser` in devcontainer.json is set, that wins. If you can't determine i
 - **Don't shadow tracked project files.** If the project tracks CLAUDE.md, AGENTS.md, or anything under `.claude/`, never propose renaming or symlinking on top. Use the `.local.md` import-shim and per-file symlink modes instead. This skill enforces this; `claude-link-project --claude-dir-per-file` will refuse on collision.
 - **Don't auto-generate agents.** Ask, offer the two-tier choice (standing catalog vs README-only), then offer the grounded role candidates from the inspected stack. Generate only what was picked. On collision with a tracked file, ask the user for a different name — don't auto-prefix.
 - **Don't scaffold the team-flow command without the catalog.** `/new-feature` references the agent catalog by `subagent_type` — without agents, the command is dead code.
+- **Never edit a project Dockerfile or other tracked devcontainer configuration.** Read those files only to discover existing behavior. All container customization from this skill belongs in the gitignored override and seed script.
 - **Don't add wildcards to settings.local.json allowlist.** Per-tool, per-command, grounded in inspected facts.
 - **Don't clobber existing files in the overlay.** Re-runs should merge or skip.
 - **Don't run installers.** `~/.dotfiles/bin/setup-agent-teams` handles host-side setup (tmux, win32yank, yq, settings.json merge).

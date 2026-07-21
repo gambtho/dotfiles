@@ -27,6 +27,8 @@ Confirm these exist:
 
 If a `docker-compose.override.yml` already exists at that location, read it before doing anything else. Preserve unrelated keys and show the diff before writing. Back it up to `<file>.backup-<timestamp>` before replacing legacy mounts.
 
+Dockerfile, devcontainer.json, and base Compose files are inspection-only. Never edit a project Dockerfile, `.devcontainer/devcontainer.json`, or base Compose file. This workflow may write only the gitignored override, `local-seed.sh`, and `.git/info/exclude` entries for those local files. Capture `git status --short` before writing and require the final output to match; report any new tracked devcontainer change without staging or reverting it.
+
 ## Step 2 — Discover the service name and container user
 
 These values vary per project and must be filled in correctly, otherwise mounts or the seed command land in the wrong place.
@@ -52,7 +54,7 @@ If you can't determine the user from any of these signals, ask. Do not guess bet
 
 **Base foreground command.** Read the base service's `command`. The override replaces this scalar, so the seed wrapper must `exec` the original foreground command after seeding. If the base command is `sleep infinity`, preserve that exact command.
 
-**Volume ownership privilege.** Docker can create the named-volume mountpoints as `root:root`. For a non-root container user, confirm the image provides passwordless `sudo` (standard devcontainer images do, or the Dockerfile must configure it). If an existing container is available, verify with `sudo -n true`. If neither the image nor the Dockerfile establishes passwordless `sudo`, stop and offer a root-run Compose init service; the non-root seed script cannot safely initialize the volumes by itself. Root containers do not need `sudo`.
+**Volume ownership privilege.** Docker can create the named-volume mountpoints as `root:root`. For a non-root container user, confirm the image already provides passwordless `sudo` (standard devcontainer images do, or an existing Dockerfile may establish it). Inspect the Dockerfile only; never add users, packages, directories, ownership changes, or sudo configuration. If an existing container is available, verify with `sudo -n true`. If passwordless `sudo` is unavailable, stop and offer only a root-run init solution implemented in the gitignored local Compose override; otherwise report the setup as unsupported. Root containers do not need `sudo`.
 
 ## Step 3 — Decide which mounts to include
 
@@ -252,7 +254,7 @@ Any signal means offer repair. Confirm each write, back up the override, remove 
 Once written:
 1. Run `docker compose -f .devcontainer/docker-compose.yml -f .devcontainer/docker-compose.override.yml config` from the project root. Compose will print the merged config or fail loudly on a typo. Check that the service name matches and that no host bind targets the container user's `~/.claude`, `~/.dotfiles`, or OpenCode directory.
 2. Confirm the merged `command` contains `local-seed.sh` followed by the original foreground command.
-3. Run `git check-ignore .devcontainer/docker-compose.override.yml .devcontainer/local-seed.sh` and `git status --short` to confirm no personal config became tracked.
+3. Run `git check-ignore .devcontainer/docker-compose.override.yml .devcontainer/local-seed.sh`, then compare `git status --short` with the initial snapshot. They must match; if a new tracked devcontainer modification appears, report it without staging or reverting it.
 4. After the user rebuilds, verify container-local files and read-only seed mounts:
 
 ```bash
@@ -271,6 +273,7 @@ Don't rebuild for them; that's their call.
 ## Things to avoid
 
 - Don't mount Claude Code or dotfiles read-write from the host.
+- Never edit a project Dockerfile, `devcontainer.json`, or base Compose file; they are evidence only. Keep every devcontainer customization in the gitignored override and seed script.
 - Don't assume adding `/host-seed` mounts removes legacy binds from the base compose file; verify the merged config and shadow inherited targets with named volumes.
 - Don't restore parallel `${HOME}:${HOME}` mounts to make absolute references resolve.
 - Don't copy host plugin runtime state; reinstall the personal marketplace container-local.
