@@ -5,7 +5,7 @@
 > `my:project-claude-setup`. No YAML frontmatter — this is not a
 > separately loaded skill.
 
-Use a local `docker-compose.override.yml` to expose SSH and `gh` auth read-only, and expose Claude Code config and dotfiles as read-only seed sources under `/host-seed`. Project-scoped named volumes at the container user's `~/.claude` and `~/.dotfiles` replace inherited host binds with the same targets. A local `local-seed.sh` copies the authored subset into those container-local volumes before the base foreground command starts. Claude Code can then write sessions, history, plugins, and other runtime state only inside the container.
+Use a local `docker-compose.override.yml` to expose SSH and `gh` auth read-only, and expose Claude Code config and dotfiles as read-only seed sources under `/host-seed`. Project-scoped named volumes at the container user's `~/.claude` and `~/.dotfiles` replace inherited host binds with the same targets. A local `local-seed.sh` copies the authored subset into those container-local volumes and installs a container-local zsh hook for Vekil before the base foreground command starts. Claude Code can then write sessions, history, plugins, and other runtime state only inside the container.
 
 Do not use `claude-merge-compose-override` for this model until that helper is updated: its current output creates writable and dual-home mounts. OpenCode is no longer bridged; the seed script links Codex with `ai/codex/install.sh`.
 
@@ -26,6 +26,18 @@ Confirm these exist:
 - a compose file referenced from it — read the `dockerComposeFile` key in `devcontainer.json` to find the actual paths. The compose files commonly live under `.devcontainer/`, but some projects keep them at the project root and reference them with `../docker-compose.yml`. The override goes wherever the base compose lives, not blindly under `.devcontainer/`.
 
 If a `docker-compose.override.yml` already exists at that location, read it before doing anything else. Preserve unrelated keys and show the diff before writing. Back it up to `<file>.backup-<timestamp>` before replacing legacy mounts.
+
+Dockerfile, devcontainer.json, and base Compose files are inspection-only.
+
+Never edit a project Dockerfile, `.devcontainer/devcontainer.json`, or a base Compose file.
+
+The only permitted devcontainer writes are the gitignored `docker-compose.override.yml`, `local-seed.sh`, and `.git/info/exclude` entries needed for those two local files.
+
+Capture the initial `git status --short` output before any write.
+
+At final verification, run `git status --short` and compare its output byte-for-byte with the initial snapshot.
+
+Report any new tracked devcontainer change without staging or reverting it.
 
 ## Step 2 — Discover the service name and container user
 
@@ -51,6 +63,8 @@ If you can't determine the user from any of these signals, ask. Do not guess bet
 **Workspace path.** Resolve `workspaceFolder` from `devcontainer.json`. If it is absent, inspect the base compose volume target. Do not assume `/workspace` or `/workspaces/<name>`.
 
 **Base foreground command.** Read the base service's `command`. The override replaces this scalar, so the seed wrapper must `exec` the original foreground command after seeding. If the base command is `sleep infinity`, preserve that exact command.
+
+**Volume ownership privilege.** Docker can create the named-volume mountpoints as `root:root`. For a non-root container user, confirm the image already provides passwordless `sudo` (standard devcontainer images do, or an existing Dockerfile may establish it). Inspect the Dockerfile only; never add users, packages, directories, ownership changes, or sudo configuration. If an existing container is available, verify with `sudo -n true`. If passwordless `sudo` is unavailable, stop and offer only a root-run init solution implemented in the gitignored local Compose override; otherwise report the setup as unsupported. Root containers do not need `sudo`.
 
 ## Step 3 — Decide which mounts to include
 
@@ -149,6 +163,24 @@ SEED_CLAUDE="/host-seed/.claude"
 SEED_DOTFILES="/host-seed/.dotfiles"
 SENTINEL="$HOME/.claude/.seeded"
 
+# Named-volume mountpoints can start as root:root. Repair them on every launch,
+# even when the sentinel exists, so stale volumes remain recoverable.
+echo "🌱 seed: repairing container-local volume ownership"
+if [ "$(id -u)" -ne 0 ]; then
+  sudo chown -R "$(id -u):$(id -g)" "$HOME/.claude" "$HOME/.dotfiles"
+fi
+
+# Load Vekil's endpoint variables and managed Codex wrapper in container zsh
+# sessions. Keep this before the sentinel so existing volumes gain the hook.
+VEKIL_ENV_HOOK='[[ -r "$HOME/.dotfiles/ai/vekil/env.zsh" ]] && source "$HOME/.dotfiles/ai/vekil/env.zsh"'
+ZSHRC="$HOME/.zshrc"
+
+touch "$ZSHRC"
+if ! grep -Fqx "$VEKIL_ENV_HOOK" "$ZSHRC"; then
+  printf '\n%s\n' "$VEKIL_ENV_HOOK" >>"$ZSHRC"
+  echo "🌱 seed: configured Vekil shell integration"
+fi
+
 if [ -f "$SENTINEL" ]; then
   echo "🌱 seed: already seeded ($SENTINEL) — skipping"
   exit 0
@@ -171,8 +203,10 @@ else
 fi
 
 # 2. Copy dotfiles container-local (shell sourcing + marketplace/codex installers).
-if [ -d "$SEED_DOTFILES" ] && [ ! -d "$HOME/.dotfiles" ]; then
-  cp -a "$SEED_DOTFILES" "$HOME/.dotfiles"
+# The named-volume mountpoint already exists, so seed it only while it is empty.
+if [ -d "$SEED_DOTFILES" ] &&
+   [ -z "$(find "$HOME/.dotfiles" -mindepth 1 -maxdepth 1 -print -quit)" ]; then
+  cp -a "$SEED_DOTFILES/." "$HOME/.dotfiles/"
   echo "🌱 seed: copied ~/.dotfiles ($(du -sh "$HOME/.dotfiles" | cut -f1))"
 fi
 
@@ -230,15 +264,23 @@ Any signal means offer repair. Confirm each write, back up the override, remove 
 Once written:
 1. Run `docker compose -f .devcontainer/docker-compose.yml -f .devcontainer/docker-compose.override.yml config` from the project root. Compose will print the merged config or fail loudly on a typo. Check that the service name matches and that no host bind targets the container user's `~/.claude`, `~/.dotfiles`, or OpenCode directory.
 2. Confirm the merged `command` contains `local-seed.sh` followed by the original foreground command.
-3. Run `git check-ignore .devcontainer/docker-compose.override.yml .devcontainer/local-seed.sh` and `git status --short` to confirm no personal config became tracked.
+3. Run `git check-ignore .devcontainer/docker-compose.override.yml .devcontainer/local-seed.sh`, then compare `git status --short` with the initial snapshot. They must match; if a new tracked devcontainer modification appears, report it without staging or reverting it.
 4. After the user rebuilds, verify container-local files and read-only seed mounts:
 
 ```bash
+docker compose exec {SERVICE} sh -c 'test "$(stat -c %u:%g /home/{USER}/.claude)" = "$(id -u):$(id -g)" && test "$(stat -c %u:%g /home/{USER}/.dotfiles)" = "$(id -u):$(id -g)"'
 docker compose exec {SERVICE} test -f /home/{USER}/.claude/.seeded
 docker compose exec {SERVICE} test -f /home/{USER}/.claude/settings.json
 docker compose exec {SERVICE} test -f /home/{USER}/.codex/config.toml
+docker compose exec {SERVICE} zsh -lic 'print "OPENAI_BASE_URL=$OPENAI_BASE_URL"; print "ANTHROPIC_BASE_URL=$ANTHROPIC_BASE_URL"; whence -v codex'
 docker compose exec {SERVICE} sh -c 'touch /host-seed/.claude/.write-test' # must fail read-only
 ```
+
+Empty endpoint variables or Codex resolving to the raw binary mean the
+container-local zsh hook did not load or Vekil's `/readyz` probe failed.
+Inspect the hook written by `local-seed.sh` and test the proxy readiness URL.
+Do not edit a Dockerfile or baked rc, source all dotfiles by glob, or add a
+shell-startup retry loop unless a readiness race has been reproduced.
 
 5. If the devcontainer is currently running, tell the user "Rebuild Container" is required before these runtime checks.
 
@@ -247,6 +289,7 @@ Don't rebuild for them; that's their call.
 ## Things to avoid
 
 - Don't mount Claude Code or dotfiles read-write from the host.
+- Never edit a project Dockerfile, `devcontainer.json`, or base Compose file; they are evidence only. Keep every devcontainer customization in the gitignored override and seed script.
 - Don't assume adding `/host-seed` mounts removes legacy binds from the base compose file; verify the merged config and shadow inherited targets with named volumes.
 - Don't restore parallel `${HOME}:${HOME}` mounts to make absolute references resolve.
 - Don't copy host plugin runtime state; reinstall the personal marketplace container-local.

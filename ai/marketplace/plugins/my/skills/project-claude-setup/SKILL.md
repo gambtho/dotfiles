@@ -57,6 +57,7 @@ Read concrete files. **Don't infer**; cite the file you read.
 | Build/test/lint commands | `Makefile` (parse target names), `package.json` scripts, `justfile`, `Taskfile.yml`, `.github/workflows/*.yml` |
 | Container user | `remoteUser` in `devcontainer.json` → Dockerfile `USER` → base image default (see table at the bottom of this skill) |
 | Container service name | `service` in `devcontainer.json` if set, else the first key under `services:` in the base compose file |
+| Seed privilege (Compose, non-root user) | Passwordless `sudo` already supplied by the image or existing Dockerfile; inspect only, and verify a running container with `sudo -n true` when available |
 
 Summarize in 4–6 lines:
 
@@ -66,6 +67,20 @@ Language: <lang> (from <file>)
 Build: <cmd> | Test: <cmd> | Lint: <cmd>  (from <Makefile/scripts/CI>)
 Devcontainer: <flavor> | service=<name> | user=<user>
 ```
+
+**Tracked devcontainer boundary.** Dockerfile, devcontainer.json, and base Compose files are inspection-only.
+
+Never edit a project Dockerfile, `.devcontainer/devcontainer.json`, or a base Compose file.
+
+The only permitted devcontainer writes are the gitignored `docker-compose.override.yml`, `local-seed.sh`, and `.git/info/exclude` entries needed for those two local files.
+
+Capture the initial `git status --short` output before any write.
+
+At final verification, run `git status --short` and compare its output byte-for-byte with the initial snapshot.
+
+They must match because all skill-created project files are ignored. If a new tracked devcontainer modification appears, stop and report it without staging, reverting, or attempting to repair it.
+
+For a Compose devcontainer with a non-root user, do not generate the seed model unless passwordless `sudo` is already provided by the image or existing Dockerfile, or verified in a running container. The Dockerfile is evidence only; never add users, packages, directories, ownership changes, or sudo configuration to it. Docker named volumes can be mounted as `root:root`, and the seed must repair both destination trees before checking its sentinel. If passwordless `sudo` is unavailable, stop and offer only a solution implemented entirely in the gitignored local Compose override; otherwise report the container setup as unsupported. Root container users do not need this check.
 
 Wait for the user to confirm before generating anything.
 
@@ -196,6 +211,8 @@ Write or merge the gitignored `docker-compose.override.yml` directly. The overri
 6. Override `command` to run `.devcontainer/local-seed.sh`, then `exec` the base service's original foreground command.
 7. Preserve unrelated existing override keys and show the diff before writing.
 8. Back up an existing override to `<file>.backup-<timestamp>` before replacing legacy mounts.
+9. In the seed script, repair both named-volume trees' ownership before checking `.seeded`; the sentinel may skip copies and installers, never ownership recovery.
+10. Before checking `.seeded`, idempotently add a container-local `~/.zshrc` hook that sources `~/.dotfiles/ai/vekil/env.zsh`; this supplies both proxy endpoint variables and the managed `codex` function without modifying the host or running the full dotfiles installer.
 
 Do **not** use `claude-merge-compose-override` for this step until that helper emits the seed model; its current output contains writable and dual-home mounts.
 
@@ -306,10 +323,10 @@ Skip this step if the user only wants standalone subagents — the catalog still
 
 ```bash
 cd <project>
-git status
+git status --short
 ```
 
-Should show **no new files**. If `.claude/` or `CLAUDE.md` shows up, the global gitignore isn't catching them — diagnose before declaring done.
+Compare the output byte-for-byte with the initial `git status --short` snapshot. If `.claude/` or `CLAUDE.md` appears, the global gitignore is not catching it. If any tracked devcontainer file appears as newly modified, stop and report the boundary violation; never stage or revert it on the user's behalf.
 
 Report to the user:
 - Files created/updated in `~/.dotfiles/projects/<slug>/`
@@ -320,6 +337,15 @@ Report to the user:
   ```
 - For case (a): rebuild the devcontainer to pick up new mounts —
   `devcontainer up --remove-existing-container --workspace-folder .` or VS Code "Dev Containers: Rebuild Container"
+- For case (a): verify Vekil in a fresh interactive login shell:
+  ```bash
+  docker compose exec <service> zsh -lic 'print "OPENAI_BASE_URL=$OPENAI_BASE_URL"; print "ANTHROPIC_BASE_URL=$ANTHROPIC_BASE_URL"; whence -v codex'
+  ```
+  Empty endpoint variables or Codex resolving to the raw binary mean the
+  container-local zsh hook did not load or Vekil's `/readyz` probe failed.
+  Diagnose the local seed hook and proxy readiness. Never edit a Dockerfile or
+  baked rc, source all dotfiles by glob, or add a shell-startup retry loop
+  without reproducing a readiness race.
 - For case (c): `claude` in the project root picks up the symlinked config on next launch
 - Reminder to run `/init` for CLAUDE.md content
 
@@ -343,6 +369,7 @@ If `remoteUser` in devcontainer.json is set, that wins. If you can't determine i
 - **Don't shadow tracked project files.** If the project tracks CLAUDE.md, AGENTS.md, or anything under `.claude/`, never propose renaming or symlinking on top. Use the `.local.md` import-shim and per-file symlink modes instead. This skill enforces this; `claude-link-project --claude-dir-per-file` will refuse on collision.
 - **Don't auto-generate agents.** Ask, offer the two-tier choice (standing catalog vs README-only), then offer the grounded role candidates from the inspected stack. Generate only what was picked. On collision with a tracked file, ask the user for a different name — don't auto-prefix.
 - **Don't scaffold the team-flow command without the catalog.** `/new-feature` references the agent catalog by `subagent_type` — without agents, the command is dead code.
+- **Never edit a project Dockerfile or other tracked devcontainer configuration.** Read those files only to discover existing behavior. All container customization from this skill belongs in the gitignored override and seed script.
 - **Don't add wildcards to settings.local.json allowlist.** Per-tool, per-command, grounded in inspected facts.
 - **Don't clobber existing files in the overlay.** Re-runs should merge or skip.
 - **Don't run installers.** `~/.dotfiles/bin/setup-agent-teams` handles host-side setup (tmux, win32yank, yq, settings.json merge).

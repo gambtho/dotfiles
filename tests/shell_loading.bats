@@ -57,6 +57,7 @@ run_loader() {
   : >"$state_dir/proxy-ready"
   chmod 0700 "$HOME/.local" "$HOME/.local/state" "$state_dir"
   chmod 0600 "$state_dir/proxy-host" "$state_dir/proxy-ready"
+  stub_command mise 'exit 0'
   stub_command curl 'exit 0'
 
   run env HOME="$HOME" DOTFILES="$REPO_ROOT" PATH="$PATH" zsh -dfc '
