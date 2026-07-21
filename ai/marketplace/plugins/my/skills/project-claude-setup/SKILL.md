@@ -200,6 +200,7 @@ Write or merge the gitignored `docker-compose.override.yml` directly. The overri
 7. Preserve unrelated existing override keys and show the diff before writing.
 8. Back up an existing override to `<file>.backup-<timestamp>` before replacing legacy mounts.
 9. In the seed script, repair both named-volume trees' ownership before checking `.seeded`; the sentinel may skip copies and installers, never ownership recovery.
+10. Before checking `.seeded`, idempotently add a container-local `~/.zshrc` hook that sources `~/.dotfiles/ai/vekil/env.zsh`; this supplies both proxy endpoint variables and the managed `codex` function without modifying the host or running the full dotfiles installer.
 
 Do **not** use `claude-merge-compose-override` for this step until that helper emits the seed model; its current output contains writable and dual-home mounts.
 

@@ -5,7 +5,7 @@
 > `my:project-claude-setup`. No YAML frontmatter — this is not a
 > separately loaded skill.
 
-Use a local `docker-compose.override.yml` to expose SSH and `gh` auth read-only, and expose Claude Code config and dotfiles as read-only seed sources under `/host-seed`. Project-scoped named volumes at the container user's `~/.claude` and `~/.dotfiles` replace inherited host binds with the same targets. A local `local-seed.sh` copies the authored subset into those container-local volumes before the base foreground command starts. Claude Code can then write sessions, history, plugins, and other runtime state only inside the container.
+Use a local `docker-compose.override.yml` to expose SSH and `gh` auth read-only, and expose Claude Code config and dotfiles as read-only seed sources under `/host-seed`. Project-scoped named volumes at the container user's `~/.claude` and `~/.dotfiles` replace inherited host binds with the same targets. A local `local-seed.sh` copies the authored subset into those container-local volumes and installs a container-local zsh hook for Vekil before the base foreground command starts. Claude Code can then write sessions, history, plugins, and other runtime state only inside the container.
 
 Do not use `claude-merge-compose-override` for this model until that helper is updated: its current output creates writable and dual-home mounts. OpenCode is no longer bridged; the seed script links Codex with `ai/codex/install.sh`.
 
@@ -158,6 +158,17 @@ if [ "$(id -u)" -ne 0 ]; then
   sudo chown -R "$(id -u):$(id -g)" "$HOME/.claude" "$HOME/.dotfiles"
 fi
 
+# Load Vekil's endpoint variables and managed Codex wrapper in container zsh
+# sessions. Keep this before the sentinel so existing volumes gain the hook.
+VEKIL_ENV_HOOK='[[ -r "$HOME/.dotfiles/ai/vekil/env.zsh" ]] && source "$HOME/.dotfiles/ai/vekil/env.zsh"'
+ZSHRC="$HOME/.zshrc"
+
+touch "$ZSHRC"
+if ! grep -Fqx "$VEKIL_ENV_HOOK" "$ZSHRC"; then
+  printf '\n%s\n' "$VEKIL_ENV_HOOK" >>"$ZSHRC"
+  echo "🌱 seed: configured Vekil shell integration"
+fi
+
 if [ -f "$SENTINEL" ]; then
   echo "🌱 seed: already seeded ($SENTINEL) — skipping"
   exit 0
@@ -249,6 +260,7 @@ docker compose exec {SERVICE} sh -c 'test "$(stat -c %u:%g /home/{USER}/.claude)
 docker compose exec {SERVICE} test -f /home/{USER}/.claude/.seeded
 docker compose exec {SERVICE} test -f /home/{USER}/.claude/settings.json
 docker compose exec {SERVICE} test -f /home/{USER}/.codex/config.toml
+docker compose exec {SERVICE} zsh -ic 'print "OPENAI_BASE_URL=$OPENAI_BASE_URL"; print "ANTHROPIC_BASE_URL=$ANTHROPIC_BASE_URL"; whence -v codex'
 docker compose exec {SERVICE} sh -c 'touch /host-seed/.claude/.write-test' # must fail read-only
 ```
 
