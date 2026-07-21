@@ -329,6 +329,15 @@ Report to the user:
   ```
 - For case (a): rebuild the devcontainer to pick up new mounts —
   `devcontainer up --remove-existing-container --workspace-folder .` or VS Code "Dev Containers: Rebuild Container"
+- For case (a): verify Vekil in a fresh interactive login shell:
+  ```bash
+  docker compose exec <service> zsh -lic 'print "OPENAI_BASE_URL=$OPENAI_BASE_URL"; print "ANTHROPIC_BASE_URL=$ANTHROPIC_BASE_URL"; whence -v codex'
+  ```
+  Empty endpoint variables or Codex resolving to the raw binary mean the
+  container-local zsh hook did not load or Vekil's `/readyz` probe failed.
+  Diagnose the local seed hook and proxy readiness. Never edit a Dockerfile or
+  baked rc, source all dotfiles by glob, or add a shell-startup retry loop
+  without reproducing a readiness race.
 - For case (c): `claude` in the project root picks up the symlinked config on next launch
 - Reminder to run `/init` for CLAUDE.md content
 

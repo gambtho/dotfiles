@@ -262,9 +262,15 @@ docker compose exec {SERVICE} sh -c 'test "$(stat -c %u:%g /home/{USER}/.claude)
 docker compose exec {SERVICE} test -f /home/{USER}/.claude/.seeded
 docker compose exec {SERVICE} test -f /home/{USER}/.claude/settings.json
 docker compose exec {SERVICE} test -f /home/{USER}/.codex/config.toml
-docker compose exec {SERVICE} zsh -ic 'print "OPENAI_BASE_URL=$OPENAI_BASE_URL"; print "ANTHROPIC_BASE_URL=$ANTHROPIC_BASE_URL"; whence -v codex'
+docker compose exec {SERVICE} zsh -lic 'print "OPENAI_BASE_URL=$OPENAI_BASE_URL"; print "ANTHROPIC_BASE_URL=$ANTHROPIC_BASE_URL"; whence -v codex'
 docker compose exec {SERVICE} sh -c 'touch /host-seed/.claude/.write-test' # must fail read-only
 ```
+
+Empty endpoint variables or Codex resolving to the raw binary mean the
+container-local zsh hook did not load or Vekil's `/readyz` probe failed.
+Inspect the hook written by `local-seed.sh` and test the proxy readiness URL.
+Do not edit a Dockerfile or baked rc, source all dotfiles by glob, or add a
+shell-startup retry loop unless a readiness race has been reproduced.
 
 5. If the devcontainer is currently running, tell the user "Rebuild Container" is required before these runtime checks.
 

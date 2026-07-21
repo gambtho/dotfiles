@@ -121,6 +121,8 @@ extract_seed_script() {
   grep -F "zsh -lic" "$SKILL_DOC" "$REFERENCE"
   grep -F "Empty endpoint variables or Codex resolving to the raw binary" \
     "$SKILL_DOC" "$REFERENCE"
-  ! grep -F 'for _ in {1..30}' "$SKILL_DOC" "$REFERENCE"
-  ! grep -F 'config_files=($DOTFILES/**/*.zsh)' "$SKILL_DOC" "$REFERENCE"
+  run grep -F 'for _ in {1..30}' "$SKILL_DOC" "$REFERENCE"
+  [ "$status" -eq 1 ]
+  run grep -F 'config_files=($DOTFILES/**/*.zsh)' "$SKILL_DOC" "$REFERENCE"
+  [ "$status" -eq 1 ]
 }
