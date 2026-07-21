@@ -34,6 +34,13 @@ stops startup with the underlying `sudo`/`chown` error. Existing non-fatal
 marketplace and Codex installer behavior is unchanged. The sentinel is written
 only after the copy and installer stages complete.
 
+## Test isolation
+
+The existing shell-loader Vekil test will stub `mise` as well as `curl`.
+The test does not exercise runtime activation, and allowing the real `mise`
+activation to reorder `PATH` can select a real curl ahead of the test stub.
+Production loader ordering and Vekil behavior remain unchanged.
+
 ## Verification
 
 Add a focused shell regression test that extracts and executes the documented
@@ -47,3 +54,5 @@ seed template with controlled seed and home directories. Cover:
   the installed hook.
 
 Run the focused regression test and the repository's AI structure validator.
+Run the complete Bats suite to confirm the isolated loader test and all seed
+tests pass together.
