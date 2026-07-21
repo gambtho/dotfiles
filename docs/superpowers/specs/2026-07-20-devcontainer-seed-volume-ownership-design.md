@@ -19,6 +19,12 @@ destination. When that directory is empty, it will copy the seed directory's
 contents into it rather than guard on the destination directory's existence.
 Non-empty dotfiles destinations remain untouched.
 
+The seed script will also ensure the container-local `~/.zshrc` contains one
+guarded source line for `~/.dotfiles/ai/vekil/env.zsh`. This hook is installed
+before the sentinel check so existing seeded containers gain it on their next
+start. It loads both the proxy endpoint variables and the managed `codex` shell
+function without running the full dotfiles installer or modifying the host.
+
 No Compose init service, root entrypoint, or writable host mount will be added.
 
 ## Failure handling
@@ -35,6 +41,9 @@ seed template with controlled seed and home directories. Cover:
 
 - root-owned destination mountpoints becoming writable by the container user;
 - an empty, already-existing dotfiles mountpoint receiving seed contents; and
-- a pre-existing sentinel skipping copies while ownership repair still runs.
+- a pre-existing sentinel skipping copies while ownership repair still runs;
+- a pre-existing sentinel still installing the zsh hook exactly once; and
+- a new interactive zsh resolving the Vekil URLs and `codex` wrapper through
+  the installed hook.
 
 Run the focused regression test and the repository's AI structure validator.
