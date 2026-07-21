@@ -62,6 +62,8 @@ extract_seed_script() {
 }
 
 @test "ownership is repaired before a stale sentinel skips seeding" {
+  local vekil_hook='[[ -r "$HOME/.dotfiles/ai/vekil/env.zsh" ]] && source "$HOME/.dotfiles/ai/vekil/env.zsh"'
+
   touch "$HOME/.claude/.seeded"
   printf '{}\n' >"$TEST_ROOT/host-seed/.claude/settings.json"
   touch "$TEST_ROOT/host-seed/.dotfiles/ai/marketplace/marker"
@@ -74,4 +76,34 @@ extract_seed_script() {
   [ ! -e "$HOME/.claude/settings.json" ]
   [ ! -e "$HOME/.dotfiles/ai/marketplace/marker" ]
   [[ "$output" == *"already seeded"* ]]
+
+  run bash "$SEED_SCRIPT"
+
+  [ "$status" -eq 0 ]
+  [ "$(grep -Fxc "$vekil_hook" "$HOME/.zshrc")" -eq 1 ]
+}
+
+@test "the installed zsh hook loads Vekil endpoints and the Codex wrapper" {
+  mkdir -p "$TEST_ROOT/host-seed/.dotfiles/ai/vekil"
+  cp "$REPO_ROOT/ai/vekil/env.zsh" \
+    "$TEST_ROOT/host-seed/.dotfiles/ai/vekil/env.zsh"
+  stub_command curl 'exit 0'
+
+  run bash "$SEED_SCRIPT"
+
+  [ "$status" -eq 0 ]
+
+  run env \
+    -u OPENAI_BASE_URL -u OPENAI_API_KEY \
+    -u ANTHROPIC_BASE_URL -u ANTHROPIC_API_KEY -u ANTHROPIC_MODEL \
+    -u VEKIL_MANAGED_OPENAI_BASE_URL -u VEKIL_MANAGED_OPENAI_API_KEY \
+    -u VEKIL_MANAGED_ANTHROPIC_BASE_URL -u VEKIL_MANAGED_ANTHROPIC_API_KEY \
+    -u VEKIL_MANAGED_ANTHROPIC_MODEL \
+    HOME="$HOME" PATH="$PATH" REMOTE_CONTAINERS=true \
+    zsh -dic 'print -r -- "OPENAI_BASE_URL=$OPENAI_BASE_URL"; print -r -- "ANTHROPIC_BASE_URL=$ANTHROPIC_BASE_URL"; whence -w codex'
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"OPENAI_BASE_URL=http://host.docker.internal:1337/v1"* ]]
+  [[ "$output" == *"ANTHROPIC_BASE_URL=http://host.docker.internal:1337"* ]]
+  [[ "$output" == *"codex: function"* ]]
 }
