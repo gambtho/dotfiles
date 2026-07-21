@@ -55,6 +55,18 @@ to report, not something to stage, revert, or repair automatically. Existing
 Dockerfile sudo configuration may be used as evidence; missing configuration
 must be handled through the local override design or reported as unsupported.
 
+## Login-shell troubleshooting
+
+Runtime verification will use an interactive login zsh (`zsh -lic`) and report
+both Vekil endpoint variables plus `whence -v codex`. Empty endpoints or Codex
+resolving to the raw binary indicate that the container-local zsh hook was not
+loaded or the proxy readiness probe failed.
+
+The skill will not copy a full dotfiles glob into project shell configuration,
+modify a baked rc/Dockerfile, or add a speculative readiness loop. Those changes
+duplicate the canonical loader, cross the tracked-file boundary, and can delay
+every shell startup without evidence of a race.
+
 ## Verification
 
 Add a focused shell regression test that extracts and executes the documented
