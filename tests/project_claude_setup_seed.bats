@@ -116,3 +116,11 @@ extract_seed_script() {
   grep -F 'Capture the initial `git status --short` output' "$SKILL_DOC"
   grep -F "Never edit a project Dockerfile" "$SKILL_DOC" "$REFERENCE"
 }
+
+@test "login-shell troubleshooting excludes tracked rc and retry-loop changes" {
+  grep -F "zsh -lic" "$SKILL_DOC" "$REFERENCE"
+  grep -F "Empty endpoint variables or Codex resolving to the raw binary" \
+    "$SKILL_DOC" "$REFERENCE"
+  ! grep -F 'for _ in {1..30}' "$SKILL_DOC" "$REFERENCE"
+  ! grep -F 'config_files=($DOTFILES/**/*.zsh)' "$SKILL_DOC" "$REFERENCE"
+}
