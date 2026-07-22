@@ -69,6 +69,27 @@ run_loader() {
   [[ "$output" == *"http://127.0.0.1:1337/v1|http://127.0.0.1:1337"* ]]
 }
 
+@test "zshrc loads Vekil before deferred customizations run" {
+  local state_dir="$HOME/.local/state/vekil"
+  mkdir -p "$state_dir" "$HOME/.zsh-defer"
+  printf '127.0.0.1\n' >"$state_dir/proxy-host"
+  : >"$state_dir/proxy-ready"
+  chmod 0700 "$HOME/.local" "$HOME/.local/state" "$state_dir"
+  chmod 0600 "$state_dir/proxy-host" "$state_dir/proxy-ready"
+  stub_command curl 'exit 0'
+  cat >"$HOME/.zsh-defer/zsh-defer.plugin.zsh" <<'SCRIPT'
+zsh-defer() { :; }
+SCRIPT
+
+  run env HOME="$HOME" DOTFILES="$REPO_ROOT" PATH="$PATH" zsh -dfc '
+    source "$DOTFILES/core/shell/zshrc.symlink" || exit 1
+    print -r -- "VEKIL_CODEX_FUNCTION=${+functions[codex]}"
+  '
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"VEKIL_CODEX_FUNCTION=1"* ]]
+}
+
 @test "localrc endpoint overrides the managed Codex wrapper" {
   local state_dir="$HOME/.local/state/vekil"
   mkdir -p "$state_dir"
