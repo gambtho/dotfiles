@@ -1,5 +1,5 @@
 ---
-name: code-reviewer
+name: dh-conventions-reviewer
 description: Read-only review of completed work against the project's conventions. Dispatch before claiming work done (per AGENTS.md post-implementation review step) and before opening a PR. Returns prioritized findings with file:line citations.
 model: sonnet
 tools: Read, Grep, Glob, Bash
