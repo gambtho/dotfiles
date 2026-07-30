@@ -1,11 +1,11 @@
 ---
 name: project-claude-setup
-description: Set up a project for Claude Code without leaking personal config into the project's git history. Creates a per-project overlay under ~/.dotfiles/projects/ (CLAUDE.md, agents/, settings.local.json), symlinks it into the project worktree, and — for compose-based devcontainers — writes a local seed-and-copy override for host SSH/gh/Claude/dotfiles. Also detects and repairs legacy writable or dual-home Claude mounts. Use when starting work on a new project, when an open-source project shouldn't carry your CLAUDE.md, when adding agent-teams support to an existing project, or when the user mentions "set up this project for Claude" / "bootstrap project Claude config" / "share host SSH/gh/dotfiles with the devcontainer".
+description: Set up a project for Claude Code without leaking personal config into the project's git history. Creates a per-project overlay under ~/.dotfiles/projects/ (CLAUDE.md, agents/, settings.local.json), symlinks it into the project worktree, and — for compose-based devcontainers — writes a local seed-and-copy override for host Claude/dotfiles (with SSH/gh identity sharing as an explicit opt-in). Also detects and repairs legacy writable or dual-home Claude mounts. Use when starting work on a new project, when an open-source project shouldn't carry your CLAUDE.md, when adding agent-teams support to an existing project, or when the user mentions "set up this project for Claude" / "bootstrap project Claude config" / "share host SSH/gh/dotfiles with the devcontainer".
 ---
 
 # Project Claude setup
 
-The user keeps personal per-project Claude config (CLAUDE.md, settings.local.json, agents/) in their dotfiles repo at `~/.dotfiles/projects/<project-name>/`, not in the project repo. This skill scaffolds that overlay, symlinks it into the project worktree (the global gitignore catches the symlinks), and — when the project has a compose-based devcontainer — wires the host mounts that let the container see the user's Claude/dotfiles/SSH/gh.
+The user keeps personal per-project Claude config (CLAUDE.md, settings.local.json, agents/) in their dotfiles repo at `~/.dotfiles/projects/<project-name>/`, not in the project repo. This skill scaffolds that overlay, symlinks it into the project worktree (the global gitignore catches the symlinks), and — when the project has a compose-based devcontainer — wires the host mounts that let the container see the user's Claude and dotfiles (with SSH/gh identity sharing available as an explicit opt-in).
 
 It replaces the old narrower `devcontainer-host-mounts` skill. The host-mounts logic is still in here, just as one section of a longer flow.
 
@@ -199,20 +199,21 @@ Never write to the project-shared `.claude/settings.json` from this skill — th
 
 ## Step 6 — Compose host mounts (case a only)
 
-Keep `~/.ssh` and `~/.config/gh` read-only at the container user's home. Mount `~/.claude` and `~/.dotfiles` read-only under `/host-seed`, then copy the authored Claude subset and dotfiles into container-local named volumes at the user's home with a gitignored `.devcontainer/local-seed.sh`. The named-volume targets also replace any inherited host binds with the same container targets during Compose merge. This lets Claude Code write runtime state without any write path back to the host. OpenCode is not seeded; the seed script links Codex through `ai/codex/install.sh`.
+Mount `~/.claude` and `~/.dotfiles` read-only under `/host-seed`, then copy the authored Claude subset and dotfiles into container-local named volumes at the user's home with a gitignored `.devcontainer/local-seed.sh`. The named-volume targets also replace any inherited host binds with the same container targets during Compose merge. This lets Claude Code write runtime state without any write path back to the host. Host SSH keys and `gh` auth are **not** shared by default — they are single global credentials that force the container onto the host's GitHub identity across projects; mount `~/.ssh` and `~/.config/gh` read-only only when the user explicitly opts in (see item 2). OpenCode is not seeded; the seed script links Codex through `ai/codex/install.sh`.
 
 Write or merge the gitignored `docker-compose.override.yml` directly. The override must:
 
 1. Target the actual devcontainer service and home directory found in Step 2.
-2. Mount `~/.ssh` and `~/.config/gh` read-only at the container home.
+2. Leave host SSH keys and `gh` auth unmounted by default. Ask the user once: "Share host SSH keys and gh auth with this container? (default: no)" — mounting them forces every container onto the same host GitHub identity and key set and can switch accounts unexpectedly. Only if the user opts in, mount `~/.ssh` and `~/.config/gh` read-only at the container home. Otherwise the container authenticates itself (`gh auth login` inside the container, a project-scoped `GH_TOKEN`, or its own key). If the merged base compose already binds host `~/.ssh` or `~/.config/gh` and the user declined, shadow each inherited target with an empty project-scoped named volume — declining must not leave an inherited host bind in place.
 3. Mount `~/.claude` at `/host-seed/.claude:ro,cached` and `~/.dotfiles` at `/host-seed/.dotfiles:ro,cached`.
 4. Mount project-scoped named volumes at the container user's `~/.claude` and `~/.dotfiles`. Because Compose volume entries merge by container target, these replace legacy host binds inherited from the base compose file.
 5. If the merged base still exposes host OpenCode config, shadow that target with an empty project-scoped named volume; do not seed or install OpenCode.
 6. Override `command` to run `.devcontainer/local-seed.sh`, then `exec` the base service's original foreground command.
 7. Preserve unrelated existing override keys and show the diff before writing.
 8. Back up an existing override to `<file>.backup-<timestamp>` before replacing legacy mounts.
-9. In the seed script, repair both named-volume trees' ownership before checking `.seeded`; the sentinel may skip copies and installers, never ownership recovery.
-10. Before checking `.seeded`, idempotently add a container-local `~/.zshrc` hook that sources `~/.dotfiles/ai/vekil/env.zsh`; this supplies both proxy endpoint variables and the managed `codex` function without modifying the host or running the full dotfiles installer.
+9. In the seed script, repair both named-volume trees' ownership before checking the sentinel; the sentinel may skip copies and installers, never ownership recovery.
+10. Before checking the sentinel, idempotently add a container-local `~/.zshrc` hook that sources `~/.dotfiles/ai/vekil/env.zsh`; this supplies both proxy endpoint variables and the managed `codex` function without modifying the host or running the full dotfiles installer.
+11. Make the sentinel version-aware: store a `SEED_VERSION` number in `~/.claude/.seeded` and re-run the gated copy/install steps only when a *stamped* sentinel records a different version. A persisted named volume survives `--remove-existing-container`, so without a version bump an evolving template could not refresh those steps; a legacy bare (empty) sentinel is treated as current and left alone, so existing good volumes are not reseeded. The always-run block (ownership + Vekil hook) stays before the gate so those land on every start regardless of version.
 
 Do **not** use `claude-merge-compose-override` for this step until that helper emits the seed model; its current output contains writable and dual-home mounts.
 
@@ -237,7 +238,7 @@ Remediation (confirm with user before each write):
 
 - Rewrite the override to read-only seed mounts, container-local named-volume targets, the `command` override, and `local-seed.sh` from Step 6. Back up the old override to `<file>.backup-<timestamp>`.
 - Remove the `${HOME}:${HOME}` dual-mount lines.
-- Inspect the fully merged Compose config, not only the override. Shadow any legacy base-file binds targeting the container user's `~/.claude`, `~/.dotfiles`, or OpenCode directory with project-scoped named volumes.
+- Inspect the fully merged Compose config, not only the override. Shadow any legacy base-file binds targeting the container user's `~/.claude`, `~/.dotfiles`, or OpenCode directory with project-scoped named volumes. Unless credential sharing was opted into, do the same for any inherited `~/.ssh` or `~/.config/gh` bind.
 - Optional host cleanup: rewrite `/home/<container-user>` to the host home in `~/.claude/plugins/{known_marketplaces,installed_plugins}.json`, and delete broken `~/.claude` symlinks whose target starts with `/home/<container-user>`. Show a diff or list first; never bulk-delete without confirmation.
 - Tell the user to rebuild the container to apply the repair.
 
@@ -339,10 +340,23 @@ Report to the user:
   `devcontainer up --remove-existing-container --workspace-folder .` or VS Code "Dev Containers: Rebuild Container"
 - For case (a): verify Vekil in a fresh interactive login shell:
   ```bash
+  # Run grep INSIDE the container — a bare ~/.zshrc would expand on the host.
+  docker compose exec <service> sh -c 'grep -Fq ai/vekil/env.zsh "$HOME/.zshrc"'          # hook present
+  docker compose exec <service> sh -c 'zsh -n "$HOME/.dotfiles/ai/vekil/env.zsh"'          # target exists + parses; no /readyz probe
   docker compose exec <service> zsh -lic 'print "OPENAI_BASE_URL=$OPENAI_BASE_URL"; print "ANTHROPIC_BASE_URL=$ANTHROPIC_BASE_URL"; whence -v codex'
   ```
-  Empty endpoint variables or Codex resolving to the raw binary mean the
-  container-local zsh hook did not load or Vekil's `/readyz` probe failed.
+  If the hook grep fails, the seed's always-run block never wrote it — the
+  running container is likely executing a stale pre-hook `local-seed.sh`. A
+  persisted named volume can keep an old versioned sentinel; confirm the on-disk
+  seed matches the current template, then restart so the always-run block fires.
+  The `zsh -n` line validates the hook *target* alone — nonzero if
+  `~/.dotfiles/ai/vekil/env.zsh` is missing (127) or malformed (1), without
+  executing it, so it does not touch the proxy. That keeps "is the hook
+  well-formed" separate from readiness; the `zsh -lic` line is the combined
+  hook-plus-readiness check, where an empty endpoint variable means the target
+  loaded but Vekil's `/readyz` probe failed. Empty endpoint variables or Codex
+  resolving to the raw binary otherwise mean the container-local zsh hook did
+  not load.
   Diagnose the local seed hook and proxy readiness. Never edit a Dockerfile or
   baked rc, source all dotfiles by glob, or add a shell-startup retry loop
   without reproducing a readiness race.
