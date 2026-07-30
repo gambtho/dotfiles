@@ -196,10 +196,14 @@ if ! grep -Fqx "$VEKIL_ENV_HOOK" "$ZSHRC"; then
 fi
 
 # --- Versioned gate --------------------------------------------------------
-# Skip the gated steps only when the sentinel records the CURRENT version.
-# A bare legacy sentinel (no version) or an older version forces a refresh.
-if [ -f "$SENTINEL" ] && [ "$(cat "$SENTINEL" 2>/dev/null)" = "$SEED_VERSION" ]; then
-  echo "🌱 seed: already seeded (v$SEED_VERSION) — skipping copies/installers"
+# Skip the gated copy/install steps when the sentinel is current: either a
+# legacy bare sentinel (empty — the pre-versioning contract) or one that already
+# records this SEED_VERSION. Refresh only when a stamped version differs, so a
+# bump re-runs the steps on containers seeded by a newer template without
+# disturbing already-good legacy volumes. The Vekil hook above runs regardless.
+SEEN_VERSION="$(cat "$SENTINEL" 2>/dev/null || true)"
+if [ -f "$SENTINEL" ] && { [ -z "$SEEN_VERSION" ] || [ "$SEEN_VERSION" = "$SEED_VERSION" ]; }; then
+  echo "🌱 seed: already seeded (${SEEN_VERSION:-legacy}) — skipping copies/installers"
   exit 0
 fi
 echo "🌱 seed: seeding to v$SEED_VERSION"
@@ -245,7 +249,7 @@ printf '%s\n' "$SEED_VERSION" >"$SENTINEL"
 echo "🌱 seed: done (v$SEED_VERSION)"
 ```
 
-The sentinel now stores a version number rather than being a bare touch-file. The always-run block (ownership + Vekil hook) executes before the gate, so hook changes land on the next container start; the gated copy/install steps re-run whenever `SEED_VERSION` is bumped, even on a persisted named volume that survives `--remove-existing-container`. A legacy bare sentinel (empty file) compares unequal to any version and triggers one refresh.
+The sentinel now stores a version number rather than being a bare touch-file. The always-run block (ownership + Vekil hook) executes before the gate, so hook changes land on the next container start; the gated copy/install steps re-run whenever `SEED_VERSION` is bumped to a value different from what a *stamped* sentinel records, even on a persisted named volume that survives `--remove-existing-container`. A legacy bare sentinel (empty file) is treated as current and left alone — the always-run block still updates its hook — so existing good volumes are not needlessly reseeded.
 
 Execute it with `bash`; an executable bit is optional. Keep both files untracked. If the project does not already ignore them, add the actual override path plus the seed script path to `.git/info/exclude`. For the common `.devcontainer/` layout:
 
@@ -291,19 +295,23 @@ Once written:
 docker compose exec {SERVICE} sh -c 'test "$(stat -c %u:%g /home/{USER}/.claude)" = "$(id -u):$(id -g)" && test "$(stat -c %u:%g /home/{USER}/.dotfiles)" = "$(id -u):$(id -g)"'
 docker compose exec {SERVICE} test -f /home/{USER}/.claude/.seeded
 docker compose exec {SERVICE} grep -Fq 'ai/vekil/env.zsh' /home/{USER}/.zshrc   # Vekil hook present
+docker compose exec {SERVICE} zsh -c 'source /home/{USER}/.zshrc' 2>&1           # hook sources cleanly
 docker compose exec {SERVICE} test -f /home/{USER}/.claude/settings.json
 docker compose exec {SERVICE} test -f /home/{USER}/.codex/config.toml
 docker compose exec {SERVICE} zsh -lic 'print "OPENAI_BASE_URL=$OPENAI_BASE_URL"; print "ANTHROPIC_BASE_URL=$ANTHROPIC_BASE_URL"; whence -v codex'
 docker compose exec {SERVICE} sh -c 'touch /host-seed/.claude/.write-test' # must fail read-only
 ```
 
-The `grep` line asserts the seed actually wrote the Vekil hook into the
-container's `~/.zshrc`. An empty `OPENAI_BASE_URL` in the `zsh -lic` line with
-the hook present points at the readiness probe, not a missing hook. If the hook
-grep fails, the seed's always-run block didn't execute — check that the running
-container isn't holding a stale pre-hook `local-seed.sh` (a persisted named
-volume can keep an old sentinel; the versioned sentinel forces a refresh, but
-only once the on-disk seed script is the current template).
+The `grep` line asserts the seed wrote the Vekil hook into the container's
+`~/.zshrc`; the `source` line asserts it actually loads — a present-but-broken
+hook (missing or malformed `~/.dotfiles/ai/vekil/env.zsh` target) prints errors
+here even though the grep passed. Only once the hook sources cleanly does an
+empty `OPENAI_BASE_URL` in the `zsh -lic` line point at the readiness probe
+rather than a missing or non-loading hook. If the grep fails, the seed's
+always-run block didn't execute — check that the running container isn't holding
+a stale pre-hook `local-seed.sh` (a persisted named volume can keep an old
+sentinel; a version bump refreshes the gated steps, but only once the on-disk
+seed script is the current template).
 
 Empty endpoint variables or Codex resolving to the raw binary mean the
 container-local zsh hook did not load or Vekil's `/readyz` probe failed.

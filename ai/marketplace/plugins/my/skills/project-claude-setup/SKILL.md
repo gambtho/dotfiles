@@ -213,7 +213,7 @@ Write or merge the gitignored `docker-compose.override.yml` directly. The overri
 8. Back up an existing override to `<file>.backup-<timestamp>` before replacing legacy mounts.
 9. In the seed script, repair both named-volume trees' ownership before checking the sentinel; the sentinel may skip copies and installers, never ownership recovery.
 10. Before checking the sentinel, idempotently add a container-local `~/.zshrc` hook that sources `~/.dotfiles/ai/vekil/env.zsh`; this supplies both proxy endpoint variables and the managed `codex` function without modifying the host or running the full dotfiles installer.
-11. Make the sentinel version-aware: store a `SEED_VERSION` number in `~/.claude/.seeded` and re-run the gated copy/install steps whenever the on-disk version differs. A persisted named volume survives `--remove-existing-container`, so a bare touch-file sentinel would otherwise pin an evolving container to its first seed forever. The always-run block (ownership + Vekil hook) stays before the gate so those land on every start regardless of version.
+11. Make the sentinel version-aware: store a `SEED_VERSION` number in `~/.claude/.seeded` and re-run the gated copy/install steps only when a *stamped* sentinel records a different version. A persisted named volume survives `--remove-existing-container`, so without a version bump an evolving template could not refresh those steps; a legacy bare (empty) sentinel is treated as current and left alone, so existing good volumes are not reseeded. The always-run block (ownership + Vekil hook) stays before the gate so those land on every start regardless of version.
 
 Do **not** use `claude-merge-compose-override` for this step until that helper emits the seed model; its current output contains writable and dual-home mounts.
 
@@ -340,15 +340,21 @@ Report to the user:
   `devcontainer up --remove-existing-container --workspace-folder .` or VS Code "Dev Containers: Rebuild Container"
 - For case (a): verify Vekil in a fresh interactive login shell:
   ```bash
-  docker compose exec <service> grep -Fq 'ai/vekil/env.zsh' ~/.zshrc   # hook present
+  # Run grep INSIDE the container — a bare ~/.zshrc would expand on the host.
+  docker compose exec <service> sh -c 'grep -Fq ai/vekil/env.zsh "$HOME/.zshrc"'   # hook present
+  docker compose exec <service> sh -c 'zsh -c "source \"$HOME/.zshrc\"" 2>&1'       # hook sources cleanly
   docker compose exec <service> zsh -lic 'print "OPENAI_BASE_URL=$OPENAI_BASE_URL"; print "ANTHROPIC_BASE_URL=$ANTHROPIC_BASE_URL"; whence -v codex'
   ```
   If the hook grep fails, the seed's always-run block never wrote it — the
   running container is likely executing a stale pre-hook `local-seed.sh`. A
   persisted named volume can keep an old versioned sentinel; confirm the on-disk
   seed matches the current template, then restart so the always-run block fires.
-  Empty endpoint variables *with* the hook present mean the
-  container-local zsh hook loaded but Vekil's `/readyz` probe failed.
+  If the hook is present but the source line errors or prints warnings, the hook
+  target is missing or malformed (`~/.dotfiles/ai/vekil/env.zsh` absent, or the
+  dotfiles copy never landed) — fix that before blaming the proxy. Only once the
+  hook sources cleanly does an empty endpoint variable point at Vekil's
+  `/readyz` probe. Empty endpoint variables or Codex resolving to the raw binary
+  otherwise mean the container-local zsh hook did not load.
   Diagnose the local seed hook and proxy readiness. Never edit a Dockerfile or
   baked rc, source all dotfiles by glob, or add a shell-startup retry loop
   without reproducing a readiness race.
