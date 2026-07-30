@@ -313,7 +313,7 @@ Once written:
 docker compose exec {SERVICE} sh -c 'test "$(stat -c %u:%g /home/{USER}/.claude)" = "$(id -u):$(id -g)" && test "$(stat -c %u:%g /home/{USER}/.dotfiles)" = "$(id -u):$(id -g)"'
 docker compose exec {SERVICE} test -f /home/{USER}/.claude/.seeded
 docker compose exec {SERVICE} grep -Fq 'ai/vekil/env.zsh' /home/{USER}/.zshrc   # Vekil hook present
-docker compose exec {SERVICE} zsh -ec 'source /home/{USER}/.dotfiles/ai/vekil/env.zsh'   # hook target sources nonzero on failure
+docker compose exec {SERVICE} zsh -n /home/{USER}/.dotfiles/ai/vekil/env.zsh   # hook target exists + parses; no /readyz probe
 docker compose exec {SERVICE} test -f /home/{USER}/.claude/settings.json
 docker compose exec {SERVICE} test -f /home/{USER}/.codex/config.toml
 docker compose exec {SERVICE} zsh -lic 'print "OPENAI_BASE_URL=$OPENAI_BASE_URL"; print "ANTHROPIC_BASE_URL=$ANTHROPIC_BASE_URL"; whence -v codex'
@@ -321,11 +321,12 @@ docker compose exec {SERVICE} sh -c 'touch /host-seed/.claude/.write-test' # mus
 ```
 
 The `grep` line asserts the seed wrote the Vekil hook into the container's
-`~/.zshrc`; the `source` line sources the hook *target* directly under `zsh -e`,
-so a missing or malformed `~/.dotfiles/ai/vekil/env.zsh` exits nonzero even
-though later `.zshrc` lines would have masked the error. Only once the target
-sources cleanly does an empty `OPENAI_BASE_URL` in the `zsh -lic` line point at
-the readiness probe rather than a missing or non-loading hook. If the grep
+`~/.zshrc`; the `zsh -n` line validates the hook *target* alone — it exits
+nonzero if `~/.dotfiles/ai/vekil/env.zsh` is missing (127) or malformed (1)
+**without executing it**, so it never triggers the `/readyz` probe. That keeps
+"is the hook well-formed" separate from "is the proxy up": the `zsh -lic` line
+below is the combined hook-plus-readiness check, where an empty `OPENAI_BASE_URL`
+means the target sourced but the readiness probe failed. If the grep
 fails, the seed's always-run block didn't execute — check that the running
 container isn't holding a stale pre-hook `local-seed.sh` (a persisted named
 volume can keep an old sentinel; a version bump refreshes the gated steps, but

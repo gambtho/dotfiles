@@ -342,19 +342,21 @@ Report to the user:
   ```bash
   # Run grep INSIDE the container — a bare ~/.zshrc would expand on the host.
   docker compose exec <service> sh -c 'grep -Fq ai/vekil/env.zsh "$HOME/.zshrc"'          # hook present
-  docker compose exec <service> sh -c 'zsh -ec "source \"$HOME/.dotfiles/ai/vekil/env.zsh\""'  # target sources nonzero on failure
+  docker compose exec <service> sh -c 'zsh -n "$HOME/.dotfiles/ai/vekil/env.zsh"'          # target exists + parses; no /readyz probe
   docker compose exec <service> zsh -lic 'print "OPENAI_BASE_URL=$OPENAI_BASE_URL"; print "ANTHROPIC_BASE_URL=$ANTHROPIC_BASE_URL"; whence -v codex'
   ```
   If the hook grep fails, the seed's always-run block never wrote it — the
   running container is likely executing a stale pre-hook `local-seed.sh`. A
   persisted named volume can keep an old versioned sentinel; confirm the on-disk
   seed matches the current template, then restart so the always-run block fires.
-  The `zsh -ec` line sources the hook *target* directly, so a missing or
-  malformed `~/.dotfiles/ai/vekil/env.zsh` exits nonzero even when later startup
-  commands would have masked it — fix that before blaming the proxy. Only once
-  the target sources cleanly does an empty endpoint variable point at Vekil's
-  `/readyz` probe. Empty endpoint variables or Codex resolving to the raw binary
-  otherwise mean the container-local zsh hook did not load.
+  The `zsh -n` line validates the hook *target* alone — nonzero if
+  `~/.dotfiles/ai/vekil/env.zsh` is missing (127) or malformed (1), without
+  executing it, so it does not touch the proxy. That keeps "is the hook
+  well-formed" separate from readiness; the `zsh -lic` line is the combined
+  hook-plus-readiness check, where an empty endpoint variable means the target
+  loaded but Vekil's `/readyz` probe failed. Empty endpoint variables or Codex
+  resolving to the raw binary otherwise mean the container-local zsh hook did
+  not load.
   Diagnose the local seed hook and proxy readiness. Never edit a Dockerfile or
   baked rc, source all dotfiles by glob, or add a shell-startup retry loop
   without reproducing a readiness race.
