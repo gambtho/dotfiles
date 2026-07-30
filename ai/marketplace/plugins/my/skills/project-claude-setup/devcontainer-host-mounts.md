@@ -88,6 +88,8 @@ dotfiles-local-home     →  /home/{USER}/.dotfiles            named volume
 
 Compose merges service volumes by container target. These named-volume entries therefore replace legacy base-file binds targeting the same home paths instead of merely adding more mounts. If a base compose file binds host OpenCode config, add an empty `opencode-local-home` named volume at that target to shadow it; do not seed OpenCode.
 
+**Inherited ssh/gh binds.** If the merged base compose already binds the host's `~/.ssh` or `~/.config/gh` into the container (some base images do), the opt-in decision below is not enough on its own — an inherited bind leaks the host identity even when the user declined. When sharing is declined, shadow each inherited target with an empty project-scoped named volume (`ssh-local-home` at `/home/{USER}/.ssh`, `gh-local-home` at `/home/{USER}/.config/gh`) so the container starts with no host credentials. The merged-config check in Step 5 must confirm neither target resolves to a host bind.
+
 Why each one:
 - **`~/.claude` seed (ro)**: supplies only authored config to the seed script. The container never writes through this mount.
 - **`~/.dotfiles` seed (ro)**: supplies shell config and the marketplace/Codex installers. The script copies it container-local before running installers.
@@ -152,6 +154,20 @@ volumes:
   opencode-local-home:
 ```
 
+If the base compose file binds host `~/.ssh` or `~/.config/gh` and the user declined credential sharing, shadow those targets the same way so no host identity leaks in:
+
+```yaml
+services:
+  {SERVICE}:
+    volumes:
+      - ssh-local-home:/home/{USER}/.ssh
+      - gh-local-home:/home/{USER}/.config/gh
+
+volumes:
+  ssh-local-home:
+  gh-local-home:
+```
+
 This does not bridge OpenCode; it replaces the inherited host bind with an empty project-local volume.
 
 Write `{WORKSPACE}/.devcontainer/local-seed.sh` with:
@@ -201,8 +217,10 @@ fi
 # records this SEED_VERSION. Refresh only when a stamped version differs, so a
 # bump re-runs the steps on containers seeded by a newer template without
 # disturbing already-good legacy volumes. The Vekil hook above runs regardless.
-SEEN_VERSION="$(cat "$SENTINEL" 2>/dev/null || true)"
-if [ -f "$SENTINEL" ] && { [ -z "$SEEN_VERSION" ] || [ "$SEEN_VERSION" = "$SEED_VERSION" ]; }; then
+# A read that FAILS (permission/IO) is not a legacy sentinel — fall through to
+# the reseed path so the later sentinel write surfaces the error.
+if [ -f "$SENTINEL" ] && SEEN_VERSION="$(cat "$SENTINEL")" 2>/dev/null \
+   && { [ -z "$SEEN_VERSION" ] || [ "$SEEN_VERSION" = "$SEED_VERSION" ]; }; then
   echo "🌱 seed: already seeded (${SEEN_VERSION:-legacy}) — skipping copies/installers"
   exit 0
 fi
@@ -286,7 +304,7 @@ Any signal means offer repair. Confirm each write, back up the override, remove 
 ## Step 5 — Verify
 
 Once written:
-1. Run `docker compose -f .devcontainer/docker-compose.yml -f .devcontainer/docker-compose.override.yml config` from the project root. Compose will print the merged config or fail loudly on a typo. Check that the service name matches and that no host bind targets the container user's `~/.claude`, `~/.dotfiles`, or OpenCode directory.
+1. Run `docker compose -f .devcontainer/docker-compose.yml -f .devcontainer/docker-compose.override.yml config` from the project root. Compose will print the merged config or fail loudly on a typo. Check that the service name matches and that no host bind targets the container user's `~/.claude`, `~/.dotfiles`, or OpenCode directory. Unless the user opted into credential sharing, also confirm no host bind targets `~/.ssh` or `~/.config/gh` — an inherited base-file bind there must be shadowed with an empty named volume (Step 3), not left in the merged config.
 2. Confirm the merged `command` contains `local-seed.sh` followed by the original foreground command.
 3. Run `git check-ignore .devcontainer/docker-compose.override.yml .devcontainer/local-seed.sh`, then compare `git status --short` with the initial snapshot. They must match; if a new tracked devcontainer modification appears, report it without staging or reverting it.
 4. After the user rebuilds, verify container-local files and read-only seed mounts:
@@ -295,7 +313,7 @@ Once written:
 docker compose exec {SERVICE} sh -c 'test "$(stat -c %u:%g /home/{USER}/.claude)" = "$(id -u):$(id -g)" && test "$(stat -c %u:%g /home/{USER}/.dotfiles)" = "$(id -u):$(id -g)"'
 docker compose exec {SERVICE} test -f /home/{USER}/.claude/.seeded
 docker compose exec {SERVICE} grep -Fq 'ai/vekil/env.zsh' /home/{USER}/.zshrc   # Vekil hook present
-docker compose exec {SERVICE} zsh -c 'source /home/{USER}/.zshrc' 2>&1           # hook sources cleanly
+docker compose exec {SERVICE} zsh -ec 'source /home/{USER}/.dotfiles/ai/vekil/env.zsh'   # hook target sources nonzero on failure
 docker compose exec {SERVICE} test -f /home/{USER}/.claude/settings.json
 docker compose exec {SERVICE} test -f /home/{USER}/.codex/config.toml
 docker compose exec {SERVICE} zsh -lic 'print "OPENAI_BASE_URL=$OPENAI_BASE_URL"; print "ANTHROPIC_BASE_URL=$ANTHROPIC_BASE_URL"; whence -v codex'
@@ -303,15 +321,15 @@ docker compose exec {SERVICE} sh -c 'touch /host-seed/.claude/.write-test' # mus
 ```
 
 The `grep` line asserts the seed wrote the Vekil hook into the container's
-`~/.zshrc`; the `source` line asserts it actually loads — a present-but-broken
-hook (missing or malformed `~/.dotfiles/ai/vekil/env.zsh` target) prints errors
-here even though the grep passed. Only once the hook sources cleanly does an
-empty `OPENAI_BASE_URL` in the `zsh -lic` line point at the readiness probe
-rather than a missing or non-loading hook. If the grep fails, the seed's
-always-run block didn't execute — check that the running container isn't holding
-a stale pre-hook `local-seed.sh` (a persisted named volume can keep an old
-sentinel; a version bump refreshes the gated steps, but only once the on-disk
-seed script is the current template).
+`~/.zshrc`; the `source` line sources the hook *target* directly under `zsh -e`,
+so a missing or malformed `~/.dotfiles/ai/vekil/env.zsh` exits nonzero even
+though later `.zshrc` lines would have masked the error. Only once the target
+sources cleanly does an empty `OPENAI_BASE_URL` in the `zsh -lic` line point at
+the readiness probe rather than a missing or non-loading hook. If the grep
+fails, the seed's always-run block didn't execute — check that the running
+container isn't holding a stale pre-hook `local-seed.sh` (a persisted named
+volume can keep an old sentinel; a version bump refreshes the gated steps, but
+only once the on-disk seed script is the current template).
 
 Empty endpoint variables or Codex resolving to the raw binary mean the
 container-local zsh hook did not load or Vekil's `/readyz` probe failed.

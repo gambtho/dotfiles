@@ -204,7 +204,7 @@ Mount `~/.claude` and `~/.dotfiles` read-only under `/host-seed`, then copy the 
 Write or merge the gitignored `docker-compose.override.yml` directly. The override must:
 
 1. Target the actual devcontainer service and home directory found in Step 2.
-2. Leave host SSH keys and `gh` auth unmounted by default. Ask the user once: "Share host SSH keys and gh auth with this container? (default: no)" — mounting them forces every container onto the same host GitHub identity and key set and can switch accounts unexpectedly. Only if the user opts in, mount `~/.ssh` and `~/.config/gh` read-only at the container home. Otherwise the container authenticates itself (`gh auth login` inside the container, a project-scoped `GH_TOKEN`, or its own key).
+2. Leave host SSH keys and `gh` auth unmounted by default. Ask the user once: "Share host SSH keys and gh auth with this container? (default: no)" — mounting them forces every container onto the same host GitHub identity and key set and can switch accounts unexpectedly. Only if the user opts in, mount `~/.ssh` and `~/.config/gh` read-only at the container home. Otherwise the container authenticates itself (`gh auth login` inside the container, a project-scoped `GH_TOKEN`, or its own key). If the merged base compose already binds host `~/.ssh` or `~/.config/gh` and the user declined, shadow each inherited target with an empty project-scoped named volume — declining must not leave an inherited host bind in place.
 3. Mount `~/.claude` at `/host-seed/.claude:ro,cached` and `~/.dotfiles` at `/host-seed/.dotfiles:ro,cached`.
 4. Mount project-scoped named volumes at the container user's `~/.claude` and `~/.dotfiles`. Because Compose volume entries merge by container target, these replace legacy host binds inherited from the base compose file.
 5. If the merged base still exposes host OpenCode config, shadow that target with an empty project-scoped named volume; do not seed or install OpenCode.
@@ -238,7 +238,7 @@ Remediation (confirm with user before each write):
 
 - Rewrite the override to read-only seed mounts, container-local named-volume targets, the `command` override, and `local-seed.sh` from Step 6. Back up the old override to `<file>.backup-<timestamp>`.
 - Remove the `${HOME}:${HOME}` dual-mount lines.
-- Inspect the fully merged Compose config, not only the override. Shadow any legacy base-file binds targeting the container user's `~/.claude`, `~/.dotfiles`, or OpenCode directory with project-scoped named volumes.
+- Inspect the fully merged Compose config, not only the override. Shadow any legacy base-file binds targeting the container user's `~/.claude`, `~/.dotfiles`, or OpenCode directory with project-scoped named volumes. Unless credential sharing was opted into, do the same for any inherited `~/.ssh` or `~/.config/gh` bind.
 - Optional host cleanup: rewrite `/home/<container-user>` to the host home in `~/.claude/plugins/{known_marketplaces,installed_plugins}.json`, and delete broken `~/.claude` symlinks whose target starts with `/home/<container-user>`. Show a diff or list first; never bulk-delete without confirmation.
 - Tell the user to rebuild the container to apply the repair.
 
@@ -341,18 +341,18 @@ Report to the user:
 - For case (a): verify Vekil in a fresh interactive login shell:
   ```bash
   # Run grep INSIDE the container — a bare ~/.zshrc would expand on the host.
-  docker compose exec <service> sh -c 'grep -Fq ai/vekil/env.zsh "$HOME/.zshrc"'   # hook present
-  docker compose exec <service> sh -c 'zsh -c "source \"$HOME/.zshrc\"" 2>&1'       # hook sources cleanly
+  docker compose exec <service> sh -c 'grep -Fq ai/vekil/env.zsh "$HOME/.zshrc"'          # hook present
+  docker compose exec <service> sh -c 'zsh -ec "source \"$HOME/.dotfiles/ai/vekil/env.zsh\""'  # target sources nonzero on failure
   docker compose exec <service> zsh -lic 'print "OPENAI_BASE_URL=$OPENAI_BASE_URL"; print "ANTHROPIC_BASE_URL=$ANTHROPIC_BASE_URL"; whence -v codex'
   ```
   If the hook grep fails, the seed's always-run block never wrote it — the
   running container is likely executing a stale pre-hook `local-seed.sh`. A
   persisted named volume can keep an old versioned sentinel; confirm the on-disk
   seed matches the current template, then restart so the always-run block fires.
-  If the hook is present but the source line errors or prints warnings, the hook
-  target is missing or malformed (`~/.dotfiles/ai/vekil/env.zsh` absent, or the
-  dotfiles copy never landed) — fix that before blaming the proxy. Only once the
-  hook sources cleanly does an empty endpoint variable point at Vekil's
+  The `zsh -ec` line sources the hook *target* directly, so a missing or
+  malformed `~/.dotfiles/ai/vekil/env.zsh` exits nonzero even when later startup
+  commands would have masked it — fix that before blaming the proxy. Only once
+  the target sources cleanly does an empty endpoint variable point at Vekil's
   `/readyz` probe. Empty endpoint variables or Codex resolving to the raw binary
   otherwise mean the container-local zsh hook did not load.
   Diagnose the local seed hook and proxy readiness. Never edit a Dockerfile or
