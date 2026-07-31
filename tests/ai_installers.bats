@@ -142,6 +142,57 @@ SCRIPT
   [ "$(cat "$HOME/action")" = "start" ]
 }
 
+@test "vekil installer does not touch systemd when HOME is redirected" {
+  # `systemctl --user` ignores HOME and targets the invoking user's real
+  # manager, so a sandboxed run must never install or enable the unit.
+  mkdir -p "$HOME/.local/bin" "$HOME/.local/state/vekil" "$HOME/.config/vekil"
+  printf 'v0.13.3\n' >"$HOME/.local/state/vekil/installed-version"
+  printf 'token\n' >"$HOME/.config/vekil/access-token"
+  chmod 0600 "$HOME/.config/vekil/access-token"
+  printf '#!/bin/bash\nexit 0\n' >"$HOME/.local/bin/vekil"
+  chmod +x "$HOME/.local/bin/vekil"
+
+  cat >"$STUB_BIN/systemctl" <<'SCRIPT'
+#!/bin/bash
+printf '%s\n' "$*" >>"$VEKIL_SYSTEMCTL_LOG"
+SCRIPT
+  chmod +x "$STUB_BIN/systemctl"
+  cat >"$STUB_BIN/env" <<'SCRIPT'
+#!/bin/bash
+printf '%s\n' "${*: -1}" >"$VEKIL_ACTION_FILE"
+SCRIPT
+  chmod +x "$STUB_BIN/env"
+
+  run /usr/bin/env \
+    HOME="$HOME" \
+    PATH="$PATH" \
+    VEKIL_SKIP_AUTH=1 \
+    VEKIL_SYSTEMCTL_LOG="$HOME/systemctl.log" \
+    VEKIL_ACTION_FILE="$HOME/action" \
+    bash "$REPO_ROOT/ai/vekil/install.sh"
+
+  [ "$status" -eq 0 ]
+  [ ! -e "$HOME/systemctl.log" ]
+  [ ! -e "$HOME/.config/systemd/user/vekil.service" ]
+  # Falls back to starting the proxy through the lifecycle helper.
+  [ "$(cat "$HOME/action")" = "start" ]
+}
+
+@test "vekil service template renders an absolute repo path" {
+  local template="$REPO_ROOT/ai/vekil/vekil.service"
+  [ -f "$template" ]
+  grep -q '^ExecStart=@DOTFILES_ROOT@/bin/vekil-proxy start$' "$template"
+  grep -q '^ExecStop=@DOTFILES_ROOT@/bin/vekil-proxy stop$' "$template"
+  # oneshot + RemainAfterExit keeps the daemonized proxy in the unit cgroup so
+  # `systemctl --user stop` shuts it down instead of leaking the process.
+  grep -q '^Type=oneshot$' "$template"
+  grep -q '^RemainAfterExit=yes$' "$template"
+  grep -q '^WantedBy=default.target$' "$template"
+  # No placeholder may survive rendering.
+  run bash -c "sed 's|@DOTFILES_ROOT@|/repo|g' '$template' | grep -c '@DOTFILES_ROOT@' || true"
+  [ "$output" = "0" ]
+}
+
 @test "codex check mode changes no files" {
   assert_check_is_immutable ai/codex/install.sh
 }

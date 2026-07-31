@@ -2,6 +2,19 @@
 
 set -euo pipefail
 
+# Snapshot caller-supplied overrides before the defaults below assign them.
+# The user service starts vekil-proxy with no environment, so it can only
+# manage the default port/paths; any override must take the direct path.
+VEKIL_ENV_OVERRIDDEN=0
+for _vekil_override in VEKIL_PORT VEKIL_BIN VEKIL_STATE_DIR VEKIL_TOKEN_DIR VEKIL_INSTALL_DIR; do
+  if [[ -n "${!_vekil_override+x}" ]]; then
+    VEKIL_ENV_OVERRIDDEN=1
+    VEKIL_ENV_OVERRIDE_NAME="$_vekil_override"
+    break
+  fi
+done
+unset _vekil_override
+
 source "$(dirname "${BASH_SOURCE[0]}")/../../bin/common.sh"
 
 DOTFILES_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
@@ -18,6 +31,11 @@ LIFECYCLE_BIN="$DOTFILES_ROOT/bin/vekil-proxy"
 LEGACY_LITELLM_DIR="${LITELLM_CONFIG_DIR:-$HOME/.config/litellm}"
 LEGACY_LITELLM_CONFIG="$LEGACY_LITELLM_DIR/config.yaml"
 LEGACY_STOP_TIMEOUT="${VEKIL_LEGACY_STOP_TIMEOUT:-15}"
+SERVICE_TEMPLATE="$DOTFILES_ROOT/ai/vekil/vekil.service"
+SYSTEMD_USER_DIR="${VEKIL_SYSTEMD_USER_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user}"
+SERVICE_UNIT="$SYSTEMD_USER_DIR/vekil.service"
+STAGED_SERVICE=""
+SERVICE_INSTALLED=0
 DOWNLOAD_DIR=""
 STAGED_BIN=""
 STAGED_VERSION=""
@@ -30,6 +48,7 @@ cleanup() {
   [[ -z "$STAGED_BIN" ]] || rm -f "$STAGED_BIN"
   [[ -z "$STAGED_VERSION" ]] || rm -f "$STAGED_VERSION"
   [[ -z "$STAGED_RESTART_REQUIRED" ]] || rm -f "$STAGED_RESTART_REQUIRED"
+  [[ -z "$STAGED_SERVICE" ]] || rm -f "$STAGED_SERVICE"
 }
 
 trap cleanup EXIT
@@ -426,6 +445,72 @@ authenticate_vekil() {
   fi
 }
 
+systemd_user_available() {
+  [[ "$(uname -s)" == "Linux" ]] || return 1
+  [[ "${VEKIL_SKIP_SERVICE:-0}" != "1" ]] || return 1
+  command -v systemctl >/dev/null 2>&1 || return 1
+  # `systemctl --user` always acts on the invoking user's real manager, ignoring
+  # HOME. If HOME has been redirected (test harnesses, sandboxes), installing a
+  # unit would mutate state outside the sandbox -- refuse and start directly.
+  local real_home
+  real_home=$(getent passwd "$(id -u)" 2>/dev/null | cut -d: -f6 || true)
+  [[ -n "$real_home" && "$HOME" == "$real_home" ]] || return 1
+  # A user manager only exists for a real login session (absent in containers,
+  # SSH ForceCommand, and CI). Without it, fall back to a direct start.
+  systemctl --user show-environment >/dev/null 2>&1 || return 1
+  [[ -f "$SERVICE_TEMPLATE" && ! -L "$SERVICE_TEMPLATE" ]] || return 1
+  # The unit invokes vekil-proxy with no environment, so it resolves the default
+  # port/paths. If this run overrides any of them, systemd would manage a
+  # different proxy than the caller asked for -- use the direct path instead.
+  if ((VEKIL_ENV_OVERRIDDEN)); then
+    log_warning "${VEKIL_ENV_OVERRIDE_NAME} is set; skipping the Vekil user service and starting the proxy directly."
+    return 1
+  fi
+}
+
+# Installs (or refreshes) the user unit that starts the proxy at login/boot.
+# The unit is generated from the repo template so DOTFILES_ROOT is baked in and
+# the file stays a plain regular file rather than a symlink into the repo --
+# systemd refuses to follow unit symlinks outside its search path predictably.
+install_service_unit() {
+  SERVICE_INSTALLED=0
+  systemd_user_available || return 0
+
+  prepare_destination_directory "$SYSTEMD_USER_DIR"
+  validate_regular_target "$SERVICE_UNIT"
+
+  STAGED_SERVICE=$(mktemp "$SYSTEMD_USER_DIR/.vekil.service.XXXXXX")
+  sed "s|@DOTFILES_ROOT@|$DOTFILES_ROOT|g" "$SERVICE_TEMPLATE" >"$STAGED_SERVICE"
+  chmod 0644 "$STAGED_SERVICE"
+
+  if [[ -f "$SERVICE_UNIT" ]] && cmp -s "$STAGED_SERVICE" "$SERVICE_UNIT"; then
+    rm -f "$STAGED_SERVICE"
+    STAGED_SERVICE=""
+  else
+    validate_regular_target "$SERVICE_UNIT"
+    command mv -f "$STAGED_SERVICE" "$SERVICE_UNIT"
+    STAGED_SERVICE=""
+    log_info "Installed Vekil user service at $SERVICE_UNIT."
+  fi
+
+  systemctl --user daemon-reload
+  systemctl --user enable vekil.service >/dev/null
+
+  # Without lingering, the user manager is torn down when the last session ends,
+  # so the proxy would not survive a reboot into a fresh WSL/SSH session.
+  if command -v loginctl >/dev/null 2>&1; then
+    if [[ "$(loginctl show-user "$USER" -p Linger --value 2>/dev/null || true)" != "yes" ]]; then
+      if loginctl enable-linger "$USER" 2>/dev/null; then
+        log_info "Enabled systemd lingering for $USER."
+      else
+        log_warning "Could not enable systemd lingering; run: sudo loginctl enable-linger $USER"
+      fi
+    fi
+  fi
+
+  SERVICE_INSTALLED=1
+}
+
 start_vekil() {
   [[ "${VEKIL_SKIP_START:-0}" == "1" ]] && return 0
 
@@ -439,7 +524,19 @@ start_vekil() {
   validate_regular_target "$RESTART_REQUIRED_FILE"
   [[ "$VEKIL_CHANGED" == "0" && "$AUTH_CHANGED" == "0" && ! -f "$RESTART_REQUIRED_FILE" ]] || action="restart"
   [[ -z "${VEKIL_PORT+x}" ]] || lifecycle_env+=("VEKIL_PORT=$VEKIL_PORT")
-  command env "${lifecycle_env[@]}" "$LIFECYCLE_BIN" "$action"
+
+  if ((SERVICE_INSTALLED)); then
+    # Let systemd own the process so it is tracked and restarted on boot.
+    # ExecStart is idempotent: vekil-proxy start is a no-op when already ready.
+    if [[ "$action" == "restart" ]]; then
+      systemctl --user restart vekil.service
+    else
+      systemctl --user start vekil.service
+    fi
+  else
+    command env "${lifecycle_env[@]}" "$LIFECYCLE_BIN" "$action"
+  fi
+
   [[ "$action" != "restart" ]] || clear_restart_required
 }
 
@@ -453,6 +550,7 @@ main() {
     log_info "[dry-run] Would inspect $LEGACY_LITELLM_DIR/proxy.pid for legacy LiteLLM on port 4000"
     log_info "[dry-run] Would inspect $LEGACY_LITELLM_DIR/codex-proxy.pid for legacy LiteLLM on port 4001"
     log_info "[dry-run] Would authenticate Vekil using token directory $TOKEN_DIR and start it through bin/vekil-proxy"
+    log_info "[dry-run] Would install and enable the user service $SERVICE_UNIT from $SERVICE_TEMPLATE"
     return 0
   fi
 
@@ -461,6 +559,7 @@ main() {
   install_vekil
   cleanup_legacy_litellm
   authenticate_vekil
+  install_service_unit
   start_vekil
   log_success "Vekil setup complete."
 }
