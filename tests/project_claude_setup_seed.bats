@@ -117,6 +117,47 @@ extract_seed_script() {
   [ ! -e "$HOME/.claude/settings.json" ]
 }
 
+@test "a stale stamped sentinel is reseeded and restamped" {
+  local seed_version
+  seed_version="$(sed -n 's/^SEED_VERSION=//p' "$SEED_SCRIPT")"
+  [ -n "$seed_version" ]
+
+  # Distinct from both the empty-sentinel migration and the matching-version
+  # skip: a real but older version must re-run the gated steps.
+  printf '%s\n' "$((seed_version - 1))" >"$HOME/.claude/.seeded"
+  printf '{}\n' >"$TEST_ROOT/host-seed/.claude/settings.json"
+  touch "$TEST_ROOT/host-seed/.dotfiles/ai/marketplace/marker"
+
+  run bash "$SEED_SCRIPT"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"seeding to v$seed_version"* ]]
+  [[ "$output" != *"migrating legacy unstamped sentinel"* ]]
+  [ -f "$HOME/.claude/settings.json" ]
+  [ -f "$HOME/.dotfiles/ai/marketplace/marker" ]
+  [ "$(cat "$HOME/.claude/.seeded")" = "$seed_version" ]
+}
+
+@test "reseeding replaces directory contents without nesting" {
+  mkdir -p "$TEST_ROOT/host-seed/.claude/commands"
+  printf 'current\n' >"$TEST_ROOT/host-seed/.claude/commands/live.md"
+
+  run bash "$SEED_SCRIPT"
+  [ "$status" -eq 0 ]
+  [ -f "$HOME/.claude/commands/live.md" ]
+
+  # Force a second gated run against the now-populated destination.
+  printf '0\n' >"$HOME/.claude/.seeded"
+  printf 'stale\n' >"$HOME/.claude/commands/removed-from-host.md"
+
+  run bash "$SEED_SCRIPT"
+
+  [ "$status" -eq 0 ]
+  [ ! -e "$HOME/.claude/commands/commands" ]
+  [ ! -e "$HOME/.claude/commands/removed-from-host.md" ]
+  [ -f "$HOME/.claude/commands/live.md" ]
+}
+
 @test "the installed zsh hook loads Vekil endpoints and the Codex wrapper" {
   mkdir -p "$TEST_ROOT/host-seed/.dotfiles/ai/vekil"
   cp "$REPO_ROOT/ai/vekil/env.zsh" \

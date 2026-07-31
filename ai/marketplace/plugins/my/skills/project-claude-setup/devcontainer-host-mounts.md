@@ -116,7 +116,18 @@ Optional, ask before adding:
 - **`~/.pi`** — only used in some of the user's projects (e.g. `abyssalwatch`). Don't include by default.
 - **Project-specific dirs** — if the user mentions another tool's config they want shared, mount it the same way.
 
-If a host directory doesn't exist, Docker creates an empty one when the container starts. That's not a failure mode — just means the tool isn't on the host yet. Don't add `if`-checks or skip mounts on this basis.
+For the **optional** directory mounts above (`~/.ssh`, `~/.config/gh`, `~/.pi`,
+project-specific dirs), a missing host directory is not a failure mode — Docker
+creates an empty one at container start, which just means the tool isn't on the
+host yet. Don't add `if`-checks or skip mounts on that basis.
+
+The `/host-seed/.claude` allowlist is the exception, and it is not optional: check
+each of the five sources with `test -e` while generating the override and emit only
+the mounts whose sources exist. Docker materializes a missing bind source as a
+*directory*, so an absent `settings.json` would appear in the container as an empty
+directory and break the seed copy — and an absent `commands/` would silently shadow
+nothing while looking mounted. Emitting all five unconditionally is a bug, not a
+convenience.
 
 ## Step 4 — Write the local override and seed script
 
@@ -130,6 +141,10 @@ Use this template, filling in `{SERVICE}`, `{USER}`, `{WORKSPACE}`, and `{BASE_C
 services:
   {SERVICE}:
     volumes:
+      # Emit only the allowlist entries whose host source exists (see Step 3):
+      #   for p in settings.json CLAUDE.md config commands skills; do
+      #     [ -e "$HOME/.claude/$p" ] && echo "      - ~/.claude/$p:/host-seed/.claude/$p:ro,cached"
+      #   done
       - ~/.claude/settings.json:/host-seed/.claude/settings.json:ro,cached
       - ~/.claude/CLAUDE.md:/host-seed/.claude/CLAUDE.md:ro,cached
       - ~/.claude/config:/host-seed/.claude/config:ro,cached
@@ -255,11 +270,18 @@ mkdir -p "$HOME/.claude"
 
 # 1. Copy authored config subset (skip runtime state + 1.6G plugins).
 if [ -d "$SEED_CLAUDE" ]; then
-  for item in settings.json CLAUDE.md config; do
+  for item in settings.json CLAUDE.md; do
     [ -e "$SEED_CLAUDE/$item" ] && cp -a "$SEED_CLAUDE/$item" "$HOME/.claude/$item"
   done
-  for dir in commands skills; do
-    [ -d "$SEED_CLAUDE/$dir" ] && cp -a "$SEED_CLAUDE/$dir" "$HOME/.claude/$dir"
+  # Directories must be removed first: `cp -a src/commands dst/commands` copies
+  # *into* an existing destination, producing ~/.claude/commands/commands on the
+  # second (version-gated) reseed. Removing first also clears files deleted from
+  # the host since the last seed, instead of leaving them stale.
+  for dir in config commands skills; do
+    if [ -d "$SEED_CLAUDE/$dir" ]; then
+      rm -rf "$HOME/.claude/$dir"
+      cp -a "$SEED_CLAUDE/$dir" "$HOME/.claude/$dir"
+    fi
   done
   echo "🌱 seed: copied authored ~/.claude subset"
 else
@@ -334,16 +356,30 @@ Once written:
 4. After the user rebuilds, verify container-local files and read-only seed mounts:
 
 ```bash
-docker compose exec {SERVICE} sh -c 'test "$(stat -c %u:%g /home/{USER}/.claude)" = "$(id -u):$(id -g)" && test "$(stat -c %u:%g /home/{USER}/.dotfiles)" = "$(id -u):$(id -g)"'
-docker compose exec {SERVICE} sh -c 'test "$(cat /home/{USER}/.claude/.seeded)" = "{SEED_VERSION}"'
-docker compose exec {SERVICE} grep -Fq 'ai/vekil/env.zsh' /home/{USER}/.zshrc   # Vekil hook present
-docker compose exec {SERVICE} zsh -n /home/{USER}/.dotfiles/ai/vekil/env.zsh   # hook target exists + parses; no /readyz probe
-docker compose exec {SERVICE} test -f /home/{USER}/.claude/settings.json
-docker compose exec {SERVICE} test -f /home/{USER}/.codex/config.toml
-docker compose exec {SERVICE} zsh -lic 'print "OPENAI_BASE_URL=$OPENAI_BASE_URL"; print "ANTHROPIC_BASE_URL=$ANTHROPIC_BASE_URL"; whence -v codex'
-docker compose exec {SERVICE} sh -c 'touch /host-seed/.claude/settings.json' # must fail read-only
-docker compose exec {SERVICE} sh -c 'test -e /host-seed/.claude/.credentials.json' # must fail: not mounted
+docker compose exec -u {USER} {SERVICE} sh -c 'test "$(stat -c %u:%g /home/{USER}/.claude)" = "$(id -u):$(id -g)" && test "$(stat -c %u:%g /home/{USER}/.dotfiles)" = "$(id -u):$(id -g)"'
+docker compose exec -u {USER} {SERVICE} sh -c 'test "$(cat /home/{USER}/.claude/.seeded)" = "{SEED_VERSION}"'
+docker compose exec -u {USER} {SERVICE} grep -Fq 'ai/vekil/env.zsh' /home/{USER}/.zshrc   # Vekil hook present
+docker compose exec -u {USER} {SERVICE} zsh -n /home/{USER}/.dotfiles/ai/vekil/env.zsh   # hook target exists + parses; no /readyz probe
+docker compose exec -u {USER} {SERVICE} test -f /home/{USER}/.claude/settings.json   # only if that mount was emitted — see below
+docker compose exec -u {USER} {SERVICE} test -f /home/{USER}/.codex/config.toml
+docker compose exec -u {USER} {SERVICE} zsh -lic 'print "OPENAI_BASE_URL=$OPENAI_BASE_URL"; print "ANTHROPIC_BASE_URL=$ANTHROPIC_BASE_URL"; whence -v codex'
+docker compose exec -u {USER} {SERVICE} sh -c 'touch /host-seed/.claude/settings.json' # must fail read-only
+docker compose exec -u {USER} {SERVICE} sh -c 'test -e /host-seed/.claude/.credentials.json' # must fail: not mounted
 ```
+
+Every check above runs with `-u {USER}` (the container user from Step 2), not
+`exec`'s default. This matters most for the ownership line: with the default user
+— often root — `$(id -u):$(id -g)` evaluates to `0:0` and the test compares root
+against root, passing even when the named volumes were never chowned to the real
+user. The `zsh -lic` line needs the same treatment or it reads root's login
+environment rather than the one the seed configured.
+
+The two `settings.json` lines are conditional on that mount being emitted. When
+the host has no `~/.claude/settings.json`, Step 3 omits it from the allowlist, so
+there is nothing to copy and nothing to write-test — skip both and instead
+confirm the override's mount list contains only the entries whose host sources
+exist, and that the seed log printed `copied authored ~/.claude subset`. Running
+the exec test against an omitted mount reports a seed failure that isn't one.
 
 The `.seeded` line checks the sentinel's *content*, not just its existence — an
 empty file is a legacy pre-versioning sentinel, and treating it as current is
