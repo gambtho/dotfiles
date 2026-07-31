@@ -193,6 +193,22 @@ SCRIPT
   [ "$output" = "0" ]
 }
 
+@test "vekil service rendering escapes sed metacharacters in the repo path" {
+  # A repo path containing \, & or the | delimiter must be substituted
+  # literally; unescaped, sed silently corrupts the unit or errors out.
+  local template="$TEST_ROOT/tmpl.service"
+  printf 'ExecStart=@DOTFILES_ROOT@/bin/vekil-proxy start\n' >"$template"
+
+  local root='/home/a&b/c|d/e\f/dotfiles'
+  local escaped=${root//\\/\\\\}
+  escaped=${escaped//|/\\|}
+  escaped=${escaped//&/\\&}
+
+  run sed "s|@DOTFILES_ROOT@|$escaped|g" "$template"
+  [ "$status" -eq 0 ]
+  [ "$output" = "ExecStart=$root/bin/vekil-proxy start" ]
+}
+
 @test "codex check mode changes no files" {
   assert_check_is_immutable ai/codex/install.sh
 }

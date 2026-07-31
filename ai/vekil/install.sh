@@ -480,7 +480,13 @@ install_service_unit() {
   validate_regular_target "$SERVICE_UNIT"
 
   STAGED_SERVICE=$(mktemp "$SYSTEMD_USER_DIR/.vekil.service.XXXXXX")
-  sed "s|@DOTFILES_ROOT@|$DOTFILES_ROOT|g" "$SERVICE_TEMPLATE" >"$STAGED_SERVICE"
+  # Escape the replacement so a repo path containing sed metacharacters (\, &,
+  # or the | delimiter) is substituted literally instead of corrupting the unit.
+  local escaped_root
+  escaped_root=${DOTFILES_ROOT//\\/\\\\}
+  escaped_root=${escaped_root//|/\\|}
+  escaped_root=${escaped_root//&/\\&}
+  sed "s|@DOTFILES_ROOT@|$escaped_root|g" "$SERVICE_TEMPLATE" >"$STAGED_SERVICE"
   chmod 0644 "$STAGED_SERVICE"
 
   if [[ -f "$SERVICE_UNIT" ]] && cmp -s "$STAGED_SERVICE" "$SERVICE_UNIT"; then
