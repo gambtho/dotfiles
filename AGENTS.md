@@ -22,13 +22,14 @@ ai/
     install.sh
   vekil/                     # Shared Copilot model proxy for Claude Code + Codex
     env.zsh                  # Auto-selects host/devcontainer endpoint
+    vekil.service            # systemd user unit template (autostart at boot)
     install.sh               # Pinned install, managed auth, lifecycle startup
 ```
 
 Configuration is symlinked into `~/.claude/` and `~/.codex/` by the respective
 install scripts. Run `make ai` or individual `ai/*/install.sh` scripts.
 
-Vekil is installed and started only through `ai/vekil/install.sh` and `bin/vekil-proxy`. Its credentials and runtime state are machine-local under `~/.config/vekil/` and `~/.local/state/vekil/`, but their lifecycle is repository-managed. The proxy binds to the Docker bridge when available so devcontainers can use `host.docker.internal` without exposing it on every interface.
+Vekil is installed and started only through `ai/vekil/install.sh` and `bin/vekil-proxy`. Its credentials and runtime state are machine-local under `~/.config/vekil/` and `~/.local/state/vekil/`, but their lifecycle is repository-managed. On Linux the installer also enables a systemd user service (from `ai/vekil/vekil.service`) so the proxy starts at boot — `env.zsh` only reads the proxy's state and never starts it. The proxy binds to the Docker bridge when available so devcontainers can use `host.docker.internal` without exposing it on every interface.
 
 ## The `my` Plugin
 

@@ -6,9 +6,47 @@ its installer (`install.sh`), lifecycle helper reference, and the shell
 integration (`env.zsh`) that points the clients at the proxy.
 
 - Proxy lifecycle script: `bin/vekil-proxy`
+- Autostart unit template: `ai/vekil/vekil.service`
 - Shell integration (sourced from `core/shell/load-custom.zsh`): `ai/vekil/env.zsh`
 - Codex config + auth installer: `ai/codex/install.sh`
 - Migration background: `VEKIL_MIGRATION_HANDOFF.md` (repo root)
+
+## Autostart
+
+`env.zsh` is deliberately read-only: it checks `/readyz` and, if the proxy is
+down, unsets the managed variables and returns. It never starts the proxy. So
+something else has to, or every shell after a reboot silently gets no
+`ANTHROPIC_BASE_URL` and Claude/Codex bypass the proxy.
+
+On Linux with a systemd user manager, `ai/vekil/install.sh` installs a user
+service from the `ai/vekil/vekil.service` template, substituting the repo path
+into `ExecStart`, then enables it and turns on lingering (so the user manager
+survives logout and starts at boot).
+
+```bash
+systemctl --user status vekil       # is it up?
+systemctl --user restart vekil      # after auth changes or a version bump
+journalctl --user -u vekil -n 50    # startup output (proxy's own log is bin/vekil-proxy logs)
+```
+
+Notes:
+
+- The unit is `Type=oneshot` + `RemainAfterExit=yes`. `vekil-proxy start`
+  daemonizes and returns once `/readyz` answers; the proxy stays in the unit's
+  cgroup, so `systemctl --user stop vekil` shuts it down properly.
+- `ExecStartPre` waits up to 30s for the Docker bridge. The proxy binds to that
+  bridge so devcontainers can reach it via `host.docker.internal`; without the
+  wait, a boot race binds it to loopback and container access breaks silently.
+- A terminal opened in the first second or two after boot can still lose the
+  race and start without the variables. Open a new shell.
+- If you set `VEKIL_PORT`, `VEKIL_BIN`, `VEKIL_STATE_DIR`, `VEKIL_TOKEN_DIR`, or
+  `VEKIL_INSTALL_DIR`, the installer skips the service and starts the proxy
+  directly — the unit runs with no environment and would otherwise manage a
+  different proxy than you asked for. Same fallback when there is no systemd
+  user manager (containers, CI, macOS): set `VEKIL_SKIP_SERVICE=1` to force it.
+- Lingering needs polkit permission. If the installer warns, run
+  `sudo loginctl enable-linger $USER`.
+
 
 ## How the two clients reach the proxy
 
