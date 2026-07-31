@@ -5,7 +5,7 @@
 > `my:project-claude-setup`. No YAML frontmatter — this is not a
 > separately loaded skill.
 
-Use a local `docker-compose.override.yml` to expose Claude Code config and dotfiles as read-only seed sources under `/host-seed`. Project-scoped named volumes at the container user's `~/.claude` and `~/.dotfiles` replace inherited host binds with the same targets. A local `local-seed.sh` copies the authored subset into those container-local volumes and installs a container-local zsh hook for Vekil before the base foreground command starts. Claude Code can then write sessions, history, plugins, and other runtime state only inside the container.
+Use a local `docker-compose.override.yml` to expose an allowlisted subset of Claude Code config, plus dotfiles, as read-only seed sources under `/host-seed`. Only the authored-config paths the seed script copies are mounted — never all of `~/.claude`, which would expose host credentials and session transcripts to the container even read-only. Project-scoped named volumes at the container user's `~/.claude` and `~/.dotfiles` replace inherited host binds with the same targets. A local `local-seed.sh` copies the authored subset into those container-local volumes and installs a container-local zsh hook for Vekil before the base foreground command starts. Claude Code can then write sessions, history, plugins, and other runtime state only inside the container.
 
 Host SSH keys (`~/.ssh`) and `gh` auth (`~/.config/gh`) are **not** shared by default. Both are single global host credentials: mounting them forces every container onto the same GitHub identity and key set, which breaks per-container credential isolation and can switch accounts unexpectedly between projects. The container should authenticate itself instead (`gh auth login` inside the container, a project-scoped `GH_TOKEN`, or its own key). Mount them only when the user explicitly opts in for a project that genuinely wants the host identity — see Step 3.
 
@@ -75,9 +75,24 @@ If you can't determine the user from any of these signals, ask. Do not guess bet
 The default set, in order:
 
 ```
-~/.claude               →  /host-seed/.claude                (ro) seed source, never written
+~/.claude/settings.json →  /host-seed/.claude/settings.json  (ro) seed source, never written
+~/.claude/CLAUDE.md     →  /host-seed/.claude/CLAUDE.md      (ro) seed source
+~/.claude/config        →  /host-seed/.claude/config         (ro) seed source
+~/.claude/commands      →  /host-seed/.claude/commands       (ro) seed source
+~/.claude/skills        →  /host-seed/.claude/skills         (ro) seed source
 ~/.dotfiles             →  /host-seed/.dotfiles              (ro) seed source
 ```
+
+**Do not mount all of `~/.claude`.** Read-only still means readable: a whole-directory
+mount exposes `.credentials.json`, `history.jsonl`, `projects/` session transcripts, and
+`todos/` to every process in the container. Mount only the authored-config allowlist the
+seed script actually copies — the paths above are exactly that list, so the two must stay
+in sync if either changes.
+
+Each entry must exist on the host before the container starts. Docker creates a *directory*
+for a missing bind source, so a missing `settings.json` would surface in the container as an
+empty directory and break the seed copy. Check with `ls` first and drop any entry the host
+doesn't have, rather than mounting it and hoping.
 
 Container-local targets:
 
@@ -91,7 +106,9 @@ Compose merges service volumes by container target. These named-volume entries t
 **Inherited ssh/gh binds.** If the merged base compose already binds the host's `~/.ssh` or `~/.config/gh` into the container (some base images do), the opt-in decision below is not enough on its own — an inherited bind leaks the host identity even when the user declined. When sharing is declined, shadow each inherited target with an empty project-scoped named volume (`ssh-local-home` at `/home/{USER}/.ssh`, `gh-local-home` at `/home/{USER}/.config/gh`) so the container starts with no host credentials. The merged-config check in Step 5 must confirm neither target resolves to a host bind.
 
 Why each one:
-- **`~/.claude` seed (ro)**: supplies only authored config to the seed script. The container never writes through this mount.
+- **`~/.claude` seed (ro)**: supplies only authored config to the seed script, mounted
+  path-by-path so host credentials and session history are never visible in the
+  container at all. The container never writes through these mounts.
 - **`~/.dotfiles` seed (ro)**: supplies shell config and the marketplace/Codex installers. The script copies it container-local before running installers.
 
 Optional, ask before adding:
@@ -99,7 +116,18 @@ Optional, ask before adding:
 - **`~/.pi`** — only used in some of the user's projects (e.g. `abyssalwatch`). Don't include by default.
 - **Project-specific dirs** — if the user mentions another tool's config they want shared, mount it the same way.
 
-If a host directory doesn't exist, Docker creates an empty one when the container starts. That's not a failure mode — just means the tool isn't on the host yet. Don't add `if`-checks or skip mounts on this basis.
+For the **optional** directory mounts above (`~/.ssh`, `~/.config/gh`, `~/.pi`,
+project-specific dirs), a missing host directory is not a failure mode — Docker
+creates an empty one at container start, which just means the tool isn't on the
+host yet. Don't add `if`-checks or skip mounts on that basis.
+
+The `/host-seed/.claude` allowlist is the exception, and it is not optional: check
+each of the five sources with `test -e` while generating the override and emit only
+the mounts whose sources exist. Docker materializes a missing bind source as a
+*directory*, so an absent `settings.json` would appear in the container as an empty
+directory and break the seed copy — and an absent `commands/` would silently shadow
+nothing while looking mounted. Emitting all five unconditionally is a bug, not a
+convenience.
 
 ## Step 4 — Write the local override and seed script
 
@@ -113,7 +141,15 @@ Use this template, filling in `{SERVICE}`, `{USER}`, `{WORKSPACE}`, and `{BASE_C
 services:
   {SERVICE}:
     volumes:
-      - ~/.claude:/host-seed/.claude:ro,cached
+      # Emit only the allowlist entries whose host source exists (see Step 3):
+      #   for p in settings.json CLAUDE.md config commands skills; do
+      #     [ -e "$HOME/.claude/$p" ] && echo "      - ~/.claude/$p:/host-seed/.claude/$p:ro,cached"
+      #   done
+      - ~/.claude/settings.json:/host-seed/.claude/settings.json:ro,cached
+      - ~/.claude/CLAUDE.md:/host-seed/.claude/CLAUDE.md:ro,cached
+      - ~/.claude/config:/host-seed/.claude/config:ro,cached
+      - ~/.claude/commands:/host-seed/.claude/commands:ro,cached
+      - ~/.claude/skills:/host-seed/.claude/skills:ro,cached
       - ~/.dotfiles:/host-seed/.dotfiles:ro,cached
       - claude-local-home:/home/{USER}/.claude
       - dotfiles-local-home:/home/{USER}/.dotfiles
@@ -212,17 +248,20 @@ if ! grep -Fqx "$VEKIL_ENV_HOOK" "$ZSHRC"; then
 fi
 
 # --- Versioned gate --------------------------------------------------------
-# Skip the gated copy/install steps when the sentinel is current: either a
-# legacy bare sentinel (empty — the pre-versioning contract) or one that already
-# records this SEED_VERSION. Refresh only when a stamped version differs, so a
-# bump re-runs the steps on containers seeded by a newer template without
-# disturbing already-good legacy volumes. The Vekil hook above runs regardless.
-# A read that FAILS (permission/IO) is not a legacy sentinel — fall through to
-# the reseed path so the later sentinel write surfaces the error.
+# Skip the gated copy/install steps only when the sentinel already records this
+# SEED_VERSION. An empty legacy sentinel (the pre-versioning contract) is NOT
+# treated as current: it falls through once so the versioned copy/install steps
+# run and the sentinel gets stamped, after which the gate is a plain version
+# match. A bump likewise re-runs the steps. The Vekil hook above runs
+# regardless. A read that FAILS (permission/IO) also falls through to the
+# reseed path so the later sentinel write surfaces the error.
 if [ -f "$SENTINEL" ] && SEEN_VERSION="$(cat "$SENTINEL")" 2>/dev/null \
-   && { [ -z "$SEEN_VERSION" ] || [ "$SEEN_VERSION" = "$SEED_VERSION" ]; }; then
-  echo "🌱 seed: already seeded (${SEEN_VERSION:-legacy}) — skipping copies/installers"
+   && [ "$SEEN_VERSION" = "$SEED_VERSION" ]; then
+  echo "🌱 seed: already seeded (v$SEEN_VERSION) — skipping copies/installers"
   exit 0
+fi
+if [ -f "$SENTINEL" ] && [ -z "${SEEN_VERSION:-}" ]; then
+  echo "🌱 seed: migrating legacy unstamped sentinel to v$SEED_VERSION"
 fi
 echo "🌱 seed: seeding to v$SEED_VERSION"
 
@@ -231,11 +270,18 @@ mkdir -p "$HOME/.claude"
 
 # 1. Copy authored config subset (skip runtime state + 1.6G plugins).
 if [ -d "$SEED_CLAUDE" ]; then
-  for item in settings.json CLAUDE.md config; do
+  for item in settings.json CLAUDE.md; do
     [ -e "$SEED_CLAUDE/$item" ] && cp -a "$SEED_CLAUDE/$item" "$HOME/.claude/$item"
   done
-  for dir in commands skills; do
-    [ -d "$SEED_CLAUDE/$dir" ] && cp -a "$SEED_CLAUDE/$dir" "$HOME/.claude/$dir"
+  # Directories must be removed first: `cp -a src/commands dst/commands` copies
+  # *into* an existing destination, producing ~/.claude/commands/commands on the
+  # second (version-gated) reseed. Removing first also clears files deleted from
+  # the host since the last seed, instead of leaving them stale.
+  for dir in config commands skills; do
+    if [ -d "$SEED_CLAUDE/$dir" ]; then
+      rm -rf "$HOME/.claude/$dir"
+      cp -a "$SEED_CLAUDE/$dir" "$HOME/.claude/$dir"
+    fi
   done
   echo "🌱 seed: copied authored ~/.claude subset"
 else
@@ -267,7 +313,7 @@ printf '%s\n' "$SEED_VERSION" >"$SENTINEL"
 echo "🌱 seed: done (v$SEED_VERSION)"
 ```
 
-The sentinel now stores a version number rather than being a bare touch-file. The always-run block (ownership + Vekil hook) executes before the gate, so hook changes land on the next container start; the gated copy/install steps re-run whenever `SEED_VERSION` is bumped to a value different from what a *stamped* sentinel records, even on a persisted named volume that survives `--remove-existing-container`. A legacy bare sentinel (empty file) is treated as current and left alone — the always-run block still updates its hook — so existing good volumes are not needlessly reseeded.
+The sentinel now stores a version number rather than being a bare touch-file. The always-run block (ownership + Vekil hook) executes before the gate, so hook changes land on the next container start; the gated copy/install steps re-run whenever the sentinel does not record the current `SEED_VERSION`, even on a persisted named volume that survives `--remove-existing-container`. A legacy bare sentinel (empty file) predates versioning and cannot prove it ran the versioned steps, so it is *not* treated as current: it migrates once through the gated steps and is then stamped, after which the gate is a plain version match. That one extra reseed is idempotent — the copies overwrite with the same authored config and the installers are re-entrant.
 
 Execute it with `bash`; an executable bit is optional. Keep both files untracked. If the project does not already ignore them, add the actual override path plus the seed script path to `.git/info/exclude`. For the common `.devcontainer/` layout:
 
@@ -310,15 +356,37 @@ Once written:
 4. After the user rebuilds, verify container-local files and read-only seed mounts:
 
 ```bash
-docker compose exec {SERVICE} sh -c 'test "$(stat -c %u:%g /home/{USER}/.claude)" = "$(id -u):$(id -g)" && test "$(stat -c %u:%g /home/{USER}/.dotfiles)" = "$(id -u):$(id -g)"'
-docker compose exec {SERVICE} test -f /home/{USER}/.claude/.seeded
-docker compose exec {SERVICE} grep -Fq 'ai/vekil/env.zsh' /home/{USER}/.zshrc   # Vekil hook present
-docker compose exec {SERVICE} zsh -n /home/{USER}/.dotfiles/ai/vekil/env.zsh   # hook target exists + parses; no /readyz probe
-docker compose exec {SERVICE} test -f /home/{USER}/.claude/settings.json
-docker compose exec {SERVICE} test -f /home/{USER}/.codex/config.toml
-docker compose exec {SERVICE} zsh -lic 'print "OPENAI_BASE_URL=$OPENAI_BASE_URL"; print "ANTHROPIC_BASE_URL=$ANTHROPIC_BASE_URL"; whence -v codex'
-docker compose exec {SERVICE} sh -c 'touch /host-seed/.claude/.write-test' # must fail read-only
+docker compose exec -u {USER} {SERVICE} sh -c 'test "$(stat -c %u:%g /home/{USER}/.claude)" = "$(id -u):$(id -g)" && test "$(stat -c %u:%g /home/{USER}/.dotfiles)" = "$(id -u):$(id -g)"'
+docker compose exec -u {USER} {SERVICE} sh -c 'test "$(cat /home/{USER}/.claude/.seeded)" = "{SEED_VERSION}"'
+docker compose exec -u {USER} {SERVICE} grep -Fq 'ai/vekil/env.zsh' /home/{USER}/.zshrc   # Vekil hook present
+docker compose exec -u {USER} {SERVICE} zsh -n /home/{USER}/.dotfiles/ai/vekil/env.zsh   # hook target exists + parses; no /readyz probe
+docker compose exec -u {USER} {SERVICE} test -f /home/{USER}/.claude/settings.json   # only if that mount was emitted — see below
+docker compose exec -u {USER} {SERVICE} test -f /home/{USER}/.codex/config.toml
+docker compose exec -u {USER} {SERVICE} zsh -lic 'print "OPENAI_BASE_URL=$OPENAI_BASE_URL"; print "ANTHROPIC_BASE_URL=$ANTHROPIC_BASE_URL"; whence -v codex'
+docker compose exec -u {USER} {SERVICE} sh -c 'touch /host-seed/.claude/settings.json' # must fail read-only
+docker compose exec -u {USER} {SERVICE} sh -c 'test -e /host-seed/.claude/.credentials.json' # must fail: not mounted
 ```
+
+Every check above runs with `-u {USER}` (the container user from Step 2), not
+`exec`'s default. This matters most for the ownership line: with the default user
+— often root — `$(id -u):$(id -g)` evaluates to `0:0` and the test compares root
+against root, passing even when the named volumes were never chowned to the real
+user. The `zsh -lic` line needs the same treatment or it reads root's login
+environment rather than the one the seed configured.
+
+The two `settings.json` lines are conditional on that mount being emitted. When
+the host has no `~/.claude/settings.json`, Step 3 omits it from the allowlist, so
+there is nothing to copy and nothing to write-test — skip both and instead
+confirm the override's mount list contains only the entries whose host sources
+exist, and that the seed log printed `copied authored ~/.claude subset`. Running
+the exec test against an omitted mount reports a seed failure that isn't one.
+
+The `.seeded` line checks the sentinel's *content*, not just its existence — an
+empty file is a legacy pre-versioning sentinel, and treating it as current is
+exactly the bug the versioned gate fixes. On a volume that predates versioning,
+verify the one-time migration instead: confirm the seed log printed
+`migrating legacy unstamped sentinel`, then assert the same stamped value above.
+Re-running the seed a second time must print `already seeded (v{SEED_VERSION})`.
 
 The `grep` line asserts the seed wrote the Vekil hook into the container's
 `~/.zshrc`; the `zsh -n` line validates the hook *target* alone — it exits
