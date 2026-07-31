@@ -110,7 +110,7 @@ As upstream adds or removes models, this list follows automatically.
   ```
 - `ai/vekil/env.zsh`:
   ```zsh
-  export ANTHROPIC_MODEL=claude-opus-4.8   # Claude default
+  export ANTHROPIC_MODEL=claude-opus-5   # Claude default
   ```
 
 If upstream ever retires one of these exact IDs, requests using the default fail
