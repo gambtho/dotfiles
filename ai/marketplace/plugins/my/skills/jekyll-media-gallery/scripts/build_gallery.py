@@ -28,7 +28,8 @@ images are recovered where possible (Pillow lenient load); anything genuinely
 unprocessable is skipped with a warning and excluded from the manifest, so one
 bad file never aborts the whole run.
 
-Requires: Pillow. ffmpeg + ffprobe required only if the source contains videos.
+Requires: Pillow. pillow-heif required only if the source contains HEIC/HEIF.
+ffmpeg + ffprobe required only if the source contains videos.
 exiftool is optional (enables the most accurate date source).
 
 Usage:
@@ -48,10 +49,22 @@ import sys
 
 from PIL import Image, ImageFile, ImageOps
 
+# HEIC/HEIF (the iPhone default) needs the pillow-heif plugin; vanilla Pillow
+# cannot decode it. Register when available and track it so we can fail loudly
+# with an actionable message instead of silently skipping every HEIC input.
+try:
+    from pillow_heif import register_heif_opener
+except ImportError:
+    _HEIF_AVAILABLE = False
+else:
+    register_heif_opener()
+    _HEIF_AVAILABLE = True
+
 # Recover truncated/incomplete images instead of crashing on them.
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 PHOTO_EXT = {"jpg", "jpeg", "png", "webp", "heic", "heif", "tif", "tiff", "bmp", "gif"}
+HEIF_EXT = {"heic", "heif"}
 VIDEO_EXT = {"mov", "mp4", "m4v", "avi", "mkv", "webm", "3gp"}
 
 # Filename timestamp patterns → named groups y/m/d. Ordered most-specific first.
@@ -261,8 +274,17 @@ def main():
     if has_video:
         require_video_tools()
 
+    # Fail early rather than skipping every HEIC/HEIF through the per-file
+    # exception handler, which would silently drop them from the manifest.
+    if not _HEIF_AVAILABLE and any(
+        n.rsplit(".", 1)[-1].lower() in HEIF_EXT for n in names if "." in n
+    ):
+        die("source contains HEIC/HEIF files but pillow-heif is not installed. "
+            "Install it (pip install pillow-heif) or convert those files first.")
+
     days = {}
     processed = skipped = 0
+    seen_bases = {}
     for name in names:
         if "." not in name:
             continue
@@ -270,6 +292,13 @@ def main():
         ext = ext.lower()
         if ext not in PHOTO_EXT and ext not in VIDEO_EXT:
             continue
+        # Disambiguate same-basename/different-extension sources (the iPhone
+        # Live Photo IMG_1234.HEIC + IMG_1234.MOV pattern). Without this the
+        # second one overwrites the first's derivatives and the manifest ends
+        # up with two entries pointing at the same files.
+        if base in seen_bases:
+            base = f"{base}_{ext}"
+        seen_bases[base] = name
         src = os.path.join(args.source, name)
         try:
             d = resolve_date(src, name, args.date_source)
@@ -296,6 +325,19 @@ def main():
         write_manifest(manifest, days, start_date)
         log(f"Wrote manifest: {manifest}")
     else:
+        # Derivatives were built for every source file, but the manifest is
+        # deliberately left alone to preserve hand edits. Warn when that means
+        # newly added media is not actually reachable from the gallery.
+        with open(manifest) as f:
+            existing = f.read()
+        missing = [base for items in days.values() for base, _ in items
+                   if f'file: {yaml_quote(base)}' not in existing]
+        if missing:
+            shown = ", ".join(missing[:5])
+            more = f" (+{len(missing) - 5} more)" if len(missing) > 5 else ""
+            log(f"WARNING: {len(missing)} processed file(s) are missing from the "
+                f"existing manifest and will not appear in the gallery: {shown}{more}. "
+                f"Add them by hand, or back up your edits and re-run with --regen-manifest.")
         log(f"Manifest exists, kept as-is (use --regen-manifest to overwrite): {manifest}")
 
     log(f"Done. Processed {processed} files across {len(days)} day(s). Skipped {skipped}.")

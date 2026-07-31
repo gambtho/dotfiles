@@ -38,9 +38,12 @@ defaults.
 - Look at the media folder: count, file types, total size, and the **filename
   pattern** (it's usually the only reliable date source — see below). Check
   whether `_data/` exists (manifest home) and whether there's a service worker.
-- Check tools: `python3` + Pillow are required; `ffmpeg`/`ffprobe` are required
-  only if there are videos; `exiftool` is optional but gives the best dates.
-  If a needed tool is missing, tell the user the exact install command and stop.
+- Check tools: `python3` + Pillow are required; `pillow-heif` is required only
+  if there are HEIC/HEIF files (the iPhone default — the script exits with an
+  install hint rather than silently skipping them); `ffmpeg`/`ffprobe` are
+  required only if there are videos; `exiftool` is optional but gives the best
+  dates. If a needed tool is missing, tell the user the exact install command
+  and stop.
 
 ### 2. Decide date grouping
 

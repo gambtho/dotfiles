@@ -65,8 +65,11 @@ extract_seed_script() {
 
 @test "ownership is repaired before a stale sentinel skips seeding" {
   local vekil_hook='[[ -r "$HOME/.dotfiles/ai/vekil/env.zsh" ]] && source "$HOME/.dotfiles/ai/vekil/env.zsh"'
+  local seed_version
+  seed_version="$(sed -n 's/^SEED_VERSION=//p' "$SEED_SCRIPT")"
+  [ -n "$seed_version" ]
 
-  touch "$HOME/.claude/.seeded"
+  printf '%s\n' "$seed_version" >"$HOME/.claude/.seeded"
   printf '{}\n' >"$TEST_ROOT/host-seed/.claude/settings.json"
   touch "$TEST_ROOT/host-seed/.dotfiles/ai/marketplace/marker"
   chmod 000 "$HOME/.claude" "$HOME/.dotfiles"
@@ -83,6 +86,35 @@ extract_seed_script() {
 
   [ "$status" -eq 0 ]
   [ "$(grep -Fxc "$vekil_hook" "$HOME/.zshrc")" -eq 1 ]
+}
+
+@test "an empty legacy sentinel migrates once and is then stamped" {
+  local seed_version
+  seed_version="$(sed -n 's/^SEED_VERSION=//p' "$SEED_SCRIPT")"
+  [ -n "$seed_version" ]
+
+  # Pre-versioning contract: a bare touch-file. It cannot prove the versioned
+  # copy/install steps ever ran, so it must not be accepted as current.
+  touch "$HOME/.claude/.seeded"
+  printf '{}\n' >"$TEST_ROOT/host-seed/.claude/settings.json"
+  touch "$TEST_ROOT/host-seed/.dotfiles/ai/marketplace/marker"
+
+  run bash "$SEED_SCRIPT"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"migrating legacy unstamped sentinel"* ]]
+  [ -f "$HOME/.claude/settings.json" ]
+  [ -f "$HOME/.dotfiles/ai/marketplace/marker" ]
+  [ "$(cat "$HOME/.claude/.seeded")" = "$seed_version" ]
+
+  # Second run matches on version and skips the gated steps.
+  rm -f "$HOME/.claude/settings.json"
+
+  run bash "$SEED_SCRIPT"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"already seeded (v$seed_version)"* ]]
+  [ ! -e "$HOME/.claude/settings.json" ]
 }
 
 @test "the installed zsh hook loads Vekil endpoints and the Codex wrapper" {
