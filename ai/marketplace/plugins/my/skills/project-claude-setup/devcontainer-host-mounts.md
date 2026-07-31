@@ -219,7 +219,7 @@ set -euo pipefail
 
 # Bump this whenever the gated steps below (copies, installers) change so
 # already-seeded containers refresh instead of silently keeping stale state.
-SEED_VERSION=2
+SEED_VERSION=4
 
 SEED_CLAUDE="/host-seed/.claude"
 SEED_DOTFILES="/host-seed/.dotfiles"
@@ -288,12 +288,29 @@ else
   echo "🌱 seed: no $SEED_CLAUDE mount — starting with empty ~/.claude"
 fi
 
-# 2. Copy dotfiles container-local (shell sourcing + marketplace/codex installers).
-# The named-volume mountpoint already exists, so seed it only while it is empty.
-if [ -d "$SEED_DOTFILES" ] &&
-   [ -z "$(find "$HOME/.dotfiles" -mindepth 1 -maxdepth 1 -print -quit)" ]; then
-  cp -a "$SEED_DOTFILES/." "$HOME/.dotfiles/"
-  echo "🌱 seed: copied ~/.dotfiles ($(du -sh "$HOME/.dotfiles" | cut -f1))"
+# 2. Refresh dotfiles container-local (shell sourcing + marketplace/codex
+# installers). This runs INSIDE the version gate, so the SEED_VERSION bump is the
+# sole refresh trigger — do NOT add an inner "only if empty" or "only if file X
+# absent" guard. The dotfiles-local-home named volume survives
+# `--remove-existing-container`, so any such content guard makes stale dotfiles
+# (e.g. a path removed upstream like ai/vekil) permanently survive rebuilds even
+# across a version bump — the exact failure this gate exists to prevent.
+#
+# SELF-HEALING: prefer `rsync -a --delete` so the container tree becomes an EXACT
+# mirror of the host-seed source — files removed upstream are pruned, not left
+# stale. The named volume persists across rebuilds, so without --delete a path
+# deleted on the host lingers until a manual volume wipe. Fall back to `cp -a`
+# where rsync is absent (updates + adds, but cannot prune). Ownership was
+# repaired in the always-run block, so writes into .git/objects etc. succeed.
+# Trailing-slash SRC/ mirrors contents, not the dir itself.
+if [ -d "$SEED_DOTFILES" ]; then
+  if command -v rsync >/dev/null 2>&1; then
+    rsync -a --delete "$SEED_DOTFILES/" "$HOME/.dotfiles/"
+    echo "🌱 seed: mirrored ~/.dotfiles via rsync ($(du -sh "$HOME/.dotfiles" | cut -f1))"
+  else
+    cp -a "$SEED_DOTFILES/." "$HOME/.dotfiles/"
+    echo "🌱 seed: refreshed ~/.dotfiles via cp (no rsync; stale files not pruned) ($(du -sh "$HOME/.dotfiles" | cut -f1))"
+  fi
 fi
 
 # 3. Reinstall my@guarzo marketplace + plugins into container-local ~/.claude.
