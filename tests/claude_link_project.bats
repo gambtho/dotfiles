@@ -180,6 +180,46 @@ run_linker() {
   [ "$(cat "$PROJECT/.claude/skills/mine/SKILL.md")" = "user content" ]
 }
 
+@test "an untracked skills dir is skipped without aborting the rest of the run" {
+  # link_one dies on a real file/dir in the way, which is right for
+  # CLAUDE.md. Applying it to skills/ meant one untracked directory
+  # aborted everything after it: commands/ went unlinked and
+  # settings.local.json was never written.
+  make_overlay
+  make_project
+  mkdir -p "$PROJECT/.claude/skills/mine"
+  echo "user content" >"$PROJECT/.claude/skills/mine/SKILL.md"
+
+  run_linker
+  [ "$status" -eq 0 ]
+
+  # The user's directory is untouched...
+  [ ! -L "$PROJECT/.claude/skills" ]
+  [ "$(cat "$PROJECT/.claude/skills/mine/SKILL.md")" = "user content" ]
+  # ...and nothing was scattered inside it by the per-file walk.
+  [ ! -e "$PROJECT/.claude/skills/foo" ]
+
+  # Everything independent of skills/ still got linked.
+  assert_symlink_target "$PROJECT/.claude/commands/baz.md" \
+    "$OVERLAY/.claude/commands/baz.md"
+  assert_symlink_target "$PROJECT/.claude/agents" "$OVERLAY/.claude/agents"
+  [ -f "$PROJECT/.claude/settings.local.json" ]
+}
+
+@test "a tracked skills dir is still a hard collision" {
+  make_overlay
+  make_project
+  mkdir -p "$PROJECT/.claude/skills"
+  echo "tracked" >"$PROJECT/.claude/skills/SKILL.md"
+  git -C "$PROJECT" add -f .claude/skills/SKILL.md
+  git -C "$PROJECT" -c user.email=t@e.com -c user.name=t \
+    commit -q -m add
+
+  run_linker
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"tracked in git"* ]]
+}
+
 @test "migration refuses when a link points outside the overlay" {
   make_overlay
   make_project

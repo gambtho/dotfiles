@@ -155,7 +155,9 @@ ls -ld <project>/.claude/skills <project>/.claude/agents
 
 # Must print nothing. Any output is a dangling link — most often one created
 # under a different $HOME (host /home/<user> vs container /root), which makes
-# the overlay silently invisible. Re-run the helper to repair.
+# the overlay silently invisible. Re-running the helper repairs CLAUDE.md and
+# the skills/ and agents/ directory links. Individually linked files (commands/)
+# are only reported, not repaired: delete the dangling link and re-run.
 find <project>/.claude -xtype l
 ```
 

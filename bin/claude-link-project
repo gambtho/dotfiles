@@ -41,7 +41,7 @@ MODE_CLAUDE_PER_FILE=0
 SLUG=""
 
 usage() {
-  sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//'
   exit "${1:-0}"
 }
 
@@ -456,9 +456,16 @@ migrate_legacy_per_file_dir() {
   while IFS= read -r -d '' entry; do
     found=1
     [[ -L "$entry" ]] || return 1
-    # readlink -m resolves without requiring the target to exist, so a
-    # dangling cross-home link still reports where it was aiming.
-    target="$(readlink -m -- "$entry" 2>/dev/null)" || return 1
+    # Resolve where the link aims without requiring the target to exist —
+    # a dangling cross-home link is precisely the case we repair. BSD/macOS
+    # readlink has no -m, so fall back to reading the link value directly
+    # and resolving it against the link's own directory.
+    if target="$(readlink -m -- "$entry" 2>/dev/null)" && [[ -n "$target" ]]; then
+      :
+    else
+      target="$(readlink -- "$entry")" || return 1
+      [[ "$target" == /* ]] || target="$(dirname "$entry")/$target"
+    fi
     rel="${entry#"$dst"/}"
     [[ "$target" == *"/$suffix/$rel" ]] || return 1
   done < <(find "$dst" -mindepth 1 \! -type d -print0)
@@ -492,6 +499,24 @@ link_claude_dir_per_file() {
   for sub in "${DIR_LINK_SUBDIRS[@]}"; do
     [[ -d "$overlay_dir/$sub" ]] || continue
     migrate_legacy_per_file_dir "$overlay_dir/$sub" "$project_dir/$sub" || true
+    # link_one dies on a real file/dir in the way, which is right for
+    # CLAUDE.md but not here: the rest of the overlay (commands/,
+    # settings.local.json) is independent of this one subdirectory and
+    # should still be linked. Match the per-file walk's behaviour and
+    # warn instead, leaving the user's content untouched.
+    if [[ ! -L "$project_dir/$sub" && -e "$project_dir/$sub" ]]; then
+      if [[ -n "$proj_root" ]] &&
+        git -C "$proj_root" ls-files --error-unmatch \
+          -- "${project_dir#"$proj_root"/}/$sub" >/dev/null 2>&1; then
+        die "Collision: $project_dir/$sub is tracked in git. Rename your overlay item and re-run."
+      fi
+      warn "$project_dir/$sub exists (untracked, not a symlink). Skipping — move or remove it manually if you want to link the overlay version."
+      # Prune anyway: without this the per-file walk would descend into
+      # the overlay's skills/ and scatter links inside the user's own
+      # directory, which is the content we just decided not to touch.
+      find_prune+=(-path "$overlay_dir/$sub" -prune -o)
+      continue
+    fi
     link_one "$overlay_dir/$sub" "$project_dir/$sub"
     find_prune+=(-path "$overlay_dir/$sub" -prune -o)
   done
