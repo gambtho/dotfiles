@@ -35,6 +35,41 @@ exec "$@"
 EOF
   chmod +x "$STUB_BIN/sudo"
 
+  # The seed now hard-fails when it cannot make zsh the login shell, because a
+  # silent skip in a real container leaves a bash terminal that bypasses the
+  # Vekil proxy. Neither condition is satisfiable in a test sandbox — we cannot
+  # rewrite the runner's /etc/passwd — so stub chsh to accept the change. CI
+  # runners also default to bash, which is why this cannot rely on the
+  # already-zsh no-op path that happens to hold on a developer machine.
+  cat >"$STUB_BIN/chsh" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+  chmod +x "$STUB_BIN/chsh"
+
+  # getent reports the sandbox user's real login shell (bash on CI), so report
+  # zsh instead once chsh has "run" — otherwise the seed's post-check would see
+  # an unchanged shell. Only field 7 is synthesized; the rest passes through.
+  cat >"$STUB_BIN/getent" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [ "${1:-}" = passwd ]; then
+  line="$(/usr/bin/getent passwd "${2:-}")" || exit 2
+  printf '%s\n' "$line" | awk -F: -v OFS=: -v z="$ZSH_STUB_PATH" '{$7=z; print}'
+  exit 0
+fi
+exec /usr/bin/getent "$@"
+EOF
+  chmod +x "$STUB_BIN/getent"
+
+  ZSH_STUB_PATH="$(command -v zsh || true)"
+  if [ -z "$ZSH_STUB_PATH" ]; then
+    ZSH_STUB_PATH="$STUB_BIN/zsh"
+    printf '#!/usr/bin/env bash\nexit 0\n' >"$ZSH_STUB_PATH"
+    chmod +x "$ZSH_STUB_PATH"
+  fi
+  export ZSH_STUB_PATH
+
   extract_seed_script
 }
 
