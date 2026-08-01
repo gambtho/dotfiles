@@ -15,18 +15,69 @@ setup() {
     "$TEST_ROOT/host-seed/.dotfiles/ai/marketplace" \
     "$HOME/.claude" "$HOME/.dotfiles"
 
+  # The seed script now routes several commands through $SUDO, not just chown.
+  # Log every invocation, emit the ownership-repair event for chown (which the
+  # assertions key on), and otherwise run the command as the current user.
   cat >"$STUB_BIN/sudo" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' "$*" >>"$SUDO_LOG"
-[ "${1:-}" = chown ] || exit 64
-printf 'test-event: ownership repaired\n'
-shift
-[ "${1:-}" = -R ] && shift
-shift
-chmod -R u+rwX "$@"
+[ "${1:-}" = -u ] && { shift 2; }
+if [ "${1:-}" = chown ]; then
+  printf 'test-event: ownership repaired\n'
+  shift
+  [ "${1:-}" = -R ] && shift
+  shift
+  chmod -R u+rwX "$@"
+  exit 0
+fi
+exec "$@"
 EOF
   chmod +x "$STUB_BIN/sudo"
+
+  # The seed hard-fails when it cannot make zsh the login shell, because a silent
+  # skip in a real container leaves a bash terminal that bypasses the Vekil
+  # proxy. A test sandbox cannot rewrite the runner's /etc/passwd, so the login
+  # shell is faked through a state file: it starts as bash (what a fresh
+  # container and the CI runner both look like) and the chsh stub rewrites it.
+  # Reporting zsh unconditionally would be wrong — the seed would take the no-op
+  # branch and neither the chsh path nor its failure path would ever run, which
+  # is exactly how a broken fatal-exit shipped green from a developer machine.
+  SHELL_STATE="$TEST_ROOT/login-shell"
+  export SHELL_STATE
+  printf '/bin/bash\n' >"$SHELL_STATE"
+
+  cat >"$STUB_BIN/chsh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+# chsh -s <shell> <user>
+[ "${1:-}" = -s ] || exit 1
+printf '%s\n' "$2" >"$SHELL_STATE"
+exit 0
+EOF
+  chmod +x "$STUB_BIN/chsh"
+
+  # Only passwd field 7 is synthesized, from the state file; everything else
+  # passes through to the real getent.
+  cat >"$STUB_BIN/getent" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [ "${1:-}" = passwd ]; then
+  line="$(/usr/bin/getent passwd "${2:-}")" || exit 2
+  printf '%s\n' "$line" | awk -F: -v OFS=: -v s="$(cat "$SHELL_STATE")" '{$7=s; print}'
+  exit 0
+fi
+exec /usr/bin/getent "$@"
+EOF
+  chmod +x "$STUB_BIN/getent"
+
+  ZSH_STUB_PATH="$(command -v zsh || true)"
+  if [ -z "$ZSH_STUB_PATH" ]; then
+    ZSH_STUB_PATH="$STUB_BIN/zsh"
+    printf '#!/usr/bin/env bash\nexit 0\n' >"$ZSH_STUB_PATH"
+    chmod +x "$ZSH_STUB_PATH"
+  fi
+  export ZSH_STUB_PATH
 
   extract_seed_script
 }
@@ -37,13 +88,25 @@ teardown() {
 
 extract_seed_script() {
   awk '
-    /Write `\{WORKSPACE\}\/\.devcontainer\/local-seed\.sh` with:/ { found = 1; next }
+    /^Write the seed script at `\{SEED_SCRIPT\}`/ { found = 1; next }
     found && /^```bash$/ { in_block = 1; next }
     in_block && /^```$/ { exit }
     in_block { print }
   ' "$REFERENCE" >"$SEED_SCRIPT"
+  [ -s "$SEED_SCRIPT" ] || {
+    echo "extract_seed_script: no bash block found — the anchor sentence in" \
+      "$REFERENCE changed; update this awk pattern" >&2
+    return 1
+  }
 
+  # This PR moved the seed script off $HOME onto an explicit SEED_USER/SEED_HOME
+  # pair. SEED_USER is templated as {USER}; left unsubstituted, `id -u "{USER}"`
+  # aborts the whole script under `set -euo pipefail` before any assertion runs.
+  # SEED_HOME is resolved from passwd at runtime, which would resolve to the
+  # real home rather than the sandbox, so it is pinned to $HOME for the test.
   sed -i \
+    -e "s|^SEED_USER=\"{USER}\"|SEED_USER=\"$(id -un)\"|" \
+    -e "s|^SEED_HOME=\"\$(getent passwd .*|SEED_HOME=\"$HOME\"|" \
     -e "s|SEED_CLAUDE=\"/host-seed/.claude\"|SEED_CLAUDE=\"$TEST_ROOT/host-seed/.claude\"|" \
     -e "s|SEED_DOTFILES=\"/host-seed/.dotfiles\"|SEED_DOTFILES=\"$TEST_ROOT/host-seed/.dotfiles\"|" \
     "$SEED_SCRIPT"
@@ -79,7 +142,10 @@ extract_seed_script() {
   [ "$status" -eq 0 ]
   grep -F "chown -R $(id -u):$(id -g)" "$SUDO_LOG"
   [ ! -e "$HOME/.claude/settings.json" ]
-  [ ! -e "$HOME/.dotfiles/ai/marketplace/marker" ]
+  # ~/.dotfiles is mirrored above the sentinel gate on purpose: the installers
+  # live under it, so a warm restart must still get a current tree. Only the
+  # ~/.claude copies and the installers themselves are gated.
+  [ -f "$HOME/.dotfiles/ai/marketplace/marker" ]
   [[ "$output" == *"test-event: ownership repaired"*"already seeded"* ]]
 
   run bash "$SEED_SCRIPT"
@@ -158,6 +224,62 @@ extract_seed_script() {
   [ -f "$HOME/.claude/commands/live.md" ]
 }
 
+@test "config removed from the host is pruned from the persisted volume" {
+  # The destination lives in the persisted claude-local-home named volume, so a
+  # source the host DELETED must be cleared on the next gated reseed. Pruning
+  # only inside an `if source exists` guard never fires for a deleted source and
+  # leaves the stale copy behind forever.
+  printf '{}\n' >"$TEST_ROOT/host-seed/.claude/settings.json"
+  mkdir -p "$TEST_ROOT/host-seed/.claude/skills"
+  printf 'doomed\n' >"$TEST_ROOT/host-seed/.claude/skills/going-away.md"
+
+  run bash "$SEED_SCRIPT"
+  [ "$status" -eq 0 ]
+  [ -f "$HOME/.claude/settings.json" ]
+  [ -f "$HOME/.claude/skills/going-away.md" ]
+
+  # Marketplace-installed plugins are NOT seed-owned and must survive the prune.
+  mkdir -p "$HOME/.claude/plugins"
+  printf 'keep\n' >"$HOME/.claude/plugins/installed.json"
+
+  # The host drops both entries, then a version bump forces a gated reseed.
+  rm -f "$TEST_ROOT/host-seed/.claude/settings.json"
+  rm -rf "$TEST_ROOT/host-seed/.claude/skills"
+  printf '0\n' >"$HOME/.claude/.seeded"
+
+  run bash "$SEED_SCRIPT"
+
+  [ "$status" -eq 0 ]
+  [ ! -e "$HOME/.claude/settings.json" ]
+  [ ! -e "$HOME/.claude/skills" ]
+  [ -f "$HOME/.claude/plugins/installed.json" ]
+}
+
+@test "removing the whole seed mount prunes authored config but keeps plugins" {
+  printf '{}\n' >"$TEST_ROOT/host-seed/.claude/settings.json"
+  mkdir -p "$TEST_ROOT/host-seed/.claude/commands"
+  printf 'doomed\n' >"$TEST_ROOT/host-seed/.claude/commands/gone.md"
+
+  run bash "$SEED_SCRIPT"
+  [ "$status" -eq 0 ]
+  [ -f "$HOME/.claude/settings.json" ]
+  [ -f "$HOME/.claude/commands/gone.md" ]
+
+  mkdir -p "$HOME/.claude/plugins"
+  printf 'keep\n' >"$HOME/.claude/plugins/installed.json"
+
+  # The entire mount disappears — the limiting case of deleting every file.
+  rm -rf "$TEST_ROOT/host-seed/.claude"
+  printf '0\n' >"$HOME/.claude/.seeded"
+
+  run bash "$SEED_SCRIPT"
+
+  [ "$status" -eq 0 ]
+  [ ! -e "$HOME/.claude/settings.json" ]
+  [ ! -e "$HOME/.claude/commands" ]
+  [ -f "$HOME/.claude/plugins/installed.json" ]
+}
+
 @test "the installed zsh hook loads Vekil endpoints and the Codex wrapper" {
   mkdir -p "$TEST_ROOT/host-seed/.dotfiles/ai/vekil"
   cp "$REPO_ROOT/ai/vekil/env.zsh" \
@@ -183,19 +305,149 @@ extract_seed_script() {
   [[ "$output" == *"codex: function"* ]]
 }
 
+@test "a failed marketplace install leaves the sentinel unstamped" {
+  local seed_version
+  seed_version="$(sed -n 's/^SEED_VERSION=//p' "$SEED_SCRIPT")"
+
+  # A stamped sentinel over a half-installed ~/.claude/plugins would make every
+  # later launch skip the repair, so a failing installer must not stamp.
+  mkdir -p "$TEST_ROOT/host-seed/.dotfiles/ai/marketplace"
+  printf '#!/usr/bin/env bash\nexit 1\n' \
+    >"$TEST_ROOT/host-seed/.dotfiles/ai/marketplace/install.sh"
+  chmod +x "$TEST_ROOT/host-seed/.dotfiles/ai/marketplace/install.sh"
+
+  run bash "$SEED_SCRIPT"
+
+  # A failed install must report non-zero, not just decline to stamp.
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"NOT stamping sentinel"* ]]
+  [ ! -e "$HOME/.claude/.seeded" ]
+
+  # Once the installer succeeds, the stamp lands and the gate engages. The
+  # replacement must differ in size from the failing stub: rsync -a compares
+  # size+mtime, so a same-size rewrite inside the same second is not mirrored.
+  printf '#!/usr/bin/env bash\n# now succeeds\nexit 0\n' \
+    >"$TEST_ROOT/host-seed/.dotfiles/ai/marketplace/install.sh"
+  chmod +x "$TEST_ROOT/host-seed/.dotfiles/ai/marketplace/install.sh"
+
+  run bash "$SEED_SCRIPT"
+
+  [ "$status" -eq 0 ]
+  [ "$(cat "$HOME/.claude/.seeded")" = "$seed_version" ]
+}
+
 @test "tracked devcontainer files are explicitly inspection-only" {
-  local permitted='The only permitted devcontainer writes are the gitignored `docker-compose.override.yml`, `local-seed.sh`, and `.git/info/exclude` entries needed for those two local files.'
-  local initial='Capture the initial `git status --short` output before any write.'
-  local final='At final verification, run `git status --short` and compare its output byte-for-byte with the initial snapshot.'
-  local dockerfile='Never edit a project Dockerfile, `.devcontainer/devcontainer.json`, or a base Compose file.'
+  local permitted='The only permitted devcontainer writes are the gitignored `docker-compose.override.yml`, `local-seed.sh`, the user-approved `dockerComposeFile` entry in `devcontainer.json`, and `.git/info/exclude` entries needed for the two local files.'
+  local initial='Capture the initial `git status --short` output before any write, **and a copy of the tracked `devcontainer.json` content**'
+  local final='At final verification, run `git status --short` and compare its output byte-for-byte with the initial snapshot, **and diff `devcontainer.json` against the captured copy**.'
   local document
 
   for document in "$SKILL_DOC" "$REFERENCE"; do
     grep -Fqx "$permitted" "$document"
-    grep -Fqx "$initial" "$document"
-    grep -Fqx "$final" "$document"
-    grep -Fqx "$dockerfile" "$document"
+    # Substring, not whole-line: both sentences carry trailing rationale prose.
+    grep -Fq "$initial" "$document"
+    grep -Fq "$final" "$document"
+    # The sanctioned exception must stay narrow: one approved key, nothing else.
+    grep -Fq 'Never edit a project Dockerfile or a base Compose file.' "$document"
   done
+
+  # The Dockerfile prohibition is worded differently in each document, so it is
+  # asserted per-document rather than through one shared exact-match string.
+  grep -Fqx 'Never edit a project Dockerfile or a base Compose file. Never edit `.devcontainer/devcontainer.json` **except** for the single user-approved change of adding `docker-compose.override.yml` to the `dockerComposeFile` array (Section 6c) — and even then, touch no other key. That edit only happens after the user explicitly approves it, knowing it is a tracked change.' "$SKILL_DOC"
+  grep -Fqx 'Never edit a project Dockerfile or a base Compose file. Never edit `devcontainer.json` except for the user-approved `dockerComposeFile` entry above — and never touch any other key in it.' "$REFERENCE"
+}
+
+@test "a bash login shell is switched to zsh" {
+  # The starting state of both a fresh container and the CI runner. Asserting
+  # the state file changed proves the chsh branch actually ran, rather than the
+  # seed short-circuiting on an already-zsh shell as it does on a dev machine.
+  [ "$(cat "$SHELL_STATE")" = /bin/bash ]
+
+  run bash "$SEED_SCRIPT"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"default shell to zsh"* ]]
+  [ "$(cat "$SHELL_STATE")" = "$ZSH_STUB_PATH" ]
+}
+
+@test "an already-zsh login shell is left alone" {
+  printf '%s\n' "$ZSH_STUB_PATH" >"$SHELL_STATE"
+
+  run bash "$SEED_SCRIPT"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"default shell to zsh"* ]]
+}
+
+@test "a missing zsh aborts the seed instead of leaving a bash terminal" {
+  # Vekil's env.zsh is zsh-only. Continuing here would produce a container whose
+  # terminal silently bypasses the proxy — the failure this check exists to
+  # prevent — so the seed must stop and say why. zsh cannot be uninstalled, so
+  # run against a PATH that mirrors the real one minus zsh.
+  local nozsh="$TEST_ROOT/nozsh"
+  mkdir -p "$nozsh"
+  local entry
+  for entry in /usr/bin/* /bin/*; do
+    case "${entry##*/}" in
+      zsh | zsh?*) continue ;;
+    esac
+    ln -sf "$entry" "$nozsh/${entry##*/}" 2>/dev/null || true
+  done
+  [ ! -e "$nozsh/zsh" ]
+
+  PATH="$STUB_BIN:$nozsh" run bash "$SEED_SCRIPT"
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"zsh not found"* ]]
+}
+
+@test "an unchangeable login shell aborts the seed" {
+  # chsh fails and /etc/passwd is not writable (the seed runs unprivileged).
+  # Previously this was a non-fatal warning, which let a proxy-bypassing
+  # container look like a successful seed.
+  printf '#!/usr/bin/env bash\nexit 1\n' >"$STUB_BIN/chsh"
+  chmod +x "$STUB_BIN/chsh"
+  [ "$(cat "$SHELL_STATE")" = /bin/bash ]
+
+  run bash "$SEED_SCRIPT"
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"could not set"*"login shell to zsh"* ]]
+  [ "$(cat "$SHELL_STATE")" = /bin/bash ]
+}
+
+@test "every documented bash block is syntactically valid" {
+  # These blocks are meant to be copy-pasted. A block that cannot even parse
+  # ships a broken command to whoever runs it, and nothing else in this suite
+  # would notice — the seed-script tests only extract one specific block.
+  # Fill-in values are written as shell variables assigned to a <placeholder>
+  # string, so the block still parses while remaining obviously templated.
+  local document block_file total=0
+  block_file="$TEST_ROOT/block.sh"
+
+  for document in "$SKILL_DOC" "$REFERENCE"; do
+    local count
+    count="$(awk '/^```bash$/ {n++} END {print n + 0}' "$document")"
+    [ "$count" -gt 0 ]
+    local i
+    for ((i = 1; i <= count; i++)); do
+      awk -v want="$i" '
+        /^```bash$/ { n++; if (n == want) { inb = 1; next } }
+        inb && /^```$/ { exit }
+        inb { print }
+      ' "$document" >"$block_file"
+      run bash -n "$block_file"
+      if [ "$status" -ne 0 ]; then
+        echo "block #$i in $document does not parse:" >&2
+        cat "$block_file" >&2
+        echo "$output" >&2
+        return 1
+      fi
+      total=$((total + 1))
+    done
+  done
+
+  [ "$total" -ge 10 ]
 }
 
 @test "login-shell troubleshooting excludes tracked rc and retry-loop changes" {

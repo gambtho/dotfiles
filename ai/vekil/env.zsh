@@ -223,7 +223,7 @@ function codex-direct {
       export VEKIL_MANAGED_ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY
     fi
     if [[ -n ${VEKIL_MANAGED_ANTHROPIC_MODEL:-} || ! -v ANTHROPIC_MODEL ]]; then
-      export ANTHROPIC_MODEL=claude-opus-4.8
+      export ANTHROPIC_MODEL=claude-opus-5
       export VEKIL_MANAGED_ANTHROPIC_MODEL=$ANTHROPIC_MODEL
     fi
   else

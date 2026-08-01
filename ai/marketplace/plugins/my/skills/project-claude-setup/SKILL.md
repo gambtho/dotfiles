@@ -47,6 +47,8 @@ Read `.devcontainer/devcontainer.json` if present. Categorize:
 
 For case (b), stop and ask: "This project uses a Dockerfile-based devcontainer, not Compose. Options: (1) add a thin `docker-compose.yml` wrapper so we can apply host mounts, (2) skip the container side and just do the overlay symlinks. Which?" Don't auto-convert.
 
+For case (a), also record the `dockerComposeFile` **contents**. The key is either a single string (`"dockerComposeFile": "docker-compose.yml"`) or an array; treat a string as a one-item list when checking whether the override is present, and normalize it to an array only if the user approves the tracked edit in Section 6c. The override only loads if `docker-compose.override.yml` is one of its entries — the Dev Containers CLI / VS Code pass explicit `-f` flags for exactly the listed files and ignore any unlisted sibling override (plain `docker compose` auto-merge does NOT happen under the real launch path). If the override is absent from the array, Section 6 must resolve that (ask the user to add it to the tracked `devcontainer.json`, or hand them the manual edit) — otherwise the seed silently never runs and `claude` never lands in the container.
+
 ## Step 2 — Inspect the project
 
 Read concrete files. **Don't infer**; cite the file you read.
@@ -55,7 +57,7 @@ Read concrete files. **Don't infer**; cite the file you read.
 |---|---|
 | Primary language | `go.mod` / `package.json` / `pyproject.toml` / `Gemfile` / `Cargo.toml` / `mix.exs` |
 | Build/test/lint commands | `Makefile` (parse target names), `package.json` scripts, `justfile`, `Taskfile.yml`, `.github/workflows/*.yml` |
-| Container user | `remoteUser` in `devcontainer.json` → Dockerfile `USER` → base image default (see table at the bottom of this skill) |
+| Container **remoteUser** (terminal/extension user — what mounts + seed target) | **Best: ask the user to run `id; echo $HOME` in their VS Code terminal.** Else `remoteUser` in `devcontainer.json`, or read the *VS Code-launched* container (`docker ps -q --filter "label=devcontainer.local_folder=$PWD"` — scoped to *this* workspace, never the first devcontainer running. **Require exactly one non-empty ID before any `docker exec`**: zero means rebuild first, more than one must be disambiguated by hand. Then `docker exec <it> sh -c 'id -un'` and `sh -c 'getent passwd "$1" \| cut -d: -f6' _ <user>` for the home, treating empty passwd output as "no such user" rather than falling through to a guess). NOT uid 1000, NOT `docker inspect .Config.User`, and NOT a container you `docker compose up` yourself — each can resolve to a different user than the one VS Code opens terminals as. Record the resulting user/home pair once and reuse it for every mount target, the seed, and verification. |
 | Container service name | `service` in `devcontainer.json` if set, else the first key under `services:` in the base compose file |
 | Seed privilege (Compose, non-root user) | Passwordless `sudo` already supplied by the image or existing Dockerfile; inspect only, and verify a running container with `sudo -n true` when available |
 
@@ -68,17 +70,17 @@ Build: <cmd> | Test: <cmd> | Lint: <cmd>  (from <Makefile/scripts/CI>)
 Devcontainer: <flavor> | service=<name> | user=<user>
 ```
 
-**Tracked devcontainer boundary.** Dockerfile, devcontainer.json, and base Compose files are inspection-only.
+**Tracked devcontainer boundary.** Dockerfile, devcontainer.json, and base Compose files are inspection-only, with ONE sanctioned exception (below).
 
-Never edit a project Dockerfile, `.devcontainer/devcontainer.json`, or a base Compose file.
+Never edit a project Dockerfile or a base Compose file. Never edit `.devcontainer/devcontainer.json` **except** for the single user-approved change of adding `docker-compose.override.yml` to the `dockerComposeFile` array (Section 6c) — and even then, touch no other key. That edit only happens after the user explicitly approves it, knowing it is a tracked change.
 
-The only permitted devcontainer writes are the gitignored `docker-compose.override.yml`, `local-seed.sh`, and `.git/info/exclude` entries needed for those two local files.
+The only permitted devcontainer writes are the gitignored `docker-compose.override.yml`, `local-seed.sh`, the user-approved `dockerComposeFile` entry in `devcontainer.json`, and `.git/info/exclude` entries needed for the two local files.
 
-Capture the initial `git status --short` output before any write.
+Capture the initial `git status --short` output before any write, **and a copy of the tracked `devcontainer.json` content** (e.g. `git show :.devcontainer/devcontainer.json` plus the working-tree file). Status alone is insufficient: if that file is already modified for unrelated reasons, a further unauthorized edit does not change its status line and would go undetected.
 
-At final verification, run `git status --short` and compare its output byte-for-byte with the initial snapshot.
+At final verification, run `git status --short` and compare its output byte-for-byte with the initial snapshot, **and diff `devcontainer.json` against the captured copy**. The only permitted content difference is the user-approved `dockerComposeFile` entry; any other tracked modification is reported without staging, reverting, or repairing it.
 
-They must match because all skill-created project files are ignored. If a new tracked devcontainer modification appears, stop and report it without staging, reverting, or attempting to repair it.
+The only expected difference is the user-approved `devcontainer.json` edit from Section 6c (if it happened) — flag that in the report with the fork/upstream caveat. Otherwise the snapshots must match, because all other skill-created files are ignored. If any *other* tracked devcontainer modification appears, stop and report it without staging, reverting, or attempting to repair it.
 
 For a Compose devcontainer with a non-root user, do not generate the seed model unless passwordless `sudo` is already provided by the image or existing Dockerfile, or verified in a running container. The Dockerfile is evidence only; never add users, packages, directories, ownership changes, or sudo configuration to it. Docker named volumes can be mounted as `root:root`, and the seed must repair both destination trees before checking its sentinel. If passwordless `sudo` is unavailable, stop and offer only a solution implemented entirely in the gitignored local Compose override; otherwise report the container setup as unsupported. Root container users do not need this check.
 
@@ -93,7 +95,9 @@ Slug derivation: the basename of the project directory (e.g., for a project at `
 Detect what the project tracks (or has on disk) before calling the helper:
 
 ```bash
-cd <project>
+PROJECT_DIR="<project>"        # the project worktree
+SLUG="$(basename "$PROJECT_DIR")"   # verbatim basename; see the slug rule above
+cd "$PROJECT_DIR"
 PROJ_HAS_CLAUDE_MD=0
 PROJ_HAS_AGENTS_MD=0
 PROJ_CLAUDE_DIR_NEEDS_PER_FILE=0
@@ -124,7 +128,7 @@ flags=()
 (( PROJ_CLAUDE_DIR_NEEDS_PER_FILE )) && flags+=(--claude-dir-per-file)
 # Dedupe in case both CLAUDE.md and AGENTS.md triggered --local-md above.
 mapfile -t flags < <(printf '%s\n' "${flags[@]}" | awk '!seen[$0]++')
-claude-link-project --create "${flags[@]}" <project-dir>
+claude-link-project --create "${flags[@]}" "$PROJECT_DIR"
 ```
 
 `claude-link-project --create` scaffolds `~/.dotfiles/projects/<slug>/{CLAUDE.md,.claude/settings.local.json}` placeholders in the overlay if not already present, then links them into the project per the chosen flags:
@@ -214,10 +218,39 @@ Write or merge the gitignored `docker-compose.override.yml` directly. The overri
 9. In the seed script, repair both named-volume trees' ownership before checking the sentinel; the sentinel may skip copies and installers, never ownership recovery.
 10. Before checking the sentinel, idempotently add a container-local `~/.zshrc` hook that sources `~/.dotfiles/ai/vekil/env.zsh`; this supplies both proxy endpoint variables and the managed `codex` function without modifying the host or running the full dotfiles installer.
 11. Make the sentinel version-aware: store a `SEED_VERSION` number in `~/.claude/.seeded` and re-run the gated copy/install steps unless the sentinel records exactly that version. A persisted named volume survives `--remove-existing-container`, so without a version bump an evolving template could not refresh those steps. A legacy bare (empty) sentinel is **not** current — it predates versioning, so it takes a one-time migration through the gated steps and is then stamped with the current version; subsequent starts match on version and skip. The always-run block (ownership + Vekil hook) stays before the gate so those land on every start regardless of version. Verify by asserting the sentinel's *content* equals the current `SEED_VERSION`, not merely that the file exists.
+12. Install the Claude Code CLI **binary** in the seed, not just its config. Most base images ship without `claude`, so seeding `~/.claude` alone leaves no runnable CLI — the exact "claude isn't installed in the devcontainer" failure. Run `~/.dotfiles/ai/claude/install.sh` with `ALLOW_REMOTE_INSTALLERS=1` (the dotfiles guard blocks remote installers by default). Note the tradeoff: that installer fetches `https://claude.ai/install.sh` unpinned, so a rebuild executes whatever upstream currently serves. This is accepted as the default because the seed only ever runs against the user's own devcontainer and the alternative (vendoring a pinned release) would go stale silently. **If the project needs supply-chain pinning, set `CLAUDE_CLI_INSTALL_CMD` in the override's `environment:`** to a command that installs a pinned, checksum-verified artifact into the remoteUser's `~/.local/bin`; the seed takes that branch instead and never invokes the remote installer. (`ai/claude/install.sh` has no version/checksum support of its own, so the pinned artifact must be supplied by the project.) Either way the step lives in the **always-run block, NOT the versioned gate** (see #15), guarded by a `command -v claude` skip so an image that already provides it is left alone. The installer drops the binary in `~/.local/bin`, so the always-run block must also add `~/.local/bin` to PATH in `~/.zshrc` (and export it for the seed's own install steps) or `claude` won't resolve.
+13. Ensure the override is actually loaded (see Step 1 / Section 6c). Writing the override is pointless if `docker-compose.override.yml` is not in `dockerComposeFile` (string or array) — the CLI ignores unlisted files. This is checked and resolved separately because it may require a user-approved edit to the tracked `devcontainer.json`.
+14. Make **zsh the container's default (login) shell** in the always-run block. Vekil's `env.zsh` is zsh-only and is what points claude/codex at the proxy (`ANTHROPIC_BASE_URL`/`OPENAI_BASE_URL`). If the default shell is bash, an interactive terminal never sources it, so `claude` launched from that terminal silently bypasses the proxy — the "claude isn't picking up the vekil proxy" symptom, even though the Vekil `~/.zshrc` hook, the proxy, and `claude` are all fine. Set the login shell with `chsh -s "$(command -v zsh)"` (fall back to editing `/etc/passwd` if writable), guarded so it's a no-op when already zsh. Keep it in the always-run block, not the version gate: `/etc/passwd` is in the container's writable layer and resets on every rebuild, so it must re-apply each launch. If zsh is missing, or neither `chsh` nor a writable `/etc/passwd` can set it, fail the seed loudly with the reason rather than skipping quietly — a silent skip produces exactly the bypassed-proxy symptom this rule exists to prevent, and the fix (a supported base image, or an override that installs zsh) is the user's to make.
+15. **Split seed steps by where their target lives — this is the rule that keeps a rebuild working.** The sentinel (`~/.claude/.seeded`) lives in the persisted `claude-local-home` named volume, which survives `--remove-existing-container`. So the version gate only correctly guards steps whose target *also* persists: the authored `~/.claude` config copy and the marketplace/plugins install. Anything whose target lives in the container's **ephemeral writable layer** must go in the **always-run block**, guarded by its own presence check — because a rebuild wipes that layer while the sentinel persists, so a gated ephemeral install would be skipped ("already seeded") yet be gone. Ephemeral targets in this setup: the `claude` binary (`~/.local/bin`), codex config (`~/.codex`), the default shell (`/etc/passwd`), the `~/.zshrc` hooks, and the `~/.dotfiles` refresh (do it in the always-run block so the installers exist before the claude/codex steps that need them). Symptom of getting this wrong: everything works on the first build, then after a rebuild `claude` is missing / the proxy isn't wired, even though the seed log says "already seeded."
 
 Do **not** use `claude-merge-compose-override` for this step until that helper emits the seed model; its current output contains writable and dual-home mounts.
 
-Keep both files local. Verify they are ignored with `git check-ignore`; if the project does not already ignore them, add them to `.git/info/exclude` rather than changing tracked project files.
+Keep the override and seed script local. Verify they are ignored with `git check-ignore`; if the project does not already ignore them, add them to `.git/info/exclude` rather than changing tracked project files.
+
+### Section 6c — Ensure the override is loaded (may edit tracked `devcontainer.json`, ask first)
+
+Before rebuilding, confirm `docker-compose.override.yml` appears in `dockerComposeFile` in `.devcontainer/devcontainer.json`. That key may be a single string or an array — read a string as a one-item list before deciding whether the override is missing. If it does not, the Dev Containers CLI / VS Code will never load it — the seed won't run and `claude` won't appear, which looks exactly like "the setup didn't work."
+
+`devcontainer.json` is otherwise off-limits, so this is a **sanctioned, ask-first exception** — never edit it silently:
+
+> "The override won't load unless it's listed in `dockerComposeFile` in the tracked `.devcontainer/devcontainer.json`. I can add it there (one line), but that file is tracked — the change will show in `git status`, and if this repo is a fork/OSS project you'll want to keep it as a local-only commit and not push it upstream. Or I can leave the file untouched and give you the exact line to add yourself. Which do you prefer?"
+
+- **User approves the edit:** add `"docker-compose.override.yml"` (or the correct relative path) to the list, matching existing style. If the current value is a plain string, convert it to an array containing the original string followed by the override; if it is already an array, append. Touch no other key. Flag it in the final report as a tracked change with the fork/upstream caveat.
+- **User declines:** write the override + seed as normal, but state plainly it will NOT take effect until the entry exists, and hand them the exact edit. Do not claim the container side is done.
+
+Verify the merge after listing — over the **complete** `dockerComposeFile` list, in order, with each entry resolved relative to `devcontainer.json`'s directory (so `../docker-compose.yml` lands at the project root). Verifying only the base plus the override misses a third file that overrides the service `command` or re-adds a host bind:
+
+```bash
+mapfile -t COMPOSE_FILES < <(jq -r '
+  (.dockerComposeFile | if type == "array" then . else [.] end)[]' \
+  .devcontainer/devcontainer.json)
+COMPOSE_ARGS=(); for f in "${COMPOSE_FILES[@]}"; do
+  COMPOSE_ARGS+=(-f "$(realpath -m ".devcontainer/$f")")
+done
+docker compose "${COMPOSE_ARGS[@]}" config    # the override appears only if it is listed
+```
+
+The merged output should show the seed `command` and the `/host-seed` mounts.
 
 See `devcontainer-host-mounts.md` for the copy-pasteable override and seed script, service/user/path substitutions, and verification commands.
 
@@ -236,8 +269,12 @@ Detect the old pattern before converting. Signals (any one → offer repair):
 
 Remediation (confirm with user before each write):
 
-- Rewrite the override to read-only seed mounts, container-local named-volume targets, the `command` override, and `local-seed.sh` from Step 6. Back up the old override to `<file>.backup-<timestamp>`.
+- **Re-resolve the remoteUser empirically first — do NOT trust the home path in the legacy override, and do NOT trust a container you started yourself.** A legacy override often hardcodes a home (e.g. `/home/node`) that may or may not still be the remoteUser after features run. The authoritative source is the user's actual VS Code terminal: ask them to run `id; echo $HOME`. If you inspect via docker, inspect the **VS Code-launched** container (`docker ps | grep devcontainer`), never one you `docker compose up` yourself — a hand-started container can resolve uid 1000 to a *different* user than VS Code's, so every `docker exec` then confirms the wrong home while the user's terminal stays broken. Use the remoteUser's home for every mount target and as the seed's `SEED_HOME`. Remember the seed `command:` may run as root or a different user — it must write to the remoteUser's home explicitly (via `runuser`/`sudo -u`), never its own `$HOME`. See Step 2 and the reference file's Step 2.
+- Rewrite the override to read-only seed mounts, container-local named-volume targets, the `command` override, and `local-seed.sh` from Step 6, **all targeting the empirically-resolved home**. Back up the old override to `<file>.backup-<timestamp>`.
 - Remove the `${HOME}:${HOME}` dual-mount lines.
+- Inspect the fully merged Compose config, not only the override. Shadow any legacy base-file binds targeting the container user's `~/.claude`, `~/.dotfiles`, or OpenCode directory with project-scoped named volumes. Unless credential sharing was opted into, do the same for any inherited `~/.ssh` or `~/.config/gh` bind.
+- Optional host cleanup: rewrite `/home/<container-user>` to the host home in `~/.claude/plugins/{known_marketplaces,installed_plugins}.json`, and delete broken `~/.claude` symlinks whose target starts with `/home/<container-user>`. Show a diff or list first; never bulk-delete without confirmation.
+- Tell the user to rebuild the container to apply the repair.
 - Inspect the fully merged Compose config, not only the override. Shadow any legacy base-file binds targeting the container user's `~/.claude`, `~/.dotfiles`, or OpenCode directory with project-scoped named volumes. Unless credential sharing was opted into, do the same for any inherited `~/.ssh` or `~/.config/gh` bind.
 - Optional host cleanup: rewrite `/home/<container-user>` to the host home in `~/.claude/plugins/{known_marketplaces,installed_plugins}.json`, and delete broken `~/.claude` symlinks whose target starts with `/home/<container-user>`. Show a diff or list first; never bulk-delete without confirmation.
 - Tell the user to rebuild the container to apply the repair.
@@ -323,27 +360,50 @@ Skip this step if the user only wants standalone subagents — the catalog still
 ## Step 8 — Final verification
 
 ```bash
-cd <project>
+cd "$PROJECT_DIR"    # from Step 7
 git status --short
 ```
 
-Compare the output byte-for-byte with the initial `git status --short` snapshot. If `.claude/` or `CLAUDE.md` appears, the global gitignore is not catching it. If any tracked devcontainer file appears as newly modified, stop and report the boundary violation; never stage or revert it on the user's behalf.
+Compare the output byte-for-byte with the initial `git status --short` snapshot. If `.claude/` or `CLAUDE.md` appears, the global gitignore is not catching it. The one permitted difference is the user-approved `devcontainer.json` edit from Section 6c — report it as a tracked change with the fork/upstream caveat. If any *other* tracked devcontainer file appears as newly modified, stop and report the boundary violation; never stage or revert it on the user's behalf.
 
 Report to the user:
 - Files created/updated in `~/.dotfiles/projects/<slug>/`
 - Symlinks created in the project worktree
 - Commands to commit dotfiles changes:
   ```bash
-  cd ~/.dotfiles && git add projects/<slug> && git commit -m "add project overlay for <slug>"
+  cd ~/.dotfiles && git add "projects/$SLUG" && git commit -m "add project overlay for $SLUG"
   ```
 - For case (a): rebuild the devcontainer to pick up new mounts —
   `devcontainer up --remove-existing-container --workspace-folder .` or VS Code "Dev Containers: Rebuild Container"
+- For case (a): after rebuild, run the checks below against the **VS Code-launched container and the remoteUser resolved in Step 2** — not `docker compose exec <service>`, which can hit a container you started by hand and defaults to the image user (often root), passing checks that the real terminal user would fail. Resolve the handles once:
+  ```bash
+  CID="$(docker ps -q --filter "label=devcontainer.local_folder=$PWD")"   # THIS workspace only
+  [ -n "$CID" ] && [ "$(printf '%s\n' "$CID" | wc -l)" -eq 1 ] \
+    || { echo "no single VS Code devcontainer for $PWD — rebuild first"; exit 1; }
+  REMOTE_USER="<from Step 2>"    # never .Config.User, never uid 1000
+  # pass the user as a positional arg, never interpolated into the sh -c text:
+  REMOTE_HOME="$(docker exec "$CID" sh -c 'getent passwd "$1" | cut -d: -f6' _ "$REMOTE_USER")"
+  ```
+- For case (a): verify the `claude` CLI binary is installed AND on PATH — this is the check that catches the "claude isn't installed in the devcontainer" failure:
+  ```bash
+  docker exec -u "$REMOTE_USER" "$CID" zsh -lic 'whence -v claude; claude --version'
+  ```
+  If `claude` doesn't resolve, either the seed's CLI-install step didn't run (override not loaded — re-check `dockerComposeFile`, Section 6c) or `~/.local/bin` isn't on PATH (the always-run PATH hook didn't fire — check the seed log for `added ~/.local/bin to PATH`).
+- For case (a): confirm zsh is the **default** shell and the proxy env reaches it — this catches "claude isn't picking up the vekil proxy" when everything else looks fine but the terminal opens bash:
+  ```bash
+  docker exec -u "$REMOTE_USER" "$CID" sh -c 'test "$(getent passwd $(id -un) | cut -d: -f7)" = "$(command -v zsh)" && echo "default shell = zsh"'
+  # `echo` always exits 0, so it cannot fail the check — test the value, then print it.
+  docker exec -u "$REMOTE_USER" "$CID" zsh -lic '[[ -n "$ANTHROPIC_BASE_URL" ]] && print "ANTHROPIC_BASE_URL=$ANTHROPIC_BASE_URL"'   # nonzero exit = proxy NOT wired into the login shell
+  ```
+  If the default shell is still bash, the always-run `chsh` step didn't apply (check the seed log for `set default shell to zsh`). Vekil's `env.zsh` is zsh-only, so a bash default shell means claude launched from the terminal bypasses the proxy even though the `~/.zshrc` hook and proxy are healthy.
 - For case (a): verify Vekil in a fresh interactive login shell:
   ```bash
   # Run grep INSIDE the container — a bare ~/.zshrc would expand on the host.
-  docker compose exec <service> sh -c 'grep -Fq ai/vekil/env.zsh "$HOME/.zshrc"'          # hook present
-  docker compose exec <service> sh -c 'zsh -n "$HOME/.dotfiles/ai/vekil/env.zsh"'          # target exists + parses; no /readyz probe
-  docker compose exec <service> zsh -lic 'print "OPENAI_BASE_URL=$OPENAI_BASE_URL"; print "ANTHROPIC_BASE_URL=$ANTHROPIC_BASE_URL"; whence -v codex'
+  docker exec -u "$REMOTE_USER" "$CID" grep -Fq ai/vekil/env.zsh "$REMOTE_HOME/.zshrc"          # hook present
+  docker exec -u "$REMOTE_USER" "$CID" zsh -n "$REMOTE_HOME/.dotfiles/ai/vekil/env.zsh"          # target exists + parses; no /readyz probe
+  # Each variable is asserted non-empty, not merely printed, so an unset proxy
+  # endpoint exits nonzero instead of scrolling past as an empty-looking line.
+  docker exec -u "$REMOTE_USER" "$CID" zsh -lic '[[ -n "$OPENAI_BASE_URL" && -n "$ANTHROPIC_BASE_URL" ]] && { print "OPENAI_BASE_URL=$OPENAI_BASE_URL"; print "ANTHROPIC_BASE_URL=$ANTHROPIC_BASE_URL"; whence -v codex; }'
   ```
   If the hook grep fails, the seed's always-run block never wrote it — the
   running container is likely executing a stale pre-hook `local-seed.sh`. A
@@ -365,17 +425,47 @@ Report to the user:
 
 ## Container user lookup table
 
-(carried over from the old skill)
+**This table is a last-resort guess, not an answer.** A devcontainer feature (ruby, github-cli, common-utils, etc.) can rebase uid 1000 from the base image's user to `vscode` at build time, so the base `FROM` does not determine the container user. **Whenever the image is built or a container is running, resolve the user empirically instead** — it is the only authoritative source:
 
-| Base image | Default user |
+```bash
+# Preferred — the VS Code-launched container, as the remoteUser VS Code uses.
+# NOT `docker compose exec <svc>` (may hit a container you started by hand) and
+# NOT `docker inspect .Config.User` (the image/seed user, frequently root).
+CID="$(docker ps -q --filter "label=devcontainer.local_folder=$PWD")"   # THIS workspace only
+# Check non-empty BEFORE counting: `printf '%s\n' ""` still prints one line, so
+# a bare `wc -l` test passes when no container matched at all.
+[ -n "$CID" ] || { echo "no devcontainer running for $PWD — rebuild first"; exit 1; }
+[ "$(printf '%s\n' "$CID" | wc -l)" -eq 1 ] || { echo "multiple containers for $PWD; disambiguate manually"; exit 1; }
+# Prefer the user already resolved in Step 2. Only re-derive if you don't have
+# it, and note devcontainer.json is JSONC — jq fails on comments/trailing
+# commas, so a null result means "unparsed", not "unset":
+REMOTE_USER="<from Step 2, if already resolved>"
+[ -n "$REMOTE_USER" ] || REMOTE_USER="$(jq -r '.remoteUser // empty' .devcontainer/devcontainer.json 2>/dev/null)"
+# A jq-derived name is a claim, not a fact: validate it against passwd before
+# using it. Empty output means no such user (a stale remoteUser, or JSONC that
+# jq mis-parsed) — do NOT silently fall back to `id -un`, which reports the
+# image default (often root) and would send mounts to the wrong home while
+# every check appears to pass. Ask the user to run `id; echo $HOME` in their
+# VS Code terminal and use that instead.
+if [ -n "$REMOTE_USER" ]; then
+  docker exec "$CID" sh -c 'getent passwd "$1"' _ "$REMOTE_USER" \
+    || { echo "remoteUser '$REMOTE_USER' is not in this container's passwd — confirm with the user, do not guess"; exit 1; }
+else
+  echo "no remoteUser configured — ask the user to run 'id; echo \$HOME' in their VS Code terminal"; exit 1
+fi
+```
+
+Use the login user's passwd home (`getent passwd <user> | cut -d: -f6`) verbatim as the mount target. A directory merely *existing* at a guessed home (e.g. `/home/node`) proves nothing: Docker creates any missing mount target as a root-owned dir, so a wrong prior mount manufactures the very path that seems to confirm it. If passwd has only `vscode` and no `node`, the target is `/home/vscode` no matter what the base image or this table says — and config seeded into the wrong home is silently invisible, since Claude Code reads `$HOME/.claude`.
+
+| Base image | Default user (unverified guess — confirm empirically) |
 |---|---|
-| `mcr.microsoft.com/devcontainers/javascript-node` | `node` |
-| `mcr.microsoft.com/devcontainers/typescript-node` | `node` |
+| `mcr.microsoft.com/devcontainers/javascript-node` | `node` (features often rebase to `vscode`) |
+| `mcr.microsoft.com/devcontainers/typescript-node` | `node` (features often rebase to `vscode`) |
 | `mcr.microsoft.com/devcontainers/base:ubuntu` (and most lang variants) | `vscode` |
 | `mcr.microsoft.com/devcontainers/universal` | `codespace` |
 | Custom Dockerfile with no `USER` | `root` (warn — bind mounts will be owned by root) |
 
-If `remoteUser` in devcontainer.json is set, that wins. If you can't determine it from any signal, ask. Don't guess between `vscode` / `node` / `developer` — getting it wrong silently mounts into a path the shell never visits.
+If `remoteUser` in devcontainer.json is set, it wins *only if that user exists in the built image's passwd* — a stale `remoteUser` pointing at a user a feature removed is a bug, not a target. If you can't determine it from any signal, ask. Don't guess between `vscode` / `node` / `developer` — getting it wrong silently mounts into a path the shell never visits.
 
 ## Things to avoid
 
@@ -383,7 +473,7 @@ If `remoteUser` in devcontainer.json is set, that wins. If you can't determine i
 - **Don't shadow tracked project files.** If the project tracks CLAUDE.md, AGENTS.md, or anything under `.claude/`, never propose renaming or symlinking on top. Use the `.local.md` import-shim and per-file symlink modes instead. This skill enforces this; `claude-link-project --claude-dir-per-file` will refuse on collision.
 - **Don't auto-generate agents.** Ask, offer the two-tier choice (standing catalog vs README-only), then offer the grounded role candidates from the inspected stack. Generate only what was picked. On collision with a tracked file, ask the user for a different name — don't auto-prefix.
 - **Don't scaffold the team-flow command without the catalog.** `/new-feature` references the agent catalog by `subagent_type` — without agents, the command is dead code.
-- **Never edit a project Dockerfile or other tracked devcontainer configuration.** Read those files only to discover existing behavior. All container customization from this skill belongs in the gitignored override and seed script.
+- **Never edit a project Dockerfile or base Compose file.** Read them only to discover existing behavior. The sole tracked-file exception is adding the override to `dockerComposeFile` in `devcontainer.json`, and only with explicit user approval (Section 6c). Every other container customization belongs in the gitignored override and seed script.
 - **Don't add wildcards to settings.local.json allowlist.** Per-tool, per-command, grounded in inspected facts.
 - **Don't clobber existing files in the overlay.** Re-runs should merge or skip.
 - **Don't run installers.** `~/.dotfiles/bin/setup-agent-teams` handles host-side setup (tmux, win32yank, yq, settings.json merge).

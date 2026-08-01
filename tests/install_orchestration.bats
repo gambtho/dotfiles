@@ -73,8 +73,17 @@ SCRIPT
 }
 
 @test "non-interactive bootstrap requires existing git identity" {
+  # Point DOTFILES_ROOT at an empty sandbox. Against the real checkout this
+  # assertion is unreliable: validate_bootstrap_options short-circuits when
+  # core/git/gitconfig.local.symlink exists, and that file is gitignored — so
+  # it is absent on CI's clean checkout but present on any machine that has
+  # actually bootstrapped, making the test pass in CI and fail locally.
+  local unconfigured_root="$TEST_ROOT/unconfigured-dotfiles"
+  mkdir -p "$unconfigured_root/core/git"
+
   run env BOOTSTRAP_SOURCE_ONLY=1 HOME="$HOME" bash -c \
-    'source "$1/bin/bootstrap"; parse_bootstrap_args --non-interactive --profile personal; validate_bootstrap_options' _ "$REPO_ROOT"
+    'source "$1/bin/bootstrap"; DOTFILES_ROOT="$2"; parse_bootstrap_args --non-interactive --profile personal; validate_bootstrap_options' \
+    _ "$REPO_ROOT" "$unconfigured_root"
   [ "$status" -ne 0 ]
   [[ "$output" == *"Git user.name and user.email are required"* ]]
 }
