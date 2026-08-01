@@ -57,7 +57,7 @@ Read concrete files. **Don't infer**; cite the file you read.
 |---|---|
 | Primary language | `go.mod` / `package.json` / `pyproject.toml` / `Gemfile` / `Cargo.toml` / `mix.exs` |
 | Build/test/lint commands | `Makefile` (parse target names), `package.json` scripts, `justfile`, `Taskfile.yml`, `.github/workflows/*.yml` |
-| Container **remoteUser** (terminal/extension user — what mounts + seed target) | **Best: ask the user to run `id; echo $HOME` in their VS Code terminal.** Else `remoteUser` in `devcontainer.json`, or read the *VS Code-launched* container (`docker ps -q --filter "label=devcontainer.local_folder=$PWD"` — scoped to *this* workspace, never the first devcontainer running — then `docker exec <it> sh -c 'id -un'` and `sh -c 'getent passwd "$1" \| cut -d: -f6' _ <user>` for the home). NOT uid 1000, NOT `docker inspect .Config.User`, and NOT a container you `docker compose up` yourself — each can resolve to a different user than the one VS Code opens terminals as. Record the resulting user/home pair once and reuse it for every mount target, the seed, and verification. |
+| Container **remoteUser** (terminal/extension user — what mounts + seed target) | **Best: ask the user to run `id; echo $HOME` in their VS Code terminal.** Else `remoteUser` in `devcontainer.json`, or read the *VS Code-launched* container (`docker ps -q --filter "label=devcontainer.local_folder=$PWD"` — scoped to *this* workspace, never the first devcontainer running. **Require exactly one non-empty ID before any `docker exec`**: zero means rebuild first, more than one must be disambiguated by hand. Then `docker exec <it> sh -c 'id -un'` and `sh -c 'getent passwd "$1" \| cut -d: -f6' _ <user>` for the home, treating empty passwd output as "no such user" rather than falling through to a guess). NOT uid 1000, NOT `docker inspect .Config.User`, and NOT a container you `docker compose up` yourself — each can resolve to a different user than the one VS Code opens terminals as. Record the resulting user/home pair once and reuse it for every mount target, the seed, and verification. |
 | Container service name | `service` in `devcontainer.json` if set, else the first key under `services:` in the base compose file |
 | Seed privilege (Compose, non-root user) | Passwordless `sudo` already supplied by the image or existing Dockerfile; inspect only, and verify a running container with `sudo -n true` when available |
 
@@ -236,7 +236,19 @@ Before rebuilding, confirm `docker-compose.override.yml` appears in `dockerCompo
 - **User approves the edit:** add `"docker-compose.override.yml"` (or the correct relative path) to the list, matching existing style. If the current value is a plain string, convert it to an array containing the original string followed by the override; if it is already an array, append. Touch no other key. Flag it in the final report as a tracked change with the fork/upstream caveat.
 - **User declines:** write the override + seed as normal, but state plainly it will NOT take effect until the entry exists, and hand them the exact edit. Do not claim the container side is done.
 
-Verify the merge after listing: `docker compose -f <base> -f <override> config` should show the seed `command` and `/host-seed` mounts.
+Verify the merge after listing — over the **complete** `dockerComposeFile` list, in order, with each entry resolved relative to `devcontainer.json`'s directory (so `../docker-compose.yml` lands at the project root). Verifying only the base plus the override misses a third file that overrides the service `command` or re-adds a host bind:
+
+```bash
+mapfile -t COMPOSE_FILES < <(jq -r '
+  (.dockerComposeFile | if type == "array" then . else [.] end)[]' \
+  .devcontainer/devcontainer.json)
+COMPOSE_ARGS=(); for f in "${COMPOSE_FILES[@]}"; do
+  COMPOSE_ARGS+=(-f "$(realpath -m ".devcontainer/$f")")
+done
+docker compose "${COMPOSE_ARGS[@]}" config    # the override appears only if it is listed
+```
+
+The merged output should show the seed `command` and the `/host-seed` mounts.
 
 See `devcontainer-host-mounts.md` for the copy-pasteable override and seed script, service/user/path substitutions, and verification commands.
 
@@ -378,7 +390,8 @@ Report to the user:
 - For case (a): confirm zsh is the **default** shell and the proxy env reaches it — this catches "claude isn't picking up the vekil proxy" when everything else looks fine but the terminal opens bash:
   ```bash
   docker exec -u "$REMOTE_USER" "$CID" sh -c 'test "$(getent passwd $(id -un) | cut -d: -f7)" = "$(command -v zsh)" && echo "default shell = zsh"'
-  docker exec -u "$REMOTE_USER" "$CID" zsh -lic 'echo ANTHROPIC_BASE_URL=$ANTHROPIC_BASE_URL'   # non-empty = proxy wired into the login shell
+  # `echo` always exits 0, so it cannot fail the check — test the value, then print it.
+  docker exec -u "$REMOTE_USER" "$CID" zsh -lic '[[ -n "$ANTHROPIC_BASE_URL" ]] && print "ANTHROPIC_BASE_URL=$ANTHROPIC_BASE_URL"'   # nonzero exit = proxy NOT wired into the login shell
   ```
   If the default shell is still bash, the always-run `chsh` step didn't apply (check the seed log for `set default shell to zsh`). Vekil's `env.zsh` is zsh-only, so a bash default shell means claude launched from the terminal bypasses the proxy even though the `~/.zshrc` hook and proxy are healthy.
 - For case (a): verify Vekil in a fresh interactive login shell:
@@ -386,7 +399,9 @@ Report to the user:
   # Run grep INSIDE the container — a bare ~/.zshrc would expand on the host.
   docker exec -u "$REMOTE_USER" "$CID" grep -Fq ai/vekil/env.zsh "$REMOTE_HOME/.zshrc"          # hook present
   docker exec -u "$REMOTE_USER" "$CID" zsh -n "$REMOTE_HOME/.dotfiles/ai/vekil/env.zsh"          # target exists + parses; no /readyz probe
-  docker exec -u "$REMOTE_USER" "$CID" zsh -lic 'print "OPENAI_BASE_URL=$OPENAI_BASE_URL"; print "ANTHROPIC_BASE_URL=$ANTHROPIC_BASE_URL"; whence -v codex'
+  # Each variable is asserted non-empty, not merely printed, so an unset proxy
+  # endpoint exits nonzero instead of scrolling past as an empty-looking line.
+  docker exec -u "$REMOTE_USER" "$CID" zsh -lic '[[ -n "$OPENAI_BASE_URL" && -n "$ANTHROPIC_BASE_URL" ]] && { print "OPENAI_BASE_URL=$OPENAI_BASE_URL"; print "ANTHROPIC_BASE_URL=$ANTHROPIC_BASE_URL"; whence -v codex; }'
   ```
   If the hook grep fails, the seed's always-run block never wrote it — the
   running container is likely executing a stale pre-hook `local-seed.sh`. A
@@ -415,14 +430,27 @@ Report to the user:
 # NOT `docker compose exec <svc>` (may hit a container you started by hand) and
 # NOT `docker inspect .Config.User` (the image/seed user, frequently root).
 CID="$(docker ps -q --filter "label=devcontainer.local_folder=$PWD")"   # THIS workspace only
-[ "$(printf '%s\n' "$CID" | wc -l)" -eq 1 ] || { echo "no single container for $PWD"; exit 1; }
+# Check non-empty BEFORE counting: `printf '%s\n' ""` still prints one line, so
+# a bare `wc -l` test passes when no container matched at all.
+[ -n "$CID" ] || { echo "no devcontainer running for $PWD — rebuild first"; exit 1; }
+[ "$(printf '%s\n' "$CID" | wc -l)" -eq 1 ] || { echo "multiple containers for $PWD; disambiguate manually"; exit 1; }
 # Prefer the user already resolved in Step 2. Only re-derive if you don't have
 # it, and note devcontainer.json is JSONC — jq fails on comments/trailing
 # commas, so a null result means "unparsed", not "unset":
 REMOTE_USER="<from Step 2, if already resolved>"
 [ -n "$REMOTE_USER" ] || REMOTE_USER="$(jq -r '.remoteUser // empty' .devcontainer/devcontainer.json 2>/dev/null)"
-[ -n "$REMOTE_USER" ] || REMOTE_USER="$(docker exec "$CID" sh -c 'id -un')"
-docker exec "$CID" sh -c 'getent passwd "$1"' _ "$REMOTE_USER"   # field 6 = home; empty output means the user does not exist
+# A jq-derived name is a claim, not a fact: validate it against passwd before
+# using it. Empty output means no such user (a stale remoteUser, or JSONC that
+# jq mis-parsed) — do NOT silently fall back to `id -un`, which reports the
+# image default (often root) and would send mounts to the wrong home while
+# every check appears to pass. Ask the user to run `id; echo $HOME` in their
+# VS Code terminal and use that instead.
+if [ -n "$REMOTE_USER" ]; then
+  docker exec "$CID" sh -c 'getent passwd "$1"' _ "$REMOTE_USER" \
+    || { echo "remoteUser '$REMOTE_USER' is not in this container's passwd — confirm with the user, do not guess"; exit 1; }
+else
+  echo "no remoteUser configured — ask the user to run 'id; echo \$HOME' in their VS Code terminal"; exit 1
+fi
 ```
 
 Use the login user's passwd home (`getent passwd <user> | cut -d: -f6`) verbatim as the mount target. A directory merely *existing* at a guessed home (e.g. `/home/node`) proves nothing: Docker creates any missing mount target as a root-owned dir, so a wrong prior mount manufactures the very path that seems to confirm it. If passwd has only `vscode` and no `node`, the target is `/home/vscode` no matter what the base image or this table says — and config seeded into the wrong home is silently invisible, since Claude Code reads `$HOME/.claude`.
