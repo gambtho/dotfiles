@@ -2,9 +2,9 @@
 
 set -e
 
-source "$(dirname "$0")/common.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
-cd "$(dirname "$0")/.."
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
 DOTFILES_ROOT=$(pwd -P)
 
 # Determine active profile
@@ -26,17 +26,36 @@ update_homebrew() {
     brew bundle dump --all --force --file="$DOTFILES_ROOT/tmp/brewfile"
 }
 
+compose_apt_packages() {
+  local platform_file profile_file
+
+  case "$OS" in
+    Ubuntu) platform_file="$DOTFILES_ROOT/platforms/linux/packages/ubuntu_apt" ;;
+    WSL) platform_file="$DOTFILES_ROOT/platforms/linux/packages/wsl_apt" ;;
+    *) return 2 ;;
+  esac
+  profile_file="$DOTFILES_ROOT/profiles/packages/${PROFILE}_apt"
+  [[ -f "$profile_file" ]] || return 2
+  awk 'NF' "$DOTFILES_ROOT/platforms/linux/packages/base_apt" "$platform_file" "$profile_file" | sort -u
+}
+
 install_apt_packages() {
-  local apt_file=$1
   local -a apt_packages
 
-  log_info "Updating APT packages from $apt_file..."
-  sudo apt update >/dev/null &&
-    mapfile -t apt_packages <"$DOTFILES_ROOT/platforms/linux/$apt_file" &&
+  log_info "Updating composed APT packages for $OS/$PROFILE..."
+  setup_package_repositories &&
+    sudo apt update >/dev/null &&
+    mapfile -t apt_packages < <(compose_apt_packages) &&
     sudo apt install -y "${apt_packages[@]}" >/dev/null &&
     sudo apt upgrade -y >/dev/null &&
     sudo apt autoremove -y >/dev/null &&
     sudo apt autoclean -y >/dev/null
+}
+
+setup_package_repositories() {
+  [[ "$PROFILE" == work ]] || return 0
+  WORK_INSTALL_SOURCE_ONLY=1 source "$DOTFILES_ROOT/work/install.sh"
+  setup_work_apt_repositories
 }
 
 install_platform_packages() {
@@ -45,14 +64,10 @@ install_platform_packages() {
       update_homebrew
       ;;
     Ubuntu)
-      if [[ "$PROFILE" == "server" ]]; then
-        install_apt_packages "server_apt"
-      else
-        install_apt_packages "ubuntu_apt"
-      fi
+      install_apt_packages
       ;;
     WSL)
-      install_apt_packages "wsl_apt"
+      install_apt_packages
       ;;
     *)
       log_warning "Unsupported OS: $OS"
@@ -62,22 +77,16 @@ install_platform_packages() {
 }
 
 check_unsaved_apt_packages() {
-  local apt_file=$1
-  if [ ! -f "$DOTFILES_ROOT/platforms/linux/$apt_file" ]; then
-    log_warning "Reference apt file missing: $apt_file. Skipping package diff."
-    return
-  fi
+  local audit_file manifest_file count
   mkdir -p "$DOTFILES_ROOT/tmp"
-  apt-mark showmanual | sort -u >"$DOTFILES_ROOT/tmp/$apt_file"
-  local apt_diff
-  set +e
-  apt_diff=$(comm -23 "$DOTFILES_ROOT/tmp/$apt_file" "$DOTFILES_ROOT/platforms/linux/$apt_file")
-  set -e
-  if [ -n "$apt_diff" ]; then
-    log_warning "Unsaved packages: $apt_diff"
-  else
-    log_success "All packages are up to date."
-  fi
+  audit_file="$DOTFILES_ROOT/tmp/unmanaged-apt-${OS,,}-${PROFILE}.txt"
+  manifest_file=$(mktemp "$DOTFILES_ROOT/tmp/managed-apt.XXXXXX")
+  compose_apt_packages >"$manifest_file"
+  comm -23 <(apt-mark showmanual | sort -u) "$manifest_file" >"$audit_file"
+  count=$(wc -l <"$audit_file")
+  count=${count//[[:space:]]/}
+  log_info "Unmanaged manual APT packages: $count (details: $audit_file)"
+  rm -f -- "$manifest_file"
 }
 
 # ── Phase 2: Runtime tools ────────────────────────────────────────────────────
@@ -158,15 +167,13 @@ main() {
 
   case "$OS" in
     Ubuntu)
-      if [[ "$PROFILE" == "server" ]]; then
-        run_phase optional package-audit check_unsaved_apt_packages "server_apt"
-      else
-        run_phase optional package-audit check_unsaved_apt_packages "ubuntu_apt"
+      run_phase optional package-audit check_unsaved_apt_packages
+      if [[ "$PROFILE" != "server" ]]; then
         run_phase optional flatpak setup_flatpak
       fi
       ;;
     WSL)
-      run_phase optional package-audit check_unsaved_apt_packages "wsl_apt"
+      run_phase optional package-audit check_unsaved_apt_packages
       ;;
   esac
 
@@ -184,4 +191,6 @@ main() {
   log_success "Install complete."
 }
 
-main "$@"
+if [[ "${INSTALL_SOURCE_ONLY:-0}" != 1 ]]; then
+  main "$@"
+fi
