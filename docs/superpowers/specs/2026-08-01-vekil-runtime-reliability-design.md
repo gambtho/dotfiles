@@ -31,6 +31,14 @@ even if the endpoint is still serving. A subsequent successful stop or start
 removes the failure marker. A reused PID is never signalled or treated as the
 original process.
 
+Ownership is judged by PID plus recorded start identity, not by whether the
+process still looks like Vekil. Termination and confirmation therefore continue
+to track a recorded process that has `exec`ed into another program: it is still
+the process this repository started and is still holding the port. The stricter
+"is this Vekil" check remains only where the question is whether to adopt an
+already-running proxy. PID reuse is still excluded, because a reused PID carries
+a different start identity.
+
 Graceful termination uses the existing `VEKIL_STOP_TIMEOUT` (default 15
 seconds). Confirmation after SIGKILL uses a separate
 `VEKIL_KILL_CONFIRM_TIMEOUT` with a 2-second default and a validated 0–30 second

@@ -106,7 +106,8 @@ SCRIPT
   chmod +x "$STUB_BIN/codex"
 
   run env HOME="$HOME" DOTFILES="$REPO_ROOT" PATH="$PATH" zsh -dfc '
-    source "$DOTFILES/core/shell/load-custom.zsh" || exit 1
+    source "$DOTFILES/core/shell/zshrc.symlink" || exit 1
+    (( ${+functions[codex]} )) || { print -r -- "NO_MANAGED_CODEX_WRAPPER"; exit 1; }
     codex exec prompt
   '
 

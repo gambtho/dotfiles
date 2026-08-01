@@ -79,6 +79,27 @@ setup() {
   [[ "$output" == *"unable to stop Vekil pid 123"* ]]
 }
 
+@test "a failed stop tells the operator the proxy is still serving" {
+  # stop() clears the ready marker up front and the design keeps it absent on
+  # failure, so shells stop configuring a proxy that is still listening. That
+  # is only safe if the failure names the consequence rather than leaving the
+  # operator to discover it one silent shell at a time.
+  run env VEKIL_PROXY_SOURCE_ONLY=1 VEKIL_STATE_DIR="$STATE_DIR" VEKIL_STOP_TIMEOUT=0 VEKIL_KILL_CONFIRM_TIMEOUT=0 bash -c '
+    source "$1/bin/vekil-proxy"
+    pid_record() { printf "123|start-id\n"; }
+    process_matches_record() { return 0; }
+    process_matches_start_id() { return 0; }
+    is_healthy() { return 0; }
+    kill() { :; }
+    stop
+  ' _ "$REPO_ROOT" "$STATE_DIR"
+
+  [ "$status" -ne 0 ]
+  [ ! -e "$STATE_DIR/proxy-ready" ]
+  [[ "$output" == *"still serving"* ]]
+  [[ "$output" == *"vekil-proxy status"* ]]
+}
+
 @test "Vekil stop does not signal a reused PID after identity changes" {
   run env VEKIL_PROXY_SOURCE_ONLY=1 VEKIL_STATE_DIR="$STATE_DIR" bash -c '
     source "$1/bin/vekil-proxy"

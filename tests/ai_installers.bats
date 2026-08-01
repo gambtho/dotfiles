@@ -180,6 +180,20 @@ SCRIPT
   [ "$(cat "$HOME/action")" = "start" ]
 }
 
+@test "vekil service lets a failed ExecStop stay visible" {
+  local template="$REPO_ROOT/ai/vekil/vekil.service"
+
+  # With the default KillMode=control-group, systemd SIGKILLs the whole cgroup
+  # after a nonzero ExecStop, destroying the surviving process that
+  # `vekil-proxy stop` just reported it could not stop. setsid does not escape
+  # the cgroup, so the failure this wave exists to surface would be masked.
+  run rg -n '^KillMode=(none|mixed)$' "$template"
+  [ "$status" -eq 0 ]
+
+  run rg -n '^TimeoutStopSec=[0-9]+$' "$template"
+  [ "$status" -eq 0 ]
+}
+
 @test "vekil service template renders an absolute repo path" {
   local template="$REPO_ROOT/ai/vekil/vekil.service"
   [ -f "$template" ]
