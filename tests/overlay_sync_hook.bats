@@ -150,3 +150,23 @@ run_hook() {
   run bash "$HOOK" <<<"$(printf '{"cwd":"%s"}' "$PROJECT")"
   [ "$status" -eq 0 ]
 }
+
+@test "repairs a dangling per-file tree, then a worktree of it" {
+  # The exact reported shape: the main checkout holds a per-file tree of
+  # links into a $HOME that does not exist here, and a worktree taken
+  # from it has no overlay at all. Both were broken at once.
+  mkdir -p "$PROJECT/.claude/skills/foo"
+  ln -s /home/ghost/.dotfiles/projects/demo/.claude/skills/foo/SKILL.md \
+    "$PROJECT/.claude/skills/foo/SKILL.md"
+  [ ! -e "$PROJECT/.claude/skills/foo/SKILL.md" ] # dangling
+
+  run bash "$HOOK" <<<"$(printf '{"cwd":"%s"}' "$PROJECT")"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$PROJECT/.claude/skills/foo/SKILL.md")" = skill ]
+  [ -z "$(find "$PROJECT/.claude" -xtype l)" ]
+
+  git -C "$PROJECT" worktree add --quiet -b feature "$TEST_ROOT/wt-feature"
+  run bash "$HOOK" <<<"$(printf '{"cwd":"%s"}' "$TEST_ROOT/wt-feature")"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$TEST_ROOT/wt-feature/.claude/skills/foo/SKILL.md")" = skill ]
+}
