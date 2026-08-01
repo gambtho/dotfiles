@@ -73,6 +73,7 @@ run_hook() {
   run bash "$HOOK" <<<"$(printf '{"hook_event_name":"SessionStart","cwd":"%s"}' "$PROJECT")"
 
   [ "$status" -eq 0 ]
+  assert_symlink_target "$PROJECT/.claude/skills" "$OVERLAY/.claude/skills"
   [ -e "$PROJECT/.claude/skills/foo/SKILL.md" ]
   [ -z "$(find "$PROJECT/.claude" -xtype l)" ]
 }
@@ -162,11 +163,17 @@ run_hook() {
 
   run bash "$HOOK" <<<"$(printf '{"cwd":"%s"}' "$PROJECT")"
   [ "$status" -eq 0 ]
+  # Assert the directory link itself, not just readable content: a copy
+  # would satisfy a content check while losing the whole point of the
+  # change (new skills appearing with no re-run, payloads carried along).
+  assert_symlink_target "$PROJECT/.claude/skills" "$OVERLAY/.claude/skills"
   [ "$(cat "$PROJECT/.claude/skills/foo/SKILL.md")" = skill ]
   [ -z "$(find "$PROJECT/.claude" -xtype l)" ]
 
   git -C "$PROJECT" worktree add --quiet -b feature "$TEST_ROOT/wt-feature"
   run bash "$HOOK" <<<"$(printf '{"cwd":"%s"}' "$TEST_ROOT/wt-feature")"
   [ "$status" -eq 0 ]
+  assert_symlink_target "$TEST_ROOT/wt-feature/.claude/skills" \
+    "$OVERLAY/.claude/skills"
   [ "$(cat "$TEST_ROOT/wt-feature/.claude/skills/foo/SKILL.md")" = skill ]
 }
