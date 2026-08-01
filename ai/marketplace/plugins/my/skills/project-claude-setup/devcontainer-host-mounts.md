@@ -41,9 +41,9 @@ Never edit a project Dockerfile or a base Compose file. Never edit `devcontainer
 
 The only permitted devcontainer writes are the gitignored `docker-compose.override.yml`, `local-seed.sh`, the user-approved `dockerComposeFile` entry in `devcontainer.json`, and `.git/info/exclude` entries needed for the two local files.
 
-Capture the initial `git status --short` output before any write.
+Capture the initial `git status --short` output before any write, **and a copy of the tracked `devcontainer.json` content** (e.g. `git show :.devcontainer/devcontainer.json` plus the working-tree file). Status alone is insufficient: if that file is already modified for unrelated reasons, a further unauthorized edit does not change its status line and would go undetected.
 
-At final verification, run `git status --short` and compare its output byte-for-byte with the initial snapshot.
+At final verification, run `git status --short` and compare its output byte-for-byte with the initial snapshot, **and diff `devcontainer.json` against the captured copy**. The only permitted content difference is the user-approved `dockerComposeFile` entry; any other tracked modification is reported without staging, reverting, or repairing it.
 
 Report any new tracked devcontainer change without staging or reverting it.
 
@@ -63,17 +63,24 @@ These values vary per project and must be filled in correctly, otherwise mounts 
 1. **`remoteUser` in `.devcontainer/devcontainer.json`** if set — this is what VS Code honors, so it is authoritative for the terminal/extension user. Verify it exists in the built image's passwd (a stale `remoteUser` pointing at a user a feature removed is a bug).
 2. **Read the VS Code-launched container directly** (NOT a container you spun up by hand — see the multi-container trap below):
    ```bash
-   # find the container the Dev Containers CLI / VS Code started — its compose
-   # project is usually "<project-basename>_devcontainer":
-   CID="$(docker ps --filter label=devcontainer.local_folder -q | head -n1)"
-   [ -n "$CID" ] || docker ps --format '{{.Names}}\t{{.CreatedAt}}' | grep devcontainer
+   # find the container the Dev Containers CLI / VS Code started FOR THIS
+   # WORKSPACE — the label records the host folder, so filter on it rather than
+   # taking whatever devcontainer happens to be running first:
+   CID="$(docker ps -q --filter "label=devcontainer.local_folder=$PWD")"
+   [ -n "$CID" ] || { docker ps --filter label=devcontainer.local_folder \
+     --format '{{.ID}}\t{{.Names}}\t{{.Label "devcontainer.local_folder"}}'
+     echo "no devcontainer for $PWD — pick the matching ID above"; exit 1; }
+   [ "$(printf '%s\n' "$CID" | wc -l)" -eq 1 ] \
+     || { echo "multiple containers for $PWD; disambiguate manually"; exit 1; }
    # the configured remoteUser, if devcontainer.json sets one:
    REMOTE_USER="$(jq -r '.remoteUser // empty' .devcontainer/devcontainer.json 2>/dev/null)"
    # else the container's own login user — NEVER uid 1000, and NEVER
    # `docker inspect .Config.User` (that is the seed-command user, often root):
    [ -n "$REMOTE_USER" ] || REMOTE_USER="$(docker exec "$CID" sh -c 'id -un')"
-   # confirm it is a real passwd user and take its home from passwd field 6:
-   REMOTE_HOME="$(docker exec "$CID" sh -c "getent passwd '$REMOTE_USER' | cut -d: -f6")"
+   # confirm it is a real passwd user and take its home from passwd field 6.
+   # Pass the name as a positional arg, never interpolated into the sh -c text,
+   # so a devcontainer.json value cannot inject shell:
+   REMOTE_HOME="$(docker exec "$CID" sh -c 'getent passwd "$1" | cut -d: -f6' _ "$REMOTE_USER")"
    [ -n "$REMOTE_HOME" ] || { echo "remoteUser '$REMOTE_USER' not in container passwd"; exit 1; }
    echo "container=$CID user=$REMOTE_USER home=$REMOTE_HOME"
    ```
@@ -171,7 +178,7 @@ Write to the same directory as the base compose file (per Step 1). If the base i
 
 **The override only takes effect if it is listed in `dockerComposeFile` — file placement alone is NOT enough.** A bare `docker compose up` auto-merges a sibling `docker-compose.override.yml`, but the Dev Containers CLI and VS Code do not: they pass explicit `-f` flags for exactly the files named in the `dockerComposeFile` array and nothing else. So a sibling override is silently ignored under the real launch path. Step 1 must confirm the override is in that array; if it is not, see the "Ensure the override is loaded" step below before writing anything else.
 
-Use this template, filling in `{SERVICE}`, `{USER}`, `{WORKSPACE}`, and `{BASE_COMMAND}` from Step 2. **`{USER}` is `$REMOTE_USER`** (the terminal/extension user resolved in Step 2), which may differ from whoever the `command:` runs as. Every `/home/{USER}` path below is shorthand for `$REMOTE_HOME` — replace the whole prefix, not just the username, whenever the resolved passwd home is not `/home/$REMOTE_USER`. The mount targets and the seed's `SEED_HOME` must both be that exact home, or the config lands where the terminal never looks.
+Use this template, filling in `{SERVICE}`, `{USER}`, `{WORKSPACE}`, and `{BASE_COMMAND}` from Step 2, and `{SEED_SCRIPT}` from Step 1 — the container-visible path of the `local-seed.sh` written next to the base compose file, which is not always under `.devcontainer/`. **`{USER}` is `$REMOTE_USER`** (the terminal/extension user resolved in Step 2), which may differ from whoever the `command:` runs as. Every `/home/{USER}` path below is shorthand for `$REMOTE_HOME` — replace the whole prefix, not just the username, whenever the resolved passwd home is not `/home/$REMOTE_USER`. The mount targets and the seed's `SEED_HOME` must both be that exact home, or the config lands where the terminal never looks.
 
 ```yaml
 # LOCAL, GITIGNORED. Claude and dotfiles are read-only seed sources. The seed
@@ -197,7 +204,7 @@ services:
       # - ~/.ssh:/home/{USER}/.ssh:ro
       # - ~/.config/gh:/home/{USER}/.config/gh:ro
     command: >-
-      bash -c "bash {WORKSPACE}/.devcontainer/local-seed.sh; exec {BASE_COMMAND}"
+      bash -c "bash {SEED_SCRIPT}; exec {BASE_COMMAND}"
     configs:
       - source: gitconfig_local
         target: /home/{USER}/.gitconfig.local
@@ -244,7 +251,7 @@ volumes:
 
 This does not bridge OpenCode; it replaces the inherited host bind with an empty project-local volume.
 
-Write `{WORKSPACE}/.devcontainer/local-seed.sh` with:
+Write the seed script at `{SEED_SCRIPT}` (the `local-seed.sh` sibling of the base compose file, from Step 1 — same path the `command:` above executes) with:
 
 ```bash
 #!/usr/bin/env bash
@@ -263,7 +270,7 @@ set -euo pipefail
 
 # Bump this whenever the gated steps below (copies, installers) change so
 # already-seeded containers refresh instead of silently keeping stale state.
-SEED_VERSION=7
+SEED_VERSION=8
 
 # The remoteUser (Step 2) — the user VS Code opens terminals as and whose
 # ~/.claude Claude Code reads. NOT necessarily the user running this script.
@@ -348,19 +355,28 @@ $SUDO chown "$SEED_UID:$SEED_GID" "$ZSHRC"
 # "claude isn't picking up the vekil proxy" symptom. Make zsh the remoteUser's
 # login shell so terminals inherit the proxy env. /etc/passwd lives in the
 # writable layer and is reset on rebuild, so this re-applies every launch (kept in
-# the always-run block, not the gate). Best-effort: skip cleanly if zsh/chsh gone.
-if command -v zsh >/dev/null 2>&1; then
-  ZSH_PATH="$(command -v zsh)"
-  CURRENT_SHELL="$(getent passwd "$SEED_USER" | cut -d: -f7)"
-  if [ "$CURRENT_SHELL" != "$ZSH_PATH" ]; then
-    if command -v chsh >/dev/null 2>&1 && $SUDO chsh -s "$ZSH_PATH" "$SEED_USER" >/dev/null 2>&1; then
-      echo "🌱 seed: set $SEED_USER default shell to zsh"
-    elif [ -w /etc/passwd ] || [ "$(id -u)" -eq 0 ]; then
-      $SUDO sed -i "s#^\($SEED_USER:.*:\)[^:]*\$#\1$ZSH_PATH#" /etc/passwd \
-        && echo "🌱 seed: set $SEED_USER default shell to zsh (via /etc/passwd)"
-    else
-      echo "⚠️  seed: could not change $SEED_USER default shell to zsh (non-fatal)"
-    fi
+# the always-run block, not the gate). This is FATAL, not best-effort: a quiet
+# skip leaves a bash login shell that silently bypasses the proxy, which is the
+# exact symptom this block exists to prevent. The fix belongs to the user (a base
+# image with zsh, or an override that installs it), so fail loudly and say so.
+if ! command -v zsh >/dev/null 2>&1; then
+  echo "❌ seed: zsh not found — Vekil's env.zsh is zsh-only, so the proxy" >&2
+  echo "   would be silently bypassed. Install zsh in the image/override." >&2
+  exit 1
+fi
+ZSH_PATH="$(command -v zsh)"
+CURRENT_SHELL="$(getent passwd "$SEED_USER" | cut -d: -f7)"
+if [ "$CURRENT_SHELL" != "$ZSH_PATH" ]; then
+  if command -v chsh >/dev/null 2>&1 && $SUDO chsh -s "$ZSH_PATH" "$SEED_USER" >/dev/null 2>&1; then
+    echo "🌱 seed: set $SEED_USER default shell to zsh"
+  elif { [ -w /etc/passwd ] || [ "$(id -u)" -eq 0 ]; } \
+    && $SUDO sed -i "s#^\($SEED_USER:.*:\)[^:]*\$#\1$ZSH_PATH#" /etc/passwd; then
+    echo "🌱 seed: set $SEED_USER default shell to zsh (via /etc/passwd)"
+  else
+    echo "❌ seed: could not set $SEED_USER's login shell to zsh — neither chsh" >&2
+    echo "   nor a writable /etc/passwd is available. Terminals would open bash" >&2
+    echo "   and bypass the Vekil proxy." >&2
+    exit 1
   fi
 fi
 
@@ -522,22 +538,25 @@ as_user mkdir -p "$CLAUDE_HOME"
 #
 # Only these five seed-owned paths are pruned. ~/.claude/plugins (marketplace),
 # the sentinel, and all runtime state are deliberately untouched.
+# The prune runs even when $SEED_CLAUDE is absent entirely — removing the whole
+# mount is just the limiting case of deleting every file in it, and leaving the
+# stale copies behind there would be the same bug.
+for item in settings.json CLAUDE.md; do
+  as_user rm -rf "$CLAUDE_HOME/$item"
+  if [ -e "$SEED_CLAUDE/$item" ]; then
+    as_user cp -a "$SEED_CLAUDE/$item" "$CLAUDE_HOME/$item"
+  fi
+done
+for dir in config commands skills; do
+  as_user rm -rf "$CLAUDE_HOME/$dir"
+  if [ -d "$SEED_CLAUDE/$dir" ]; then
+    as_user cp -a "$SEED_CLAUDE/$dir" "$CLAUDE_HOME/$dir"
+  fi
+done
 if [ -d "$SEED_CLAUDE" ]; then
-  for item in settings.json CLAUDE.md; do
-    as_user rm -rf "$CLAUDE_HOME/$item"
-    if [ -e "$SEED_CLAUDE/$item" ]; then
-      as_user cp -a "$SEED_CLAUDE/$item" "$CLAUDE_HOME/$item"
-    fi
-  done
-  for dir in config commands skills; do
-    as_user rm -rf "$CLAUDE_HOME/$dir"
-    if [ -d "$SEED_CLAUDE/$dir" ]; then
-      as_user cp -a "$SEED_CLAUDE/$dir" "$CLAUDE_HOME/$dir"
-    fi
-  done
   echo "🌱 seed: copied authored ~/.claude subset"
 else
-  echo "🌱 seed: no $SEED_CLAUDE mount — starting with empty ~/.claude"
+  echo "🌱 seed: no $SEED_CLAUDE mount — pruned seed-owned ~/.claude paths"
 fi
 
 # 2. Reinstall my@guarzo marketplace + plugins into container-local ~/.claude.
@@ -613,16 +632,26 @@ Any signal means offer repair. Confirm each write, back up the override, remove 
 Once written, drive every command below off the paths and identity resolved during discovery, not off the `.devcontainer/` defaults:
 
 ```bash
-# From Step 1 (the dockerComposeFile entries — may be at the project root, not
-# under .devcontainer/) and Step 2 (the remoteUser pair). Paths are relative to
-# the project root.
-BASE_COMPOSE="<the dockerComposeFile base entry>"
-OVERRIDE_COMPOSE="<sibling of BASE_COMPOSE>/docker-compose.override.yml"
-SEED_SCRIPT="<sibling of BASE_COMPOSE>/local-seed.sh"
+# From Step 1. `dockerComposeFile` may be a string or an array, and each entry
+# is relative to devcontainer.json's own directory — so `../docker-compose.yml`
+# resolves to the project root, not `.devcontainer/`. Normalize every entry
+# once and pass the whole list to Compose; a project with a base + a CI overlay
+# breaks if you verify only the first file.
+DC_DIR=".devcontainer"
+mapfile -t COMPOSE_FILES < <(jq -r '
+  (.dockerComposeFile | if type == "array" then . else [.] end)[]' \
+  "$DC_DIR/devcontainer.json")
+COMPOSE_ARGS=(); for f in "${COMPOSE_FILES[@]}"; do
+  COMPOSE_ARGS+=(-f "$(realpath -m "$DC_DIR/$f")")
+done
+BASE_COMPOSE="$(realpath -m "$DC_DIR/${COMPOSE_FILES[0]}")"
+COMPOSE_DIR="$(dirname "$BASE_COMPOSE")"
+OVERRIDE_COMPOSE="$COMPOSE_DIR/docker-compose.override.yml"
+SEED_SCRIPT="$COMPOSE_DIR/local-seed.sh"
 REMOTE_USER="<resolved in Step 2>"; REMOTE_HOME="<resolved in Step 2>"
 ```
 
-1. Run `docker compose -f "$BASE_COMPOSE" -f "$OVERRIDE_COMPOSE" config` from the project root. Compose will print the merged config or fail loudly on a typo. Check that the service name matches and that no host bind targets the container user's `~/.claude`, `~/.dotfiles`, or OpenCode directory. Unless the user opted into credential sharing, also confirm no host bind targets `~/.ssh` or `~/.config/gh` — an inherited base-file bind there must be shadowed with an empty named volume (Step 3), not left in the merged config. **Also confirm every home path in the merged config equals `$REMOTE_HOME`** — the passwd home resolved in Step 2, not a `/home/<name>` guess. A `/home/node` target when the user's home is `/home/vscode` means config lands where the shell never looks (the mounts "work" and the seed logs success, but Claude Code sees nothing).
+1. Run `docker compose "${COMPOSE_ARGS[@]}" config` from the project root — every resolved `dockerComposeFile` entry plus the override, in that order, so the merge you inspect is the one the Dev Containers CLI actually builds. Compose will print the merged config or fail loudly on a typo. Check that the service name matches and that no host bind targets the container user's `~/.claude`, `~/.dotfiles`, or OpenCode directory. Unless the user opted into credential sharing, also confirm no host bind targets `~/.ssh` or `~/.config/gh` — an inherited base-file bind there must be shadowed with an empty named volume (Step 3), not left in the merged config. **Also confirm every home path in the merged config equals `$REMOTE_HOME`** — the passwd home resolved in Step 2, not a `/home/<name>` guess. A `/home/node` target when the user's home is `/home/vscode` means config lands where the shell never looks (the mounts "work" and the seed logs success, but Claude Code sees nothing).
 2. Confirm the merged `command` contains `local-seed.sh` followed by the original foreground command.
 3. Run `git check-ignore "$OVERRIDE_COMPOSE" "$SEED_SCRIPT"`, then compare `git status --short` with the initial snapshot. They must match; if a new tracked devcontainer modification appears, report it without staging or reverting it.
 4. After the user rebuilds, verify. **The single most reliable check — do this first — is to ask the user to run these in their actual VS Code terminal** (not a `docker exec`, which can hit a different container or force a different shell than the terminal uses):
@@ -637,20 +666,23 @@ REMOTE_USER="<resolved in Step 2>"; REMOTE_HOME="<resolved in Step 2>"
    Then run the mechanical checks against the **VS Code-launched** container, not a bare service name — `docker compose exec {SERVICE}` can resolve to a container you started by hand, and its default user is often root. Re-confirm the container ID against the Step 2 identity first, then drive every check off those variables:
 
 ```bash
-CID="$(docker ps --filter label=devcontainer.local_folder -q | head -n1)"   # the VS Code container
-[ -n "$CID" ] || { echo "no VS Code devcontainer running — rebuild first"; exit 1; }
+CID="$(docker ps -q --filter "label=devcontainer.local_folder=$PWD")"   # this workspace's VS Code container
+[ -n "$CID" ] && [ "$(printf '%s\n' "$CID" | wc -l)" -eq 1 ] \
+  || { echo "no single VS Code devcontainer for $PWD — rebuild first"; exit 1; }
 # REMOTE_USER / REMOTE_HOME come from Step 2. Do NOT re-derive them here from
 # `docker inspect .Config.User` — that is the image/seed-command user, which is
 # frequently root and is never authoritative for the terminal user. Re-confirm
 # the pair against this container instead of recomputing it:
 docker exec "$CID" getent passwd "$REMOTE_USER" >/dev/null \
   || { echo "remoteUser '$REMOTE_USER' not in this container's passwd"; exit 1; }
-ACTUAL_HOME="$(docker exec "$CID" sh -c "getent passwd '$REMOTE_USER' | cut -d: -f6")"
+ACTUAL_HOME="$(docker exec "$CID" sh -c 'getent passwd "$1" | cut -d: -f6' _ "$REMOTE_USER")"
 [ "$ACTUAL_HOME" = "$REMOTE_HOME" ] \
   || { echo "home mismatch: Step 2 said $REMOTE_HOME, container says $ACTUAL_HOME"; exit 1; }
 echo "container=$CID user=$REMOTE_USER home=$REMOTE_HOME"    # sanity-check before trusting any check below
 ```
-docker exec -u "$REMOTE_USER" "$CID" sh -c "test \"\$(cat $REMOTE_HOME/.claude/.seeded)\" = '{SEED_VERSION}'"
+SEED_VERSION="$(sed -n 's/^SEED_VERSION=\([0-9][0-9]*\).*/\1/p' "$SEED_SCRIPT" | head -n1)"
+[ -n "$SEED_VERSION" ] || { echo "could not read SEED_VERSION from $SEED_SCRIPT"; exit 1; }
+docker exec -u "$REMOTE_USER" "$CID" sh -c 'test "$(cat "$1/.claude/.seeded")" = "$2"' _ "$REMOTE_HOME" "$SEED_VERSION"
 docker exec -u "$REMOTE_USER" "$CID" grep -Fq 'ai/vekil/env.zsh' "$REMOTE_HOME/.zshrc"   # Vekil hook present
 docker exec -u "$REMOTE_USER" "$CID" zsh -n "$REMOTE_HOME/.dotfiles/ai/vekil/env.zsh"   # hook target exists + parses; no /readyz probe
 docker exec -u "$REMOTE_USER" "$CID" zsh -lic 'whence -v claude; claude --version'   # the CLI binary is installed AND on PATH

@@ -44,11 +44,16 @@ teardown() {
 
 extract_seed_script() {
   awk '
-    /Write `\{WORKSPACE\}\/\.devcontainer\/local-seed\.sh` with:/ { found = 1; next }
+    /^Write the seed script at `\{SEED_SCRIPT\}`/ { found = 1; next }
     found && /^```bash$/ { in_block = 1; next }
     in_block && /^```$/ { exit }
     in_block { print }
   ' "$REFERENCE" >"$SEED_SCRIPT"
+  [ -s "$SEED_SCRIPT" ] || {
+    echo "extract_seed_script: no bash block found — the anchor sentence in" \
+      "$REFERENCE changed; update this awk pattern" >&2
+    return 1
+  }
 
   # This PR moved the seed script off $HOME onto an explicit SEED_USER/SEED_HOME
   # pair. SEED_USER is templated as {USER}; left unsubstituted, `id -u "{USER}"`
@@ -206,6 +211,31 @@ extract_seed_script() {
   [ -f "$HOME/.claude/plugins/installed.json" ]
 }
 
+@test "removing the whole seed mount prunes authored config but keeps plugins" {
+  printf '{}\n' >"$TEST_ROOT/host-seed/.claude/settings.json"
+  mkdir -p "$TEST_ROOT/host-seed/.claude/commands"
+  printf 'doomed\n' >"$TEST_ROOT/host-seed/.claude/commands/gone.md"
+
+  run bash "$SEED_SCRIPT"
+  [ "$status" -eq 0 ]
+  [ -f "$HOME/.claude/settings.json" ]
+  [ -f "$HOME/.claude/commands/gone.md" ]
+
+  mkdir -p "$HOME/.claude/plugins"
+  printf 'keep\n' >"$HOME/.claude/plugins/installed.json"
+
+  # The entire mount disappears — the limiting case of deleting every file.
+  rm -rf "$TEST_ROOT/host-seed/.claude"
+  printf '0\n' >"$HOME/.claude/.seeded"
+
+  run bash "$SEED_SCRIPT"
+
+  [ "$status" -eq 0 ]
+  [ ! -e "$HOME/.claude/settings.json" ]
+  [ ! -e "$HOME/.claude/commands" ]
+  [ -f "$HOME/.claude/plugins/installed.json" ]
+}
+
 @test "the installed zsh hook loads Vekil endpoints and the Codex wrapper" {
   mkdir -p "$TEST_ROOT/host-seed/.dotfiles/ai/vekil"
   cp "$REPO_ROOT/ai/vekil/env.zsh" \
@@ -264,14 +294,15 @@ extract_seed_script() {
 
 @test "tracked devcontainer files are explicitly inspection-only" {
   local permitted='The only permitted devcontainer writes are the gitignored `docker-compose.override.yml`, `local-seed.sh`, the user-approved `dockerComposeFile` entry in `devcontainer.json`, and `.git/info/exclude` entries needed for the two local files.'
-  local initial='Capture the initial `git status --short` output before any write.'
-  local final='At final verification, run `git status --short` and compare its output byte-for-byte with the initial snapshot.'
+  local initial='Capture the initial `git status --short` output before any write, **and a copy of the tracked `devcontainer.json` content**'
+  local final='At final verification, run `git status --short` and compare its output byte-for-byte with the initial snapshot, **and diff `devcontainer.json` against the captured copy**.'
   local document
 
   for document in "$SKILL_DOC" "$REFERENCE"; do
     grep -Fqx "$permitted" "$document"
-    grep -Fqx "$initial" "$document"
-    grep -Fqx "$final" "$document"
+    # Substring, not whole-line: both sentences carry trailing rationale prose.
+    grep -Fq "$initial" "$document"
+    grep -Fq "$final" "$document"
     # The sanctioned exception must stay narrow: one approved key, nothing else.
     grep -Fq 'Never edit a project Dockerfile or a base Compose file.' "$document"
   done
