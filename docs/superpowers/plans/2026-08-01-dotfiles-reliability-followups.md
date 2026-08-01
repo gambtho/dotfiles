@@ -156,19 +156,19 @@ git commit -m "feat: generate safe devcontainer seed mounts"
 - Modify: `tests/project_claude_setup_seed.bats`
 - Modify: `tests/validate_ai.bats`
 
-- [ ] **Step 1: Write failing contracts**
+- [x] **Step 1: Write failing contracts**
 
 Assert both helper bans are absent, Step 6 contains the full helper CLI and auth opt-in rule, the reference links both templates, remediation bullets occur once, and “Things to avoid” preserves the sanctioned `dockerComposeFile` exception.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run `bats tests/project_claude_setup_seed.bats tests/validate_ai.bats`.
 
-- [ ] **Step 3: Make the helper canonical**
+- [x] **Step 3: Make the helper canonical**
 
 Keep discovery, consent, repair detection, tracked-file exception, and verification in `SKILL.md`; replace manual generation with the CLI. Replace embedded YAML/seed blocks in the reference with exact template/helper links. Remove duplicate bullets and narrow the blanket prohibition to all `devcontainer.json` edits except the approved `dockerComposeFile` entry.
 
-- [ ] **Step 4: Verify GREEN and commit**
+- [x] **Step 4: Verify GREEN and commit**
 
 ```bash
 bats tests/project_claude_setup_seed.bats tests/validate_ai.bats

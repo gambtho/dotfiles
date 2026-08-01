@@ -37,6 +37,16 @@ write_pi_skills() {
   [[ "$output" == *"package.json: exhaustive Pi skill inventory"* ]]
 }
 
+@test "project setup executable assets remain inside and linked from the canonical skill" {
+  local skill="$REPO_ROOT/ai/marketplace/plugins/my/skills/project-claude-setup"
+
+  [ -f "$skill/templates/local-seed.sh" ]
+  [ -f "$skill/templates/compose-override.yml" ]
+  grep -Fq 'templates/local-seed.sh' "$skill/SKILL.md" "$skill/devcontainer-host-mounts.md"
+  grep -Fq 'templates/compose-override.yml' "$skill/SKILL.md" "$skill/devcontainer-host-mounts.md"
+  grep -Fq 'bin/claude-merge-compose-override' "$skill/SKILL.md" "$skill/devcontainer-host-mounts.md"
+}
+
 @test "validator rejects a nonexistent declared Pi skill" {
   make_validator_repo
   write_pi_skills '["./skills/not-real/SKILL.md"]'

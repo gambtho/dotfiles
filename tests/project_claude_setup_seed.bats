@@ -457,6 +457,44 @@ extract_seed_script() {
   grep -Fqx 'Never edit a project Dockerfile or a base Compose file. Never edit `devcontainer.json` except for the user-approved `dockerComposeFile` entry above — and never touch any other key in it.' "$REFERENCE"
 }
 
+@test "project setup routes generation through the safe helper and executable templates" {
+  local document
+  for document in "$SKILL_DOC" "$REFERENCE"; do
+    run grep -Fi 'do not use `claude-merge-compose-override`' "$document"
+    [ "$status" -eq 1 ]
+    run grep -Fi 'do **not** use `claude-merge-compose-override`' "$document"
+    [ "$status" -eq 1 ]
+  done
+
+  local flag
+  for flag in --service --remote-user --remote-home --seed-file \
+    --seed-container-path --base-command-json; do
+    grep -Fq -- "$flag" "$SKILL_DOC"
+  done
+  grep -Fq -- '--share-host-auth' "$SKILL_DOC"
+  grep -Fq 'default remains no host SSH or gh credentials' "$SKILL_DOC"
+
+  grep -Fq '[Compose skeleton](templates/compose-override.yml)' "$REFERENCE"
+  grep -Fq '[seed script](templates/local-seed.sh)' "$REFERENCE"
+  grep -Fq '[safe renderer](../../../../../../bin/claude-merge-compose-override)' "$REFERENCE"
+  run grep -F 'Write the seed script at `{SEED_SCRIPT}`' "$REFERENCE"
+  [ "$status" -eq 1 ]
+  run grep -F 'Use this template, filling in' "$REFERENCE"
+  [ "$status" -eq 1 ]
+}
+
+@test "legacy remediation and tracked-file guidance have one canonical statement" {
+  [ "$(grep -Fc -- '- Inspect the fully merged Compose config' "$SKILL_DOC")" -eq 1 ]
+  [ "$(grep -Fc -- '- Optional host cleanup:' "$SKILL_DOC")" -eq 1 ]
+  [ "$(grep -Fc -- '- Tell the user to rebuild the container' "$SKILL_DOC")" -eq 1 ]
+
+  local avoid_section
+  avoid_section="$(sed -n '/^## Things to avoid$/,$p' "$REFERENCE")"
+  [[ "$avoid_section" == *'Never edit a project Dockerfile or a base Compose file.'* ]]
+  [[ "$avoid_section" == *'The sole tracked-file exception is the user-approved `dockerComposeFile` entry in `devcontainer.json`.'* ]]
+  [[ "$avoid_section" != *'`devcontainer.json`, or base Compose file; they are evidence only'* ]]
+}
+
 @test "a bash login shell is switched to zsh" {
   # The starting state of both a fresh container and the CI runner. Asserting
   # the state file changed proves the chsh branch actually ran, rather than the

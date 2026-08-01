@@ -203,7 +203,12 @@ fi
 # lingers until a manual wipe). Fall back to cp -a where rsync is absent.
 if [ -d "$SEED_DOTFILES" ]; then
   if command -v rsync >/dev/null 2>&1; then
-    as_user rsync -a --delete "$SEED_DOTFILES/" "$DOTFILES_HOME/"
+    # -c checksums instead of the default size+mtime quick check. The quick
+    # check compares mtime at 1-second resolution, so a same-size edit made
+    # within a second of the previous sync is skipped -- silently, and this
+    # tree decides the model. 40M of unchanged files hashes fast enough that
+    # correctness is the better trade here.
+    as_user rsync -ac --delete "$SEED_DOTFILES/" "$DOTFILES_HOME/"
     echo "🌱 seed: mirrored ~/.dotfiles via rsync ($(du -sh "$DOTFILES_HOME" | cut -f1))"
   else
     # No non-pruning fallback. DOTFILES_HOME persists across rebuilds and the
@@ -271,18 +276,120 @@ elif [ -x "$DOTFILES_HOME/ai/codex/install.sh" ]; then
   as_user bash "$DOTFILES_HOME/ai/codex/install.sh" || echo "⚠️  seed: codex install failed (non-fatal)"
 fi
 
+# ---------------------------------------------------------------------------
+# AUTHORED ~/.claude COPY — ALWAYS-RUN, deliberately ABOVE the version gate.
+#
+# Clause 2 of the two-clause rule: the target persists (claude-local-home), but
+# the SOURCE IS THE HOST. SEED_VERSION lives in this script, so the gate cannot
+# observe a host-side edit — gating this copy pins the container to whatever the
+# host looked like at first seed, through any number of rebuilds, with the fresh
+# value sitting unread in the read-only mount one directory away. Unconditional
+# costs ~9ms for a ~12K tree, so there is nothing worth protecting. Do NOT
+# substitute rsync: absent from many base images, pointless at this size, and
+# `rm -rf` + `cp -a` already deletes host-removed files.
+#
+# PRUNE FIRST, UNCONDITIONALLY. The destination lives in the PERSISTED
+# claude-local-home volume, so anything not removed here survives every rebuild.
+# Removing inside an `if source exists` guard is the bug: when the host DELETES
+# settings.json / CLAUDE.md / config / commands / skills, the guard never fires,
+# the stale copy is left behind, and the next sentinel stamp preserves it
+# forever. Clearing first makes the seed converge on the host in both
+# directions. It also fixes nesting: `cp -a src/commands dst/commands` copies
+# *into* an existing destination, producing ~/.claude/commands/commands on the
+# second copy.
+#
+# Only these five seed-owned paths are pruned. ~/.claude/plugins (marketplace),
+# the sentinel, and all runtime state are deliberately untouched.
+# The prune runs even when $SEED_CLAUDE is absent entirely — removing the whole
+# mount is just the limiting case of deleting every file in it, and leaving the
+# stale copies behind there would be the same bug.
+# ---------------------------------------------------------------------------
+echo "🌱 seed: creating container-local $CLAUDE_HOME"
+as_user mkdir -p "$CLAUDE_HOME"
+
+for item in settings.json CLAUDE.md; do
+  as_user rm -rf "$CLAUDE_HOME/$item"
+  if [ -e "$SEED_CLAUDE/$item" ]; then
+    as_user cp -a "$SEED_CLAUDE/$item" "$CLAUDE_HOME/$item"
+  fi
+done
+for dir in config commands skills; do
+  as_user rm -rf "$CLAUDE_HOME/$dir"
+  if [ -d "$SEED_CLAUDE/$dir" ]; then
+    as_user cp -a "$SEED_CLAUDE/$dir" "$CLAUDE_HOME/$dir"
+  fi
+done
+if [ -d "$SEED_CLAUDE" ]; then
+  echo "🌱 seed: refreshed authored ~/.claude subset from host"
+else
+  echo "🌱 seed: no $SEED_CLAUDE mount — pruned seed-owned ~/.claude paths"
+fi
+
+# ---------------------------------------------------------------------------
+# DRIFT CHECK — runs on BOTH the gated-skip and reseed paths.
+# Compares CONTENT against the host mount rather than trusting the sentinel, so
+# it reports staleness no matter the cause — including a seed still running the
+# old layout where this copy sat below the gate. This is the check that turns
+# "why is my model wrong" from a debugging session into a line in the log.
+# Advisory only: never exits nonzero, so a false positive cannot block startup.
+# ---------------------------------------------------------------------------
+config_drift_check() {
+  local drift=""
+  # The SAME five seed-owned paths the copy above manages. Comparing a subset
+  # would pass while commands/ or skills/ were stale.
+  for item in settings.json CLAUDE.md config commands skills; do
+    local src="$SEED_CLAUDE/$item" dst="$CLAUDE_HOME/$item"
+    # Both directions. An `[ -e "$src" ] || continue` guard is the bug it is
+    # meant to catch: a path DELETED on the host but still present in the
+    # persisted volume is exactly the stale-copy case, and skipping absent
+    # sources makes it invisible.
+    if [ -e "$src" ] && [ ! -e "$dst" ]; then
+      drift="$drift $item(missing)"
+    elif [ ! -e "$src" ] && [ -e "$dst" ]; then
+      drift="$drift $item(orphaned)"
+    elif [ -d "$src" ] || [ -d "$dst" ]; then
+      # --no-dereference is REQUIRED here, not a nicety. ~/.claude/skills is a
+      # tree of symlinks into ~/.agents, which is deliberately NOT mounted, so a
+      # dereferencing diff compares two unreachable targets and reports drift
+      # between byte-identical trees — a FAIL on every single start.
+      diff --no-dereference -rq "$src" "$dst" >/dev/null 2>&1 ||
+        drift="$drift $item"
+    elif [ -e "$src" ]; then
+      cmp -s "$src" "$dst" || drift="$drift $item"
+    fi
+  done
+  if [ -n "$drift" ]; then
+    echo "   FAIL  ~/.claude differs from host mount:$drift"
+    echo "         seed may predate the always-run config copy — re-copy"
+    echo "         local-seed.sh from the project-claude-setup skill"
+  else
+    echo "   PASS  authored ~/.claude matches host mount"
+  fi
+  return 0
+}
+
+# Invoked here, ABOVE the gate, so it runs on BOTH paths — the gated-skip branch
+# below and the reseed path. Placed after the copy so it verifies the result of
+# this run rather than the previous one.
+config_drift_check
+
 # --- Versioned gate --------------------------------------------------------
-# Skip the gated copy/install steps only when the sentinel already records this
+# Skip the gated INSTALL steps only when the sentinel already records this
 # SEED_VERSION. An empty legacy sentinel (the pre-versioning contract) is NOT
-# treated as current: it falls through once so the versioned copy/install steps
-# run and the sentinel gets stamped, after which the gate is a plain version
-# match. A bump likewise re-runs the steps. The Vekil hook above runs
+# treated as current: it falls through once so the versioned steps run and the
+# sentinel gets stamped, after which the gate is a plain version match. A bump
+# likewise re-runs them. The Vekil hook and the authored-config copy above run
 # regardless. A read that FAILS (permission/IO) also falls through to the
 # reseed path so the later sentinel write surfaces the error.
+#
+# NOTE what is NOT below this gate: the authored ~/.claude copy. Its target
+# persists, but its SOURCE IS THE HOST, and SEED_VERSION lives in this file —
+# so a host-side edit bumps no version and a gated copy would never see it.
+# See clause 2 of the two-clause rule (SKILL.md item 15).
 SEED_ALREADY_CURRENT=0
 if [ -f "$SENTINEL" ] && SEEN_VERSION="$(cat "$SENTINEL")" 2>/dev/null &&
   [ "$SEEN_VERSION" = "$SEED_VERSION" ]; then
-  echo "🌱 seed: already seeded (v$SEEN_VERSION) — skipping copies/installers"
+  echo "🌱 seed: already seeded (v$SEEN_VERSION) — skipping installers"
   SEED_ALREADY_CURRENT=1
 fi
 if [ "$SEED_ALREADY_CURRENT" -eq 0 ]; then
@@ -291,44 +398,7 @@ if [ "$SEED_ALREADY_CURRENT" -eq 0 ]; then
   fi
   echo "🌱 seed: seeding to v$SEED_VERSION"
 
-  echo "🌱 seed: creating container-local $CLAUDE_HOME"
-  as_user mkdir -p "$CLAUDE_HOME"
-
-  # 1. Copy authored config subset (skip runtime state + 1.6G plugins).
-  # PRUNE FIRST, UNCONDITIONALLY. The destination lives in the PERSISTED
-  # claude-local-home volume, so anything not removed here survives every rebuild.
-  # Removing inside an `if source exists` guard is the bug: when the host DELETES
-  # settings.json / CLAUDE.md / config / commands / skills, the guard never fires,
-  # the stale copy is left behind, and the next sentinel stamp preserves it
-  # forever. Clearing first makes the seed converge on the host in both
-  # directions. It also fixes nesting: `cp -a src/commands dst/commands` copies
-  # *into* an existing destination, producing ~/.claude/commands/commands on the
-  # second (version-gated) reseed.
-  #
-  # Only these five seed-owned paths are pruned. ~/.claude/plugins (marketplace),
-  # the sentinel, and all runtime state are deliberately untouched.
-  # The prune runs even when $SEED_CLAUDE is absent entirely — removing the whole
-  # mount is just the limiting case of deleting every file in it, and leaving the
-  # stale copies behind there would be the same bug.
-  for item in settings.json CLAUDE.md; do
-    as_user rm -rf "$CLAUDE_HOME/$item"
-    if [ -e "$SEED_CLAUDE/$item" ]; then
-      as_user cp -a "$SEED_CLAUDE/$item" "$CLAUDE_HOME/$item"
-    fi
-  done
-  for dir in config commands skills; do
-    as_user rm -rf "$CLAUDE_HOME/$dir"
-    if [ -d "$SEED_CLAUDE/$dir" ]; then
-      as_user cp -a "$SEED_CLAUDE/$dir" "$CLAUDE_HOME/$dir"
-    fi
-  done
-  if [ -d "$SEED_CLAUDE" ]; then
-    echo "🌱 seed: copied authored ~/.claude subset"
-  else
-    echo "🌱 seed: no $SEED_CLAUDE mount — pruned seed-owned ~/.claude paths"
-  fi
-
-  # 2. Reinstall my@guarzo marketplace + plugins into container-local ~/.claude.
+  # Reinstall my@guarzo marketplace + plugins into container-local ~/.claude.
   # This is correctly gated: it targets the PERSISTED claude-local-home named
   # volume, so once installed it survives rebuilds and only needs re-running on a
   # SEED_VERSION bump. (Dotfiles refresh, claude binary, and codex config moved to
@@ -346,7 +416,7 @@ if [ "$SEED_ALREADY_CURRENT" -eq 0 ]; then
     }
   fi
 
-  # 3. Stamp the sentinel with the current version, but only on a clean run.
+  # Stamp the sentinel with the current version, but only on a clean run.
   if [ "$MARKETPLACE_OK" -eq 1 ]; then
     printf '%s\n' "$SEED_VERSION" | as_user tee "$SENTINEL" >/dev/null
     echo "🌱 seed: done (v$SEED_VERSION)"

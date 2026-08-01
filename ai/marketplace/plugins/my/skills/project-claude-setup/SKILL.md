@@ -92,6 +92,7 @@ Read concrete files. **Don't infer**; cite the file you read.
 | Build/test/lint commands | `Makefile` (parse target names), `package.json` scripts, `justfile`, `Taskfile.yml`, `.github/workflows/*.yml` |
 | Container **remoteUser** (terminal/extension user — what mounts + seed target) | **Best: ask the user to run `id; echo $HOME` in their VS Code terminal.** Else `remoteUser` in `devcontainer.json`, or read the *VS Code-launched* container (`docker ps -q --filter "label=devcontainer.local_folder=$PWD"` — scoped to *this* workspace, never the first devcontainer running. **On Windows+WSL that label holds a UNC path** (`\\wsl.localhost\Ubuntu\home\you\proj`), so a POSIX `$PWD` match returns nothing even when the container is healthy; fall back to `devcontainer.config_file=$PWD/.devcontainer/devcontainer.json` or `com.docker.compose.project.working_dir=$PWD/.devcontainer`, which are always POSIX. See `devcontainer_cid()` in Step 8. **Require exactly one non-empty ID before any `docker exec`**: zero means rebuild first, more than one must be disambiguated by hand. Then `docker exec <it> sh -c 'id -un'` and `sh -c 'getent passwd "$1" \| cut -d: -f6' _ <user>` for the home, treating empty passwd output as "no such user" rather than falling through to a guess). NOT uid 1000, NOT `docker inspect .Config.User`, and NOT a container you `docker compose up` yourself — each can resolve to a different user than the one VS Code opens terminals as. Record the resulting user/home pair once and reuse it for every mount target, the seed, and verification. |
 | Container service name | `service` in `devcontainer.json` if set, else the first key under `services:` in the base compose file |
+| Container workspace path | `workspaceFolder` in `devcontainer.json`, otherwise the Compose/devcontainer default confirmed in the running VS Code terminal |
 | Seed privilege (Compose, non-root user) | Passwordless `sudo` already supplied by the image or existing Dockerfile; inspect only, and verify a running container with `sudo -n true` when available |
 
 Summarize in 4–6 lines:
@@ -100,7 +101,7 @@ Summarize in 4–6 lines:
 Project: <name> (slug: <basename>)
 Language: <lang> (from <file>)
 Build: <cmd> | Test: <cmd> | Lint: <cmd>  (from <Makefile/scripts/CI>)
-Devcontainer: <flavor> | service=<name> | user=<user>
+Devcontainer: <flavor> | service=<name> | user=<user> | home=<home> | workspace=<path>
 ```
 
 **Tracked devcontainer boundary.** Dockerfile, devcontainer.json, and base Compose files are inspection-only, with ONE sanctioned exception (below).
@@ -294,18 +295,24 @@ Never write to the project-shared `.claude/settings.json` from this skill — th
 
 ## Step 6 — Compose host mounts (case a only)
 
-Mount an allowlisted subset of `~/.claude` — plus `~/.dotfiles` — read-only under `/host-seed`, then copy the authored Claude subset and dotfiles into container-local named volumes at the user's home with a gitignored `.devcontainer/local-seed.sh`. Mounting the whole `~/.claude` would expose host credentials and session transcripts to the container even read-only, so only the authored-config paths the seed script actually copies are mounted. The named-volume targets also replace any inherited host binds with the same container targets during Compose merge. This lets Claude Code write runtime state without any write path back to the host. Host SSH keys and `gh` auth are **not** shared by default — they are single global credentials that force the container onto the host's GitHub identity across projects; mount `~/.ssh` and `~/.config/gh` read-only only when the user explicitly opts in (see item 2). OpenCode is not seeded; the seed script links Codex through `ai/codex/install.sh`.
+Mount an allowlisted subset of `~/.claude` — plus `~/.dotfiles` — read-only under `/host-seed`, then copy the authored Claude subset and dotfiles into container-local named volumes at the user's home with a gitignored `local-seed.sh` beside the resolved base Compose file. Mounting the whole `~/.claude` would expose host credentials and session transcripts to the container even read-only, so only the authored-config paths the seed script actually copies are mounted. The named-volume targets also replace any inherited host binds with the same container targets during Compose merge. This lets Claude Code write runtime state without any write path back to the host. Host SSH keys and `gh` auth are **not** shared by default — they are single global credentials that force the container onto the host's GitHub identity across projects; mount `~/.ssh` and `~/.config/gh` read-only only when the user explicitly opts in (see item 2). OpenCode is not seeded; the seed script links Codex through `ai/codex/install.sh`.
 
-Write or merge the gitignored `docker-compose.override.yml` directly. The override must:
+Generate or merge the gitignored `docker-compose.override.yml` and its sibling
+`local-seed.sh` with `~/.dotfiles/bin/claude-merge-compose-override`. The helper
+renders the repository-owned
+[`templates/compose-override.yml`](templates/compose-override.yml) and
+[`templates/local-seed.sh`](templates/local-seed.sh), validates every input,
+shows both diffs, and publishes both files transactionally. The generated
+override must:
 
 1. Target the actual devcontainer service and home directory found in Step 2.
 2. Leave host SSH keys and `gh` auth unmounted by default. Ask the user once: "Share host SSH keys and gh auth with this container? (default: no)" — mounting them forces every container onto the same host GitHub identity and key set and can switch accounts unexpectedly. Only if the user opts in, mount `~/.ssh` and `~/.config/gh` read-only at the container home. Otherwise the container authenticates itself (`gh auth login` inside the container, a project-scoped `GH_TOKEN`, or its own key). If the merged base compose already binds host `~/.ssh` or `~/.config/gh` and the user declined, shadow each inherited target with an empty project-scoped named volume — declining must not leave an inherited host bind in place.
-3. Mount the authored-config allowlist from `~/.claude` under `/host-seed/.claude` path-by-path (`settings.json`, `CLAUDE.md`, `config`, `commands`, `skills`, each `:ro,cached`), and `~/.dotfiles` at `/host-seed/.dotfiles:ro,cached`. Never mount all of `~/.claude`: read-only still means readable, so a whole-directory mount would expose `.credentials.json`, `history.jsonl`, and `projects/` session transcripts to the container. Skip any allowlist entry the host lacks — Docker would otherwise create an empty directory in its place.
+3. Mount the authored-config allowlist from `~/.claude` under `/host-seed/.claude` path-by-path (`settings.json`, `CLAUDE.md`, `config`, `commands`, `skills`, each `:ro`), and `~/.dotfiles` at `/host-seed/.dotfiles:ro`. Never mount all of `~/.claude`: read-only still means readable, so a whole-directory mount would expose `.credentials.json`, `history.jsonl`, and `projects/` session transcripts to the container. Skip any allowlist entry the host lacks — Docker would otherwise create an empty directory in its place.
 4. Mount project-scoped named volumes at the container user's `~/.claude` and `~/.dotfiles`. Because Compose volume entries merge by container target, these replace legacy host binds inherited from the base compose file.
 5. If the merged base still exposes host OpenCode config, shadow that target with an empty project-scoped named volume; do not seed or install OpenCode.
-6. Override `command` to run `.devcontainer/local-seed.sh`, then `exec` the base service's original foreground command.
+6. Override `command` to run the seed at its resolved container path, then `exec` the base service's original foreground command without reparsing an argv command through a shell.
 7. Preserve unrelated existing override keys and show the diff before writing.
-8. Back up an existing override to `<file>.backup-<timestamp>` before replacing legacy mounts.
+8. Allocate collision-safe backups with `bin/common.sh` before replacing either existing output, and restore both outputs if the second publication fails.
 9. In the seed script, repair both named-volume trees' ownership before checking the sentinel; the sentinel may skip copies and installers, never ownership recovery.
 10. Before checking the sentinel, idempotently add a container-local `~/.zshrc` hook that sources `~/.dotfiles/ai/vekil/env.zsh`; this supplies both proxy endpoint variables and the managed `codex` function without modifying the host or running the full dotfiles installer.
 11. Make the sentinel version-aware: store a `SEED_VERSION` number in `~/.claude/.seeded` and re-run the gated copy/install steps unless the sentinel records exactly that version. A persisted named volume survives `--remove-existing-container`, so without a version bump an evolving template could not refresh those steps. A legacy bare (empty) sentinel is **not** current — it predates versioning, so it takes a one-time migration through the gated steps and is then stamped with the current version; subsequent starts match on version and skip. The always-run block (ownership + Vekil hook) stays before the gate so those land on every start regardless of version. Verify by asserting the sentinel's *content* equals the current `SEED_VERSION`, not merely that the file exists.
@@ -339,7 +346,32 @@ Write or merge the gitignored `docker-compose.override.yml` directly. The overri
 
     Net: **only the marketplace/plugins install stays gated** — it alone is both expensive and template-sourced.
 
-Do **not** use `claude-merge-compose-override` for this step until that helper emits the seed model; its current output contains writable and dual-home mounts.
+After the credential-sharing decision and the Section 6c tracked-file decision,
+invoke the helper with every discovered value. `BASE_COMMAND_JSON` must be the
+base service's non-empty Compose command encoded as JSON: either an argv array
+or one shell-command string. If Compose leaves it null, inspect the image command
+and resolve it explicitly; do not invent a foreground command.
+
+```bash
+COMPOSE_DIR="$(dirname "$BASE_COMPOSE")"
+OVERRIDE_COMPOSE="$COMPOSE_DIR/docker-compose.override.yml"
+SEED_FILE="$COMPOSE_DIR/local-seed.sh"
+SEED_CONTAINER_PATH="<absolute container path for $SEED_FILE>"
+BASE_COMMAND_JSON="<non-empty JSON string or array resolved from the base service>"
+AUTH_ARGS=()
+# Add this only after the user explicitly opts in. The default remains no host SSH or gh credentials.
+(( SHARE_HOST_AUTH )) && AUTH_ARGS+=(--share-host-auth)
+
+~/.dotfiles/bin/claude-merge-compose-override \
+  --service "$SERVICE" \
+  --remote-user "$REMOTE_USER" \
+  --remote-home "$REMOTE_HOME" \
+  --seed-file "$SEED_FILE" \
+  --seed-container-path "$SEED_CONTAINER_PATH" \
+  --base-command-json "$BASE_COMMAND_JSON" \
+  "${AUTH_ARGS[@]}" \
+  "$OVERRIDE_COMPOSE"
+```
 
 Keep the override and seed script local. Verify they are ignored with `git check-ignore`; if the project does not already ignore them, add them to `.git/info/exclude` rather than changing tracked project files.
 
@@ -368,7 +400,8 @@ docker compose "${COMPOSE_ARGS[@]}" config    # the override appears only if it 
 
 The merged output should show the seed `command` and the `/host-seed` mounts.
 
-See `devcontainer-host-mounts.md` for the copy-pasteable override and seed script, service/user/path substitutions, and verification commands.
+See `devcontainer-host-mounts.md` for the policy model, exact executable-source
+links, discovery details, repair guidance, and verification commands.
 
 For a project that **already has** a `.devcontainer/local-seed.sh` predating a template change, see `catch-up-local-seed.md`. Don't regenerate the file from the template to close the gap — the drift runs both ways, and a wholesale regeneration silently deletes whatever that project fixed locally first. `SEED_VERSION` is not a reliable indicator either: always-run blocks correctly don't bump it, so two seeds can both report the same version and differ.
 
@@ -526,11 +559,8 @@ observable, which makes the fix look ineffective.
 Remediation (confirm with user before each write):
 
 - **Re-resolve the remoteUser empirically first — do NOT trust the home path in the legacy override, and do NOT trust a container you started yourself.** A legacy override often hardcodes a home (e.g. `/home/node`) that may or may not still be the remoteUser after features run. The authoritative source is the user's actual VS Code terminal: ask them to run `id; echo $HOME`. If you inspect via docker, inspect the **VS Code-launched** container (`docker ps | grep devcontainer`), never one you `docker compose up` yourself — a hand-started container can resolve uid 1000 to a *different* user than VS Code's, so every `docker exec` then confirms the wrong home while the user's terminal stays broken. Use the remoteUser's home for every mount target and as the seed's `SEED_HOME`. Remember the seed `command:` may run as root or a different user — it must write to the remoteUser's home explicitly (via `runuser`/`sudo -u`), never its own `$HOME`. See Step 2 and the reference file's Step 2.
-- Rewrite the override to read-only seed mounts, container-local named-volume targets, the `command` override, and `local-seed.sh` from Step 6, **all targeting the empirically-resolved home**. Back up the old override to `<file>.backup-<timestamp>`.
+- Run the Step 6 helper against the legacy override so it replaces managed targets with read-only seed mounts, container-local named volumes, the safe `command`, and a rendered `local-seed.sh`, **all targeting the empirically resolved home**. Its transaction creates collision-safe backups and rolls both files back on publication failure.
 - Remove the `${HOME}:${HOME}` dual-mount lines.
-- Inspect the fully merged Compose config, not only the override. Shadow any legacy base-file binds targeting the container user's `~/.claude`, `~/.dotfiles`, or OpenCode directory with project-scoped named volumes. Unless credential sharing was opted into, do the same for any inherited `~/.ssh` or `~/.config/gh` bind.
-- Optional host cleanup: rewrite `/home/<container-user>` to the host home in `~/.claude/plugins/{known_marketplaces,installed_plugins}.json`, and delete broken `~/.claude` symlinks whose target starts with `/home/<container-user>`. Show a diff or list first; never bulk-delete without confirmation.
-- Tell the user to rebuild the container to apply the repair.
 - Inspect the fully merged Compose config, not only the override. Shadow any legacy base-file binds targeting the container user's `~/.claude`, `~/.dotfiles`, or OpenCode directory with project-scoped named volumes. Unless credential sharing was opted into, do the same for any inherited `~/.ssh` or `~/.config/gh` bind.
 - Optional host cleanup: rewrite `/home/<container-user>` to the host home in `~/.claude/plugins/{known_marketplaces,installed_plugins}.json`, and delete broken `~/.claude` symlinks whose target starts with `/home/<container-user>`. Show a diff or list first; never bulk-delete without confirmation.
 - Tell the user to rebuild the container to apply the repair.
