@@ -20,5 +20,14 @@ ExecStop=@DOTFILES_ROOT@/bin/vekil-proxy stop
 # vekil-proxy waits for /readyz itself (VEKIL_START_TIMEOUT, default 90s).
 TimeoutStartSec=180
 
+# vekil-proxy owns termination: it signals, waits VEKIL_STOP_TIMEOUT (15s),
+# escalates to SIGKILL, then confirms for VEKIL_KILL_CONFIRM_TIMEOUT (2s). If
+# it cannot confirm the process is gone it preserves ownership state and exits
+# nonzero. KillMode=none keeps systemd from SIGKILLing the cgroup afterwards,
+# which would destroy that evidence and mask a genuinely stuck proxy. The stop
+# budget must exceed the helper's own worst case so systemd does not pre-empt it.
+KillMode=none
+TimeoutStopSec=45
+
 [Install]
 WantedBy=default.target

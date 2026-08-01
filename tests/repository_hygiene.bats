@@ -9,9 +9,8 @@ setup() {
 @test "system package manifests do not install mise-owned runtimes" {
   run rg -n '^(go|node|ruby|python(@.*)?|openjdk(@.*)?|openjdk-[0-9].*|neovim)$|^brew "(go|node|ruby|python(@.*)?|openjdk(@.*)?|neovim)"$' \
     "$REPO_ROOT/platforms/macos/brewfile" \
-    "$REPO_ROOT/platforms/linux/ubuntu_apt" \
-    "$REPO_ROOT/platforms/linux/wsl_apt" \
-    "$REPO_ROOT/platforms/linux/server_apt"
+    "$REPO_ROOT/platforms/linux/packages" \
+    "$REPO_ROOT/profiles/packages"
   [ "$status" -eq 1 ]
 }
 

@@ -4,6 +4,7 @@ load test_helper
 
 setup() {
   setup_dotfiles_test
+  source "$REPO_ROOT/config/versions.env"
   mkdir -p \
     "$HOME/.claude" \
     "$HOME/.codex" \
@@ -63,7 +64,7 @@ SCRIPT
   chmod +x "$STUB_BIN/curl"
 }
 
-@test "vekil release downloads use bounded retries" {
+@test "vekil release download uses bounded retries and a pinned digest" {
   mkdir -p "$HOME/.local/bin" "$HOME/.local/state/vekil"
   cat >"$STUB_BIN/curl" <<'SCRIPT'
 #!/bin/bash
@@ -73,19 +74,19 @@ output=""
 url=""
 while (($# > 0)); do
   case "$1" in
-    -o) output="$2"; shift 2 ;;
+    -o | --output) output="$2"; shift 2 ;;
     http*) url="$1"; shift ;;
     *) shift ;;
   esac
 done
-if [[ "$url" == */checksums.txt ]]; then
-  checksum=$(/usr/bin/sha256sum "${output%/*}/vekil-linux-amd64" | /usr/bin/awk '{print $1}')
-  printf '%s  vekil-linux-amd64\n' "$checksum" >"$output"
-else
-  printf '#!/bin/bash\nexit 0\n' >"$output"
-fi
+printf '#!/bin/bash\nexit 0\n' >"$output"
 SCRIPT
   chmod +x "$STUB_BIN/curl"
+  cat >"$STUB_BIN/sha256sum" <<SCRIPT
+#!/bin/bash
+printf '%s  %s\n' '$VEKIL_LINUX_AMD64_SHA256' "\$1"
+SCRIPT
+  chmod +x "$STUB_BIN/sha256sum"
 
   run /usr/bin/env \
     HOME="$HOME" \
@@ -98,7 +99,8 @@ SCRIPT
     bash "$REPO_ROOT/ai/vekil/install.sh"
 
   [ "$status" -eq 0 ]
-  [ "$(grep -c -- '--connect-timeout 10 --max-time 120 --retry 3' "$HOME/curl.log")" -eq 2 ]
+  [ "$(grep -c -- '--connect-timeout 10 --max-time 120 --retry 3' "$HOME/curl.log")" -eq 1 ]
+  ! grep -q 'checksums.txt' "$HOME/curl.log"
 }
 
 @test "vekil installer restarts only when refreshed credentials change" {
@@ -178,6 +180,20 @@ SCRIPT
   [ "$(cat "$HOME/action")" = "start" ]
 }
 
+@test "vekil service lets a failed ExecStop stay visible" {
+  local template="$REPO_ROOT/ai/vekil/vekil.service"
+
+  # With the default KillMode=control-group, systemd SIGKILLs the whole cgroup
+  # after a nonzero ExecStop, destroying the surviving process that
+  # `vekil-proxy stop` just reported it could not stop. setsid does not escape
+  # the cgroup, so the failure this wave exists to surface would be masked.
+  run rg -n '^KillMode=(none|mixed)$' "$template"
+  [ "$status" -eq 0 ]
+
+  run rg -n '^TimeoutStopSec=[0-9]+$' "$template"
+  [ "$status" -eq 0 ]
+}
+
 @test "vekil service template renders an absolute repo path" {
   local template="$REPO_ROOT/ai/vekil/vekil.service"
   [ -f "$template" ]
@@ -223,6 +239,17 @@ SCRIPT
   grep -Fq '[marketplaces.guarzo]' "$config"
   grep -Fq 'source_type = "local"' "$config"
   grep -Fq "source = \"$REPO_ROOT/ai/marketplace\"" "$config"
+  assert_symlink_target "$codex_home/AGENTS.md" "$REPO_ROOT/ai/codex/AGENTS.md"
+}
+
+@test "codex install replaces a different AGENTS symlink" {
+  local codex_home="$HOME/generated-codex"
+  mkdir -p "$codex_home"
+  ln -s "$TEST_ROOT/old-agents" "$codex_home/AGENTS.md"
+
+  run env HOME="$HOME" CODEX_HOME="$codex_home" PATH="/usr/bin:/bin" bash "$REPO_ROOT/ai/codex/install.sh"
+
+  [ "$status" -eq 0 ]
   assert_symlink_target "$codex_home/AGENTS.md" "$REPO_ROOT/ai/codex/AGENTS.md"
 }
 
@@ -362,6 +389,19 @@ SCRIPT
   stub_successful_remote_download
 
   run env ALLOW_REMOTE_INSTALLERS=1 HOME="$HOME" PATH="$PATH" bash "$REPO_ROOT/ai/claude/install.sh"
+  [ "$status" -eq 0 ]
+  assert_symlink_target "$HOME/.claude/settings.json" "$REPO_ROOT/ai/claude/settings.json"
+}
+
+@test "claude installer preserves an older settings backup" {
+  printf 'older\n' >"$HOME/.claude/settings.json.backup"
+  stub_successful_remote_download
+
+  run env ALLOW_REMOTE_INSTALLERS=1 HOME="$HOME" PATH="$PATH" bash "$REPO_ROOT/ai/claude/install.sh"
+
+  [ "$status" -eq 0 ]
+  [ "$(cat "$HOME/.claude/settings.json.backup")" = older ]
+  run bash -c 'compgen -G "$1/.claude/settings.json.backup.*"' _ "$HOME"
   [ "$status" -eq 0 ]
   assert_symlink_target "$HOME/.claude/settings.json" "$REPO_ROOT/ai/claude/settings.json"
 }

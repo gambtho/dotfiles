@@ -6,6 +6,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
 PINS_FILE="$ROOT/config/versions.env"
 MISE_FILE="$ROOT/config/mise/config.toml"
 export MISE_CONFIG_DIR="$ROOT/config/mise"
+source "$ROOT/bin/common.sh"
 
 # shellcheck source=config/versions.env
 source "$PINS_FILE"
@@ -44,6 +45,14 @@ list_pins() {
   printf 'git prezto %s\n' "$PREZTO_REF"
   printf 'git zsh-defer %s\n' "$ZSH_DEFER_REF"
   printf 'channel kubernetes %s\n' "$KUBERNETES_CHANNEL"
+  printf 'artifact mise %s\n' "$MISE_VERSION"
+  printf 'artifact yq %s\n' "$YQ_VERSION"
+  printf 'artifact win32yank %s\n' "$WIN32YANK_VERSION"
+  printf 'artifact vekil %s\n' "$VEKIL_VERSION"
+  printf 'artifact nerd-fonts %s\n' "$NERD_FONTS_VERSION"
+  printf 'artifact nerd-font-cascadia-mono %s %s\n' "$NERD_FONTS_VERSION" "$NERD_FONT_CASCADIA_MONO_SHA256"
+  printf 'artifact nerd-font-hack %s %s\n' "$NERD_FONTS_VERSION" "$NERD_FONT_HACK_SHA256"
+  printf 'artifact nerd-font-meslo %s %s\n' "$NERD_FONTS_VERSION" "$NERD_FONT_MESLO_SHA256"
 }
 
 with_mise_config() {
@@ -76,8 +85,27 @@ check_git_ref() {
 
 latest_kubernetes_channel() {
   local stable
-  stable="$(curl --fail --silent --show-error --location https://dl.k8s.io/release/stable.txt)"
+  stable="$(curl "${CURL_DOWNLOAD_ARGS[@]}" --silent https://dl.k8s.io/release/stable.txt)"
   printf '%s\n' "${stable%.*}"
+}
+
+latest_artifact_release() {
+  local repository="$1" response
+  response=$(curl "${CURL_DOWNLOAD_ARGS[@]}" --silent "https://api.github.com/repos/$repository/releases/latest") || return
+  jq -er '.tag_name' <<<"$response"
+}
+
+check_artifact_release() {
+  local name="$1" repository="$2" current="$3" latest
+  latest=$(latest_artifact_release "$repository") || {
+    printf 'error artifact %s: unable to query latest release for %s\n' "$name" "$repository" >&2
+    return 1
+  }
+  if [[ "$current" == "$latest" ]]; then
+    printf 'current artifact %s %s\n' "$name" "$current"
+  else
+    printf 'outdated artifact %s %s -> %s\n' "$name" "$current" "$latest"
+  fi
 }
 
 check_pins() {
@@ -91,6 +119,11 @@ check_pins() {
   else
     printf 'outdated channel kubernetes %s -> %s\n' "$KUBERNETES_CHANNEL" "$latest_channel"
   fi
+  check_artifact_release mise jdx/mise "$MISE_VERSION"
+  check_artifact_release yq mikefarah/yq "$YQ_VERSION"
+  check_artifact_release win32yank equalsraf/win32yank "$WIN32YANK_VERSION"
+  check_artifact_release vekil sozercan/vekil "$VEKIL_VERSION"
+  check_artifact_release nerd-fonts ryanoasis/nerd-fonts "$NERD_FONTS_VERSION"
 }
 
 update_pin() {
@@ -108,6 +141,7 @@ update_pins() {
   update_pin PREZTO_REF "$(git ls-remote "$PREZTO_REPO" HEAD | awk 'NR == 1 { print $1 }')"
   update_pin ZSH_DEFER_REF "$(git ls-remote "$ZSH_DEFER_REPO" HEAD | awk 'NR == 1 { print $1 }')"
   update_pin KUBERNETES_CHANNEL "$(latest_kubernetes_channel)"
+  printf '%s\n' 'artifact versions unchanged: checksum-reviewed manual update required'
   "$0" list
   make -C "$ROOT" check
   git -C "$ROOT" diff -- "$PINS_FILE" "$MISE_FILE"

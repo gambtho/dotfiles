@@ -96,30 +96,9 @@ link_file() {
   local src="$1"
   local dst="$2"
   local label="$3"
-
-  if [[ "$check_only" == true ]]; then
-    log_info "[dry-run] Would ensure Claude $label is linked: $src -> $dst"
-    return 0
-  fi
-
-  if [ -L "$dst" ]; then
-    local current
-    current=$(readlink "$dst")
-    if [ "$current" == "$src" ]; then
-      log_info "Claude $label already linked."
-      return
-    fi
-    log_info "Removing existing $label symlink -> $current"
-    rm "$dst"
-  elif [ -f "$dst" ]; then
-    local backup="${dst}.backup"
-    [ -e "$backup" ] && backup="${dst}.backup.$(date +%Y%m%d%H%M%S)"
-    log_info "Backing up existing $label to $backup"
-    mv "$dst" "$backup"
-  fi
-
-  ln -s "$src" "$dst"
-  log_success "Linked $src to $dst"
+  local mode=apply
+  [[ "$check_only" == true ]] && mode=check
+  reconcile_link "$src" "$dst" "Claude $label" backup "$mode"
 }
 
 main() {

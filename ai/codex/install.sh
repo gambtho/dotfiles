@@ -13,25 +13,9 @@ link_file() {
   local src="$1"
   local dst="$2"
   local label="$3"
-
-  if [ -L "$dst" ]; then
-    local current
-    current=$(readlink "$dst")
-    if [ "$current" == "$src" ]; then
-      log_info "Codex $label already linked."
-      return
-    fi
-    log_info "Removing existing $label symlink -> $current"
-    rm "$dst"
-  elif [ -f "$dst" ]; then
-    local backup="${dst}.backup"
-    [ -e "$backup" ] && backup="${dst}.backup.$(date +%Y%m%d%H%M%S)"
-    log_info "Backing up existing $label to $backup"
-    mv "$dst" "$backup"
-  fi
-
-  ln -s "$src" "$dst"
-  log_success "Linked $src to $dst"
+  local mode=apply
+  [[ "$check_only" == true ]] && mode=check
+  reconcile_link "$src" "$dst" "Codex $label" backup "$mode"
 }
 
 render_config() {
@@ -118,7 +102,7 @@ main() {
     else
       log_info "[dry-run] Would write placeholder Codex auth at $codex_home/auth.json"
     fi
-    log_info "[dry-run] Would link $DOTFILES_ROOT/codex/AGENTS.md -> $codex_home/AGENTS.md"
+    link_file "$DOTFILES_ROOT/codex/AGENTS.md" "$codex_home/AGENTS.md" "global AGENTS.md"
     log_info "[dry-run] Would refresh my@guarzo from the local marketplace"
     return
   fi

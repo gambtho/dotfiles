@@ -50,7 +50,7 @@ run_loader() {
   [[ "$output" != *"goms.io"* ]]
 }
 
-@test "shell loader configures healthy Vekil endpoints" {
+@test "zshrc configures healthy Vekil endpoints" {
   local state_dir="$HOME/.local/state/vekil"
   mkdir -p "$state_dir"
   printf '127.0.0.1\n' >"$state_dir/proxy-host"
@@ -61,7 +61,7 @@ run_loader() {
   stub_command curl 'exit 0'
 
   run env HOME="$HOME" DOTFILES="$REPO_ROOT" PATH="$PATH" zsh -dfc '
-    source "$DOTFILES/core/shell/load-custom.zsh" || exit 1
+    source "$DOTFILES/core/shell/zshrc.symlink" || exit 1
     print -r -- "$OPENAI_BASE_URL|$ANTHROPIC_BASE_URL"
   '
 
@@ -106,7 +106,8 @@ SCRIPT
   chmod +x "$STUB_BIN/codex"
 
   run env HOME="$HOME" DOTFILES="$REPO_ROOT" PATH="$PATH" zsh -dfc '
-    source "$DOTFILES/core/shell/load-custom.zsh" || exit 1
+    source "$DOTFILES/core/shell/zshrc.symlink" || exit 1
+    (( ${+functions[codex]} )) || { print -r -- "NO_MANAGED_CODEX_WRAPPER"; exit 1; }
     codex exec prompt
   '
 
@@ -153,4 +154,102 @@ SCRIPT
   run env HOME="$HOME" PATH="$PATH" zsh -dfc 'source "$1/core/shell/zshrc.symlink"' _ "$REPO_ROOT"
   [ "$status" -eq 0 ]
   [[ "$output" != *"called"* ]]
+}
+
+@test "personal zshrc does not load Agency" {
+  printf 'personal\n' >"$HOME/.dotfiles-profile"
+  stub_command mise 'exit 0'
+
+  run env HOME="$HOME" DOTFILES="$REPO_ROOT" PATH="/usr/bin:/bin" zsh -dfc '
+    path=("$STUB_BIN" /usr/bin /bin)
+    export PATH
+    source "$DOTFILES/core/shell/zshrc.symlink"
+    print -r -- "$PATH"
+  '
+
+  [ "$status" -eq 0 ]
+  [[ ":$output:" != *":$HOME/.config/agency/CurrentVersion:"* ]]
+  [[ "$output" != *"/home/tng/.config/agency/CurrentVersion"* ]]
+}
+
+@test "work zshrc loads the HOME-relative Agency path exactly once" {
+  printf 'work\n' >"$HOME/.dotfiles-profile"
+  stub_command mise 'exit 0'
+
+  run env HOME="$HOME" DOTFILES="$REPO_ROOT" PATH="/usr/bin:/bin" zsh -dfc '
+    path=("$STUB_BIN" /usr/bin /bin)
+    export PATH
+    source "$DOTFILES/core/shell/zshrc.symlink"
+    source "$DOTFILES/core/shell/zshrc.symlink"
+    paths=("${(@s/:/)PATH}")
+    count=0
+    for path in $paths; do
+      [[ $path == "$HOME/.config/agency/CurrentVersion" ]] && (( count += 1 ))
+    done
+    print -r -- "$count|$PATH"
+  '
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"1|"* ]]
+}
+
+@test "normal zshrc initialization performs one Vekil readiness probe" {
+  local state_dir="$HOME/.local/state/vekil"
+  local curl_log="$TEST_ROOT/vekil-curl.log"
+  mkdir -p "$state_dir"
+  printf '127.0.0.1\n' >"$state_dir/proxy-host"
+  printf 'ready\n' >"$state_dir/proxy-ready"
+  chmod 0700 "$HOME/.local" "$HOME/.local/state" "$state_dir"
+  chmod 0600 "$state_dir/proxy-host" "$state_dir/proxy-ready"
+  stub_command mise 'exit 0'
+  cat >"$STUB_BIN/curl" <<'SCRIPT'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$VEKIL_CURL_LOG"
+exit 0
+SCRIPT
+  chmod +x "$STUB_BIN/curl"
+
+  run env HOME="$HOME" DOTFILES="$REPO_ROOT" PATH="$PATH" VEKIL_CURL_LOG="$curl_log" zsh -dfc '
+    source "$DOTFILES/core/shell/zshrc.symlink"
+  '
+
+  [ "$status" -eq 0 ]
+  [ "$(grep -c '/readyz' "$curl_log")" -eq 1 ]
+}
+
+@test "deliberate Vekil env re-source performs a fresh convergence probe" {
+  local state_dir="$HOME/.local/state/vekil"
+  local curl_log="$TEST_ROOT/vekil-curl.log"
+  mkdir -p "$state_dir"
+  printf '127.0.0.1\n' >"$state_dir/proxy-host"
+  printf 'ready\n' >"$state_dir/proxy-ready"
+  chmod 0700 "$HOME/.local" "$HOME/.local/state" "$state_dir"
+  chmod 0600 "$state_dir/proxy-host" "$state_dir/proxy-ready"
+  stub_command mise 'exit 0'
+  cat >"$STUB_BIN/curl" <<'SCRIPT'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$VEKIL_CURL_LOG"
+if [[ "$(cat "$VEKIL_PROBE_STATE")" == ready ]]; then exit 0; fi
+exit 1
+SCRIPT
+  chmod +x "$STUB_BIN/curl"
+  printf 'ready\n' >"$TEST_ROOT/probe-state"
+
+  run env HOME="$HOME" DOTFILES="$REPO_ROOT" PATH="$PATH" \
+    VEKIL_CURL_LOG="$curl_log" VEKIL_PROBE_STATE="$TEST_ROOT/probe-state" zsh -dfc '
+      unset OPENAI_BASE_URL OPENAI_API_KEY
+      unset ANTHROPIC_BASE_URL ANTHROPIC_API_KEY ANTHROPIC_MODEL
+      unset VEKIL_MANAGED_OPENAI_BASE_URL VEKIL_MANAGED_OPENAI_API_KEY
+      unset VEKIL_MANAGED_ANTHROPIC_BASE_URL VEKIL_MANAGED_ANTHROPIC_API_KEY
+      unset VEKIL_MANAGED_ANTHROPIC_MODEL
+      source "$DOTFILES/ai/vekil/env.zsh"
+      first=$OPENAI_BASE_URL
+      print unavailable >"$VEKIL_PROBE_STATE"
+      source "$DOTFILES/ai/vekil/env.zsh"
+      print -r -- "$first|${OPENAI_BASE_URL-unset}|${OPENAI_API_KEY-unset}|${ANTHROPIC_BASE_URL-unset}|${ANTHROPIC_API_KEY-unset}|${ANTHROPIC_MODEL-unset}"
+    '
+
+  [ "$status" -eq 0 ]
+  [ "$(grep -c '/readyz' "$curl_log")" -eq 2 ]
+  [[ "$output" == *"http://127.0.0.1:1337/v1|unset|unset|unset|unset|unset"* ]]
 }

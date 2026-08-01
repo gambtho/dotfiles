@@ -38,7 +38,7 @@ while IFS= read -r -d '' link; do
   if [ ! -e "$link" ]; then
     log_warning "Removing dead symlink: $link -> $target"
     rm "$link"
-    (( removed++ )) || true
+    ((removed++)) || true
   fi
 done < <(find "$HOME" -maxdepth 1 -type l -print0)
 
@@ -54,23 +54,12 @@ log_info "Creating symlinks for *.symlink files..."
 
 link_file() {
   local src=$1 dst=$2
-
-  if [ -L "$dst" ]; then
-    current=$(readlink "$dst")
-    if [ "$current" = "$src" ]; then
-      log_info "Already linked: $dst"
-      return
-    fi
-    log_warning "Relinking: $dst (was $current)"
-    rm "$dst"
-  elif [ -e "$dst" ]; then
-    log_warning "Skipping $dst — exists as a real file (not a symlink). Remove manually to relink."
+  local policy=skip
+  [[ -L "$dst" ]] && policy=replace
+  reconcile_link "$src" "$dst" "$(basename "$src")" "$policy" apply || return
+  if [[ "$(readlink "$dst" 2>/dev/null || true)" != "$src" ]]; then
     SKIPPED_DESTINATIONS+=("$dst")
-    return
   fi
-
-  ln -s "$src" "$dst"
-  log_success "Linked: $dst -> $src"
 }
 
 while IFS= read -r -d '' src; do
@@ -91,22 +80,7 @@ if [ -d "$DOTFILES_ROOT/config" ]; then
     config_name=$(basename "$config_dir")
     dst="$HOME/.config/$config_name"
 
-    if [ -L "$dst" ]; then
-      current=$(readlink "$dst")
-      if [ "$current" = "$config_dir" ]; then
-        log_info "Already linked: $dst"
-        continue
-      fi
-      log_warning "Relinking: $dst (was $current)"
-      rm "$dst"
-    elif [ -e "$dst" ]; then
-      log_warning "Skipping $dst — exists as a real directory. Remove manually to relink."
-      SKIPPED_DESTINATIONS+=("$dst")
-      continue
-    fi
-
-    ln -s "$config_dir" "$dst"
-    log_success "Linked: $dst -> $config_dir"
+    link_file "$config_dir" "$dst"
   done
 fi
 

@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+usage() {
+  printf 'Usage: bin/list-check-files {bash|zsh|shellcheck|shfmt}\n' >&2
+}
+
+class=${1:-}
+case "$class" in
+  bash | zsh | shellcheck | shfmt) ;;
+  *)
+    usage
+    exit 2
+    ;;
+esac
+
+if [[ $(git rev-parse --is-inside-work-tree 2>/dev/null || true) != true ]]; then
+  printf '%s\n' 'bin/list-check-files must run inside a Git checkout.' >&2
+  exit 1
+fi
+
+root=$(git rev-parse --show-toplevel)
+cd "$root"
+
+is_direct_bin_shell() {
+  local path="$1" name
+  [[ "$path" == bin/* && "${path#bin/}" != */* ]] || return 1
+  name=${path#bin/}
+  [[ "$name" != *.* || "$name" == *.sh ]]
+}
+
+is_repository_sh() {
+  case "$1" in
+    ai/* | core/* | fonts/* | languages/* | platforms/* | work/*) [[ "$1" == *.sh ]] ;;
+    *) return 1 ;;
+  esac
+}
+
+is_repository_zsh() {
+  case "$1" in
+    core/shell/*.symlink) return 0 ;;
+    core/* | languages/* | platforms/* | profiles/* | tools/* | work/*) [[ "$1" == *.zsh ]] ;;
+    *) return 1 ;;
+  esac
+}
+
+{
+  git ls-files -z
+  git ls-files -z --others --exclude-standard
+} | while IFS= read -r -d '' path; do
+  case "$class" in
+    bash)
+      if is_direct_bin_shell "$path" || is_repository_sh "$path"; then printf '%s\0' "$path"; fi
+      ;;
+    zsh)
+      if is_repository_zsh "$path"; then printf '%s\0' "$path"; fi
+      ;;
+    shellcheck)
+      if is_direct_bin_shell "$path" || is_repository_sh "$path"; then printf '%s\0' "$path"; fi
+      ;;
+    shfmt)
+      if is_direct_bin_shell "$path" || is_repository_sh "$path" || [[ "$path" == tests/test_helper.bash ]]; then printf '%s\0' "$path"; fi
+      ;;
+  esac
+done
