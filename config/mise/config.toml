@@ -4,6 +4,13 @@ python = "3.14.3"
 java = "25.0.2"
 node = "26.5.0"
 ruby = "4.0.1"
-neovim = "0.11.7"
-"npm:tree-sitter-cli" = "0.26.11"
+# Pinned rather than "stable": a floating alias moves the toolchain on every
+# upstream release without a commit. 0.12.4 is what "stable" resolved to here.
+neovim = "0.12.4"
+# npm_args is load-bearing: without --ignore-scripts=false the postinstall never
+# runs, so tree-sitter-cli installs but its native binary is missing.
+"npm:tree-sitter-cli" = { version = "0.26.11", npm_args = "--ignore-scripts=false" }
 git-lfs = "3.7.1"
+
+[settings.npm]
+shell_out = true
