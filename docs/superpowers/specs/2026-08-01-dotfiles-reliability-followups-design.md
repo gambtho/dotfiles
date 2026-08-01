@@ -238,7 +238,14 @@ the resulting YAML. They will assert:
 Existing seed lifecycle tests will execute the rendered seed template instead
 of extracting a copy from Markdown. The documented-block syntax test will stop
 assuming the old block count (`total >= 10`) and will continue validating every
-remaining Bash block plus the executable seed template directly.
+remaining Bash block plus the executable seed template directly. The template
+lives under the plugin tree with a `.sh` suffix, and file-discovery tests assert
+that `bin/list-check-files` includes it in the Bash syntax, shellcheck, and shfmt
+sets.
+
+Apply-mode tests also force a failure after the first of the helper's two output
+files has been published. They verify that rollback restores both previous
+files and leaves no staged output behind.
 
 ### Unlink
 
@@ -250,15 +257,17 @@ shim, an exact cross-home generated shim, and an edited shim.
 
 Standard-library `unittest` coverage lives in
 `tests/python/test_build_gallery.py`. `make check` gains a Python-test target
-that runs `python3 -m unittest discover -s tests/python -p 'test_*.py'`; CI
-explicitly installs `python3`. Because Pillow is an optional dependency of this
-one skill rather than a repository-wide development dependency, tests inject a
-minimal fake `PIL` module and exercise the shared atomic-output path without
-making `make check` require Pillow. The tests will force image/ffmpeg generation
-failures, verify that old outputs survive, verify staged files are cleaned,
-then retry and prove the real destination is regenerated. Manifest replacement
-receives equivalent coverage. Repository-hygiene coverage rejects tracked
-`*.pyc`/`__pycache__` artifacts after removing the existing bytecode.
+that runs `python3 -m unittest discover -s tests/python -p 'test_*.py'`.
+`python-test` is an explicit prerequisite of `check`, alongside syntax, lint,
+Bats, and validation, so local and CI `make check` executions cannot omit it.
+CI explicitly installs `python3`. Because Pillow is an optional dependency of
+this one skill rather than a repository-wide development dependency, tests
+inject a minimal fake `PIL` module and exercise the shared atomic-output path
+without making `make check` require Pillow. The tests will force image/ffmpeg
+generation failures, verify that old outputs survive, verify staged files are
+cleaned, then retry and prove the real destination is regenerated. Manifest
+replacement receives equivalent coverage. Repository-hygiene coverage rejects
+tracked `*.pyc`/`__pycache__` artifacts after removing the existing bytecode.
 
 ### Windows settings
 
