@@ -86,6 +86,17 @@
           }
         ]
       }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "startup|resume",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.dotfiles/ai/claude/hooks/overlay-sync.sh"
+          }
+        ]
+      }
     ]
   },
   "enabledPlugins": {

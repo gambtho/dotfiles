@@ -135,7 +135,7 @@ claude-link-project --create "${flags[@]}" "$PROJECT_DIR"
 
 - Default: symlinks `<project>/CLAUDE.md` → overlay's CLAUDE.md, and `<project>/.claude` → overlay's `.claude` dir.
 - `--local-md`: writes a 1-line `<project>/CLAUDE.local.md` (gitignored globally) containing `@~/.dotfiles/projects/<slug>/CLAUDE.md`; the project's tracked CLAUDE.md is left untouched.
-- `--claude-dir-per-file`: walks the overlay's `.claude/` tree and symlinks each leaf into the project's `.claude/` at the same relative path. `settings.local.json` is merged via jq (with diff + confirmation) instead of symlinked. If a tracked file in the project would be shadowed, the helper refuses with a clear message — rename your overlay item and re-run.
+- `--claude-dir-per-file`: links the overlay's `.claude/` into the project's `.claude/`. `skills/` and `agents/` are linked as **whole directories**; every other file is linked individually at the same relative path. `settings.local.json` is merged via jq (with diff + confirmation) instead of symlinked. If a tracked file in the project would be shadowed, the helper refuses with a clear message — rename your overlay item and re-run. A legacy per-file `skills/`/`agents/` tree from an older run is migrated to a directory link automatically, provided every entry under it is a symlink into the overlay.
 
 If the overlay already exists (re-run), the helper detects this and skips the placeholder writes. Per-file mode and merges are idempotent.
 
@@ -145,7 +145,46 @@ After running it, verify the expected on-disk shapes:
 ls -L <project>/CLAUDE.md       # symlink (default) OR untouched real file (--local-md)
 ls -L <project>/CLAUDE.local.md # exists only in --local-md mode
 ls -L <project>/.claude/settings.local.json
+
+# skills/ and agents/ are DIRECTORY symlinks into the overlay, not trees of
+# per-file links: Claude Code documents a <skill-name> entry that is a symlink
+# to a directory elsewhere, but says nothing about a symlinked SKILL.md inside
+# a real directory. A directory link also carries scripts/ and other payloads,
+# and picks up newly added skills with no re-run.
+ls -ld <project>/.claude/skills <project>/.claude/agents
+
+# Must print nothing. Any output is a dangling link — most often one created
+# under a different $HOME (host /home/<user> vs container /root), which makes
+# the overlay silently invisible. Re-running the helper repairs CLAUDE.md and
+# the skills/ and agents/ directory links. Individually linked files (commands/)
+# are only reported, not repaired: delete the dangling link and re-run.
+find <project>/.claude -xtype l
 ```
+
+Skills and agents are discovered when a session starts, so anything linked
+after launch only appears once the session is restarted.
+
+### Git worktrees
+
+`git worktree add` produces a fresh working tree, and the `.claude/` overlay is
+untracked — so a new worktree starts with none of the project's personal skills
+or agents. The `SessionStart` hook at `ai/claude/hooks/overlay-sync.sh` repairs
+this automatically: it resolves the overlay slug from the **primary** working
+tree (a worktree directory is named after its branch, not the project), re-runs
+the linker, and reports what it created. It also repoints links left dangling by
+a different `$HOME`. It writes only inside the working tree it was invoked for,
+and fails open — a broken hook never blocks a session from starting.
+
+To link a worktree by hand, or whenever the directory name doesn't match the
+overlay, pass the slug explicitly:
+
+```bash
+project_name="<project-name>"
+worktree_dir="<worktree-dir>"
+claude-link-project --claude-dir-per-file --slug "$project_name" "$worktree_dir"
+```
+
+Set `CLAUDE_OVERLAY_SYNC=off` to disable the hook.
 
 ## Step 4 — CLAUDE.md content
 
@@ -329,7 +368,7 @@ tools: <restricted set — see table above>
 
 For **reviewer-type** agents: `tools: Read, Grep, Glob, Bash` with the Bash entries scoped to non-mutating commands. **No Edit/Write.** For **analyst-type** agents: same Read-only stance, Bash limited to `psql`, `curl`, etc.
 
-Files land at `<overlay>/.claude/agents/<name>.md`. Re-running `claude-link-project --claude-dir-per-file` walks the overlay tree and symlinks each new agent into the project's `.claude/agents/`.
+Files land at `<overlay>/.claude/agents/<name>.md`. Because `agents/` is a directory symlink, a new agent file appears in the project immediately — no re-run needed.
 
 ## Step 7b — Team-flow scaffolding (offer when standing catalog created)
 
@@ -353,7 +392,7 @@ The frontmatter is just `description:` and `argument-hint:`. Body uses `$ARGUMEN
 
 **File 2: workflow section appended to `<overlay>/CLAUDE.md`** — codifies when to use the team flow vs the main thread (see Step 4 for content guidance). Without this, Claude doesn't know it should reach for the agents on each new task and defaults to single-thread execution.
 
-`claude-link-project --claude-dir-per-file` walks the overlay tree, so `.claude/commands/*.md` get symlinked into the project the same way agents do. Re-run after creating the command file. **Verify the symlink lands**: `ls -L <project>/.claude/commands/new-feature.md` should resolve.
+`commands/` is still linked per-file (unlike `skills/` and `agents/`), because a project is more likely to track its own `.claude/commands/` content and the per-file mode is what catches those collisions. Re-run after creating the command file. **Verify the symlink lands**: `ls -L <project>/.claude/commands/new-feature.md` should resolve.
 
 Skip this step if the user only wants standalone subagents — the catalog still works for one-shot delegation without the team ritual.
 
