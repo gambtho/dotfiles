@@ -23,8 +23,19 @@ bounded confirmation wait.
 The PID record is removed and `STOPPED` is printed only after the recorded
 process no longer exists or no longer has the recorded start identity. If the
 process survives, the command preserves the PID record, leaves the ready marker
-absent, emits an actionable failure, and returns nonzero. A reused PID is never
-signalled or treated as the original process.
+absent, writes a mode-0600 `proxy-stop-failed` marker containing the recorded
+process identity, emits an actionable failure, and returns nonzero. `status`
+checks this marker before ordinary readiness classification and reports
+`STOP_FAILED host=... port=... pid=...` while that same process remains alive,
+even if the endpoint is still serving. A subsequent successful stop or start
+removes the failure marker. A reused PID is never signalled or treated as the
+original process.
+
+Graceful termination uses the existing `VEKIL_STOP_TIMEOUT` (default 15
+seconds). Confirmation after SIGKILL uses a separate
+`VEKIL_KILL_CONFIRM_TIMEOUT` with a 2-second default and a validated 0–30 second
+range. A zero value performs one immediate identity check, which keeps failure
+tests fast without skipping confirmation logic.
 
 This behavior applies equally when invoked directly and through systemd. A
 failed `ExecStop` therefore remains visible to the service manager instead of
@@ -33,13 +44,14 @@ silently orphaning the proxy.
 ## Single shell readiness probe
 
 Early `.zshrc` loading remains authoritative because Codex needs managed Vekil
-configuration before deferred customizations run. `ai/vekil/env.zsh` will expose
-or honor an initialization marker so a second source during the same shell does
-not repeat filesystem validation and the readiness curl.
+configuration before deferred customizations run. The later source in
+`core/shell/load-custom.zsh` is unnecessary: it occurs before `.localrc`, does
+not protect any intervening Vekil mutation, and only repeats initialization.
+It will be removed. No exported or global initialization sentinel is introduced,
+so child shells cannot inherit stale probe state; a deliberate manual source of
+`env.zsh` still performs a fresh convergence check.
 
-Deferred `load-custom.zsh` retains the second source point only if it is needed
-to reconcile variables after other customizations; otherwise it will omit it.
-Whichever implementation is smallest must preserve these observable rules:
+The implementation preserves these observable rules:
 
 - one readiness curl per interactive shell initialization,
 - safe repeated sourcing,
@@ -58,13 +70,22 @@ accumulate functions, PATH entries, or stale ownership markers.
 ## Testing
 
 Lifecycle tests will cover graceful termination, forced termination, failed
-SIGKILL or surviving process, PID reuse/start-identity change, PID-file
-preservation on failure, and successful cleanup. Shell tests will create valid
-state files, stub curl, count readiness probes, exercise repeated sourcing, and
-verify `.localrc` precedence and managed-variable cleanup.
+SIGKILL or surviving process, PID reuse/start-identity change, PID-file and
+failure-marker preservation, `STOP_FAILED` status, stale-marker cleanup, and
+successful shutdown. Shell tests will create valid state files, stub curl,
+count one readiness probe through normal `.zshrc` initialization, exercise
+deliberate repeated sourcing, and verify `.localrc` precedence and
+managed-variable cleanup.
 
 ## Compatibility and exclusions
 
-No command names, environment variable names, ports, state paths, or systemd
-unit interfaces change. This wave does not redesign the proxy lock, migrate the
-legacy LiteLLM cleanup, or change readiness endpoint semantics.
+No command names, environment variable names, ports, primary state directory,
+or systemd unit interfaces change. The new failure marker is internal state;
+`status` gains the explicit `STOP_FAILED` result described above. This wave does
+not redesign the proxy lock, migrate the legacy LiteLLM cleanup, or change
+readiness endpoint semantics.
+
+Recovery remains idempotent: after correcting the condition that prevented
+termination, rerunning `vekil-proxy stop` removes the preserved PID and failure
+records only when the recorded process is gone. `restart` continues only after
+stop succeeds.
