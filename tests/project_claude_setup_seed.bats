@@ -15,16 +15,23 @@ setup() {
     "$TEST_ROOT/host-seed/.dotfiles/ai/marketplace" \
     "$HOME/.claude" "$HOME/.dotfiles"
 
+  # The seed script now routes several commands through $SUDO, not just chown.
+  # Log every invocation, emit the ownership-repair event for chown (which the
+  # assertions key on), and otherwise run the command as the current user.
   cat >"$STUB_BIN/sudo" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' "$*" >>"$SUDO_LOG"
-[ "${1:-}" = chown ] || exit 64
-printf 'test-event: ownership repaired\n'
-shift
-[ "${1:-}" = -R ] && shift
-shift
-chmod -R u+rwX "$@"
+[ "${1:-}" = -u ] && { shift 2; }
+if [ "${1:-}" = chown ]; then
+  printf 'test-event: ownership repaired\n'
+  shift
+  [ "${1:-}" = -R ] && shift
+  shift
+  chmod -R u+rwX "$@"
+  exit 0
+fi
+exec "$@"
 EOF
   chmod +x "$STUB_BIN/sudo"
 
@@ -43,7 +50,14 @@ extract_seed_script() {
     in_block { print }
   ' "$REFERENCE" >"$SEED_SCRIPT"
 
+  # This PR moved the seed script off $HOME onto an explicit SEED_USER/SEED_HOME
+  # pair. SEED_USER is templated as {USER}; left unsubstituted, `id -u "{USER}"`
+  # aborts the whole script under `set -euo pipefail` before any assertion runs.
+  # SEED_HOME is resolved from passwd at runtime, which would resolve to the
+  # real home rather than the sandbox, so it is pinned to $HOME for the test.
   sed -i \
+    -e "s|^SEED_USER=\"{USER}\"|SEED_USER=\"$(id -un)\"|" \
+    -e "s|^SEED_HOME=\"\$(getent passwd .*|SEED_HOME=\"$HOME\"|" \
     -e "s|SEED_CLAUDE=\"/host-seed/.claude\"|SEED_CLAUDE=\"$TEST_ROOT/host-seed/.claude\"|" \
     -e "s|SEED_DOTFILES=\"/host-seed/.dotfiles\"|SEED_DOTFILES=\"$TEST_ROOT/host-seed/.dotfiles\"|" \
     "$SEED_SCRIPT"
@@ -79,7 +93,10 @@ extract_seed_script() {
   [ "$status" -eq 0 ]
   grep -F "chown -R $(id -u):$(id -g)" "$SUDO_LOG"
   [ ! -e "$HOME/.claude/settings.json" ]
-  [ ! -e "$HOME/.dotfiles/ai/marketplace/marker" ]
+  # ~/.dotfiles is mirrored above the sentinel gate on purpose: the installers
+  # live under it, so a warm restart must still get a current tree. Only the
+  # ~/.claude copies and the installers themselves are gated.
+  [ -f "$HOME/.dotfiles/ai/marketplace/marker" ]
   [[ "$output" == *"test-event: ownership repaired"*"already seeded"* ]]
 
   run bash "$SEED_SCRIPT"
@@ -183,19 +200,54 @@ extract_seed_script() {
   [[ "$output" == *"codex: function"* ]]
 }
 
+@test "a failed marketplace install leaves the sentinel unstamped" {
+  local seed_version
+  seed_version="$(sed -n 's/^SEED_VERSION=//p' "$SEED_SCRIPT")"
+
+  # A stamped sentinel over a half-installed ~/.claude/plugins would make every
+  # later launch skip the repair, so a failing installer must not stamp.
+  mkdir -p "$TEST_ROOT/host-seed/.dotfiles/ai/marketplace"
+  printf '#!/usr/bin/env bash\nexit 1\n' \
+    >"$TEST_ROOT/host-seed/.dotfiles/ai/marketplace/install.sh"
+  chmod +x "$TEST_ROOT/host-seed/.dotfiles/ai/marketplace/install.sh"
+
+  run bash "$SEED_SCRIPT"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"NOT stamping sentinel"* ]]
+  [ ! -e "$HOME/.claude/.seeded" ]
+
+  # Once the installer succeeds, the stamp lands and the gate engages. The
+  # replacement must differ in size from the failing stub: rsync -a compares
+  # size+mtime, so a same-size rewrite inside the same second is not mirrored.
+  printf '#!/usr/bin/env bash\n# now succeeds\nexit 0\n' \
+    >"$TEST_ROOT/host-seed/.dotfiles/ai/marketplace/install.sh"
+  chmod +x "$TEST_ROOT/host-seed/.dotfiles/ai/marketplace/install.sh"
+
+  run bash "$SEED_SCRIPT"
+
+  [ "$status" -eq 0 ]
+  [ "$(cat "$HOME/.claude/.seeded")" = "$seed_version" ]
+}
+
 @test "tracked devcontainer files are explicitly inspection-only" {
-  local permitted='The only permitted devcontainer writes are the gitignored `docker-compose.override.yml`, `local-seed.sh`, and `.git/info/exclude` entries needed for those two local files.'
+  local permitted='The only permitted devcontainer writes are the gitignored `docker-compose.override.yml`, `local-seed.sh`, the user-approved `dockerComposeFile` entry in `devcontainer.json`, and `.git/info/exclude` entries needed for the two local files.'
   local initial='Capture the initial `git status --short` output before any write.'
   local final='At final verification, run `git status --short` and compare its output byte-for-byte with the initial snapshot.'
-  local dockerfile='Never edit a project Dockerfile, `.devcontainer/devcontainer.json`, or a base Compose file.'
   local document
 
   for document in "$SKILL_DOC" "$REFERENCE"; do
     grep -Fqx "$permitted" "$document"
     grep -Fqx "$initial" "$document"
     grep -Fqx "$final" "$document"
-    grep -Fqx "$dockerfile" "$document"
+    # The sanctioned exception must stay narrow: one approved key, nothing else.
+    grep -Fq 'Never edit a project Dockerfile or a base Compose file.' "$document"
   done
+
+  # The Dockerfile prohibition is worded differently in each document, so it is
+  # asserted per-document rather than through one shared exact-match string.
+  grep -Fqx 'Never edit a project Dockerfile or a base Compose file. Never edit `.devcontainer/devcontainer.json` **except** for the single user-approved change of adding `docker-compose.override.yml` to the `dockerComposeFile` array (Section 6c) — and even then, touch no other key. That edit only happens after the user explicitly approves it, knowing it is a tracked change.' "$SKILL_DOC"
+  grep -Fqx 'Never edit a project Dockerfile or a base Compose file. Never edit `devcontainer.json` except for the user-approved `dockerComposeFile` entry above — and never touch any other key in it.' "$REFERENCE"
 }
 
 @test "login-shell troubleshooting excludes tracked rc and retry-loop changes" {

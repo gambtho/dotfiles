@@ -31,9 +31,9 @@ Confirm these exist:
 
 If a `docker-compose.override.yml` already exists at that location, read it before doing anything else. Preserve unrelated keys and show the diff before writing. Back it up to `<file>.backup-<timestamp>` before replacing legacy mounts.
 
-**Check the override is actually loaded.** Read the `dockerComposeFile` value in `devcontainer.json` and confirm `docker-compose.override.yml` is one of its entries. The Dev Containers CLI / VS Code only load the compose files named in that array — a sibling override that is *not* listed is silently ignored, so the seed never runs and `claude` never appears in the container. This is the single most common reason "the setup didn't work." If the override is missing from the array, do not just write the override and stop — resolve the listing first (see next paragraph).
+**Check the override is actually loaded.** Read the `dockerComposeFile` value in `devcontainer.json` and confirm `docker-compose.override.yml` is one of its entries. That value may be a single string or an array — read a string as a one-item list before concluding the override is missing. The Dev Containers CLI / VS Code only load the compose files named there — a sibling override that is *not* listed is silently ignored, so the seed never runs and `claude` never appears in the container. This is the single most common reason "the setup didn't work." If the override is missing from the array, do not just write the override and stop — resolve the listing first (see next paragraph).
 
-**Resolving a missing override entry (asks the user).** Adding `docker-compose.override.yml` to `dockerComposeFile` requires editing the git-tracked `devcontainer.json`, which is otherwise off-limits. This is a sanctioned exception, but never silent: ask the user first. Present the trade-off — "The override won't load unless it's listed in `dockerComposeFile` in the tracked `.devcontainer/devcontainer.json`. I can add it there (one line), but that file is tracked and the change will show in `git status`; if this repo is a fork/OSS project, keep it as a local-only commit and don't push it upstream. Alternatively I can leave the file untouched and give you the line to add manually." If they approve the edit, add the override to the array (matching the existing style) and flag it clearly in the final report as a tracked change. If they decline, write the override + seed as normal but tell them plainly it will NOT take effect until the entry is added, and hand them the exact edit.
+**Resolving a missing override entry (asks the user).** Adding `docker-compose.override.yml` to `dockerComposeFile` requires editing the git-tracked `devcontainer.json`, which is otherwise off-limits. This is a sanctioned exception, but never silent: ask the user first. Present the trade-off — "The override won't load unless it's listed in `dockerComposeFile` in the tracked `.devcontainer/devcontainer.json`. I can add it there (one line), but that file is tracked and the change will show in `git status`; if this repo is a fork/OSS project, keep it as a local-only commit and don't push it upstream. Alternatively I can leave the file untouched and give you the line to add manually." If they approve the edit, add the override to the list (matching the existing style; if the current value is a plain string, convert it to an array of the original string plus the override) and flag it clearly in the final report as a tracked change. If they decline, write the override + seed as normal but tell them plainly it will NOT take effect until the entry is added, and hand them the exact edit.
 
 Dockerfile, devcontainer.json, and base Compose files are inspection-only, with ONE sanctioned exception: adding the override to `dockerComposeFile` in `devcontainer.json` when the user has approved it (above). Nothing else in these files may be changed.
 
@@ -257,8 +257,19 @@ SEED_VERSION=6
 
 # The remoteUser (Step 2) — the user VS Code opens terminals as and whose
 # ~/.claude Claude Code reads. NOT necessarily the user running this script.
+#
+# Resolve BOTH values empirically and once. Do not assume uid 1000 is the
+# remoteUser, and do not assume the home is /home/$SEED_USER: images pin homes
+# like /home/node, /home/vscode, or /root independently of the name, and a
+# guessed home seeds a directory the login shell never reads (mounts "work",
+# seed logs success, Claude Code sees nothing). Every mount target and seed
+# path below derives from SEED_HOME, so getting it wrong here is silent.
 SEED_USER="{USER}"
-SEED_HOME="/home/{USER}"      # root remoteUser → "/root"; adjust if so
+SEED_HOME="$(getent passwd "$SEED_USER" | cut -d: -f6)"
+if [ -z "$SEED_HOME" ]; then
+  echo "❌ seed: cannot resolve passwd home for '$SEED_USER' — refusing to guess" >&2
+  exit 1
+fi
 SEED_UID="$(id -u "$SEED_USER")"
 SEED_GID="$(id -g "$SEED_USER")"
 
@@ -424,16 +435,23 @@ if [ -d "$SEED_DOTFILES" ]; then
     as_user rsync -a --delete "$SEED_DOTFILES/" "$DOTFILES_HOME/"
     echo "🌱 seed: mirrored ~/.dotfiles via rsync ($(du -sh "$DOTFILES_HOME" | cut -f1))"
   else
+    # No non-pruning fallback. DOTFILES_HOME persists across rebuilds and the
+    # always-run installers below EXECUTE files from it, so a stale installer
+    # deleted upstream would keep running. Wipe-then-copy prunes equivalently.
+    as_user find "$DOTFILES_HOME" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
     as_user cp -a "$SEED_DOTFILES/." "$DOTFILES_HOME/"
-    echo "🌱 seed: refreshed ~/.dotfiles via cp (no rsync; stale files not pruned) ($(du -sh "$DOTFILES_HOME" | cut -f1))"
+    echo "🌱 seed: rebuilt ~/.dotfiles via wipe+cp (no rsync) ($(du -sh "$DOTFILES_HOME" | cut -f1))"
   fi
 fi
 
 # Claude CLI binary (ephemeral target). ALLOW_REMOTE_INSTALLERS=1 opts past the
 # dotfiles guard that blocks remote installers by default. Run as the remoteUser
 # via a login shell so the installer sees their PATH and installs into their home.
-if as_user bash -lc 'command -v claude >/dev/null 2>&1'; then
-  echo "🌱 seed: claude already on $SEED_USER PATH — skipping CLI install"
+# Probe the concrete install path, NOT `bash -lc command -v`: the PATH entry for
+# ~/.local/bin is added to ~/.zshrc, which a bash login shell never sources, so
+# the PATH probe misses an existing binary and reinstalls on every warm restart.
+if as_user test -x "$SEED_HOME/.local/bin/claude" || as_user bash -lc 'command -v claude >/dev/null 2>&1'; then
+  echo "🌱 seed: claude already installed for $SEED_USER — skipping CLI install"
 elif [ -x "$DOTFILES_HOME/ai/claude/install.sh" ]; then
   echo "🌱 seed: installing Claude Code CLI"
   as_user env ALLOW_REMOTE_INSTALLERS=1 bash "$DOTFILES_HOME/ai/claude/install.sh" || echo "⚠️  seed: claude CLI install failed (non-fatal)"
@@ -494,14 +512,25 @@ fi
 # SEED_VERSION bump. (Dotfiles refresh, claude binary, and codex config moved to
 # the always-run block above because their targets are ephemeral and would vanish
 # on rebuild while this sentinel persisted.)
+# A failed install must NOT be stamped: the sentinel is the only thing standing
+# between a half-populated ~/.claude/plugins and a permanent skip on every later
+# launch. Record the failure and leave the sentinel alone so the next run retries.
+MARKETPLACE_OK=1
 if [ -x "$DOTFILES_HOME/ai/marketplace/install.sh" ]; then
   echo "🌱 seed: installing my@guarzo marketplace + plugin"
-  as_user bash "$DOTFILES_HOME/ai/marketplace/install.sh" || echo "⚠️  seed: marketplace install failed (non-fatal)"
+  as_user bash "$DOTFILES_HOME/ai/marketplace/install.sh" || {
+    MARKETPLACE_OK=0
+    echo "⚠️  seed: marketplace install failed — NOT stamping sentinel; next launch retries"
+  }
 fi
 
-# 3. Stamp the sentinel with the current version.
-printf '%s\n' "$SEED_VERSION" | as_user tee "$SENTINEL" >/dev/null
-echo "🌱 seed: done (v$SEED_VERSION)"
+# 3. Stamp the sentinel with the current version, but only on a clean run.
+if [ "$MARKETPLACE_OK" -eq 1 ]; then
+  printf '%s\n' "$SEED_VERSION" | as_user tee "$SENTINEL" >/dev/null
+  echo "🌱 seed: done (v$SEED_VERSION)"
+else
+  echo "🌱 seed: finished with errors (sentinel left at previous version)"
+fi
 ```
 
 The sentinel stores a version number rather than being a bare touch-file. The always-run block (ownership, Vekil hook, PATH, default-shell, **plus the ephemeral-target installs**) executes before the gate, so those land on every container start — including after a rebuild that wiped `~/.local/bin`, `~/.codex`, and `/etc/passwd`. Only steps whose target is a **persisted named volume** (authored `~/.claude` config copy, marketplace plugins) belong in the gate, since the sentinel that guards them lives in that same volume. Getting this split wrong is the "claude is missing after rebuild" bug: gating an install whose target is ephemeral means the persisted sentinel says "done" while the binary is gone. A legacy bare sentinel (empty file) predates versioning and is *not* treated as current: it migrates once through the gated steps and is then stamped, after which the gate is a plain version match. That one extra reseed is idempotent — the copies overwrite with the same authored config and the installer is re-entrant.
@@ -553,22 +582,31 @@ Once written:
    ```
    An empty `ANTHROPIC_BASE_URL` or the auth picker means the Vekil hook is not in *this* user's `~/.zshrc` — almost always because the seed targeted a different home. If `id` shows a different user or home than you assumed, the mounts and seed are pointed at the wrong place; fix `SEED_HOME`/the override targets and reseed.
 
-   Then, for the mechanical checks, resolve `{USER}` to the **VS Code-launched** container's remoteUser and run against **that** container (find it with `docker ps | grep devcontainer` — not a container you started by hand):
-docker compose exec -u {USER} {SERVICE} sh -c 'test "$(cat /home/{USER}/.claude/.seeded)" = "{SEED_VERSION}"'
-docker compose exec -u {USER} {SERVICE} grep -Fq 'ai/vekil/env.zsh' /home/{USER}/.zshrc   # Vekil hook present
-docker compose exec -u {USER} {SERVICE} zsh -n /home/{USER}/.dotfiles/ai/vekil/env.zsh   # hook target exists + parses; no /readyz probe
-docker compose exec -u {USER} {SERVICE} zsh -lic 'whence -v claude; claude --version'   # the CLI binary is installed AND on PATH
-docker compose exec -u {USER} {SERVICE} sh -c 'test "$(getent passwd {USER} | cut -d: -f7)" = "$(command -v zsh)"'   # default login shell is zsh
-docker compose exec -u {USER} {SERVICE} "$(command -v zsh)" -lic 'echo "ANTHROPIC_BASE_URL=$ANTHROPIC_BASE_URL"'   # proxy env reaches the DEFAULT login shell (what the terminal opens), non-empty means Vekil is wired
-docker compose exec -u {USER} {SERVICE} test -f /home/{USER}/.claude/settings.json   # only if that mount was emitted — see below
-docker compose exec -u {USER} {SERVICE} test -f /home/{USER}/.codex/config.toml
-docker compose exec -u {USER} {SERVICE} zsh -lic 'print "OPENAI_BASE_URL=$OPENAI_BASE_URL"; print "ANTHROPIC_BASE_URL=$ANTHROPIC_BASE_URL"; whence -v codex'
-docker compose exec -u {USER} {SERVICE} sh -c 'touch /host-seed/.claude/settings.json' # must fail read-only
-docker compose exec -u {USER} {SERVICE} sh -c 'test -e /host-seed/.claude/.credentials.json' # must fail: not mounted
+   Then run the mechanical checks against the **VS Code-launched** container, not a bare service name — `docker compose exec {SERVICE}` can resolve to a container you started by hand, and its default user is often root. Capture the container ID and the real remoteUser/home first, then drive every check off those variables:
+
+```bash
+CID="$(docker ps --filter label=devcontainer.local_folder -q | head -n1)"   # the VS Code container
+[ -n "$CID" ] || { echo "no VS Code devcontainer running — rebuild first"; exit 1; }
+CUSER="$(docker inspect -f '{{.Config.User}}' "$CID")"; CUSER="${CUSER%%:*}"
+[ -n "$CUSER" ] || CUSER="{USER}"
+CHOME="$(docker exec -u "$CUSER" "$CID" sh -c 'getent passwd "$(id -un)" | cut -d: -f6')"
+echo "container=$CID user=$CUSER home=$CHOME"    # sanity-check before trusting any check below
+```
+docker exec -u "$CUSER" "$CID" sh -c "test \"\$(cat $CHOME/.claude/.seeded)\" = '{SEED_VERSION}'"
+docker exec -u "$CUSER" "$CID" grep -Fq 'ai/vekil/env.zsh' "$CHOME/.zshrc"   # Vekil hook present
+docker exec -u "$CUSER" "$CID" zsh -n "$CHOME/.dotfiles/ai/vekil/env.zsh"   # hook target exists + parses; no /readyz probe
+docker exec -u "$CUSER" "$CID" zsh -lic 'whence -v claude; claude --version'   # the CLI binary is installed AND on PATH
+docker exec -u "$CUSER" "$CID" sh -c 'test "$(getent passwd "$(id -un)" | cut -d: -f7)" = "$(command -v zsh)"'   # default login shell is zsh
+docker exec -u "$CUSER" "$CID" zsh -lic 'echo "ANTHROPIC_BASE_URL=$ANTHROPIC_BASE_URL"'   # proxy env reaches the DEFAULT login shell (what the terminal opens), non-empty means Vekil is wired
+docker exec -u "$CUSER" "$CID" test -f "$CHOME/.claude/settings.json"   # only if that mount was emitted — see below
+docker exec -u "$CUSER" "$CID" test -f "$CHOME/.codex/config.toml"
+docker exec -u "$CUSER" "$CID" zsh -lic 'print "OPENAI_BASE_URL=$OPENAI_BASE_URL"; print "ANTHROPIC_BASE_URL=$ANTHROPIC_BASE_URL"; whence -v codex'
+docker exec -u "$CUSER" "$CID" sh -c 'touch /host-seed/.claude/settings.json' # must fail read-only
+docker exec -u "$CUSER" "$CID" sh -c 'test -e /host-seed/.claude/.credentials.json' # must fail: not mounted
 ```
 
-Every check above runs with `-u {USER}` (the container user from Step 2), not
-`exec`'s default. This matters most for the ownership line: with the default user
+Every check above runs with `-u "$CUSER"` against `"$CID"` (the VS Code
+container and its real remoteUser, resolved above), not `exec`'s default. This matters most for the ownership line: with the default user
 — often root — `$(id -u):$(id -g)` evaluates to `0:0` and the test compares root
 against root, passing even when the named volumes were never chowned to the real
 user. The `zsh -lic` line needs the same treatment or it reads root's login
