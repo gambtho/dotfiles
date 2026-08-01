@@ -223,6 +223,28 @@ CASES
   [ "$status" -eq 0 ]
 }
 
+@test "bootstrap stops when pinned mise installation fails" {
+  local original_path="$PATH"
+  local path_result="$TEST_ROOT/path-after-mise-failure"
+
+  run env BOOTSTRAP_SOURCE_ONLY=1 HOME="$HOME" PATH_RESULT="$path_result" bash -c '
+    source "$1/bin/bootstrap"
+    sudo() { :; }
+    command_exists() { [[ "$1" == zsh ]]; }
+    install_pinned_mise() { return 42; }
+    if linux_prep; then
+      result=0
+    else
+      result=$?
+    fi
+    printf "%s\n" "$PATH" >"$PATH_RESULT"
+    exit "$result"
+  ' _ "$REPO_ROOT"
+
+  [ "$status" -eq 42 ]
+  [ "$(cat "$path_result")" = "$original_path" ]
+}
+
 @test "agent teams setup consumes verified yq and win32yank artifacts" {
   run rg -n 'install_pinned_yq' "$REPO_ROOT/bin/setup-agent-teams"
   [ "$status" -eq 0 ]

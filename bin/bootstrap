@@ -231,7 +231,7 @@ linux_prep() {
   fi
 
   if ! command_exists mise; then
-    install_pinned_mise "$HOME/.local/bin/mise"
+    install_pinned_mise "$HOME/.local/bin/mise" || return
     export PATH="$HOME/.local/bin:$PATH"
   else
     log_info "mise already installed"

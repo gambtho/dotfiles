@@ -62,20 +62,20 @@ install_fonts() {
     mv -- "$FONT_DIR" "$previous"
   fi
   if ! mv -- "$staged_fonts" "$FONT_DIR"; then
-    [[ ! -e "$previous" ]] || mv -- "$previous" "$FONT_DIR"
+    [[ -e "$previous" || -L "$previous" ]] && mv -- "$previous" "$FONT_DIR"
     rm -rf -- "$staging"
     return 1
   fi
   if command -v fc-cache >/dev/null 2>&1 && ! fc-cache -f "$FONT_DIR"; then
     rm -rf -- "$FONT_DIR"
-    [[ ! -e "$previous" ]] || mv -- "$previous" "$FONT_DIR"
+    [[ -e "$previous" || -L "$previous" ]] && mv -- "$previous" "$FONT_DIR"
     rm -rf -- "$staging"
     return 1
   fi
   if command -v gsettings >/dev/null 2>&1; then
     if ! gsettings set org.gnome.desktop.interface monospace-font-name "$DEFAULT_FONT"; then
       rm -rf -- "$FONT_DIR"
-      [[ ! -e "$previous" ]] || mv -- "$previous" "$FONT_DIR"
+      [[ -e "$previous" || -L "$previous" ]] && mv -- "$previous" "$FONT_DIR"
       rm -rf -- "$staging"
       return 1
     fi

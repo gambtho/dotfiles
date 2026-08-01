@@ -237,14 +237,19 @@ SCRIPT
 
   run env HOME="$HOME" DOTFILES="$REPO_ROOT" PATH="$PATH" \
     VEKIL_CURL_LOG="$curl_log" VEKIL_PROBE_STATE="$TEST_ROOT/probe-state" zsh -dfc '
+      unset OPENAI_BASE_URL OPENAI_API_KEY
+      unset ANTHROPIC_BASE_URL ANTHROPIC_API_KEY ANTHROPIC_MODEL
+      unset VEKIL_MANAGED_OPENAI_BASE_URL VEKIL_MANAGED_OPENAI_API_KEY
+      unset VEKIL_MANAGED_ANTHROPIC_BASE_URL VEKIL_MANAGED_ANTHROPIC_API_KEY
+      unset VEKIL_MANAGED_ANTHROPIC_MODEL
       source "$DOTFILES/ai/vekil/env.zsh"
       first=$OPENAI_BASE_URL
       print unavailable >"$VEKIL_PROBE_STATE"
       source "$DOTFILES/ai/vekil/env.zsh"
-      print -r -- "$first|${OPENAI_BASE_URL-unset}|${OPENAI_API_KEY-unset}"
+      print -r -- "$first|${OPENAI_BASE_URL-unset}|${OPENAI_API_KEY-unset}|${ANTHROPIC_BASE_URL-unset}|${ANTHROPIC_API_KEY-unset}|${ANTHROPIC_MODEL-unset}"
     '
 
   [ "$status" -eq 0 ]
   [ "$(grep -c '/readyz' "$curl_log")" -eq 2 ]
-  [[ "$output" == *"http://127.0.0.1:1337/v1|unset|unset"* ]]
+  [[ "$output" == *"http://127.0.0.1:1337/v1|unset|unset|unset|unset|unset"* ]]
 }

@@ -454,12 +454,20 @@ wait_until_ready() {
   wait_for_probe "$1" "READY" "$2" is_ready
 }
 
-terminate_record() {
-  local record="$1" pid deadline pgid target
-  pid=${record%%|*}
-  target=$pid
+signal_target_for_pid() {
+  local pid="$1" pgid
   pgid=$(ps -p "$pid" -o pgid= 2>/dev/null | tr -d '[:space:]' || true)
-  [[ "$pgid" == "$pid" ]] && target="-$pid"
+  if [[ "$pgid" == "$pid" ]]; then
+    printf -- '-%s\n' "$pid"
+  else
+    printf '%s\n' "$pid"
+  fi
+}
+
+terminate_record() {
+  local record="$1" pid deadline target
+  pid=${record%%|*}
+  target=$(signal_target_for_pid "$pid")
   if process_matches_record "$record"; then
     kill -- "$target" 2>/dev/null || true
   fi
@@ -476,11 +484,9 @@ terminate_record() {
 }
 
 terminate_verified_start() {
-  local record="$1" pid deadline pgid target
+  local record="$1" pid deadline target
   pid=${record%%|*}
-  target=$pid
-  pgid=$(ps -p "$pid" -o pgid= 2>/dev/null | tr -d '[:space:]' || true)
-  [[ "$pgid" == "$pid" ]] && target="-$pid"
+  target=$(signal_target_for_pid "$pid")
   if process_matches_start_id "$record"; then kill -- "$target" 2>/dev/null || true; fi
   deadline=$((SECONDS + STOP_TIMEOUT))
   while process_matches_start_id "$record"; do
@@ -755,7 +761,7 @@ stop() {
   secure_directory "$STATE_DIR"
   validate_state_entries
   remove_ready_marker
-  local record pid deadline
+  local record pid deadline target
   record=$(pid_record || true)
   if [[ -z "$record" ]]; then
     rm -f -- "$PIDFILE"
@@ -765,9 +771,10 @@ stop() {
   fi
 
   pid=${record%%|*}
+  target=$(signal_target_for_pid "$pid")
   echo -n "stopping Vekil pid $pid "
   if process_matches_record "$record"; then
-    kill "$pid" 2>/dev/null || true
+    kill -- "$target" 2>/dev/null || true
   fi
   deadline=$((SECONDS + STOP_TIMEOUT))
   while process_matches_start_id "$record"; do
@@ -778,7 +785,7 @@ stop() {
 
   if process_matches_start_id "$record"; then
     echo -n "force "
-    kill -9 "$pid" 2>/dev/null || true
+    kill -9 -- "$target" 2>/dev/null || true
     if ! wait_until_process_changes "$record" "$KILL_CONFIRM_TIMEOUT"; then
       write_stop_failed "$record"
       echo "FAILED"

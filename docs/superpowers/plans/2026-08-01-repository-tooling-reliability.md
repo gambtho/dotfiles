@@ -10,7 +10,7 @@
 
 ---
 
-### Task 1: Characterize existing link behavior
+## Task 1: Characterize existing link behavior
 
 **Files:**
 - Create: `tests/link_reconciliation.bats`
@@ -46,6 +46,17 @@ Create `tests/link_reconciliation.bats` with setup that sources `bin/common.sh`,
   [ "$(cat "$HOME/destination.backup")" = older ]
   run bash -c 'compgen -G "$1/destination.backup.*"' _ "$HOME"
   [ "$status" -eq 0 ]
+}
+
+@test "link creation failure restores the original destination" {
+  printf 'local\n' >"$HOME/destination"
+  run bash -c '
+    source "$1/bin/common.sh"
+    ln() { return 1; }
+    reconcile_link "$2" "$3" config replace apply
+  ' _ "$REPO_ROOT" "$TEST_ROOT/source" "$HOME/destination"
+  [ "$status" -ne 0 ]
+  [ "$(cat "$HOME/destination")" = local ]
 }
 
 @test "check mode describes replacement without mutation" {
@@ -86,7 +97,7 @@ git add tests/link_reconciliation.bats tests/ai_installers.bats
 git commit -m "test: characterize dotfile link reconciliation"
 ```
 
-### Task 2: Implement the shared link APIs
+## Task 2: Implement the shared link APIs
 
 **Files:**
 - Modify: `bin/common.sh`
@@ -112,6 +123,7 @@ next_backup_path() {
 
 reconcile_link() {
   local source="$1" destination="$2" label="$3" policy="$4" mode="$5"
+  local backup moved_to="" keep_backup=false
   [[ "$policy" == skip || "$policy" == replace || "$policy" == backup ]] || return 2
   [[ "$mode" == apply || "$mode" == check ]] || return 2
   if [[ -L "$destination" && "$(readlink "$destination")" == "$source" ]]; then
@@ -121,19 +133,32 @@ reconcile_link() {
   if [[ -e "$destination" || -L "$destination" ]]; then
     case "$policy" in
       skip) log_info "Skipped $label at $destination"; return 0 ;;
-      replace) [[ "$mode" == check ]] && { log_info "[dry-run] Would replace $label at $destination"; return; }; rm -rf -- "$destination" ;;
+      replace)
+        [[ "$mode" == check ]] && { log_info "[dry-run] Would replace $label at $destination"; return; }
+        moved_to=$(next_backup_path "$destination")
+        mv -- "$destination" "$moved_to" || return
+        ;;
       backup)
-        local backup
         backup=$(next_backup_path "$destination")
         [[ "$mode" == check ]] && { log_info "[dry-run] Would back up $label to $backup"; return; }
-        mv -- "$destination" "$backup"
+        mv -- "$destination" "$backup" || return
+        moved_to=$backup
+        keep_backup=true
         ;;
     esac
   elif [[ "$mode" == check ]]; then
     log_info "[dry-run] Would link $source -> $destination"
     return 0
   fi
-  ln -s -- "$source" "$destination"
+  if ! ln -s -- "$source" "$destination"; then
+    if [[ -n "$moved_to" && ! -e "$destination" && ! -L "$destination" ]]; then
+      mv -- "$moved_to" "$destination" || true
+    fi
+    return 1
+  fi
+  if [[ -n "$moved_to" && "$keep_backup" != true ]]; then
+    rm -rf -- "$moved_to"
+  fi
   log_success "Linked $source to $destination"
 }
 ```
@@ -156,7 +181,7 @@ git add bin/common.sh tests/link_reconciliation.bats
 git commit -m "refactor: centralize symlink reconciliation"
 ```
 
-### Task 3: Migrate all four link callers
+## Task 3: Migrate all four link callers
 
 **Files:**
 - Modify: `bin/bootstrap`
@@ -191,7 +216,7 @@ git add bin/bootstrap bin/relink ai/claude/install.sh ai/codex/install.sh tests/
 git commit -m "refactor: share installer link policy"
 ```
 
-### Task 4: Make verification file discovery hermetic
+## Task 4: Make verification file discovery hermetic
 
 **Files:**
 - Create: `bin/list-check-files`
@@ -236,7 +261,7 @@ git add bin/list-check-files tests/check_file_discovery.bats Makefile
 git commit -m "build: make repository checks hermetic"
 ```
 
-### Task 5: Validate consumer manifests and tracked symlinks
+## Task 5: Validate consumer manifests and tracked symlinks
 
 **Files:**
 - Modify: `bin/validate-ai`
@@ -276,7 +301,7 @@ git add bin/validate-ai tests/validate_ai.bats ai/marketplace/plugins/my/package
 git commit -m "fix: validate published AI skill inventory"
 ```
 
-### Task 6: Verify tooling wave
+## Task 6: Verify tooling wave
 
 **Files:**
 - Modify: none

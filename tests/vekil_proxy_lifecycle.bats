@@ -26,7 +26,7 @@ setup() {
   [ "$status" -eq 0 ]
   [ ! -e "$STATE_DIR/proxy.pid" ]
   [ ! -e "$STATE_DIR/proxy-ready" ]
-  [ "$(cat "$STATE_DIR/signals")" = 123 ]
+  [ "$(cat "$STATE_DIR/signals")" = '-- 123' ]
   [[ "$output" == *"STOPPED"* ]]
 }
 
@@ -43,7 +43,23 @@ setup() {
 
   [ "$status" -eq 0 ]
   [ ! -e "$STATE_DIR/proxy.pid" ]
-  grep -Fq -- '-9 123' "$STATE_DIR/signals"
+  grep -Fq -- '-9 -- 123' "$STATE_DIR/signals"
+}
+
+@test "Vekil stop signals the process group when the PID is its leader" {
+  run env VEKIL_PROXY_SOURCE_ONLY=1 VEKIL_STATE_DIR="$STATE_DIR" VEKIL_STOP_TIMEOUT=0 VEKIL_KILL_CONFIRM_TIMEOUT=0 bash -c '
+    source "$1/bin/vekil-proxy"
+    pid_record() { printf "123|start-id\n"; }
+    process_matches_record() { return 0; }
+    matches=0
+    process_matches_start_id() { (( matches += 1 )); (( matches <= 2 )); }
+    ps() { printf " 123\n"; }
+    kill() { printf "%s\n" "${!#}" >>"$VEKIL_STATE_DIR/signals"; }
+    stop
+  ' _ "$REPO_ROOT" "$STATE_DIR"
+
+  [ "$status" -eq 0 ]
+  [ "$(cat "$STATE_DIR/signals")" = $'-123\n-123' ]
 }
 
 @test "Vekil stop keeps confirming the recorded process after it execs" {

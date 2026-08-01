@@ -90,14 +90,17 @@ latest_kubernetes_channel() {
 }
 
 latest_artifact_release() {
-  local repository="$1"
-  curl "${CURL_DOWNLOAD_ARGS[@]}" --silent "https://api.github.com/repos/$repository/releases/latest" |
-    jq -er '.tag_name'
+  local repository="$1" response
+  response=$(curl "${CURL_DOWNLOAD_ARGS[@]}" --silent "https://api.github.com/repos/$repository/releases/latest") || return
+  jq -er '.tag_name' <<<"$response"
 }
 
 check_artifact_release() {
   local name="$1" repository="$2" current="$3" latest
-  latest=$(latest_artifact_release "$repository")
+  latest=$(latest_artifact_release "$repository") || {
+    printf 'error artifact %s: unable to query latest release for %s\n' "$name" "$repository" >&2
+    return 1
+  }
   if [[ "$current" == "$latest" ]]; then
     printf 'current artifact %s %s\n' "$name" "$current"
   else

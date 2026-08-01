@@ -180,3 +180,29 @@ compose_packages() {
   [[ "$output" == *"Unmanaged manual APT packages: 2"* ]]
   [ "$(cat "$audit_root/tmp/unmanaged-apt-ubuntu-personal.txt")" = $'another-extra\nzoxide' ]
 }
+
+@test "package audit stops when manifest composition fails" {
+  local audit_root="$TEST_ROOT/audit-repo"
+  local events="$TEST_ROOT/audit-events"
+  mkdir -p "$audit_root/tmp"
+
+  run env INSTALL_SOURCE_ONLY=1 EVENTS="$events" bash -c '
+    source "$1/bin/install"
+    DOTFILES_ROOT="$2"
+    OS=Ubuntu
+    PROFILE=missing
+    compose_apt_packages() { return 42; }
+    apt-mark() { printf "apt-mark called\n" >>"$EVENTS"; }
+    if check_unsaved_apt_packages; then
+      exit 0
+    else
+      exit $?
+    fi
+  ' _ "$REPO_ROOT" "$audit_root"
+
+  [ "$status" -ne 0 ]
+  [ ! -e "$audit_root/tmp/unmanaged-apt-ubuntu-missing.txt" ]
+  [ ! -s "$events" ]
+  run bash -c 'compgen -G "$1/tmp/managed-apt.*"' _ "$audit_root"
+  [ "$status" -eq 1 ]
+}

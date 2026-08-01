@@ -10,7 +10,7 @@
 
 ---
 
-### Task 1: Add lifecycle failure tests
+## Task 1: Add lifecycle failure tests
 
 **Files:**
 - Create: `tests/vekil_proxy_lifecycle.bats`
@@ -49,7 +49,7 @@ git add tests/vekil_proxy_lifecycle.bats tests/test_helper.bash
 git commit -m "test: cover Vekil shutdown outcomes"
 ```
 
-### Task 2: Validate kill-confirm configuration and state entry
+## Task 2: Validate kill-confirm configuration and state entry
 
 **Files:**
 - Modify: `bin/vekil-proxy`
@@ -94,7 +94,7 @@ git add bin/vekil-proxy tests/vekil_proxy_lifecycle.bats
 git commit -m "feat: track Vekil stop failures safely"
 ```
 
-### Task 3: Confirm shutdown before deleting ownership state
+## Task 3: Confirm shutdown before deleting ownership state
 
 **Files:**
 - Modify: `bin/vekil-proxy`
@@ -145,7 +145,7 @@ git add bin/vekil-proxy tests/vekil_proxy_lifecycle.bats
 git commit -m "fix: verify Vekil process termination"
 ```
 
-### Task 4: Surface and clear STOP_FAILED status
+## Task 4: Surface and clear STOP_FAILED status
 
 **Files:**
 - Modify: `bin/vekil-proxy`
@@ -179,7 +179,7 @@ git add bin/vekil-proxy tests/vekil_proxy_lifecycle.bats ai/vekil/README.md
 git commit -m "fix: report failed Vekil shutdowns"
 ```
 
-### Task 5: Prove one readiness probe per shell
+## Task 5: Prove one readiness probe per shell
 
 **Files:**
 - Modify: `tests/shell_loading.bats`
@@ -222,7 +222,7 @@ git add core/shell/load-custom.zsh tests/shell_loading.bats
 git commit -m "fix: probe Vekil once during shell startup"
 ```
 
-### Task 6: Verify Vekil wave
+## Task 6: Verify Vekil wave
 
 **Files:**
 - Modify: none

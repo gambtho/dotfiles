@@ -86,7 +86,10 @@ check_unsaved_apt_packages() {
   mkdir -p "$DOTFILES_ROOT/tmp"
   audit_file="$DOTFILES_ROOT/tmp/unmanaged-apt-${OS,,}-${PROFILE}.txt"
   manifest_file=$(mktemp "$DOTFILES_ROOT/tmp/managed-apt.XXXXXX")
-  compose_apt_packages >"$manifest_file"
+  compose_apt_packages >"$manifest_file" || {
+    rm -f -- "$manifest_file"
+    return 1
+  }
   comm -23 <(apt-mark showmanual | sort -u) "$manifest_file" >"$audit_file"
   count=$(wc -l <"$audit_file")
   count=${count//[[:space:]]/}

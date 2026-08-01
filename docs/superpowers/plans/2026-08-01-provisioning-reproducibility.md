@@ -10,7 +10,7 @@
 
 ---
 
-### Task 1: Characterize Linux package composition
+## Task 1: Characterize Linux package composition
 
 **Files:**
 - Create: `tests/linux_packages.bats`
@@ -101,7 +101,7 @@ git add bin/install tests/linux_packages.bats platforms/linux profiles/packages
 git commit -m "refactor: compose Linux packages by profile"
 ```
 
-### Task 2: Order repositories, installation, and package audit
+## Task 2: Order repositories, installation, and package audit
 
 **Files:**
 - Modify: `bin/install`
@@ -158,7 +158,7 @@ git add bin/install work/install.sh tests/linux_packages.bats
 git commit -m "fix: converge curated Linux package manifests"
 ```
 
-### Task 3: Add verified artifact primitives and canonical pins
+## Task 3: Add verified artifact primitives and canonical pins
 
 **Files:**
 - Modify: `bin/common.sh`
@@ -223,7 +223,7 @@ git add bin/common.sh config/versions.env bin/versions tests/install_orchestrati
 git commit -m "feat: verify pinned remote artifacts"
 ```
 
-### Task 4: Install pinned mise and yq through the shared path
+## Task 4: Install pinned mise and yq through the shared path
 
 **Files:**
 - Modify: `bin/bootstrap`
@@ -257,7 +257,7 @@ git add bin/common.sh bin/bootstrap bin/setup-agent-teams tests/install_orchestr
 git commit -m "fix: install pinned bootstrap tools"
 ```
 
-### Task 5: Replace the moving Nerd Fonts clone
+## Task 5: Replace the moving Nerd Fonts clone
 
 **Files:**
 - Modify: `fonts/install.sh`
@@ -290,7 +290,7 @@ git add fonts/install.sh tests/font_install.bats
 git commit -m "fix: install pinned Nerd Font assets"
 ```
 
-### Task 6: Track and restore the Neovim graph
+## Task 6: Track and restore the Neovim graph
 
 **Files:**
 - Modify: `.gitignore`
@@ -326,7 +326,7 @@ git add .gitignore config/nvim/init.lua config/nvim/lazy-lock.json bin/install t
 git commit -m "fix: lock Neovim plugin convergence"
 ```
 
-### Task 7: Scope Agency PATH to work profiles
+## Task 7: Scope Agency PATH to work profiles
 
 **Files:**
 - Create: `work/agency.zsh`
@@ -371,7 +371,7 @@ git add work/agency.zsh core/shell/zshrc.symlink tests/shell_loading.bats
 git commit -m "fix: scope Agency configuration to work profiles"
 ```
 
-### Task 8: Verify provisioning wave
+## Task 8: Verify provisioning wave
 
 **Files:**
 - Modify: none

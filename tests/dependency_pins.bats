@@ -100,6 +100,41 @@ SCRIPT
   [[ "$output" == *"current artifact nerd-fonts v3.4.0"* ]]
 }
 
+@test "versions check reports artifact release lookup failures clearly" {
+  local failure
+  stub_command mise 'exit 0'
+  cat >"$STUB_BIN/git" <<SCRIPT
+#!/usr/bin/env bash
+case "\$*" in
+  *prezto*) printf '%s\tHEAD\n' '$PREZTO_REF' ;;
+  *zsh-defer*) printf '%s\tHEAD\n' '$ZSH_DEFER_REF' ;;
+esac
+SCRIPT
+  chmod +x "$STUB_BIN/git"
+  cat >"$STUB_BIN/curl" <<'SCRIPT'
+#!/usr/bin/env bash
+url="${@: -1}"
+case "$url" in
+  *dl.k8s.io*) printf 'v1.28.0\n' ;;
+  *api.github.com*)
+    if [[ "$VERSION_LOOKUP_FAILURE" == transport ]]; then
+      exit 22
+    fi
+    printf '{}\n'
+    ;;
+esac
+SCRIPT
+  chmod +x "$STUB_BIN/curl"
+
+  for failure in transport response; do
+    run env PATH="$PATH" VERSION_LOOKUP_FAILURE="$failure" bash "$REPO_ROOT/bin/versions" check
+
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"error artifact mise: unable to query latest release for jdx/mise"* ]]
+    [[ "$output" != *"outdated artifact mise"* ]]
+  done
+}
+
 @test "versions update keeps artifact bumps behind checksum review" {
   run rg -n 'checksum-reviewed manual update required' "$REPO_ROOT/bin/versions"
 

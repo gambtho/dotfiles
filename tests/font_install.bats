@@ -88,3 +88,25 @@ setup() {
   [ "$(cat "$FONT_DIR/old.ttf")" = old-font ]
   [ "$(cat "$FONT_DIR/installed-version")" = v3.3.0 ]
 }
+
+@test "failed post-install verification restores a dangling font symlink" {
+  local original_target="$TEST_ROOT/missing-managed-fonts"
+  mkdir -p "$(dirname "$FONT_DIR")"
+  ln -s "$original_target" "$FONT_DIR"
+
+  run env FONT_INSTALL_SOURCE_ONLY=1 FONT_DIR="$FONT_DIR" bash -c '
+    source "$1/fonts/install.sh"
+    download_verified_artifact() { printf archive >"$3"; }
+    unzip() {
+      local archive="$2" destination="$4"
+      printf font >"$destination/${archive##*/}.ttf"
+    }
+    fc-cache() { return 1; }
+    gsettings() { :; }
+    install_fonts
+  ' _ "$REPO_ROOT"
+
+  [ "$status" -ne 0 ]
+  [ -L "$FONT_DIR" ]
+  [ "$(readlink "$FONT_DIR")" = "$original_target" ]
+}
