@@ -529,7 +529,13 @@ if [ "$MARKETPLACE_OK" -eq 1 ]; then
   printf '%s\n' "$SEED_VERSION" | as_user tee "$SENTINEL" >/dev/null
   echo "🌱 seed: done (v$SEED_VERSION)"
 else
-  echo "🌱 seed: finished with errors (sentinel left at previous version)"
+  # Exit non-zero so the failure is visible to anything that checks. Note the
+  # compose command uses `;` (not `&&`) before `exec {BASE_COMMAND}`, so the
+  # container still starts — deliberately, since a degraded container the user
+  # can debug beats one that will not boot. A missing installer stays non-fatal;
+  # only an installer that ran and failed reports an error.
+  echo "❌ seed: marketplace install failed (sentinel left at previous version)" >&2
+  exit 1
 fi
 ```
 

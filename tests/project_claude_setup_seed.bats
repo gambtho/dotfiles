@@ -213,7 +213,8 @@ extract_seed_script() {
 
   run bash "$SEED_SCRIPT"
 
-  [ "$status" -eq 0 ]
+  # A failed install must report non-zero, not just decline to stamp.
+  [ "$status" -ne 0 ]
   [[ "$output" == *"NOT stamping sentinel"* ]]
   [ ! -e "$HOME/.claude/.seeded" ]
 
