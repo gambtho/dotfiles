@@ -62,6 +62,23 @@ list_files() {
   [[ "$output" == *"ai/claude/install.sh"* ]]
 }
 
+@test "shfmt covers extensionless bin executables" {
+  # Extensionless bin/ executables are the bulk of this repo's shell code.
+  # Linting but never format-checking them let drift accumulate exactly where
+  # most changes land. Discovery now matches the shellcheck set; the remaining
+  # backlog of unformatted bin/ scripts is tracked separately, so this asserts
+  # discovery rather than a clean shfmt run.
+  local shellcheck_set shfmt_set
+  shellcheck_set=$("$REPO_ROOT/bin/list-check-files" shellcheck | tr '\0' '\n' | sort)
+  shfmt_set=$("$REPO_ROOT/bin/list-check-files" shfmt | tr '\0' '\n' | sort)
+
+  run comm -23 <(printf '%s\n' "$shellcheck_set") <(printf '%s\n' "$shfmt_set")
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+
+  [[ "$shfmt_set" == *"bin/vekil-proxy"* ]]
+}
+
 @test "Makefile check pipelines propagate discovery failures portably" {
   run rg -n 'sort -z|sort -zu|xargs[^\n]* -r([[:space:]]|$)' "$REPO_ROOT/bin/list-check-files" "$REPO_ROOT/Makefile"
   [ "$status" -eq 1 ]

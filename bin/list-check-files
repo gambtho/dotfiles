@@ -60,7 +60,7 @@ is_repository_zsh() {
       if is_direct_bin_shell "$path" || is_repository_sh "$path"; then printf '%s\0' "$path"; fi
       ;;
     shfmt)
-      if { [[ "$path" == bin/*.sh && "${path#bin/}" != */* ]]; } || is_repository_sh "$path" || [[ "$path" == tests/test_helper.bash ]]; then printf '%s\0' "$path"; fi
+      if is_direct_bin_shell "$path" || is_repository_sh "$path" || [[ "$path" == tests/test_helper.bash ]]; then printf '%s\0' "$path"; fi
       ;;
   esac
 done

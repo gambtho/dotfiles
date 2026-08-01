@@ -21,24 +21,55 @@ TARGET=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --service)    SERVICE="$2"; shift 2 ;;
-    --user)       USER_IN_CONTAINER="$2"; shift 2 ;;
-    -n|--dry-run) DRY_RUN=1; shift ;;
-    -h|--help)
+    --service)
+      SERVICE="$2"
+      shift 2
+      ;;
+    --user)
+      USER_IN_CONTAINER="$2"
+      shift 2
+      ;;
+    -n | --dry-run)
+      DRY_RUN=1
+      shift
+      ;;
+    -h | --help)
       sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'
-      exit 0 ;;
-    -*) echo "unknown flag: $1" >&2; exit 2 ;;
-    *)  TARGET="$1"; shift ;;
+      exit 0
+      ;;
+    -*)
+      echo "unknown flag: $1" >&2
+      exit 2
+      ;;
+    *)
+      TARGET="$1"
+      shift
+      ;;
   esac
 done
 
-[[ -n "$TARGET" ]]            || { echo "missing target file" >&2; exit 2; }
-[[ -n "$SERVICE" ]]           || { echo "--service required" >&2; exit 2; }
-[[ -n "$USER_IN_CONTAINER" ]] || { echo "--user required" >&2; exit 2; }
+[[ -n "$TARGET" ]] || {
+  echo "missing target file" >&2
+  exit 2
+}
+[[ -n "$SERVICE" ]] || {
+  echo "--service required" >&2
+  exit 2
+}
+[[ -n "$USER_IN_CONTAINER" ]] || {
+  echo "--user required" >&2
+  exit 2
+}
 
-command -v yq >/dev/null || { echo "yq not installed; run setup-agent-teams first" >&2; exit 127; }
-yq --version 2>&1 | grep -qi mikefarah \
-  || { echo "yq is not mikefarah/yq — merge semantics differ; refusing" >&2; exit 127; }
+command -v yq >/dev/null || {
+  echo "yq not installed; run setup-agent-teams first" >&2
+  exit 127
+}
+yq --version 2>&1 | grep -qi mikefarah ||
+  {
+    echo "yq is not mikefarah/yq — merge semantics differ; refusing" >&2
+    exit 127
+  }
 
 # Resolve HOME inside the container. For most images, it's /home/<user>;
 # for root it's /root.
@@ -49,9 +80,10 @@ else
 fi
 
 # Build the patch document we want to merge in.
-PATCH=$(mktemp); trap 'rm -f "$PATCH"' EXIT
+PATCH=$(mktemp)
+trap 'rm -f "$PATCH"' EXIT
 
-cat > "$PATCH" <<EOF
+cat >"$PATCH" <<EOF
 services:
   ${SERVICE}:
     environment:
@@ -77,7 +109,7 @@ EOF
 
 # If target doesn't exist, just write our patch as the new override.
 if [[ ! -f "$TARGET" ]]; then
-  if (( DRY_RUN )); then
+  if ((DRY_RUN)); then
     echo "──── would write to $TARGET ────"
     cat "$PATCH"
     exit 0
@@ -92,7 +124,8 @@ fi
 #   - `*` deep-merges maps (services.<name>.environment merges)
 #   - `*+` would append arrays globally; we only want it for volumes,
 #     so we explicitly rebuild .services[svc].volumes after the deep merge
-MERGED=$(mktemp); trap 'rm -f "$PATCH" "$MERGED"' EXIT
+MERGED=$(mktemp)
+trap 'rm -f "$PATCH" "$MERGED"' EXIT
 
 if ! SVC="$SERVICE" yq eval-all '
   select(fileIndex == 0) as $dst | select(fileIndex == 1) as $src |
@@ -101,15 +134,19 @@ if ! SVC="$SERVICE" yq eval-all '
     (($dst.services[strenv(SVC)].volumes // []) + ($src.services[strenv(SVC)].volumes // []))
     | unique
   )
-' "$TARGET" "$PATCH" > "$MERGED"; then
+' "$TARGET" "$PATCH" >"$MERGED"; then
   rm -f "$MERGED"
   echo "yq merge failed for $TARGET" >&2
   exit 1
 fi
 
 # Verify it parses.
-yq eval '.' "$MERGED" >/dev/null 2>&1 \
-  || { rm -f "$MERGED"; echo "merged YAML failed to parse" >&2; exit 1; }
+yq eval '.' "$MERGED" >/dev/null 2>&1 ||
+  {
+    rm -f "$MERGED"
+    echo "merged YAML failed to parse" >&2
+    exit 1
+  }
 
 # Detect tracked status for warning.
 PROJ_ROOT="$(git -C "$(dirname "$TARGET")" rev-parse --show-toplevel 2>/dev/null || true)"
@@ -126,12 +163,12 @@ fi
 echo "──── proposed diff ────"
 diff -u "$TARGET" "$MERGED" || true
 echo
-if (( TRACKED )); then
+if ((TRACKED)); then
   echo "Note: $TARGET is tracked in git — this change will appear in 'git diff'."
   echo "Decide whether to commit, stash, or revert after reviewing."
 fi
 
-if (( DRY_RUN )); then
+if ((DRY_RUN)); then
   echo "--dry-run; not writing."
   exit 0
 fi

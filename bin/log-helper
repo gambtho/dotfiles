@@ -2,7 +2,6 @@
 
 DEBUG=${DEBUG:-false}
 
-
 # Add timestamps to logs
 timestamp() {
   date +"%Y-%m-%d %H:%M:%S"

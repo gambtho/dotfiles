@@ -38,7 +38,7 @@ while IFS= read -r -d '' link; do
   if [ ! -e "$link" ]; then
     log_warning "Removing dead symlink: $link -> $target"
     rm "$link"
-    (( removed++ )) || true
+    ((removed++)) || true
   fi
 done < <(find "$HOME" -maxdepth 1 -type l -print0)
 

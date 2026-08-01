@@ -13,29 +13,35 @@ VERBOSE=false
 
 [[ "${1:-}" == "--verbose" ]] && VERBOSE=true
 
-error() { echo "  ERROR: $1"; ERRORS=$((ERRORS + 1)); }
-warn()  { echo "  WARN:  $1"; WARNINGS=$((WARNINGS + 1)); }
-info()  { $VERBOSE && echo "  OK:    $1" || true; }
+error() {
+  echo "  ERROR: $1"
+  ERRORS=$((ERRORS + 1))
+}
+warn() {
+  echo "  WARN:  $1"
+  WARNINGS=$((WARNINGS + 1))
+}
+info() { $VERBOSE && echo "  OK:    $1" || true; }
 
 resolve_existing_path() {
-    local path="$1" directory base target attempts=0
-    while [ "$attempts" -lt 40 ]; do
-        directory=$(cd -P "$(dirname "$path")" 2>/dev/null && pwd -P) || return 1
-        base=$(basename "$path")
-        path="$directory/$base"
-        if [ ! -L "$path" ]; then
-            [ -e "$path" ] || return 1
-            printf '%s\n' "$path"
-            return 0
-        fi
-        target=$(readlink "$path") || return 1
-        case "$target" in
-            /*) path=$target ;;
-            *) path="$directory/$target" ;;
-        esac
-        attempts=$((attempts + 1))
-    done
-    return 1
+  local path="$1" directory base target attempts=0
+  while [ "$attempts" -lt 40 ]; do
+    directory=$(cd -P "$(dirname "$path")" 2>/dev/null && pwd -P) || return 1
+    base=$(basename "$path")
+    path="$directory/$base"
+    if [ ! -L "$path" ]; then
+      [ -e "$path" ] || return 1
+      printf '%s\n' "$path"
+      return 0
+    fi
+    target=$(readlink "$path") || return 1
+    case "$target" in
+      /*) path=$target ;;
+      *) path="$directory/$target" ;;
+    esac
+    attempts=$((attempts + 1))
+  done
+  return 1
 }
 
 echo "=== Validating 'my' plugin config ==="
@@ -44,120 +50,120 @@ echo "=== Validating 'my' plugin config ==="
 echo ""
 echo "Commands:"
 for cmd in "$PLUGIN_DIR"/commands/*.md; do
-    [ -f "$cmd" ] || continue
-    name=$(basename "$cmd")
+  [ -f "$cmd" ] || continue
+  name=$(basename "$cmd")
 
-    if ! head -1 "$cmd" | grep -q '^---$'; then
-        error "$name: missing frontmatter"
-        continue
-    fi
-    if ! grep -q '^description:' "$cmd"; then
-        error "$name: missing 'description' in frontmatter"
-    fi
-    info "$name"
+  if ! head -1 "$cmd" | grep -q '^---$'; then
+    error "$name: missing frontmatter"
+    continue
+  fi
+  if ! grep -q '^description:' "$cmd"; then
+    error "$name: missing 'description' in frontmatter"
+  fi
+  info "$name"
 done
 
 # ── Skills ────────────────────────────────────────────────────────────────────
 echo ""
 echo "Skills:"
 for skill_dir in "$PLUGIN_DIR"/skills/*/; do
-    [ -d "$skill_dir" ] || continue
-    skill_name=$(basename "$skill_dir")
+  [ -d "$skill_dir" ] || continue
+  skill_name=$(basename "$skill_dir")
 
-    if [ ! -f "$skill_dir/SKILL.md" ]; then
-        error "$skill_name: missing SKILL.md"
-        continue
-    fi
-    if ! head -1 "$skill_dir/SKILL.md" | grep -q '^---$'; then
-        error "$skill_name/SKILL.md: missing frontmatter"
-    fi
-    if ! grep -q '^name:' "$skill_dir/SKILL.md"; then
-        error "$skill_name/SKILL.md: missing 'name' in frontmatter"
-    fi
-    if ! grep -q '^description:' "$skill_dir/SKILL.md"; then
-        error "$skill_name/SKILL.md: missing 'description' in frontmatter"
-    fi
-    info "$skill_name"
+  if [ ! -f "$skill_dir/SKILL.md" ]; then
+    error "$skill_name: missing SKILL.md"
+    continue
+  fi
+  if ! head -1 "$skill_dir/SKILL.md" | grep -q '^---$'; then
+    error "$skill_name/SKILL.md: missing frontmatter"
+  fi
+  if ! grep -q '^name:' "$skill_dir/SKILL.md"; then
+    error "$skill_name/SKILL.md: missing 'name' in frontmatter"
+  fi
+  if ! grep -q '^description:' "$skill_dir/SKILL.md"; then
+    error "$skill_name/SKILL.md: missing 'description' in frontmatter"
+  fi
+  info "$skill_name"
 done
 
 # ── Plugin manifest ───────────────────────────────────────────────────────────
 echo ""
 echo "Manifest:"
 if [ ! -f "$PLUGIN_DIR/.claude-plugin/plugin.json" ]; then
-    error "plugin.json: missing"
+  error "plugin.json: missing"
 elif command -v jq &>/dev/null && ! jq empty "$PLUGIN_DIR/.claude-plugin/plugin.json" 2>/dev/null; then
-    error "plugin.json: invalid JSON"
+  error "plugin.json: invalid JSON"
 else
-    info "plugin.json: valid JSON"
+  info "plugin.json: valid JSON"
 fi
 
 if ! command -v jq &>/dev/null; then
-    error "package.json: jq is required for Pi manifest validation"
+  error "package.json: jq is required for Pi manifest validation"
 elif ! jq empty "$PACKAGE_FILE" 2>/dev/null; then
-    error "package.json: invalid JSON"
+  error "package.json: invalid JSON"
 else
-    declared_skills=()
-    while IFS= read -r skill_path; do
-        declared_skills+=("$skill_path")
-    done < <(jq -r '.pi.skills[]?' "$PACKAGE_FILE")
-    actual_skills=()
-    while IFS= read -r skill_path; do
-        actual_skills+=("$skill_path")
-    done < <(
-        for skill_file in "$PLUGIN_DIR"/skills/*/SKILL.md; do
-            [ -f "$skill_file" ] || continue
-            printf './skills/%s/SKILL.md\n' "$(basename "$(dirname "$skill_file")")"
-        done | sort
-    )
+  declared_skills=()
+  while IFS= read -r skill_path; do
+    declared_skills+=("$skill_path")
+  done < <(jq -r '.pi.skills[]?' "$PACKAGE_FILE")
+  actual_skills=()
+  while IFS= read -r skill_path; do
+    actual_skills+=("$skill_path")
+  done < <(
+    for skill_file in "$PLUGIN_DIR"/skills/*/SKILL.md; do
+      [ -f "$skill_file" ] || continue
+      printf './skills/%s/SKILL.md\n' "$(basename "$(dirname "$skill_file")")"
+    done | sort
+  )
 
-    for skill_path in "${declared_skills[@]}"; do
-        if [[ ! "$skill_path" =~ ^\./skills/[^/]+/SKILL\.md$ ]]; then
-            error "package.json: invalid Pi skill path: $skill_path"
-        elif [ ! -f "$PLUGIN_DIR/${skill_path#./}" ]; then
-            error "package.json: declared Pi skill does not exist: $skill_path"
-        fi
-    done
-
-    while IFS= read -r skill_path; do
-        [ -n "$skill_path" ] || continue
-        error "package.json: Pi manifest omits skill: $skill_path"
-    done < <(comm -23 <(printf '%s\n' "${actual_skills[@]}") <(printf '%s\n' "${declared_skills[@]}" | sort -u))
-
-    if [ "${#declared_skills[@]}" -ne "$(printf '%s\n' "${declared_skills[@]}" | sort -u | wc -l)" ]; then
-        error "package.json: Pi skill inventory contains duplicates"
-    elif [ "${#declared_skills[@]}" -eq "${#actual_skills[@]}" ] && \
-         [ "$(printf '%s\n' "${declared_skills[@]}" | sort)" = "$(printf '%s\n' "${actual_skills[@]}")" ]; then
-        info "package.json: exhaustive Pi skill inventory"
+  for skill_path in "${declared_skills[@]}"; do
+    if [[ ! "$skill_path" =~ ^\./skills/[^/]+/SKILL\.md$ ]]; then
+      error "package.json: invalid Pi skill path: $skill_path"
+    elif [ ! -f "$PLUGIN_DIR/${skill_path#./}" ]; then
+      error "package.json: declared Pi skill does not exist: $skill_path"
     fi
+  done
+
+  while IFS= read -r skill_path; do
+    [ -n "$skill_path" ] || continue
+    error "package.json: Pi manifest omits skill: $skill_path"
+  done < <(comm -23 <(printf '%s\n' "${actual_skills[@]}") <(printf '%s\n' "${declared_skills[@]}" | sort -u))
+
+  if [ "${#declared_skills[@]}" -ne "$(printf '%s\n' "${declared_skills[@]}" | sort -u | wc -l)" ]; then
+    error "package.json: Pi skill inventory contains duplicates"
+  elif [ "${#declared_skills[@]}" -eq "${#actual_skills[@]}" ] &&
+    [ "$(printf '%s\n' "${declared_skills[@]}" | sort)" = "$(printf '%s\n' "${actual_skills[@]}")" ]; then
+    info "package.json: exhaustive Pi skill inventory"
+  fi
 fi
 
 # ── Tracked symlinks ─────────────────────────────────────────────────────────
 echo ""
 echo "Tracked symlinks:"
 while IFS= read -r -d '' entry; do
-    metadata=${entry%%$'\t'*}
-    path=${entry#*$'\t'}
-    mode=${metadata%% *}
-    [ "$mode" = 120000 ] || continue
-    link="$DOTFILES_ROOT/$path"
-    target=$(readlink "$link")
-    if [[ "$target" = /* ]]; then
-        error "$path: tracked symlink target must be relative: $target"
-        continue
-    fi
-    target_path="$(dirname "$link")/$target"
-    if [ ! -e "$target_path" ]; then
-        error "$path: tracked symlink does not resolve: $target"
-        continue
-    fi
-    resolved_target=$(resolve_existing_path "$target_path") || {
-        error "$path: tracked symlink does not resolve: $target"
-        continue
-    }
-    case "$resolved_target" in
-        "$DOTFILES_ROOT"/*) info "$path -> $target" ;;
-        *) error "$path: tracked symlink resolves outside repository: $target" ;;
-    esac
+  metadata=${entry%%$'\t'*}
+  path=${entry#*$'\t'}
+  mode=${metadata%% *}
+  [ "$mode" = 120000 ] || continue
+  link="$DOTFILES_ROOT/$path"
+  target=$(readlink "$link")
+  if [[ "$target" = /* ]]; then
+    error "$path: tracked symlink target must be relative: $target"
+    continue
+  fi
+  target_path="$(dirname "$link")/$target"
+  if [ ! -e "$target_path" ]; then
+    error "$path: tracked symlink does not resolve: $target"
+    continue
+  fi
+  resolved_target=$(resolve_existing_path "$target_path") || {
+    error "$path: tracked symlink does not resolve: $target"
+    continue
+  }
+  case "$resolved_target" in
+    "$DOTFILES_ROOT"/*) info "$path -> $target" ;;
+    *) error "$path: tracked symlink resolves outside repository: $target" ;;
+  esac
 done < <(git -C "$DOTFILES_ROOT" ls-files -s -z)
 
 # ── Summary ───────────────────────────────────────────────────────────────────
@@ -171,11 +177,11 @@ echo "  Errors:   $ERRORS"
 echo "  Warnings: $WARNINGS"
 
 if [ $ERRORS -gt 0 ]; then
-    echo ""
-    echo "FAILED: $ERRORS errors found"
-    exit 1
+  echo ""
+  echo "FAILED: $ERRORS errors found"
+  exit 1
 else
-    echo ""
-    echo "PASSED"
-    exit 0
+  echo ""
+  echo "PASSED"
+  exit 0
 fi
