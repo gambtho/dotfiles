@@ -6,6 +6,7 @@ set -e
 
 DOTFILES_ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
 PLUGIN_DIR="$DOTFILES_ROOT/ai/marketplace/plugins/my"
+PACKAGE_FILE="$PLUGIN_DIR/package.json"
 ERRORS=0
 WARNINGS=0
 VERBOSE=false
@@ -68,6 +69,66 @@ elif command -v jq &>/dev/null && ! jq empty "$PLUGIN_DIR/.claude-plugin/plugin.
 else
     info "plugin.json: valid JSON"
 fi
+
+if ! command -v jq &>/dev/null; then
+    error "package.json: jq is required for Pi manifest validation"
+elif ! jq empty "$PACKAGE_FILE" 2>/dev/null; then
+    error "package.json: invalid JSON"
+else
+    mapfile -t declared_skills < <(jq -r '.pi.skills[]?' "$PACKAGE_FILE")
+    mapfile -t actual_skills < <(
+        for skill_file in "$PLUGIN_DIR"/skills/*/SKILL.md; do
+            [ -f "$skill_file" ] || continue
+            printf './skills/%s/SKILL.md\n' "$(basename "$(dirname "$skill_file")")"
+        done | sort
+    )
+
+    for skill_path in "${declared_skills[@]}"; do
+        if [[ ! "$skill_path" =~ ^\./skills/[^/]+/SKILL\.md$ ]]; then
+            error "package.json: invalid Pi skill path: $skill_path"
+        elif [ ! -f "$PLUGIN_DIR/${skill_path#./}" ]; then
+            error "package.json: declared Pi skill does not exist: $skill_path"
+        fi
+    done
+
+    while IFS= read -r skill_path; do
+        [ -n "$skill_path" ] || continue
+        error "package.json: Pi manifest omits skill: $skill_path"
+    done < <(comm -23 <(printf '%s\n' "${actual_skills[@]}") <(printf '%s\n' "${declared_skills[@]}" | sort -u))
+
+    if [ "${#declared_skills[@]}" -ne "$(printf '%s\n' "${declared_skills[@]}" | sort -u | wc -l)" ]; then
+        error "package.json: Pi skill inventory contains duplicates"
+    elif [ "${#declared_skills[@]}" -eq "${#actual_skills[@]}" ] && \
+         [ "$(printf '%s\n' "${declared_skills[@]}" | sort)" = "$(printf '%s\n' "${actual_skills[@]}")" ]; then
+        info "package.json: exhaustive Pi skill inventory"
+    fi
+fi
+
+# ── Tracked symlinks ─────────────────────────────────────────────────────────
+echo ""
+echo "Tracked symlinks:"
+while IFS= read -r -d '' entry; do
+    metadata=${entry%%$'\t'*}
+    path=${entry#*$'\t'}
+    mode=${metadata%% *}
+    [ "$mode" = 120000 ] || continue
+    link="$DOTFILES_ROOT/$path"
+    target=$(readlink "$link")
+    if [[ "$target" = /* ]]; then
+        error "$path: tracked symlink target must be relative: $target"
+        continue
+    fi
+    target_path="$(dirname "$link")/$target"
+    if [ ! -e "$target_path" ]; then
+        error "$path: tracked symlink does not resolve: $target"
+        continue
+    fi
+    resolved_dir=$(cd -P "$(dirname "$target_path")" && pwd -P)
+    case "$resolved_dir/$(basename "$target_path")" in
+        "$DOTFILES_ROOT"/*) info "$path -> $target" ;;
+        *) error "$path: tracked symlink resolves outside repository: $target" ;;
+    esac
+done < <(git -C "$DOTFILES_ROOT" ls-files -s -z)
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""
