@@ -61,3 +61,41 @@ setup() {
   run rg -n 'Lazy![[:space:]]+(sync|update)' "$REPO_ROOT/bin/install"
   [ "$status" -eq 1 ]
 }
+
+@test "versions check reports every pinned artifact release" {
+  stub_command mise 'exit 0'
+  cat >"$STUB_BIN/git" <<SCRIPT
+#!/usr/bin/env bash
+case "\$*" in
+  *prezto*) printf '%s\tHEAD\n' '$PREZTO_REF' ;;
+  *zsh-defer*) printf '%s\tHEAD\n' '$ZSH_DEFER_REF' ;;
+esac
+SCRIPT
+  chmod +x "$STUB_BIN/git"
+  cat >"$STUB_BIN/curl" <<'SCRIPT'
+#!/usr/bin/env bash
+url="${@: -1}"
+case "$url" in
+  *dl.k8s.io*) printf 'v1.28.0\n' ;;
+  *jdx/mise*) printf '{"tag_name":"v2026.7.18"}\n' ;;
+  *mikefarah/yq*) printf '{"tag_name":"v4.45.1"}\n' ;;
+  *equalsraf/win32yank*) printf '{"tag_name":"v0.1.1"}\n' ;;
+  *ryanoasis/nerd-fonts*) printf '{"tag_name":"v3.4.0"}\n' ;;
+esac
+SCRIPT
+  chmod +x "$STUB_BIN/curl"
+
+  run env PATH="$PATH" bash "$REPO_ROOT/bin/versions" check
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"current artifact mise v2026.7.18"* ]]
+  [[ "$output" == *"current artifact yq v4.45.1"* ]]
+  [[ "$output" == *"current artifact win32yank v0.1.1"* ]]
+  [[ "$output" == *"current artifact nerd-fonts v3.4.0"* ]]
+}
+
+@test "versions update keeps artifact bumps behind checksum review" {
+  run rg -n 'checksum-reviewed manual update required' "$REPO_ROOT/bin/versions"
+
+  [ "$status" -eq 0 ]
+}
