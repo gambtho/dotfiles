@@ -50,6 +50,29 @@ compose_packages() {
   [[ "$output" != *"kubectl"* ]]
 }
 
+@test "every profile running the flatpak phase installs flatpak itself" {
+  local os profile
+  for os in Ubuntu WSL; do
+    for profile in personal work; do
+      compose_packages "$os" "$profile"
+      [ "$status" -eq 0 ]
+      [[ "$output" == *$'\nflatpak\n'* ]]
+      [[ "$output" == *$'\nlibfuse2\n'* ]]
+    done
+  done
+}
+
+@test "manifests exclude packages with no configured APT repository" {
+  # 1password, gcm, intune-portal, microsoft-edge-stable and
+  # microsoft-identity-broker were present on the migrated workstation but are
+  # served by repositories this repo never configures. `apt install` runs as a
+  # single required call, so one unresolvable name fails the whole phase.
+  run rg -n '^(1password|gcm|intune-portal|microsoft-edge-stable|microsoft-identity-broker)$' \
+    "$REPO_ROOT/platforms/linux/packages" "$REPO_ROOT/profiles/packages"
+
+  [ "$status" -eq 1 ]
+}
+
 @test "managed binary tools are absent from APT manifests" {
   run rg -n '^(mise|yq)$' "$REPO_ROOT/platforms/linux/packages" "$REPO_ROOT/profiles/packages"
 
