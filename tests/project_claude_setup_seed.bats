@@ -7,9 +7,10 @@ setup() {
 
   REFERENCE="$REPO_ROOT/ai/marketplace/plugins/my/skills/project-claude-setup/devcontainer-host-mounts.md"
   SKILL_DOC="$REPO_ROOT/ai/marketplace/plugins/my/skills/project-claude-setup/SKILL.md"
+  SEED_TEMPLATE="$REPO_ROOT/ai/marketplace/plugins/my/skills/project-claude-setup/templates/local-seed.sh"
   SEED_SCRIPT="$TEST_ROOT/local-seed.sh"
   SUDO_LOG="$TEST_ROOT/sudo.log"
-  export REFERENCE SKILL_DOC SEED_SCRIPT SUDO_LOG
+  export REFERENCE SKILL_DOC SEED_TEMPLATE SEED_SCRIPT SUDO_LOG
 
   # The seed publishes a stable root that overlay symlinks target, so they
   # resolve under both the host's $HOME and the container's. In production that
@@ -98,17 +99,7 @@ teardown() {
 }
 
 extract_seed_script() {
-  awk '
-    /^Write the seed script at `\{SEED_SCRIPT\}`/ { found = 1; next }
-    found && /^```bash$/ { in_block = 1; next }
-    in_block && /^```$/ { exit }
-    in_block { print }
-  ' "$REFERENCE" >"$SEED_SCRIPT"
-  [ -s "$SEED_SCRIPT" ] || {
-    echo "extract_seed_script: no bash block found — the anchor sentence in" \
-      "$REFERENCE changed; update this awk pattern" >&2
-    return 1
-  }
+  cp "$SEED_TEMPLATE" "$SEED_SCRIPT"
 
   # This PR moved the seed script off $HOME onto an explicit SEED_USER/SEED_HOME
   # pair. SEED_USER is templated as {USER}; left unsubstituted, `id -u "{USER}"`
@@ -167,6 +158,36 @@ extract_seed_script() {
 
   [ "$status" -eq 0 ]
   [ "$(grep -Fxc "$vekil_hook" "$HOME/.zshrc")" -eq 1 ]
+}
+
+@test "argv command dispatch runs after a current sentinel skips gated work" {
+  local seed_version
+  seed_version="$(sed -n 's/^SEED_VERSION=//p' "$SEED_SCRIPT")"
+  printf '%s\n' "$seed_version" >"$HOME/.claude/.seeded"
+
+  run bash "$SEED_SCRIPT" --argv bash -c \
+    'printf "%s\n" "$1" >"$2"' _ 'argument with spaces' "$TEST_ROOT/argv-result"
+
+  [ "$status" -eq 0 ]
+  [ "$(cat "$TEST_ROOT/argv-result")" = "argument with spaces" ]
+}
+
+@test "shell command dispatch receives exactly one command string" {
+  run bash "$SEED_SCRIPT" --shell \
+    "printf '%s\\n' shell-ran >'$TEST_ROOT/shell-result'"
+
+  [ "$status" -eq 0 ]
+  [ "$(cat "$TEST_ROOT/shell-result")" = shell-ran ]
+
+  run bash "$SEED_SCRIPT" --shell 'printf first' 'printf second'
+  [ "$status" -eq 2 ]
+}
+
+@test "seed rejects an unknown command mode" {
+  run bash "$SEED_SCRIPT" --unknown
+
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"unknown command mode: --unknown"* ]]
 }
 
 @test "an empty legacy sentinel migrates once and is then stamped" {
@@ -486,7 +507,7 @@ extract_seed_script() {
   # would notice — the seed-script tests only extract one specific block.
   # Fill-in values are written as shell variables assigned to a <placeholder>
   # string, so the block still parses while remaining obviously templated.
-  local document block_file total=0
+  local document block_file
   block_file="$TEST_ROOT/block.sh"
 
   for document in "$SKILL_DOC" "$REFERENCE"; do
@@ -507,11 +528,11 @@ extract_seed_script() {
         echo "$output" >&2
         return 1
       fi
-      total=$((total + 1))
     done
   done
 
-  [ "$total" -ge 10 ]
+  run bash -n "$SEED_TEMPLATE"
+  [ "$status" -eq 0 ]
 }
 
 @test "login-shell troubleshooting excludes tracked rc and retry-loop changes" {

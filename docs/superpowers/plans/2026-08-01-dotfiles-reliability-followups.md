@@ -30,11 +30,11 @@
 - Modify: `tests/project_claude_setup_seed.bats`
 - Create: `implementation-notes.md`
 
-- [ ] **Step 1: Record approved constraints**
+- [x] **Step 1: Record approved constraints**
 
 Create `implementation-notes.md` listing deny-by-default credentials, cross-home suffix ownership, operator-owned Kubernetes, and mandatory `make check` coverage.
 
-- [ ] **Step 2: Write failing template tests**
+- [x] **Step 2: Write failing template tests**
 
 Add this discovery test:
 
@@ -59,12 +59,12 @@ cp "$SEED_TEMPLATE" "$SEED_SCRIPT"
 
 Replace the brittle `total >= 10` assertion with per-document `count > 0` and `bash -n "$SEED_TEMPLATE"`.
 
-- [ ] **Step 3: Verify RED**
+- [x] **Step 3: Verify RED**
 
 Run `bats tests/check_file_discovery.bats tests/project_claude_setup_seed.bats`.
 Expected: failure because the template is absent.
 
-- [ ] **Step 4: Move the seed block and add command dispatch**
+- [x] **Step 4: Move the seed block and add command dispatch**
 
 Move the exact Bash block following “Write the seed script at `{SEED_SCRIPT}`” into `templates/local-seed.sh`, preserving all lifecycle behavior. Append:
 
@@ -77,7 +77,7 @@ case "${1:-}" in
 esac
 ```
 
-- [ ] **Step 5: Verify GREEN and commit**
+- [x] **Step 5: Verify GREEN and commit**
 
 Run the focused Bats command, then:
 
