@@ -65,11 +65,19 @@ These values vary per project and must be filled in correctly, otherwise mounts 
    ```bash
    # find the container the Dev Containers CLI / VS Code started — its compose
    # project is usually "<project-basename>_devcontainer":
-   docker ps --format '{{.Names}}\t{{.CreatedAt}}' | grep devcontainer
-   # then read the remoteUser's real login + home from passwd:
-   docker exec <that-container> sh -c 'getent passwd 1000; grep :1000: /etc/passwd'
+   CID="$(docker ps --filter label=devcontainer.local_folder -q | head -n1)"
+   [ -n "$CID" ] || docker ps --format '{{.Names}}\t{{.CreatedAt}}' | grep devcontainer
+   # the configured remoteUser, if devcontainer.json sets one:
+   REMOTE_USER="$(jq -r '.remoteUser // empty' .devcontainer/devcontainer.json 2>/dev/null)"
+   # else the container's own login user — NEVER uid 1000, and NEVER
+   # `docker inspect .Config.User` (that is the seed-command user, often root):
+   [ -n "$REMOTE_USER" ] || REMOTE_USER="$(docker exec "$CID" sh -c 'id -un')"
+   # confirm it is a real passwd user and take its home from passwd field 6:
+   REMOTE_HOME="$(docker exec "$CID" sh -c "getent passwd '$REMOTE_USER' | cut -d: -f6")"
+   [ -n "$REMOTE_HOME" ] || { echo "remoteUser '$REMOTE_USER' not in container passwd"; exit 1; }
+   echo "container=$CID user=$REMOTE_USER home=$REMOTE_HOME"
    ```
-   `getent passwd` field 1 is the login name, field 6 is the home. Use that home verbatim.
+   **`$REMOTE_USER` and `$REMOTE_HOME` resolved here are the single source of truth** for every mount target, the seed's `SEED_USER`/`SEED_HOME`, and every verification command in Step 5. Do not re-derive either value later from uid 1000, from `.Config.User`, or by concatenating `/home/$REMOTE_USER` — images pin homes independently of the login name.
 3. `USER` instruction in the Dockerfile (last one wins).
 4. **Last resort, nothing built yet:** base image default from the table below — a guess to confirm on first `up`, not a fact.
 
@@ -93,7 +101,7 @@ If you can't determine the remoteUser from any signal, ask. Do not guess between
 
 **Seed runs as a possibly-different user — write to the remoteUser's home explicitly.** The compose `command:` that runs `local-seed.sh` executes as the image `Config.User`, which is often `root` or a user *other than* the remoteUser. Two consequences the seed must handle:
 
-- **Never key the seed off its own `$HOME`.** When the seed runs as root, `$HOME` is `/root`; keying ownership repair, the `~/.zshrc` hook, or the config copy off `$HOME` writes to the wrong home and the remoteUser's terminal sees nothing. Hardcode the remoteUser's home (`SEED_HOME=/home/<remoteUser>`) and resolve its uid/gid with `id -u <remoteUser>` / `id -g <remoteUser>`.
+- **Never key the seed off its own `$HOME`.** When the seed runs as root, `$HOME` is `/root`; keying ownership repair, the `~/.zshrc` hook, or the config copy off `$HOME` writes to the wrong home and the remoteUser's terminal sees nothing. Use the `$REMOTE_USER` / `$REMOTE_HOME` pair resolved above (`SEED_USER=$REMOTE_USER`, `SEED_HOME=$REMOTE_HOME`) and resolve its uid/gid with `id -u "$REMOTE_USER"` / `id -g "$REMOTE_USER"`. Do **not** write `SEED_HOME=/home/<remoteUser>`: the passwd home is the only correct value, and it is frequently not `/home/<name>` (e.g. `root` → `/root`, or an image that pins `/home/node` for a user named `vscode`).
 - **Do all writes as the remoteUser and chown to it.** If the seed runs as root, use `runuser -u <remoteUser> -- <cmd>` (or `chown -R <uid>:<gid>` after writing) so every seeded file is owned by the remoteUser. If the seed runs as a non-root user that differs from the remoteUser, it needs passwordless `sudo` to chown/write into the remoteUser's home — confirm the image provides it (`sudo -n true`), and if not, stop and report the setup as unsupported rather than seeding into the wrong home. When the seed user IS the remoteUser and is non-root, the original sudo-chown approach applies. Root seed users need no sudo. Inspect the Dockerfile only; never add users, packages, or sudo config to it.
 
 ## Step 3 — Decide which mounts to include
@@ -123,9 +131,11 @@ doesn't have, rather than mounting it and hoping.
 Container-local targets:
 
 ```
-claude-local-home       →  /home/{USER}/.claude              named volume
-dotfiles-local-home     →  /home/{USER}/.dotfiles            named volume
+claude-local-home       →  {REMOTE_HOME}/.claude              named volume
+dotfiles-local-home     →  {REMOTE_HOME}/.dotfiles            named volume
 ```
+
+`{REMOTE_HOME}` is the passwd home resolved in Step 2 — used verbatim, never rebuilt as `/home/{USER}`. The template below writes `/home/{USER}` because that is the common case; substitute the real `$REMOTE_HOME` whenever it differs (`/root` for a root remoteUser, or any image that pins a home unrelated to the login name). A named volume mounted at a path the login shell does not use as `$HOME` is invisible to Claude Code even though every mount and the seed log look healthy.
 
 Compose merges service volumes by container target. These named-volume entries therefore replace legacy base-file binds targeting the same home paths instead of merely adding more mounts. If a base compose file binds host OpenCode config, add an empty `opencode-local-home` named volume at that target to shadow it; do not seed OpenCode.
 
@@ -161,7 +171,7 @@ Write to the same directory as the base compose file (per Step 1). If the base i
 
 **The override only takes effect if it is listed in `dockerComposeFile` — file placement alone is NOT enough.** A bare `docker compose up` auto-merges a sibling `docker-compose.override.yml`, but the Dev Containers CLI and VS Code do not: they pass explicit `-f` flags for exactly the files named in the `dockerComposeFile` array and nothing else. So a sibling override is silently ignored under the real launch path. Step 1 must confirm the override is in that array; if it is not, see the "Ensure the override is loaded" step below before writing anything else.
 
-Use this template, filling in `{SERVICE}`, `{USER}`, `{WORKSPACE}`, and `{BASE_COMMAND}` from Step 2. **`{USER}` is the remoteUser** (the terminal/extension user), which may differ from whoever the `command:` runs as — the mount targets and the seed's `SEED_HOME` must both use this remoteUser's home, or the config lands where the terminal never looks.
+Use this template, filling in `{SERVICE}`, `{USER}`, `{WORKSPACE}`, and `{BASE_COMMAND}` from Step 2. **`{USER}` is `$REMOTE_USER`** (the terminal/extension user resolved in Step 2), which may differ from whoever the `command:` runs as. Every `/home/{USER}` path below is shorthand for `$REMOTE_HOME` — replace the whole prefix, not just the username, whenever the resolved passwd home is not `/home/$REMOTE_USER`. The mount targets and the seed's `SEED_HOME` must both be that exact home, or the config lands where the terminal never looks.
 
 ```yaml
 # LOCAL, GITIGNORED. Claude and dotfiles are read-only seed sources. The seed
@@ -253,7 +263,7 @@ set -euo pipefail
 
 # Bump this whenever the gated steps below (copies, installers) change so
 # already-seeded containers refresh instead of silently keeping stale state.
-SEED_VERSION=6
+SEED_VERSION=7
 
 # The remoteUser (Step 2) — the user VS Code opens terminals as and whose
 # ~/.claude Claude Code reads. NOT necessarily the user running this script.
@@ -444,16 +454,29 @@ if [ -d "$SEED_DOTFILES" ]; then
   fi
 fi
 
-# Claude CLI binary (ephemeral target). ALLOW_REMOTE_INSTALLERS=1 opts past the
-# dotfiles guard that blocks remote installers by default. Run as the remoteUser
-# via a login shell so the installer sees their PATH and installs into their home.
+# Claude CLI binary (ephemeral target). Run as the remoteUser via a login shell
+# so the installer sees their PATH and installs into their home.
 # Probe the concrete install path, NOT `bash -lc command -v`: the PATH entry for
 # ~/.local/bin is added to ~/.zshrc, which a bash login shell never sources, so
 # the PATH probe misses an existing binary and reinstalls on every warm restart.
+#
+# SUPPLY CHAIN: the default path sets ALLOW_REMOTE_INSTALLERS=1, which opts past
+# the dotfiles guard and fetches https://claude.ai/install.sh UNPINNED — a
+# rebuild executes whatever upstream currently serves. That is accepted here
+# because the seed only ever runs against the user's own devcontainer (see
+# SKILL.md rule #12). A project that needs supply-chain pinning sets
+# CLAUDE_CLI_INSTALL_CMD (via the override's `environment:`) to a command that
+# installs a pinned, checksum-verified artifact into $SEED_HOME/.local/bin; the
+# remote installer is then never invoked. Note `ai/claude/install.sh` itself has
+# no version/checksum support — the pinned artifact must come from the project.
 if as_user test -x "$SEED_HOME/.local/bin/claude" || as_user bash -lc 'command -v claude >/dev/null 2>&1'; then
   echo "🌱 seed: claude already installed for $SEED_USER — skipping CLI install"
+elif [ -n "${CLAUDE_CLI_INSTALL_CMD:-}" ]; then
+  echo "🌱 seed: installing Claude Code CLI via pinned CLAUDE_CLI_INSTALL_CMD"
+  as_user bash -lc "$CLAUDE_CLI_INSTALL_CMD" \
+    || echo "⚠️  seed: pinned claude CLI install failed (non-fatal)"
 elif [ -x "$DOTFILES_HOME/ai/claude/install.sh" ]; then
-  echo "🌱 seed: installing Claude Code CLI"
+  echo "🌱 seed: installing Claude Code CLI (unpinned upstream installer)"
   as_user env ALLOW_REMOTE_INSTALLERS=1 bash "$DOTFILES_HOME/ai/claude/install.sh" || echo "⚠️  seed: claude CLI install failed (non-fatal)"
 fi
 
@@ -487,17 +510,28 @@ echo "🌱 seed: creating container-local $CLAUDE_HOME"
 as_user mkdir -p "$CLAUDE_HOME"
 
 # 1. Copy authored config subset (skip runtime state + 1.6G plugins).
+# PRUNE FIRST, UNCONDITIONALLY. The destination lives in the PERSISTED
+# claude-local-home volume, so anything not removed here survives every rebuild.
+# Removing inside an `if source exists` guard is the bug: when the host DELETES
+# settings.json / CLAUDE.md / config / commands / skills, the guard never fires,
+# the stale copy is left behind, and the next sentinel stamp preserves it
+# forever. Clearing first makes the seed converge on the host in both
+# directions. It also fixes nesting: `cp -a src/commands dst/commands` copies
+# *into* an existing destination, producing ~/.claude/commands/commands on the
+# second (version-gated) reseed.
+#
+# Only these five seed-owned paths are pruned. ~/.claude/plugins (marketplace),
+# the sentinel, and all runtime state are deliberately untouched.
 if [ -d "$SEED_CLAUDE" ]; then
   for item in settings.json CLAUDE.md; do
-    [ -e "$SEED_CLAUDE/$item" ] && as_user cp -a "$SEED_CLAUDE/$item" "$CLAUDE_HOME/$item"
+    as_user rm -rf "$CLAUDE_HOME/$item"
+    if [ -e "$SEED_CLAUDE/$item" ]; then
+      as_user cp -a "$SEED_CLAUDE/$item" "$CLAUDE_HOME/$item"
+    fi
   done
-  # Directories must be removed first: `cp -a src/commands dst/commands` copies
-  # *into* an existing destination, producing ~/.claude/commands/commands on the
-  # second (version-gated) reseed. Removing first also clears files deleted from
-  # the host since the last seed, instead of leaving them stale.
   for dir in config commands skills; do
+    as_user rm -rf "$CLAUDE_HOME/$dir"
     if [ -d "$SEED_CLAUDE/$dir" ]; then
-      as_user rm -rf "$CLAUDE_HOME/$dir"
       as_user cp -a "$SEED_CLAUDE/$dir" "$CLAUDE_HOME/$dir"
     fi
   done
@@ -541,7 +575,7 @@ fi
 
 The sentinel stores a version number rather than being a bare touch-file. The always-run block (ownership, Vekil hook, PATH, default-shell, **plus the ephemeral-target installs**) executes before the gate, so those land on every container start — including after a rebuild that wiped `~/.local/bin`, `~/.codex`, and `/etc/passwd`. Only steps whose target is a **persisted named volume** (authored `~/.claude` config copy, marketplace plugins) belong in the gate, since the sentinel that guards them lives in that same volume. Getting this split wrong is the "claude is missing after rebuild" bug: gating an install whose target is ephemeral means the persisted sentinel says "done" while the binary is gone. A legacy bare sentinel (empty file) predates versioning and is *not* treated as current: it migrates once through the gated steps and is then stamped, after which the gate is a plain version match. That one extra reseed is idempotent — the copies overwrite with the same authored config and the installer is re-entrant.
 
-Execute it with `bash`; an executable bit is optional. Keep both files untracked. If the project does not already ignore them, add the actual override path plus the seed script path to `.git/info/exclude`. For the common `.devcontainer/` layout:
+Execute it with `bash`; an executable bit is optional. Keep both files untracked. If the project does not already ignore them, add the actual override path plus the seed script path (`$OVERRIDE_COMPOSE` and `$SEED_SCRIPT` as resolved in Step 1) to `.git/info/exclude`. For the common `.devcontainer/` layout that is:
 
 ```text
 .devcontainer/docker-compose.override.yml
@@ -561,12 +595,13 @@ The legacy writable `~/.claude` mount let the container persist `/home/{USER}` p
 
 ### Repairing a legacy rw-mount project
 
-Follow `SKILL.md` Step 6b. Canonical detection checks:
+Follow `SKILL.md` Step 6b. Canonical detection checks — search the directory holding the resolved compose files (`$(dirname "$BASE_COMPOSE")`, from Step 1), which is not always `.devcontainer/`:
 
 ```bash
-grep -rnE '~/\.claude:/home/[^:]+:cached' .devcontainer/
-grep -rn '${HOME}:${HOME}' .devcontainer/ 2>/dev/null || \
-  grep -rnE '\$\{HOME\}/\.claude:\$\{HOME\}/\.claude' .devcontainer/
+COMPOSE_DIR="$(dirname "$BASE_COMPOSE")"
+grep -rnE '~/\.claude:/home/[^:]+:cached' "$COMPOSE_DIR"
+grep -rn '${HOME}:${HOME}' "$COMPOSE_DIR" 2>/dev/null || \
+  grep -rnE '\$\{HOME\}/\.claude:\$\{HOME\}/\.claude' "$COMPOSE_DIR"
 grep -rl '/home/vscode\|/home/node' ~/.claude/plugins/*.json 2>/dev/null
 ls -l /home/*/ 2>/dev/null | grep -- '-> /home/' # inside a container only
 ```
@@ -575,10 +610,21 @@ Any signal means offer repair. Confirm each write, back up the override, remove 
 
 ## Step 5 — Verify
 
-Once written:
-1. Run `docker compose -f .devcontainer/docker-compose.yml -f .devcontainer/docker-compose.override.yml config` from the project root. Compose will print the merged config or fail loudly on a typo. Check that the service name matches and that no host bind targets the container user's `~/.claude`, `~/.dotfiles`, or OpenCode directory. Unless the user opted into credential sharing, also confirm no host bind targets `~/.ssh` or `~/.config/gh` — an inherited base-file bind there must be shadowed with an empty named volume (Step 3), not left in the merged config. **Also confirm every `{USER}` home in the merged config is the login user's real passwd home** — run `docker compose exec {SERVICE} sh -c 'echo "$HOME"; getent passwd "$(id -un)" | cut -d: -f6'` and check the mount targets match it. A `/home/node` target when the user's home is `/home/vscode` means config lands where the shell never looks (the mounts "work" and the seed logs success, but Claude Code sees nothing).
+Once written, drive every command below off the paths and identity resolved during discovery, not off the `.devcontainer/` defaults:
+
+```bash
+# From Step 1 (the dockerComposeFile entries — may be at the project root, not
+# under .devcontainer/) and Step 2 (the remoteUser pair). Paths are relative to
+# the project root.
+BASE_COMPOSE="<the dockerComposeFile base entry>"
+OVERRIDE_COMPOSE="<sibling of BASE_COMPOSE>/docker-compose.override.yml"
+SEED_SCRIPT="<sibling of BASE_COMPOSE>/local-seed.sh"
+REMOTE_USER="<resolved in Step 2>"; REMOTE_HOME="<resolved in Step 2>"
+```
+
+1. Run `docker compose -f "$BASE_COMPOSE" -f "$OVERRIDE_COMPOSE" config` from the project root. Compose will print the merged config or fail loudly on a typo. Check that the service name matches and that no host bind targets the container user's `~/.claude`, `~/.dotfiles`, or OpenCode directory. Unless the user opted into credential sharing, also confirm no host bind targets `~/.ssh` or `~/.config/gh` — an inherited base-file bind there must be shadowed with an empty named volume (Step 3), not left in the merged config. **Also confirm every home path in the merged config equals `$REMOTE_HOME`** — the passwd home resolved in Step 2, not a `/home/<name>` guess. A `/home/node` target when the user's home is `/home/vscode` means config lands where the shell never looks (the mounts "work" and the seed logs success, but Claude Code sees nothing).
 2. Confirm the merged `command` contains `local-seed.sh` followed by the original foreground command.
-3. Run `git check-ignore .devcontainer/docker-compose.override.yml .devcontainer/local-seed.sh`, then compare `git status --short` with the initial snapshot. They must match; if a new tracked devcontainer modification appears, report it without staging or reverting it.
+3. Run `git check-ignore "$OVERRIDE_COMPOSE" "$SEED_SCRIPT"`, then compare `git status --short` with the initial snapshot. They must match; if a new tracked devcontainer modification appears, report it without staging or reverting it.
 4. After the user rebuilds, verify. **The single most reliable check — do this first — is to ask the user to run these in their actual VS Code terminal** (not a `docker exec`, which can hit a different container or force a different shell than the terminal uses):
 
    ```bash
@@ -588,31 +634,37 @@ Once written:
    ```
    An empty `ANTHROPIC_BASE_URL` or the auth picker means the Vekil hook is not in *this* user's `~/.zshrc` — almost always because the seed targeted a different home. If `id` shows a different user or home than you assumed, the mounts and seed are pointed at the wrong place; fix `SEED_HOME`/the override targets and reseed.
 
-   Then run the mechanical checks against the **VS Code-launched** container, not a bare service name — `docker compose exec {SERVICE}` can resolve to a container you started by hand, and its default user is often root. Capture the container ID and the real remoteUser/home first, then drive every check off those variables:
+   Then run the mechanical checks against the **VS Code-launched** container, not a bare service name — `docker compose exec {SERVICE}` can resolve to a container you started by hand, and its default user is often root. Re-confirm the container ID against the Step 2 identity first, then drive every check off those variables:
 
 ```bash
 CID="$(docker ps --filter label=devcontainer.local_folder -q | head -n1)"   # the VS Code container
 [ -n "$CID" ] || { echo "no VS Code devcontainer running — rebuild first"; exit 1; }
-CUSER="$(docker inspect -f '{{.Config.User}}' "$CID")"; CUSER="${CUSER%%:*}"
-[ -n "$CUSER" ] || CUSER="{USER}"
-CHOME="$(docker exec -u "$CUSER" "$CID" sh -c 'getent passwd "$(id -un)" | cut -d: -f6')"
-echo "container=$CID user=$CUSER home=$CHOME"    # sanity-check before trusting any check below
+# REMOTE_USER / REMOTE_HOME come from Step 2. Do NOT re-derive them here from
+# `docker inspect .Config.User` — that is the image/seed-command user, which is
+# frequently root and is never authoritative for the terminal user. Re-confirm
+# the pair against this container instead of recomputing it:
+docker exec "$CID" getent passwd "$REMOTE_USER" >/dev/null \
+  || { echo "remoteUser '$REMOTE_USER' not in this container's passwd"; exit 1; }
+ACTUAL_HOME="$(docker exec "$CID" sh -c "getent passwd '$REMOTE_USER' | cut -d: -f6")"
+[ "$ACTUAL_HOME" = "$REMOTE_HOME" ] \
+  || { echo "home mismatch: Step 2 said $REMOTE_HOME, container says $ACTUAL_HOME"; exit 1; }
+echo "container=$CID user=$REMOTE_USER home=$REMOTE_HOME"    # sanity-check before trusting any check below
 ```
-docker exec -u "$CUSER" "$CID" sh -c "test \"\$(cat $CHOME/.claude/.seeded)\" = '{SEED_VERSION}'"
-docker exec -u "$CUSER" "$CID" grep -Fq 'ai/vekil/env.zsh' "$CHOME/.zshrc"   # Vekil hook present
-docker exec -u "$CUSER" "$CID" zsh -n "$CHOME/.dotfiles/ai/vekil/env.zsh"   # hook target exists + parses; no /readyz probe
-docker exec -u "$CUSER" "$CID" zsh -lic 'whence -v claude; claude --version'   # the CLI binary is installed AND on PATH
-docker exec -u "$CUSER" "$CID" sh -c 'test "$(getent passwd "$(id -un)" | cut -d: -f7)" = "$(command -v zsh)"'   # default login shell is zsh
-docker exec -u "$CUSER" "$CID" zsh -lic 'echo "ANTHROPIC_BASE_URL=$ANTHROPIC_BASE_URL"'   # proxy env reaches the DEFAULT login shell (what the terminal opens), non-empty means Vekil is wired
-docker exec -u "$CUSER" "$CID" test -f "$CHOME/.claude/settings.json"   # only if that mount was emitted — see below
-docker exec -u "$CUSER" "$CID" test -f "$CHOME/.codex/config.toml"
-docker exec -u "$CUSER" "$CID" zsh -lic 'print "OPENAI_BASE_URL=$OPENAI_BASE_URL"; print "ANTHROPIC_BASE_URL=$ANTHROPIC_BASE_URL"; whence -v codex'
-docker exec -u "$CUSER" "$CID" sh -c 'touch /host-seed/.claude/settings.json' # must fail read-only
-docker exec -u "$CUSER" "$CID" sh -c 'test -e /host-seed/.claude/.credentials.json' # must fail: not mounted
+docker exec -u "$REMOTE_USER" "$CID" sh -c "test \"\$(cat $REMOTE_HOME/.claude/.seeded)\" = '{SEED_VERSION}'"
+docker exec -u "$REMOTE_USER" "$CID" grep -Fq 'ai/vekil/env.zsh' "$REMOTE_HOME/.zshrc"   # Vekil hook present
+docker exec -u "$REMOTE_USER" "$CID" zsh -n "$REMOTE_HOME/.dotfiles/ai/vekil/env.zsh"   # hook target exists + parses; no /readyz probe
+docker exec -u "$REMOTE_USER" "$CID" zsh -lic 'whence -v claude; claude --version'   # the CLI binary is installed AND on PATH
+docker exec -u "$REMOTE_USER" "$CID" sh -c 'test "$(getent passwd "$(id -un)" | cut -d: -f7)" = "$(command -v zsh)"'   # default login shell is zsh
+docker exec -u "$REMOTE_USER" "$CID" zsh -lic 'echo "ANTHROPIC_BASE_URL=$ANTHROPIC_BASE_URL"'   # proxy env reaches the DEFAULT login shell (what the terminal opens), non-empty means Vekil is wired
+docker exec -u "$REMOTE_USER" "$CID" test -f "$REMOTE_HOME/.claude/settings.json"   # only if that mount was emitted — see below
+docker exec -u "$REMOTE_USER" "$CID" test -f "$REMOTE_HOME/.codex/config.toml"
+docker exec -u "$REMOTE_USER" "$CID" zsh -lic 'print "OPENAI_BASE_URL=$OPENAI_BASE_URL"; print "ANTHROPIC_BASE_URL=$ANTHROPIC_BASE_URL"; whence -v codex'
+docker exec -u "$REMOTE_USER" "$CID" sh -c 'touch /host-seed/.claude/settings.json' # must fail read-only
+docker exec -u "$REMOTE_USER" "$CID" sh -c 'test -e /host-seed/.claude/.credentials.json' # must fail: not mounted
 ```
 
-Every check above runs with `-u "$CUSER"` against `"$CID"` (the VS Code
-container and its real remoteUser, resolved above), not `exec`'s default. This matters most for the ownership line: with the default user
+Every check above runs with `-u "$REMOTE_USER"` against `"$CID"` (the VS Code
+container and the remoteUser resolved in Step 2), not `exec`'s default. This matters most for the ownership line: with the default user
 — often root — `$(id -u):$(id -g)` evaluates to `0:0` and the test compares root
 against root, passing even when the named volumes were never chowned to the real
 user. The `zsh -lic` line needs the same treatment or it reads root's login

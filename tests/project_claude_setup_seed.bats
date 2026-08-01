@@ -175,6 +175,37 @@ extract_seed_script() {
   [ -f "$HOME/.claude/commands/live.md" ]
 }
 
+@test "config removed from the host is pruned from the persisted volume" {
+  # The destination lives in the persisted claude-local-home named volume, so a
+  # source the host DELETED must be cleared on the next gated reseed. Pruning
+  # only inside an `if source exists` guard never fires for a deleted source and
+  # leaves the stale copy behind forever.
+  printf '{}\n' >"$TEST_ROOT/host-seed/.claude/settings.json"
+  mkdir -p "$TEST_ROOT/host-seed/.claude/skills"
+  printf 'doomed\n' >"$TEST_ROOT/host-seed/.claude/skills/going-away.md"
+
+  run bash "$SEED_SCRIPT"
+  [ "$status" -eq 0 ]
+  [ -f "$HOME/.claude/settings.json" ]
+  [ -f "$HOME/.claude/skills/going-away.md" ]
+
+  # Marketplace-installed plugins are NOT seed-owned and must survive the prune.
+  mkdir -p "$HOME/.claude/plugins"
+  printf 'keep\n' >"$HOME/.claude/plugins/installed.json"
+
+  # The host drops both entries, then a version bump forces a gated reseed.
+  rm -f "$TEST_ROOT/host-seed/.claude/settings.json"
+  rm -rf "$TEST_ROOT/host-seed/.claude/skills"
+  printf '0\n' >"$HOME/.claude/.seeded"
+
+  run bash "$SEED_SCRIPT"
+
+  [ "$status" -eq 0 ]
+  [ ! -e "$HOME/.claude/settings.json" ]
+  [ ! -e "$HOME/.claude/skills" ]
+  [ -f "$HOME/.claude/plugins/installed.json" ]
+}
+
 @test "the installed zsh hook loads Vekil endpoints and the Codex wrapper" {
   mkdir -p "$TEST_ROOT/host-seed/.dotfiles/ai/vekil"
   cp "$REPO_ROOT/ai/vekil/env.zsh" \

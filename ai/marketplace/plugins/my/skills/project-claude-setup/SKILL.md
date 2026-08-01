@@ -57,7 +57,7 @@ Read concrete files. **Don't infer**; cite the file you read.
 |---|---|
 | Primary language | `go.mod` / `package.json` / `pyproject.toml` / `Gemfile` / `Cargo.toml` / `mix.exs` |
 | Build/test/lint commands | `Makefile` (parse target names), `package.json` scripts, `justfile`, `Taskfile.yml`, `.github/workflows/*.yml` |
-| Container **remoteUser** (terminal/extension user — what mounts + seed target) | **Best: ask the user to run `id; echo $HOME` in their VS Code terminal.** Else `remoteUser` in `devcontainer.json`, or read the *VS Code-launched* container (`docker ps \| grep devcontainer`, then `docker exec <it> getent passwd 1000`). NOT a container you `docker compose up` yourself — that can resolve uid 1000 to a different user. The `command:`/seed may run as root or a *different* user; that one is not the target. |
+| Container **remoteUser** (terminal/extension user — what mounts + seed target) | **Best: ask the user to run `id; echo $HOME` in their VS Code terminal.** Else `remoteUser` in `devcontainer.json`, or read the *VS Code-launched* container (`docker ps --filter label=devcontainer.local_folder -q`, then `docker exec <it> sh -c 'id -un'` and `getent passwd <user> \| cut -d: -f6` for the home). NOT uid 1000, NOT `docker inspect .Config.User`, and NOT a container you `docker compose up` yourself — each can resolve to a different user than the one VS Code opens terminals as. Record the resulting user/home pair once and reuse it for every mount target, the seed, and verification. |
 | Container service name | `service` in `devcontainer.json` if set, else the first key under `services:` in the base compose file |
 | Seed privilege (Compose, non-root user) | Passwordless `sudo` already supplied by the image or existing Dockerfile; inspect only, and verify a running container with `sudo -n true` when available |
 
@@ -216,7 +216,7 @@ Write or merge the gitignored `docker-compose.override.yml` directly. The overri
 9. In the seed script, repair both named-volume trees' ownership before checking the sentinel; the sentinel may skip copies and installers, never ownership recovery.
 10. Before checking the sentinel, idempotently add a container-local `~/.zshrc` hook that sources `~/.dotfiles/ai/vekil/env.zsh`; this supplies both proxy endpoint variables and the managed `codex` function without modifying the host or running the full dotfiles installer.
 11. Make the sentinel version-aware: store a `SEED_VERSION` number in `~/.claude/.seeded` and re-run the gated copy/install steps unless the sentinel records exactly that version. A persisted named volume survives `--remove-existing-container`, so without a version bump an evolving template could not refresh those steps. A legacy bare (empty) sentinel is **not** current — it predates versioning, so it takes a one-time migration through the gated steps and is then stamped with the current version; subsequent starts match on version and skip. The always-run block (ownership + Vekil hook) stays before the gate so those land on every start regardless of version. Verify by asserting the sentinel's *content* equals the current `SEED_VERSION`, not merely that the file exists.
-12. Install the Claude Code CLI **binary** in the seed, not just its config. Most base images ship without `claude`, so seeding `~/.claude` alone leaves no runnable CLI — the exact "claude isn't installed in the devcontainer" failure. Run `~/.dotfiles/ai/claude/install.sh` with `ALLOW_REMOTE_INSTALLERS=1` (the dotfiles guard blocks remote installers by default). Note the tradeoff: that installer fetches `https://claude.ai/install.sh` unpinned, so a rebuild executes whatever upstream currently serves. This is accepted here because the seed only ever runs against the user's own devcontainer and the alternative (vendoring a pinned release) would go stale silently; if the project needs supply-chain pinning, install a pinned release artifact instead and skip this step in the **always-run block, NOT the versioned gate** (see #15), guarded by a `command -v claude` skip so an image that already provides it is left alone. The installer drops the binary in `~/.local/bin`, so the always-run block must also add `~/.local/bin` to PATH in `~/.zshrc` (and export it for the seed's own install steps) or `claude` won't resolve.
+12. Install the Claude Code CLI **binary** in the seed, not just its config. Most base images ship without `claude`, so seeding `~/.claude` alone leaves no runnable CLI — the exact "claude isn't installed in the devcontainer" failure. Run `~/.dotfiles/ai/claude/install.sh` with `ALLOW_REMOTE_INSTALLERS=1` (the dotfiles guard blocks remote installers by default). Note the tradeoff: that installer fetches `https://claude.ai/install.sh` unpinned, so a rebuild executes whatever upstream currently serves. This is accepted as the default because the seed only ever runs against the user's own devcontainer and the alternative (vendoring a pinned release) would go stale silently. **If the project needs supply-chain pinning, set `CLAUDE_CLI_INSTALL_CMD` in the override's `environment:`** to a command that installs a pinned, checksum-verified artifact into the remoteUser's `~/.local/bin`; the seed takes that branch instead and never invokes the remote installer. (`ai/claude/install.sh` has no version/checksum support of its own, so the pinned artifact must be supplied by the project.) Either way the step lives in the **always-run block, NOT the versioned gate** (see #15), guarded by a `command -v claude` skip so an image that already provides it is left alone. The installer drops the binary in `~/.local/bin`, so the always-run block must also add `~/.local/bin` to PATH in `~/.zshrc` (and export it for the seed's own install steps) or `claude` won't resolve.
 13. Ensure the override is actually loaded (see Step 1 / Section 6c). Writing the override is pointless if `docker-compose.override.yml` is not in `dockerComposeFile` (string or array) — the CLI ignores unlisted files. This is checked and resolved separately because it may require a user-approved edit to the tracked `devcontainer.json`.
 14. Make **zsh the container's default (login) shell** in the always-run block. Vekil's `env.zsh` is zsh-only and is what points claude/codex at the proxy (`ANTHROPIC_BASE_URL`/`OPENAI_BASE_URL`). If the default shell is bash, an interactive terminal never sources it, so `claude` launched from that terminal silently bypasses the proxy — the "claude isn't picking up the vekil proxy" symptom, even though the Vekil `~/.zshrc` hook, the proxy, and `claude` are all fine. Set the login shell with `chsh -s "$(command -v zsh)"` (fall back to editing `/etc/passwd` if writable), guarded so it's a no-op when already zsh. Keep it in the always-run block, not the version gate: `/etc/passwd` is in the container's writable layer and resets on every rebuild, so it must re-apply each launch. Best-effort — skip cleanly if zsh/chsh are absent.
 15. **Split seed steps by where their target lives — this is the rule that keeps a rebuild working.** The sentinel (`~/.claude/.seeded`) lives in the persisted `claude-local-home` named volume, which survives `--remove-existing-container`. So the version gate only correctly guards steps whose target *also* persists: the authored `~/.claude` config copy and the marketplace/plugins install. Anything whose target lives in the container's **ephemeral writable layer** must go in the **always-run block**, guarded by its own presence check — because a rebuild wipes that layer while the sentinel persists, so a gated ephemeral install would be skipped ("already seeded") yet be gone. Ephemeral targets in this setup: the `claude` binary (`~/.local/bin`), codex config (`~/.codex`), the default shell (`/etc/passwd`), the `~/.zshrc` hooks, and the `~/.dotfiles` refresh (do it in the always-run block so the installers exist before the claude/codex steps that need them). Symptom of getting this wrong: everything works on the first build, then after a rebuild `claude` is missing / the proxy isn't wired, even though the seed log says "already seeded."
@@ -361,23 +361,30 @@ Report to the user:
   ```
 - For case (a): rebuild the devcontainer to pick up new mounts —
   `devcontainer up --remove-existing-container --workspace-folder .` or VS Code "Dev Containers: Rebuild Container"
-- For case (a): after rebuild, verify the `claude` CLI binary is installed AND on PATH — this is the check that catches the "claude isn't installed in the devcontainer" failure:
+- For case (a): after rebuild, run the checks below against the **VS Code-launched container and the remoteUser resolved in Step 2** — not `docker compose exec <service>`, which can hit a container you started by hand and defaults to the image user (often root), passing checks that the real terminal user would fail. Resolve the handles once:
   ```bash
-  docker compose exec <service> zsh -lic 'whence -v claude; claude --version'
+  CID="$(docker ps --filter label=devcontainer.local_folder -q | head -n1)"
+  [ -n "$CID" ] || { echo "no VS Code devcontainer running — rebuild first"; exit 1; }
+  REMOTE_USER="<from Step 2>"    # never .Config.User, never uid 1000
+  REMOTE_HOME="$(docker exec "$CID" sh -c "getent passwd '$REMOTE_USER' | cut -d: -f6")"
+  ```
+- For case (a): verify the `claude` CLI binary is installed AND on PATH — this is the check that catches the "claude isn't installed in the devcontainer" failure:
+  ```bash
+  docker exec -u "$REMOTE_USER" "$CID" zsh -lic 'whence -v claude; claude --version'
   ```
   If `claude` doesn't resolve, either the seed's CLI-install step didn't run (override not loaded — re-check `dockerComposeFile`, Section 6c) or `~/.local/bin` isn't on PATH (the always-run PATH hook didn't fire — check the seed log for `added ~/.local/bin to PATH`).
 - For case (a): confirm zsh is the **default** shell and the proxy env reaches it — this catches "claude isn't picking up the vekil proxy" when everything else looks fine but the terminal opens bash:
   ```bash
-  docker compose exec <service> sh -c 'test "$(getent passwd $(id -un) | cut -d: -f7)" = "$(command -v zsh)" && echo "default shell = zsh"'
-  docker compose exec <service> "$(command -v zsh)" -lic 'echo ANTHROPIC_BASE_URL=$ANTHROPIC_BASE_URL'   # non-empty = proxy wired into the login shell
+  docker exec -u "$REMOTE_USER" "$CID" sh -c 'test "$(getent passwd $(id -un) | cut -d: -f7)" = "$(command -v zsh)" && echo "default shell = zsh"'
+  docker exec -u "$REMOTE_USER" "$CID" zsh -lic 'echo ANTHROPIC_BASE_URL=$ANTHROPIC_BASE_URL'   # non-empty = proxy wired into the login shell
   ```
   If the default shell is still bash, the always-run `chsh` step didn't apply (check the seed log for `set default shell to zsh`). Vekil's `env.zsh` is zsh-only, so a bash default shell means claude launched from the terminal bypasses the proxy even though the `~/.zshrc` hook and proxy are healthy.
 - For case (a): verify Vekil in a fresh interactive login shell:
   ```bash
   # Run grep INSIDE the container — a bare ~/.zshrc would expand on the host.
-  docker compose exec <service> sh -c 'grep -Fq ai/vekil/env.zsh "$HOME/.zshrc"'          # hook present
-  docker compose exec <service> sh -c 'zsh -n "$HOME/.dotfiles/ai/vekil/env.zsh"'          # target exists + parses; no /readyz probe
-  docker compose exec <service> zsh -lic 'print "OPENAI_BASE_URL=$OPENAI_BASE_URL"; print "ANTHROPIC_BASE_URL=$ANTHROPIC_BASE_URL"; whence -v codex'
+  docker exec -u "$REMOTE_USER" "$CID" grep -Fq ai/vekil/env.zsh "$REMOTE_HOME/.zshrc"          # hook present
+  docker exec -u "$REMOTE_USER" "$CID" zsh -n "$REMOTE_HOME/.dotfiles/ai/vekil/env.zsh"          # target exists + parses; no /readyz probe
+  docker exec -u "$REMOTE_USER" "$CID" zsh -lic 'print "OPENAI_BASE_URL=$OPENAI_BASE_URL"; print "ANTHROPIC_BASE_URL=$ANTHROPIC_BASE_URL"; whence -v codex'
   ```
   If the hook grep fails, the seed's always-run block never wrote it — the
   running container is likely executing a stale pre-hook `local-seed.sh`. A
@@ -402,11 +409,13 @@ Report to the user:
 **This table is a last-resort guess, not an answer.** A devcontainer feature (ruby, github-cli, common-utils, etc.) can rebase uid 1000 from the base image's user to `vscode` at build time, so the base `FROM` does not determine the container user. **Whenever the image is built or a container is running, resolve the user empirically instead** — it is the only authoritative source:
 
 ```bash
-# running compose container:
-docker compose -f <base> -f <override> exec <svc> sh -c 'id -un; echo "$HOME"'
-# or from the built image's passwd:
-img=$(docker inspect <container> --format '{{.Image}}')
-docker run --rm --entrypoint sh "$img" -c 'getent passwd "$(id -un)"'   # field 6 = home
+# Preferred — the VS Code-launched container, as the remoteUser VS Code uses.
+# NOT `docker compose exec <svc>` (may hit a container you started by hand) and
+# NOT `docker inspect .Config.User` (the image/seed user, frequently root).
+CID="$(docker ps --filter label=devcontainer.local_folder -q | head -n1)"
+REMOTE_USER="$(jq -r '.remoteUser // empty' .devcontainer/devcontainer.json 2>/dev/null)"
+[ -n "$REMOTE_USER" ] || REMOTE_USER="$(docker exec "$CID" sh -c 'id -un')"
+docker exec "$CID" sh -c "getent passwd '$REMOTE_USER'"   # field 6 = home
 ```
 
 Use the login user's passwd home (`getent passwd <user> | cut -d: -f6`) verbatim as the mount target. A directory merely *existing* at a guessed home (e.g. `/home/node`) proves nothing: Docker creates any missing mount target as a root-owned dir, so a wrong prior mount manufactures the very path that seems to confirm it. If passwd has only `vscode` and no `node`, the target is `/home/vscode` no matter what the base image or this table says — and config seeded into the wrong home is silently invisible, since Claude Code reads `$HOME/.claude`.
