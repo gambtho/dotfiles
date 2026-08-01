@@ -226,6 +226,17 @@ SCRIPT
   assert_symlink_target "$codex_home/AGENTS.md" "$REPO_ROOT/ai/codex/AGENTS.md"
 }
 
+@test "codex install replaces a different AGENTS symlink" {
+  local codex_home="$HOME/generated-codex"
+  mkdir -p "$codex_home"
+  ln -s "$TEST_ROOT/old-agents" "$codex_home/AGENTS.md"
+
+  run env HOME="$HOME" CODEX_HOME="$codex_home" PATH="/usr/bin:/bin" bash "$REPO_ROOT/ai/codex/install.sh"
+
+  [ "$status" -eq 0 ]
+  assert_symlink_target "$codex_home/AGENTS.md" "$REPO_ROOT/ai/codex/AGENTS.md"
+}
+
 @test "codex install writes placeholder auth when none exists" {
   local codex_home="$HOME/generated-codex"
   local auth="$codex_home/auth.json"
@@ -362,6 +373,19 @@ SCRIPT
   stub_successful_remote_download
 
   run env ALLOW_REMOTE_INSTALLERS=1 HOME="$HOME" PATH="$PATH" bash "$REPO_ROOT/ai/claude/install.sh"
+  [ "$status" -eq 0 ]
+  assert_symlink_target "$HOME/.claude/settings.json" "$REPO_ROOT/ai/claude/settings.json"
+}
+
+@test "claude installer preserves an older settings backup" {
+  printf 'older\n' >"$HOME/.claude/settings.json.backup"
+  stub_successful_remote_download
+
+  run env ALLOW_REMOTE_INSTALLERS=1 HOME="$HOME" PATH="$PATH" bash "$REPO_ROOT/ai/claude/install.sh"
+
+  [ "$status" -eq 0 ]
+  [ "$(cat "$HOME/.claude/settings.json.backup")" = older ]
+  run bash -c 'compgen -G "$1/.claude/settings.json.backup.*"' _ "$HOME"
   [ "$status" -eq 0 ]
   assert_symlink_target "$HOME/.claude/settings.json" "$REPO_ROOT/ai/claude/settings.json"
 }

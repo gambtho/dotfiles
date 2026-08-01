@@ -132,67 +132,39 @@ setup_profile() {
 
 link_file() {
   local src=$1 dst=$2
+  local label policy
 
-  local overwrite='' backup='' skip=''
-  local action=
-
-  if [ -f "$dst" ] || [ -d "$dst" ] || [ -L "$dst" ]; then
-    if [ "$overwrite_all" == "false" ] && [ "$backup_all" == "false" ] && [ "$skip_all" == "false" ]; then
-      local currentSrc=""
-      if [ -L "$dst" ]; then
-        currentSrc=$(readlink "$dst")
-      fi
-
-      if [ "$currentSrc" == "$src" ]; then
-        skip=true
-      else
-        log_warning "File already exists: $dst ($(basename "$src")), what do you want to do?
-        [s]kip, [S]kip all, [o]verwrite, [O]verwrite all, [b]ackup, [B]ackup all?"
-        read -n 1 action </dev/tty
-        echo
-
-        case "$action" in
-          o) overwrite=true ;;
-          O) overwrite_all=true ;;
-          b) backup=true ;;
-          B) backup_all=true ;;
-          s) skip=true ;;
-          S) skip_all=true ;;
-          *) ;;
-        esac
-      fi
-    fi
-
-    overwrite=${overwrite:-$overwrite_all}
-    backup=${backup:-$backup_all}
-    skip=${skip:-$skip_all}
-
-    if [ "$overwrite" == "true" ]; then
-      rm -rf "$dst"
-      log_success "Removed $dst"
-    fi
-
-    if [ "$backup" == "true" ]; then
-      mv "$dst" "${dst}.backup"
-      log_success "Moved $dst to ${dst}.backup"
-    fi
-
-    if [ "$skip" == "true" ]; then
-      log_info "Skipped $src"
-      # A skip leaves $dst as whatever was already there. That is benign when it
-      # is already the correct symlink, but when it is a foreign file/dir the
-      # destination stays UNLINKED — record those so install_dotfiles reports
-      # them instead of finishing with an unqualified success. That silence is
-      # how ~/.git-hooks stayed uninstalled while bootstrap looked green.
-      if [ "$(readlink "$dst" 2>/dev/null)" != "$src" ]; then
-        SKIPPED_DESTINATIONS+=("$dst")
-      fi
-      return
-    fi
+  label=$(basename "$src")
+  if [[ "$overwrite_all" == true ]]; then
+    policy=replace
+  elif [[ "$backup_all" == true ]]; then
+    policy=backup
+  elif [[ "$skip_all" == true ]]; then
+    policy=skip
+  elif [[ -e "$dst" || -L "$dst" ]]; then
+    policy=$(prompt_link_policy "$src" "$dst" "$label")
+    case "$policy" in
+      replace-all)
+        overwrite_all=true
+        policy=replace
+        ;;
+      backup-all)
+        backup_all=true
+        policy=backup
+        ;;
+      skip-all)
+        skip_all=true
+        policy=skip
+        ;;
+    esac
+  else
+    policy=skip
   fi
 
-  ln -s "$src" "$dst"
-  log_success "Linked $src to $dst"
+  reconcile_link "$src" "$dst" "$label" "$policy" apply || return
+  if [[ "$(readlink "$dst" 2>/dev/null || true)" != "$src" ]]; then
+    SKIPPED_DESTINATIONS+=("$dst")
+  fi
 }
 
 install_dotfiles() {
