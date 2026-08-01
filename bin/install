@@ -116,8 +116,8 @@ setup_neovim() {
     return
   fi
   log_info "Bootstrapping neovim plugins..."
-  nvim --headless "+Lazy! sync" +qa 2>/dev/null || return
-  log_success "Neovim plugins synced."
+  nvim --headless "+Lazy! restore" +qa 2>/dev/null || return
+  log_success "Neovim plugins restored from the tracked lockfile."
 }
 
 # ── Phase 6: Fonts ────────────────────────────────────────────────────────────

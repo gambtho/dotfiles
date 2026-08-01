@@ -15,8 +15,11 @@ set -euo pipefail
 DOTFILES="$HOME/.dotfiles"
 TMUX_CONF="$DOTFILES/tools/tmux/tmux.conf.symlink"
 CLAUDE_SETTINGS="$DOTFILES/ai/claude/settings.json"
-WIN32YANK_VER="v0.1.1"
-YQ_VER="v4.45.1"
+
+# shellcheck source=bin/common.sh
+source "$DOTFILES/bin/common.sh"
+# shellcheck source=config/versions.env
+source "$DOTFILES/config/versions.env"
 
 ASSUME_YES=0
 DRY_RUN=0
@@ -68,14 +71,14 @@ fi
 if command -v win32yank >/dev/null; then
   ok "win32yank already installed: $(command -v win32yank)"
 else
-  url="https://github.com/equalsraf/win32yank/releases/download/${WIN32YANK_VER}/win32yank-x64.zip"
-  info "win32yank not found. Will install ${WIN32YANK_VER} from:"
+  url="$WIN32YANK_RELEASE_BASE/win32yank-x64.zip"
+  info "win32yank not found. Will install ${WIN32YANK_VERSION} from:"
   info "  $url"
   info "Steps: curl → unzip → chmod +x → sudo mv to /usr/local/bin/win32yank"
   confirm "Proceed?" || die "Aborted."
   if (( ! DRY_RUN )); then
     tmpdir=$(mktemp -d); trap 'rm -rf "$tmpdir"' EXIT
-    curl -fsSL "$url" -o "$tmpdir/win32yank.zip"
+    download_verified_artifact "$url" "$WIN32YANK_WINDOWS_X64_SHA256" "$tmpdir/win32yank.zip" 0644
     command -v unzip >/dev/null || { sudo apt-get install -y unzip; }
     unzip -p "$tmpdir/win32yank.zip" win32yank.exe > "$tmpdir/win32yank.exe"
     chmod +x "$tmpdir/win32yank.exe"
@@ -105,15 +108,14 @@ else
     aarch64|arm64) yq_asset="yq_linux_arm64" ;;
     *) die "unsupported architecture for yq install: $arch (expected x86_64 or aarch64)" ;;
   esac
-  url="https://github.com/mikefarah/yq/releases/download/${YQ_VER}/${yq_asset}"
-  info "yq not found. Will install ${YQ_VER} (${yq_asset}) from:"
+  url="$YQ_RELEASE_BASE/$yq_asset"
+  info "yq not found. Will install ${YQ_VERSION} (${yq_asset}) from:"
   info "  $url"
   info "Steps: curl → chmod +x → sudo mv to /usr/local/bin/yq"
   confirm "Proceed?" || die "Aborted."
   if (( ! DRY_RUN )); then
     tmpfile=$(mktemp); trap 'rm -f "$tmpfile"' EXIT
-    curl -fsSL "$url" -o "$tmpfile"
-    chmod +x "$tmpfile"
+    install_pinned_yq "$tmpfile"
     sudo mv "$tmpfile" /usr/local/bin/yq
   fi
   ok "yq installed: $(yq --version 2>/dev/null || echo '(dry-run)')"

@@ -14,6 +14,10 @@ setup() {
   [[ "$output" == *"git prezto 9739c8bdc9c288ffc134c209225543180e32ff69"* ]]
   [[ "$output" == *"git zsh-defer $ZSH_DEFER_REF"* ]]
   [[ "$output" == *"channel kubernetes v1.28"* ]]
+  [[ "$output" == *"artifact mise v2026.7.18"* ]]
+  [[ "$output" == *"artifact yq v4.45.1"* ]]
+  [[ "$output" == *"artifact win32yank v0.1.1"* ]]
+  [[ "$output" == *"artifact nerd-fonts v3.4.0"* ]]
 }
 
 @test "versions check fails when mise cannot check pins" {
@@ -36,4 +40,24 @@ setup() {
   run bash "$REPO_ROOT/bin/versions" unknown
   [ "$status" -eq 2 ]
   [[ "$output" == *"Usage:"* ]]
+}
+
+@test "Neovim lockfile is tracked and pins lazy bootstrap" {
+  local lock="$REPO_ROOT/config/nvim/lazy-lock.json"
+
+  [ -f "$lock" ]
+  run git -C "$REPO_ROOT" check-ignore config/nvim/lazy-lock.json
+  [ "$status" -eq 1 ]
+  [ "$(jq -r '.["lazy.nvim"].commit' "$lock")" = 306a05526ada86a7b30af95c5cc81ffba93fef97 ]
+  run rg -n '306a05526ada86a7b30af95c5cc81ffba93fef97' "$REPO_ROOT/config/nvim/init.lua"
+  [ "$status" -eq 0 ]
+  run rg -n -- '--branch=stable|--branch[[:space:]]*=[[:space:]]*stable' "$REPO_ROOT/config/nvim/init.lua"
+  [ "$status" -eq 1 ]
+}
+
+@test "routine Neovim convergence restores without updating the lock" {
+  run rg -n 'Lazy![[:space:]]+restore' "$REPO_ROOT/bin/install"
+  [ "$status" -eq 0 ]
+  run rg -n 'Lazy![[:space:]]+(sync|update)' "$REPO_ROOT/bin/install"
+  [ "$status" -eq 1 ]
 }

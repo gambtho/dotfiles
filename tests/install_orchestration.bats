@@ -5,6 +5,7 @@ load test_helper
 setup() {
   setup_dotfiles_test
   source "$REPO_ROOT/bin/common.sh"
+  source "$REPO_ROOT/config/versions.env"
 }
 
 @test "required phase failure makes summary fail" {
@@ -56,6 +57,72 @@ SCRIPT
     bash -c 'source "$1/bin/common.sh"; run_remote_installer https://example.test/install.sh sh "{}" --yes' _ "$REPO_ROOT"
   [ "$status" -eq 0 ]
   [ "$(cat "$result")" = "--yes" ]
+}
+
+@test "remote installer downloads use bounded curl defaults" {
+  local curl_log="$TEST_ROOT/curl-args"
+  cat >"$STUB_BIN/curl" <<'SCRIPT'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >"$CURL_LOG"
+while (($# > 0)); do
+  if [[ "$1" == --output ]]; then
+    printf '#!/usr/bin/env bash\nexit 0\n' >"$2"
+    exit 0
+  fi
+  shift
+done
+SCRIPT
+  chmod +x "$STUB_BIN/curl"
+
+  run env ALLOW_REMOTE_INSTALLERS=1 PATH="$PATH" CURL_LOG="$curl_log" \
+    bash -c 'source "$1/bin/common.sh"; run_remote_installer https://example.test/install.sh bash' _ "$REPO_ROOT"
+
+  [ "$status" -eq 0 ]
+  grep -Fq -- '--connect-timeout 10 --max-time 120 --retry 3' "$curl_log"
+}
+
+@test "verified artifact mismatch preserves the destination" {
+  printf 'old\n' >"$HOME/tool"
+  cat >"$STUB_BIN/curl" <<'SCRIPT'
+#!/usr/bin/env bash
+while (($# > 0)); do
+  if [[ "$1" == --output ]]; then printf 'new\n' >"$2"; exit 0; fi
+  shift
+done
+SCRIPT
+  chmod +x "$STUB_BIN/curl"
+
+  run env PATH="$PATH" bash -c \
+    'source "$1/bin/common.sh"; download_verified_artifact https://example.test/tool deadbeef "$2" 0755' \
+    _ "$REPO_ROOT" "$HOME/tool"
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"checksum mismatch"* ]]
+  [ "$(cat "$HOME/tool")" = old ]
+}
+
+@test "verified artifact atomically replaces a destination with requested mode" {
+  printf 'old\n' >"$HOME/tool"
+  local expected
+  expected=$(printf 'new\n' | sha256sum | awk '{print $1}')
+  cat >"$STUB_BIN/curl" <<'SCRIPT'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >"$CURL_LOG"
+while (($# > 0)); do
+  if [[ "$1" == --output ]]; then printf 'new\n' >"$2"; exit 0; fi
+  shift
+done
+SCRIPT
+  chmod +x "$STUB_BIN/curl"
+
+  run env PATH="$PATH" CURL_LOG="$TEST_ROOT/curl-args" bash -c \
+    'source "$1/bin/common.sh"; download_verified_artifact https://example.test/tool "$2" "$3" 0755' \
+    _ "$REPO_ROOT" "$expected" "$HOME/tool"
+
+  [ "$status" -eq 0 ]
+  [ "$(cat "$HOME/tool")" = new ]
+  [ "$(stat -c '%a' "$HOME/tool")" = 755 ]
+  grep -Fq -- '--connect-timeout 10 --max-time 120 --retry 3' "$TEST_ROOT/curl-args"
 }
 
 @test "remote scripts are never piped directly to a shell" {
@@ -114,6 +181,57 @@ SCRIPT
     'source "$1/bin/bootstrap"; DOTFILES_ROOT="$2"; parse_bootstrap_args --non-interactive --profile personal; validate_bootstrap_options' \
     _ "$REPO_ROOT" "$configured_root"
   [ "$status" -eq 0 ]
+}
+
+@test "pinned mise selects the reviewed artifact for each Linux architecture" {
+  local arch expected_asset expected_digest
+  while read -r arch expected_asset expected_digest; do
+    run env ARTIFACT_ARCH="$arch" bash -c '
+      source "$1/bin/common.sh"
+      download_verified_artifact() { printf "%s|%s|%s|%s\n" "$@"; }
+      install_pinned_mise "$2"
+    ' _ "$REPO_ROOT" "$HOME/mise"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"/$expected_asset|$expected_digest|$HOME/mise|0755"* ]]
+  done <<CASES
+x86_64 mise-v2026.7.18-linux-x64 $MISE_LINUX_X64_SHA256
+aarch64 mise-v2026.7.18-linux-arm64 $MISE_LINUX_ARM64_SHA256
+CASES
+}
+
+@test "pinned yq selects the reviewed artifact for each Linux architecture" {
+  local arch expected_asset expected_digest
+  while read -r arch expected_asset expected_digest; do
+    run env ARTIFACT_ARCH="$arch" bash -c '
+      source "$1/bin/common.sh"
+      download_verified_artifact() { printf "%s|%s|%s|%s\n" "$@"; }
+      install_pinned_yq "$2"
+    ' _ "$REPO_ROOT" "$HOME/yq"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"/$expected_asset|$expected_digest|$HOME/yq|0755"* ]]
+  done <<CASES
+x86_64 yq_linux_amd64 $YQ_LINUX_AMD64_SHA256
+arm64 yq_linux_arm64 $YQ_LINUX_ARM64_SHA256
+CASES
+}
+
+@test "bootstrap no longer calls an undefined mise installer" {
+  run rg -n 'install_mise_ubuntu' "$REPO_ROOT/bin/bootstrap"
+
+  [ "$status" -eq 1 ]
+  run rg -n 'install_pinned_mise' "$REPO_ROOT/bin/bootstrap"
+  [ "$status" -eq 0 ]
+}
+
+@test "agent teams setup consumes verified yq and win32yank artifacts" {
+  run rg -n 'install_pinned_yq' "$REPO_ROOT/bin/setup-agent-teams"
+  [ "$status" -eq 0 ]
+
+  run rg -n 'download_verified_artifact.*WIN32YANK_WINDOWS_X64_SHA256' "$REPO_ROOT/bin/setup-agent-teams"
+  [ "$status" -eq 0 ]
+
+  run rg -n 'curl[[:space:]].*github.com/(mikefarah/yq|equalsraf/win32yank)' "$REPO_ROOT/bin/setup-agent-teams"
+  [ "$status" -eq 1 ]
 }
 
 @test "work kubectl shortcuts use maintained krew plugins" {

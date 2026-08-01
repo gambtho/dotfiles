@@ -6,6 +6,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
 PINS_FILE="$ROOT/config/versions.env"
 MISE_FILE="$ROOT/config/mise/config.toml"
 export MISE_CONFIG_DIR="$ROOT/config/mise"
+source "$ROOT/bin/common.sh"
 
 # shellcheck source=config/versions.env
 source "$PINS_FILE"
@@ -44,6 +45,10 @@ list_pins() {
   printf 'git prezto %s\n' "$PREZTO_REF"
   printf 'git zsh-defer %s\n' "$ZSH_DEFER_REF"
   printf 'channel kubernetes %s\n' "$KUBERNETES_CHANNEL"
+  printf 'artifact mise %s\n' "$MISE_VERSION"
+  printf 'artifact yq %s\n' "$YQ_VERSION"
+  printf 'artifact win32yank %s\n' "$WIN32YANK_VERSION"
+  printf 'artifact nerd-fonts %s\n' "$NERD_FONTS_VERSION"
 }
 
 with_mise_config() {
@@ -76,7 +81,7 @@ check_git_ref() {
 
 latest_kubernetes_channel() {
   local stable
-  stable="$(curl --fail --silent --show-error --location https://dl.k8s.io/release/stable.txt)"
+  stable="$(curl "${CURL_DOWNLOAD_ARGS[@]}" --silent https://dl.k8s.io/release/stable.txt)"
   printf '%s\n' "${stable%.*}"
 }
 

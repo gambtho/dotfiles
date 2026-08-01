@@ -2,8 +2,18 @@
 
 source "$(dirname "${BASH_SOURCE[0]}")/log-helper"
 
+COMMON_DOTFILES_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+
 PHASE_FAILURES=()
 PHASE_WARNINGS=()
+CURL_DOWNLOAD_ARGS=(
+  --fail
+  --show-error
+  --location
+  --connect-timeout 10
+  --max-time 120
+  --retry 3
+)
 
 run_phase() {
   local requirement="$1"
@@ -135,6 +145,68 @@ require_remote_installers() {
   fi
 }
 
+sha256_file() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  else
+    shasum -a 256 "$1" | awk '{print $1}'
+  fi
+}
+
+download_verified_artifact() {
+  local url="$1"
+  local expected="$2"
+  local destination="$3"
+  local mode="${4:-0644}"
+  local temporary actual
+
+  temporary=$(mktemp "${destination}.download.XXXXXX") || return 1
+  if ! curl "${CURL_DOWNLOAD_ARGS[@]}" "$url" --output "$temporary"; then
+    rm -f -- "$temporary"
+    return 1
+  fi
+  actual=$(sha256_file "$temporary")
+  if [[ "$actual" != "$expected" ]]; then
+    printf 'checksum mismatch for %s: expected %s, got %s\n' "$url" "$expected" "$actual" >&2
+    rm -f -- "$temporary"
+    return 1
+  fi
+  chmod "$mode" "$temporary"
+  mv -f -- "$temporary" "$destination"
+}
+
+install_pinned_mise() {
+  local destination="$1"
+  local arch="${ARTIFACT_ARCH:-$(uname -m)}"
+  local asset digest
+  # shellcheck source=config/versions.env
+  source "$COMMON_DOTFILES_ROOT/config/versions.env"
+
+  case "$arch" in
+    x86_64) asset="mise-${MISE_VERSION}-linux-x64"; digest="$MISE_LINUX_X64_SHA256" ;;
+    aarch64 | arm64) asset="mise-${MISE_VERSION}-linux-arm64"; digest="$MISE_LINUX_ARM64_SHA256" ;;
+    *) printf 'unsupported architecture for mise install: %s\n' "$arch" >&2; return 2 ;;
+  esac
+  mkdir -p "$(dirname "$destination")"
+  download_verified_artifact "$MISE_RELEASE_BASE/$asset" "$digest" "$destination" 0755
+}
+
+install_pinned_yq() {
+  local destination="$1"
+  local arch="${ARTIFACT_ARCH:-$(uname -m)}"
+  local asset digest
+  # shellcheck source=config/versions.env
+  source "$COMMON_DOTFILES_ROOT/config/versions.env"
+
+  case "$arch" in
+    x86_64) asset=yq_linux_amd64; digest="$YQ_LINUX_AMD64_SHA256" ;;
+    aarch64 | arm64) asset=yq_linux_arm64; digest="$YQ_LINUX_ARM64_SHA256" ;;
+    *) printf 'unsupported architecture for yq install: %s\n' "$arch" >&2; return 2 ;;
+  esac
+  mkdir -p "$(dirname "$destination")"
+  download_verified_artifact "$YQ_RELEASE_BASE/$asset" "$digest" "$destination" 0755
+}
+
 run_remote_installer() {
   local url="$1"
   local script
@@ -153,7 +225,7 @@ run_remote_installer() {
   require_remote_installers || return 1
   script=$(mktemp) || return 1
 
-  if ! curl --fail --show-error --location "$url" --output "$script"; then
+  if ! curl "${CURL_DOWNLOAD_ARGS[@]}" "$url" --output "$script"; then
     rm -f "$script"
     return 1
   fi

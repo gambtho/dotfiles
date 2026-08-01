@@ -154,3 +154,40 @@ SCRIPT
   [ "$status" -eq 0 ]
   [[ "$output" != *"called"* ]]
 }
+
+@test "personal zshrc does not load Agency" {
+  printf 'personal\n' >"$HOME/.dotfiles-profile"
+  stub_command mise 'exit 0'
+
+  run env HOME="$HOME" DOTFILES="$REPO_ROOT" PATH="/usr/bin:/bin" zsh -dfc '
+    path=("$STUB_BIN" /usr/bin /bin)
+    export PATH
+    source "$DOTFILES/core/shell/zshrc.symlink"
+    print -r -- "$PATH"
+  '
+
+  [ "$status" -eq 0 ]
+  [[ ":$output:" != *":$HOME/.config/agency/CurrentVersion:"* ]]
+  [[ "$output" != *"/home/tng/.config/agency/CurrentVersion"* ]]
+}
+
+@test "work zshrc loads the HOME-relative Agency path exactly once" {
+  printf 'work\n' >"$HOME/.dotfiles-profile"
+  stub_command mise 'exit 0'
+
+  run env HOME="$HOME" DOTFILES="$REPO_ROOT" PATH="/usr/bin:/bin" zsh -dfc '
+    path=("$STUB_BIN" /usr/bin /bin)
+    export PATH
+    source "$DOTFILES/core/shell/zshrc.symlink"
+    source "$DOTFILES/core/shell/zshrc.symlink"
+    paths=("${(@s/:/)PATH}")
+    count=0
+    for path in $paths; do
+      [[ $path == "$HOME/.config/agency/CurrentVersion" ]] && (( count += 1 ))
+    done
+    print -r -- "$count|$PATH"
+  '
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"1|"* ]]
+}

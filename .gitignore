@@ -1,6 +1,5 @@
 languages/mise/.venv
 platforms/linux/set_background
-config/nvim/lazy-lock.json
 core/git/git_updated
 .vscode
 .idea
