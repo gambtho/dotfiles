@@ -179,6 +179,14 @@ link_file() {
 
     if [ "$skip" == "true" ]; then
       log_info "Skipped $src"
+      # A skip leaves $dst as whatever was already there. That is benign when it
+      # is already the correct symlink, but when it is a foreign file/dir the
+      # destination stays UNLINKED — record those so install_dotfiles reports
+      # them instead of finishing with an unqualified success. That silence is
+      # how ~/.git-hooks stayed uninstalled while bootstrap looked green.
+      if [ "$(readlink "$dst" 2>/dev/null)" != "$src" ]; then
+        SKIPPED_DESTINATIONS+=("$dst")
+      fi
       return
     fi
   fi
@@ -194,6 +202,7 @@ install_dotfiles() {
   touch "$DOTFILES_ROOT/tmp/brewfile"
 
   local overwrite_all=false backup_all=false skip_all="$NON_INTERACTIVE"
+  local -a SKIPPED_DESTINATIONS=()
 
   # Link *.symlink files to $HOME/.<name>
   while IFS= read -r -d '' src; do
@@ -202,7 +211,7 @@ install_dotfiles() {
   done < <(find -H "$DOTFILES_ROOT" \
     -not -path '*/archived/*' \
     -not -path '*/.git/*' \
-    -not -path '*/.claude/worktrees/*' \
+    -not -path "$DOTFILES_ROOT/.claude/worktrees/*" \
     -name '*.symlink' -print0)
 
   # Link config/ subdirectories to ~/.config/<name>
@@ -212,6 +221,15 @@ install_dotfiles() {
       config_name=$(basename "$config_dir")
       link_file "$config_dir" "$HOME/.config/$config_name"
     done
+  fi
+
+  if [ ${#SKIPPED_DESTINATIONS[@]} -gt 0 ]; then
+    log_warning "${#SKIPPED_DESTINATIONS[@]} destination(s) left UNLINKED because a real file or directory occupies them:"
+    for dst in "${SKIPPED_DESTINATIONS[@]}"; do
+      log_warning "  $dst"
+    done
+    log_warning "Remove or move each path above, then re-run bin/relink."
+    return 1
   fi
 
   log_success "Symlinks installed"

@@ -459,3 +459,35 @@ extract_seed_script() {
   run grep -F 'config_files=($DOTFILES/**/*.zsh)' "$SKILL_DOC" "$REFERENCE"
   [ "$status" -eq 1 ]
 }
+
+@test "core.hooksPath is pointed at the mirrored dotfiles git hooks" {
+  # The commit-msg hook that strips Co-authored-by trailers reaches the host via
+  # a ~/.git-hooks symlink that is never seeded into a container. The seed must
+  # configure hooksPath directly, or container commits keep the trailers.
+  mkdir -p "$TEST_ROOT/host-seed/.dotfiles/core/git/git-hooks.symlink"
+  printf '#!/bin/sh\nexit 0\n' \
+    >"$TEST_ROOT/host-seed/.dotfiles/core/git/git-hooks.symlink/commit-msg"
+  chmod +x "$TEST_ROOT/host-seed/.dotfiles/core/git/git-hooks.symlink/commit-msg"
+
+  run bash "$SEED_SCRIPT"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"pointed core.hooksPath at"* ]]
+
+  run git config --global --get core.hooksPath
+  [ "$status" -eq 0 ]
+  [ "$output" = "$HOME/.dotfiles/core/git/git-hooks.symlink" ]
+  # Ordering guard: the hooks only exist after the ~/.dotfiles mirror runs, so a
+  # step placed before it would configure a path that is empty at the time.
+  [ -x "$output/commit-msg" ]
+}
+
+@test "missing git hooks warn without aborting the seed" {
+  # No git-hooks.symlink in the host seed. A missing hook costs one commit
+  # trailer, unlike the proxy steps, so it must not take the container down.
+  run bash "$SEED_SCRIPT"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"global git"* ]]
+  [[ "$output" == *"trailers will not be stripped"* ]]
+}

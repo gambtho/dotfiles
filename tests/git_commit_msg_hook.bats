@@ -101,3 +101,28 @@ EOF
   [ "$status" -eq 0 ]
   ! grep -qi '^[[:space:]]*co-authored-by:' "$MESSAGE_FILE"
 }
+
+@test "relink fails loudly when a real directory blocks a managed symlink" {
+  # The regression that let this ship: ~/.git-hooks pre-existed as a real
+  # directory (git-lfs creates hooks there), so link_file warned and moved on
+  # while relink still exited 0. The commit-msg hook was never installed and
+  # nothing in the output or exit status said so.
+  mkdir -p "$HOME/.git-hooks"
+  : >"$HOME/.git-hooks/pre-existing"
+
+  run bash "$REPO_ROOT/bin/relink"
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"left UNLINKED"* ]]
+  [[ "$output" == *".git-hooks"* ]]
+  # The blocking path is reported, not silently clobbered.
+  [ -f "$HOME/.git-hooks/pre-existing" ]
+}
+
+@test "relink succeeds and reports nothing skipped on a clean home" {
+  run bash "$REPO_ROOT/bin/relink"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"left UNLINKED"* ]]
+  [ -x "$HOME/.git-hooks/commit-msg" ]
+}

@@ -470,6 +470,28 @@ if [ -d "$SEED_DOTFILES" ]; then
   fi
 fi
 
+# Managed global git hooks — most importantly commit-msg, which strips
+# Co-authored-by trailers from locally-authored commits. On the host these are
+# installed by symlinking ~/.git-hooks -> ~/.dotfiles/core/git/git-hooks.symlink,
+# but that symlink is never seeded into the container. Point core.hooksPath
+# straight at the mirrored dotfiles copy instead: no symlink to maintain, and it
+# follows the repo automatically on every refresh.
+#
+# MUST come after the ~/.dotfiles mirror above — the hooks only exist once that
+# has run. Always-run block: git config lives in the ephemeral layer and resets
+# on rebuild, same as core.excludesFile.
+#
+# Non-fatal, unlike the Vekil proxy steps: a missing hook costs one commit
+# trailer rather than silently routing traffic off-proxy. Warn, don't exit.
+HOOKS_DIR="$DOTFILES_HOME/core/git/git-hooks.symlink"
+if as_user test -x "$HOOKS_DIR/commit-msg"; then
+  as_user git config --global core.hooksPath "$HOOKS_DIR"
+  echo "🌱 seed: pointed core.hooksPath at $HOOKS_DIR"
+else
+  echo "⚠️  seed: $HOOKS_DIR/commit-msg missing or not executable — global git" >&2
+  echo "   hooks not configured; Co-authored-by trailers will not be stripped." >&2
+fi
+
 # Claude CLI binary (ephemeral target). Run as the remoteUser via a login shell
 # so the installer sees their PATH and installs into their home.
 # Probe the concrete install path, NOT `bash -lc command -v`: the PATH entry for

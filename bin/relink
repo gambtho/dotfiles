@@ -17,6 +17,12 @@ DOTFILES_ROOT=$(pwd -P)
 
 log_info "Relinking dotfiles from $DOTFILES_ROOT"
 
+# Destinations skipped because a real file/dir occupies them. Collected rather
+# than aborted on, so one conflict does not block every remaining link, and
+# reported as a hard failure at exit — a warning alone is how ~/.git-hooks sat
+# uninstalled for weeks while `relink` still reported success.
+SKIPPED_DESTINATIONS=()
+
 # ── Step 1: Remove dead symlinks in $HOME pointing into this dotfiles repo ────
 
 log_info "Scanning $HOME for stale dotfiles symlinks..."
@@ -59,6 +65,7 @@ link_file() {
     rm "$dst"
   elif [ -e "$dst" ]; then
     log_warning "Skipping $dst — exists as a real file (not a symlink). Remove manually to relink."
+    SKIPPED_DESTINATIONS+=("$dst")
     return
   fi
 
@@ -72,7 +79,7 @@ while IFS= read -r -d '' src; do
 done < <(find -H "$DOTFILES_ROOT" \
   -not -path '*/archived/*' \
   -not -path '*/.git/*' \
-  -not -path '*/.claude/worktrees/*' \
+  -not -path "$DOTFILES_ROOT/.claude/worktrees/*" \
   -name '*.symlink' -print0)
 
 # ── Step 3: Re-create config/ directory symlinks ──────────────────────────────
@@ -94,12 +101,23 @@ if [ -d "$DOTFILES_ROOT/config" ]; then
       rm "$dst"
     elif [ -e "$dst" ]; then
       log_warning "Skipping $dst — exists as a real directory. Remove manually to relink."
+      SKIPPED_DESTINATIONS+=("$dst")
       continue
     fi
 
     ln -s "$config_dir" "$dst"
     log_success "Linked: $dst -> $config_dir"
   done
+fi
+
+if [ ${#SKIPPED_DESTINATIONS[@]} -gt 0 ]; then
+  # log_error exits on its own, so the per-path list is emitted as warnings and
+  # the single terminating log_error comes last.
+  log_warning "Relink incomplete — ${#SKIPPED_DESTINATIONS[@]} destination(s) left UNLINKED because a real file or directory occupies them:"
+  for dst in "${SKIPPED_DESTINATIONS[@]}"; do
+    log_warning "  $dst"
+  done
+  log_error "Remove or move each path above, then re-run bin/relink."
 fi
 
 log_success "Relink complete."
