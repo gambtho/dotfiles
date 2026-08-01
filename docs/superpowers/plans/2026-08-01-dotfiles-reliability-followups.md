@@ -95,7 +95,7 @@ git commit -m "refactor: make devcontainer seed executable source"
 - Rewrite: `bin/claude-merge-compose-override`
 - Create: `tests/claude_compose_override.bats`
 
-- [ ] **Step 1: Write failing default and opt-in policy tests**
+- [x] **Step 1: Write failing default and opt-in policy tests**
 
 Invoke the wished-for CLI in an isolated `HOME`:
 
@@ -110,20 +110,20 @@ run "$REPO_ROOT/bin/claude-merge-compose-override" \
 
 Assert read-only `/host-seed` sources; named `.claude`, `.dotfiles`, `.ssh`, gh, and OpenCode volumes; no host credentials by default; no whole-Claude/writable/dual-home binds; and an argv-safe command. With `--share-host-auth`, assert only SSH and gh become read-only host binds.
 
-- [ ] **Step 2: Write failing merge and validation tests**
+- [x] **Step 2: Write failing merge and validation tests**
 
 Assert unrelated environment keys and `/cache:/cache` survive while old managed targets are replaced. Reject `null`, booleans, numbers, objects, `""`, `[]`, and mixed arrays as command JSON. Reject relative remote-home and seed-container paths before writes.
 
-- [ ] **Step 3: Write failing backup and rollback tests**
+- [x] **Step 3: Write failing backup and rollback tests**
 
 Precreate occupied `.backup` names and assert numeric/UTC fallback preservation. Put a one-shot `mv` stub on `PATH` that fails the first override publication, then assert both original files return and no stage remains.
 
-- [ ] **Step 4: Verify RED**
+- [x] **Step 4: Verify RED**
 
 Run `bats tests/claude_compose_override.bats`.
 Expected: legacy CLI rejection or unsafe mounts.
 
-- [ ] **Step 5: Implement renderer and transaction**
+- [x] **Step 5: Implement renderer and transaction**
 
 Validate command JSON with:
 
@@ -135,7 +135,7 @@ jq -e '(type == "string" and length > 0) or
 
 Use yq environment values, never shell interpolation. Remove existing entries by managed container target, preserve unrelated targets, then append one safe entry per target. Render array commands as `["bash", seed, "--argv", ...]` and scalar commands as `["bash", seed, "--shell", scalar]`. Source `common.sh`, use `next_backup_path`, stage both files beside destinations, publish seed then override, and rollback both on failure. Dry-run writes nothing.
 
-- [ ] **Step 6: Verify GREEN and commit**
+- [x] **Step 6: Verify GREEN and commit**
 
 ```bash
 bats tests/claude_compose_override.bats tests/project_claude_setup_seed.bats

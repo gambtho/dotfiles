@@ -21,3 +21,8 @@
   current. That would bypass the new base-command dispatch on warm starts, so
   the sentinel now skips only gated persisted-volume work before continuing to
   `--argv` or `--shell`. Focused tests cover this warm-start path.
+- The approved helper interface has no workspace argument even though the old
+  prose template expected one. The seed now discovers the enclosing Git
+  worktree from its own mounted path (falling back to its directory), preserving
+  the public CLI and supporting both root-level and `.devcontainer/` Compose
+  layouts without path guessing.

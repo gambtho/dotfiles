@@ -390,6 +390,21 @@ extract_seed_script() {
   [[ "$output" == *"codex: function"* ]]
 }
 
+@test "seed discovers a workspace when mounted beneath its .devcontainer directory" {
+  local workspace="$TEST_ROOT/workspace"
+  mkdir -p "$workspace/.devcontainer" "$workspace/.claude"
+  git -C "$workspace" init -q
+  mv "$SEED_SCRIPT" "$workspace/.devcontainer/local-seed.sh"
+  SEED_SCRIPT="$workspace/.devcontainer/local-seed.sh"
+  ln -s /foreign/.dotfiles/projects/demo/agent.md \
+    "$workspace/.claude/personal-agent.md"
+
+  run bash "$SEED_SCRIPT"
+
+  [ "$status" -eq 0 ]
+  grep -Fqx '.claude/personal-agent.md' "$HOME/.gitignore"
+}
+
 @test "a failed marketplace install leaves the sentinel unstamped" {
   local seed_version
   seed_version="$(sed -n 's/^SEED_VERSION=//p' "$SEED_SCRIPT")"

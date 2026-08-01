@@ -164,9 +164,10 @@ as_user git config --global core.excludesFile "$GITIGNORE"
 # set changes as the overlay grows, so discover the exact overlay symlinks each
 # launch and maintain them in a marked, rewritten section of ~/.gitignore. Match
 # by the symlink's target TEXT (find -lname), which works in the container even
-# though the /home/<host-user>/... target is unresolvable here. {WORKSPACE} is
-# the workspaceFolder from Step 2. Repo-relative paths.
-WORKSPACE="{WORKSPACE}"
+# though the /home/<host-user>/... target is unresolvable here. Discover the
+# enclosing worktree from this mounted script's path. The fallback keeps the
+# seed usable when the project is not a Git checkout.
+WORKSPACE="$(git -C "$(dirname "$0")" rev-parse --show-toplevel 2>/dev/null || dirname "$0")"
 GI_MARK_BEGIN="# >>> overlay symlinks (auto, do not edit) >>>"
 GI_MARK_END="# <<< overlay symlinks (auto) <<<"
 if [ -d "$WORKSPACE" ]; then

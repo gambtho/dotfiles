@@ -1,0 +1,7 @@
+services: {}
+volumes:
+  claude-local-home: {}
+  dotfiles-local-home: {}
+  ssh-local-home: {}
+  gh-local-home: {}
+  opencode-local-home: {}
