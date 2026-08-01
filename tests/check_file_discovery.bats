@@ -27,6 +27,7 @@ list_files() {
 
   [ "$status" -eq 0 ]
   [[ "$output" == *"bin/install"* ]]
+  [[ "$output" == *"bin/common.sh"* ]]
   [[ "$output" == *"${UNTRACKED_FILE#"$REPO_ROOT/"}"* ]]
   [[ "$output" != *"${IGNORED_FILE#"$REPO_ROOT/"}"* ]]
   [[ "$output" != *"core/shell/zshrc.symlink"* ]]
@@ -46,6 +47,7 @@ list_files() {
 
   [ "$status" -eq 0 ]
   [[ "$output" == *"bin/install"* ]]
+  [[ "$output" == *"bin/common.sh"* ]]
   [[ "$output" == *"ai/claude/install.sh"* ]]
   [[ "$output" == *"${UNTRACKED_FILE#"$REPO_ROOT/"}"* ]]
   [[ "$output" != *"${IGNORED_FILE#"$REPO_ROOT/"}"* ]]
@@ -56,7 +58,16 @@ list_files() {
 
   [ "$status" -eq 0 ]
   [[ "$output" == *"tests/test_helper.bash"* ]]
+  [[ "$output" == *"bin/common.sh"* ]]
   [[ "$output" == *"ai/claude/install.sh"* ]]
+}
+
+@test "Makefile check pipelines propagate discovery failures portably" {
+  run rg -n 'sort -z|sort -zu|xargs[^\n]* -r([[:space:]]|$)' "$REPO_ROOT/bin/list-check-files" "$REPO_ROOT/Makefile"
+  [ "$status" -eq 1 ]
+
+  run rg -n "bash -o pipefail -c" "$REPO_ROOT/Makefile"
+  [ "$status" -eq 0 ]
 }
 
 @test "discovery rejects unknown classes" {

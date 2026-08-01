@@ -40,16 +40,21 @@ compose_apt_packages() {
 }
 
 install_apt_packages() {
-  local -a apt_packages
+  local package package_list
+  local -a apt_packages=()
 
   log_info "Updating composed APT packages for $OS/$PROFILE..."
-  setup_package_repositories &&
-    sudo apt update >/dev/null &&
-    mapfile -t apt_packages < <(compose_apt_packages) &&
-    sudo apt install -y "${apt_packages[@]}" >/dev/null &&
-    sudo apt upgrade -y >/dev/null &&
-    sudo apt autoremove -y >/dev/null &&
-    sudo apt autoclean -y >/dev/null
+  setup_package_repositories || return
+  sudo apt update >/dev/null || return
+  package_list=$(compose_apt_packages) || return
+  [[ -n "$package_list" ]] || return 1
+  while IFS= read -r package; do
+    [[ -n "$package" ]] && apt_packages+=("$package")
+  done <<<"$package_list"
+  sudo apt install -y "${apt_packages[@]}" >/dev/null || return
+  sudo apt upgrade -y >/dev/null || return
+  sudo apt autoremove -y >/dev/null || return
+  sudo apt autoclean -y >/dev/null
 }
 
 setup_package_repositories() {

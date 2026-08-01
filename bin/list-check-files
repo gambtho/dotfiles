@@ -27,7 +27,7 @@ is_direct_bin_shell() {
   local path="$1" name
   [[ "$path" == bin/* && "${path#bin/}" != */* ]] || return 1
   name=${path#bin/}
-  [[ "$name" != *.* ]]
+  [[ "$name" != *.* || "$name" == *.sh ]]
 }
 
 is_repository_sh() {
@@ -48,7 +48,7 @@ is_repository_zsh() {
 {
   git ls-files -z
   git ls-files -z --others --exclude-standard
-} | sort -zu | while IFS= read -r -d '' path; do
+} | while IFS= read -r -d '' path; do
   case "$class" in
     bash)
       if is_direct_bin_shell "$path" || is_repository_sh "$path"; then printf '%s\0' "$path"; fi
@@ -60,7 +60,7 @@ is_repository_zsh() {
       if is_direct_bin_shell "$path" || is_repository_sh "$path"; then printf '%s\0' "$path"; fi
       ;;
     shfmt)
-      if is_repository_sh "$path" || [[ "$path" == tests/test_helper.bash ]]; then printf '%s\0' "$path"; fi
+      if { [[ "$path" == bin/*.sh && "${path#bin/}" != */* ]]; } || is_repository_sh "$path" || [[ "$path" == tests/test_helper.bash ]]; then printf '%s\0' "$path"; fi
       ;;
   esac
 done

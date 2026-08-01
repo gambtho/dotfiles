@@ -4,6 +4,7 @@ load test_helper
 
 setup() {
   setup_dotfiles_test
+  source "$REPO_ROOT/config/versions.env"
   mkdir -p \
     "$HOME/.claude" \
     "$HOME/.codex" \
@@ -63,7 +64,7 @@ SCRIPT
   chmod +x "$STUB_BIN/curl"
 }
 
-@test "vekil release downloads use bounded retries" {
+@test "vekil release download uses bounded retries and a pinned digest" {
   mkdir -p "$HOME/.local/bin" "$HOME/.local/state/vekil"
   cat >"$STUB_BIN/curl" <<'SCRIPT'
 #!/bin/bash
@@ -73,19 +74,19 @@ output=""
 url=""
 while (($# > 0)); do
   case "$1" in
-    -o) output="$2"; shift 2 ;;
+    -o | --output) output="$2"; shift 2 ;;
     http*) url="$1"; shift ;;
     *) shift ;;
   esac
 done
-if [[ "$url" == */checksums.txt ]]; then
-  checksum=$(/usr/bin/sha256sum "${output%/*}/vekil-linux-amd64" | /usr/bin/awk '{print $1}')
-  printf '%s  vekil-linux-amd64\n' "$checksum" >"$output"
-else
-  printf '#!/bin/bash\nexit 0\n' >"$output"
-fi
+printf '#!/bin/bash\nexit 0\n' >"$output"
 SCRIPT
   chmod +x "$STUB_BIN/curl"
+  cat >"$STUB_BIN/sha256sum" <<SCRIPT
+#!/bin/bash
+printf '%s  %s\n' '$VEKIL_LINUX_AMD64_SHA256' "\$1"
+SCRIPT
+  chmod +x "$STUB_BIN/sha256sum"
 
   run /usr/bin/env \
     HOME="$HOME" \
@@ -98,7 +99,8 @@ SCRIPT
     bash "$REPO_ROOT/ai/vekil/install.sh"
 
   [ "$status" -eq 0 ]
-  [ "$(grep -c -- '--connect-timeout 10 --max-time 120 --retry 3' "$HOME/curl.log")" -eq 2 ]
+  [ "$(grep -c -- '--connect-timeout 10 --max-time 120 --retry 3' "$HOME/curl.log")" -eq 1 ]
+  ! grep -q 'checksums.txt' "$HOME/curl.log"
 }
 
 @test "vekil installer restarts only when refreshed credentials change" {

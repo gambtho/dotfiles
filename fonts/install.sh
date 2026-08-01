@@ -66,12 +66,21 @@ install_fonts() {
     rm -rf -- "$staging"
     return 1
   fi
-  rm -rf -- "$staging"
-
-  command -v fc-cache >/dev/null 2>&1 && fc-cache -f "$FONT_DIR"
-  if command -v gsettings >/dev/null 2>&1; then
-    gsettings set org.gnome.desktop.interface monospace-font-name "$DEFAULT_FONT"
+  if command -v fc-cache >/dev/null 2>&1 && ! fc-cache -f "$FONT_DIR"; then
+    rm -rf -- "$FONT_DIR"
+    [[ ! -e "$previous" ]] || mv -- "$previous" "$FONT_DIR"
+    rm -rf -- "$staging"
+    return 1
   fi
+  if command -v gsettings >/dev/null 2>&1; then
+    if ! gsettings set org.gnome.desktop.interface monospace-font-name "$DEFAULT_FONT"; then
+      rm -rf -- "$FONT_DIR"
+      [[ ! -e "$previous" ]] || mv -- "$previous" "$FONT_DIR"
+      rm -rf -- "$staging"
+      return 1
+    fi
+  fi
+  rm -rf -- "$staging"
   log_success "Installed Nerd Fonts $NERD_FONTS_VERSION."
 }
 

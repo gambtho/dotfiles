@@ -117,7 +117,8 @@ offers; nothing in this repo pins the list. Query it any time:
 
 As upstream adds or removes models, this list follows automatically.
 
-**Two defaults are hardcoded and do NOT auto-follow** — you own these strings:
+**Two defaults are hardcoded and do NOT auto-follow** — you own these strings.
+`bin/vekil-proxy env` prints the same Claude default as `env.zsh`:
 
 - `ai/codex/config.toml`:
   ```toml

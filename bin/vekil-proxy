@@ -730,7 +730,7 @@ start() {
 wait_until_process_changes() {
   local record="$1" timeout="$2" deadline
   deadline=$((SECONDS + timeout))
-  while process_matches_record "$record"; do
+  while process_matches_start_id "$record"; do
     (( SECONDS < deadline )) || return 1
     sleep 1
   done
@@ -755,13 +755,13 @@ stop() {
     kill "$pid" 2>/dev/null || true
   fi
   deadline=$((SECONDS + STOP_TIMEOUT))
-  while process_matches_record "$record"; do
+  while process_matches_start_id "$record"; do
     (( SECONDS < deadline )) || break
     echo -n "."
     sleep 1
   done
 
-  if process_matches_record "$record"; then
+  if process_matches_start_id "$record"; then
     echo -n "force "
     kill -9 "$pid" 2>/dev/null || true
     if ! wait_until_process_changes "$record" "$KILL_CONFIRM_TIMEOUT"; then
@@ -783,7 +783,7 @@ status() {
   host=$(runtime_host)
   failed_record=$(read_stop_failed_record || true)
   if [[ -n "$failed_record" ]]; then
-    if process_matches_record "$failed_record"; then
+    if process_matches_start_id "$failed_record"; then
       pid=${failed_record%%|*}
       echo "STOP_FAILED host=$host port=$PORT pid=$pid"
       return 1
@@ -821,7 +821,7 @@ EOF
   printf 'export OPENAI_API_KEY="dummy"\n'
   printf 'export ANTHROPIC_BASE_URL="%s"\n' "http://${formatted_host}:${PORT}"
   printf 'export ANTHROPIC_API_KEY="dummy"\n'
-  printf 'export ANTHROPIC_MODEL="claude-opus-4.8"\n'
+  printf 'export ANTHROPIC_MODEL="claude-opus-5"\n'
   cat <<'EOF'
 
 # Devcontainer shell
@@ -830,7 +830,7 @@ EOF
   printf 'export OPENAI_API_KEY="dummy"\n'
   printf 'export ANTHROPIC_BASE_URL="http://host.docker.internal:%s"\n' "$PORT"
   printf 'export ANTHROPIC_API_KEY="dummy"\n'
-  printf 'export ANTHROPIC_MODEL="claude-opus-4.8"\n'
+  printf 'export ANTHROPIC_MODEL="claude-opus-5"\n'
 }
 
 models() {

@@ -77,3 +77,21 @@ write_pi_skills() {
   [ "$status" -ne 0 ]
   [[ "$output" == *"tracked symlink does not resolve"* ]]
 }
+
+@test "validator rejects a tracked symlink whose final target escapes the repository" {
+  make_validator_repo
+  printf 'outside\n' >"$TEST_ROOT/outside"
+  ln -s "$TEST_ROOT/outside" "$VALIDATOR_REPO/ai/marketplace/plugins/my/outside-hop"
+  ln -s outside-hop "$VALIDATOR_REPO/ai/marketplace/plugins/my/escaping-link"
+  git -C "$VALIDATOR_REPO" add ai/marketplace/plugins/my/escaping-link
+
+  run bash "$VALIDATOR_REPO/bin/validate-ai"
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"tracked symlink resolves outside repository"* ]]
+}
+
+@test "validator avoids Bash-4-only mapfile" {
+  run rg -n '(^|[[:space:]])mapfile([[:space:]]|$)' "$REPO_ROOT/bin/validate-ai"
+  [ "$status" -eq 1 ]
+}

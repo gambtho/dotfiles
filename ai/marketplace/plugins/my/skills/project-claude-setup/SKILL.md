@@ -28,12 +28,7 @@ It replaces the old narrower `devcontainer-host-mounts` skill. The host-mounts l
 2. **Project root.** `.git/` exists in the current dir. If not, ask the user to `cd` first.
 3. **Dotfiles repo present.** `~/.dotfiles/` exists with `core/git/gitignore.symlink` and `projects/` subdir. If not, point at `~/.dotfiles/projects/README.md` for the setup story.
 4. **Global gitignore wired.** `git config --global core.excludesFile` resolves to a real file that includes `.claude/`, `CLAUDE.md`, `CLAUDE.local.md`, and `AGENTS.local.md`. Without these, the symlinks and import shims this skill creates will leak to `git status` inside the project. Stop and tell the user to add the missing patterns.
-5. **`yq` (mikefarah/yq) and `jq` available.** Probe in order: `command -v yq` and, if that misses (PATH/cache lag in fresh shells), also `[ -x /usr/local/bin/yq ]` directly. Confirm flavor via `yq --version 2>&1 | grep -q mikefarah` — if it doesn't match, refuse. **Never suggest `apt install yq`** — Ubuntu/Debian ship the Python `kislyuk/yq`, which has incompatible merge semantics. Correct install:
-   ```bash
-   sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 \
-     && sudo chmod +x /usr/local/bin/yq
-   ```
-   Or run `~/.dotfiles/bin/setup-agent-teams` which installs yq plus the rest of the host-side toolchain. `jq` should already be present; `sudo apt install jq` is fine (only one flavor).
+5. **`yq` (mikefarah/yq) and `jq` available.** Probe in order: `command -v yq` and, if that misses (PATH/cache lag in fresh shells), also `[ -x /usr/local/bin/yq ]` directly. Confirm flavor via `yq --version 2>&1 | grep -q mikefarah` — if it doesn't match, refuse. **Never suggest `apt install yq`** — Ubuntu/Debian ship the Python `kislyuk/yq`, which has incompatible merge semantics. Run `~/.dotfiles/bin/setup-agent-teams`, which installs the repository-pinned, checksum-verified yq artifact plus the rest of the host-side toolchain. `jq` should already be present; `sudo apt install jq` is fine (only one flavor).
 
 Don't continue past failed prereqs — they're not auto-recoverable from inside this skill.
 

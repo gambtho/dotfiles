@@ -17,6 +17,27 @@ error() { echo "  ERROR: $1"; ERRORS=$((ERRORS + 1)); }
 warn()  { echo "  WARN:  $1"; WARNINGS=$((WARNINGS + 1)); }
 info()  { $VERBOSE && echo "  OK:    $1" || true; }
 
+resolve_existing_path() {
+    local path="$1" directory base target attempts=0
+    while [ "$attempts" -lt 40 ]; do
+        directory=$(cd -P "$(dirname "$path")" 2>/dev/null && pwd -P) || return 1
+        base=$(basename "$path")
+        path="$directory/$base"
+        if [ ! -L "$path" ]; then
+            [ -e "$path" ] || return 1
+            printf '%s\n' "$path"
+            return 0
+        fi
+        target=$(readlink "$path") || return 1
+        case "$target" in
+            /*) path=$target ;;
+            *) path="$directory/$target" ;;
+        esac
+        attempts=$((attempts + 1))
+    done
+    return 1
+}
+
 echo "=== Validating 'my' plugin config ==="
 
 # ── Commands ──────────────────────────────────────────────────────────────────
@@ -75,8 +96,14 @@ if ! command -v jq &>/dev/null; then
 elif ! jq empty "$PACKAGE_FILE" 2>/dev/null; then
     error "package.json: invalid JSON"
 else
-    mapfile -t declared_skills < <(jq -r '.pi.skills[]?' "$PACKAGE_FILE")
-    mapfile -t actual_skills < <(
+    declared_skills=()
+    while IFS= read -r skill_path; do
+        declared_skills+=("$skill_path")
+    done < <(jq -r '.pi.skills[]?' "$PACKAGE_FILE")
+    actual_skills=()
+    while IFS= read -r skill_path; do
+        actual_skills+=("$skill_path")
+    done < <(
         for skill_file in "$PLUGIN_DIR"/skills/*/SKILL.md; do
             [ -f "$skill_file" ] || continue
             printf './skills/%s/SKILL.md\n' "$(basename "$(dirname "$skill_file")")"
@@ -123,8 +150,11 @@ while IFS= read -r -d '' entry; do
         error "$path: tracked symlink does not resolve: $target"
         continue
     fi
-    resolved_dir=$(cd -P "$(dirname "$target_path")" && pwd -P)
-    case "$resolved_dir/$(basename "$target_path")" in
+    resolved_target=$(resolve_existing_path "$target_path") || {
+        error "$path: tracked symlink does not resolve: $target"
+        continue
+    }
+    case "$resolved_target" in
         "$DOTFILES_ROOT"/*) info "$path -> $target" ;;
         *) error "$path: tracked symlink resolves outside repository: $target" ;;
     esac

@@ -45,12 +45,12 @@ validate: ## Validate AI config structure (agents, commands, skills)
 check: syntax lint test validate
 
 syntax:
-	@bin/list-check-files bash | xargs -0 -r -n 1 bash -n
-	@bin/list-check-files zsh | xargs -0 -r -n 1 zsh -n
+	@bash -o pipefail -c 'bin/list-check-files bash | xargs -0 -n 1 bash -n'
+	@bash -o pipefail -c 'bin/list-check-files zsh | xargs -0 -n 1 zsh -n'
 
 lint:
-	@bin/list-check-files shellcheck | xargs -0 -r shellcheck -x -S warning -e SC1091
-	@bin/list-check-files shfmt | xargs -0 -r shfmt -d -i 2 -ci
+	@bash -o pipefail -c 'bin/list-check-files shellcheck | xargs -0 shellcheck -x -S warning -e SC1091'
+	@bash -o pipefail -c 'bin/list-check-files shfmt | xargs -0 shfmt -d -i 2 -ci'
 
 test:
 	bats tests

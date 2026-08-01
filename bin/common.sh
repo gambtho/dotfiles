@@ -97,7 +97,7 @@ reconcile_link() {
   local label="$3"
   local policy="$4"
   local mode="$5"
-  local backup
+  local backup moved_to="" keep_backup=false
 
   [[ "$policy" == skip || "$policy" == replace || "$policy" == backup ]] || return 2
   [[ "$mode" == apply || "$mode" == check ]] || return 2
@@ -118,7 +118,8 @@ reconcile_link() {
           log_info "[dry-run] Would replace $label at $destination"
           return 0
         fi
-        rm -rf -- "$destination"
+        moved_to=$(next_backup_path "$destination")
+        mv -- "$destination" "$moved_to" || return
         ;;
       backup)
         backup=$(next_backup_path "$destination")
@@ -126,7 +127,9 @@ reconcile_link() {
           log_info "[dry-run] Would back up $label to $backup"
           return 0
         fi
-        mv -- "$destination" "$backup"
+        mv -- "$destination" "$backup" || return
+        moved_to=$backup
+        keep_backup=true
         ;;
     esac
   elif [[ "$mode" == check ]]; then
@@ -134,7 +137,15 @@ reconcile_link() {
     return 0
   fi
 
-  ln -s -- "$source" "$destination"
+  if ! ln -s -- "$source" "$destination"; then
+    if [[ -n "$moved_to" && ! -e "$destination" && ! -L "$destination" ]]; then
+      mv -- "$moved_to" "$destination" || true
+    fi
+    return 1
+  fi
+  if [[ -n "$moved_to" && "$keep_backup" != true ]]; then
+    rm -rf -- "$moved_to"
+  fi
   log_success "Linked $source to $destination"
 }
 
@@ -183,9 +194,18 @@ install_pinned_mise() {
   source "$COMMON_DOTFILES_ROOT/config/versions.env"
 
   case "$arch" in
-    x86_64) asset="mise-${MISE_VERSION}-linux-x64"; digest="$MISE_LINUX_X64_SHA256" ;;
-    aarch64 | arm64) asset="mise-${MISE_VERSION}-linux-arm64"; digest="$MISE_LINUX_ARM64_SHA256" ;;
-    *) printf 'unsupported architecture for mise install: %s\n' "$arch" >&2; return 2 ;;
+    x86_64)
+      asset="mise-${MISE_VERSION}-linux-x64"
+      digest="$MISE_LINUX_X64_SHA256"
+      ;;
+    aarch64 | arm64)
+      asset="mise-${MISE_VERSION}-linux-arm64"
+      digest="$MISE_LINUX_ARM64_SHA256"
+      ;;
+    *)
+      printf 'unsupported architecture for mise install: %s\n' "$arch" >&2
+      return 2
+      ;;
   esac
   mkdir -p "$(dirname "$destination")"
   download_verified_artifact "$MISE_RELEASE_BASE/$asset" "$digest" "$destination" 0755
@@ -199,9 +219,18 @@ install_pinned_yq() {
   source "$COMMON_DOTFILES_ROOT/config/versions.env"
 
   case "$arch" in
-    x86_64) asset=yq_linux_amd64; digest="$YQ_LINUX_AMD64_SHA256" ;;
-    aarch64 | arm64) asset=yq_linux_arm64; digest="$YQ_LINUX_ARM64_SHA256" ;;
-    *) printf 'unsupported architecture for yq install: %s\n' "$arch" >&2; return 2 ;;
+    x86_64)
+      asset=yq_linux_amd64
+      digest="$YQ_LINUX_AMD64_SHA256"
+      ;;
+    aarch64 | arm64)
+      asset=yq_linux_arm64
+      digest="$YQ_LINUX_ARM64_SHA256"
+      ;;
+    *)
+      printf 'unsupported architecture for yq install: %s\n' "$arch" >&2
+      return 2
+      ;;
   esac
   mkdir -p "$(dirname "$destination")"
   download_verified_artifact "$YQ_RELEASE_BASE/$asset" "$digest" "$destination" 0755

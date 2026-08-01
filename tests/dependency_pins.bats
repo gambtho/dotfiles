@@ -17,7 +17,11 @@ setup() {
   [[ "$output" == *"artifact mise v2026.7.18"* ]]
   [[ "$output" == *"artifact yq v4.45.1"* ]]
   [[ "$output" == *"artifact win32yank v0.1.1"* ]]
+  [[ "$output" == *"artifact vekil v0.13.3"* ]]
   [[ "$output" == *"artifact nerd-fonts v3.4.0"* ]]
+  [[ "$output" == *"artifact nerd-font-cascadia-mono v3.4.0 $NERD_FONT_CASCADIA_MONO_SHA256"* ]]
+  [[ "$output" == *"artifact nerd-font-hack v3.4.0 $NERD_FONT_HACK_SHA256"* ]]
+  [[ "$output" == *"artifact nerd-font-meslo v3.4.0 $NERD_FONT_MESLO_SHA256"* ]]
 }
 
 @test "versions check fails when mise cannot check pins" {
@@ -30,7 +34,7 @@ setup() {
 }
 
 @test "non-mise pins have one canonical manifest" {
-  run rg -l '^(PREZTO_REF|ZSH_DEFER_REF|KUBERNETES_CHANNEL)=' "$REPO_ROOT" \
+  run rg -l '^(PREZTO_REF|ZSH_DEFER_REF|KUBERNETES_CHANNEL|VEKIL_VERSION|VEKIL_RELEASE_BASE|VEKIL_(DARWIN|LINUX)_(AMD64|ARM64)_SHA256)=' "$REPO_ROOT" \
     --glob '!docs/**' --glob '!tests/**'
   [ "$status" -eq 0 ]
   [ "$output" = "$REPO_ROOT/config/versions.env" ]
@@ -80,6 +84,7 @@ case "$url" in
   *jdx/mise*) printf '{"tag_name":"v2026.7.18"}\n' ;;
   *mikefarah/yq*) printf '{"tag_name":"v4.45.1"}\n' ;;
   *equalsraf/win32yank*) printf '{"tag_name":"v0.1.1"}\n' ;;
+  *sozercan/vekil*) printf '{"tag_name":"v0.13.3"}\n' ;;
   *ryanoasis/nerd-fonts*) printf '{"tag_name":"v3.4.0"}\n' ;;
 esac
 SCRIPT
@@ -91,6 +96,7 @@ SCRIPT
   [[ "$output" == *"current artifact mise v2026.7.18"* ]]
   [[ "$output" == *"current artifact yq v4.45.1"* ]]
   [[ "$output" == *"current artifact win32yank v0.1.1"* ]]
+  [[ "$output" == *"current artifact vekil v0.13.3"* ]]
   [[ "$output" == *"current artifact nerd-fonts v3.4.0"* ]]
 }
 

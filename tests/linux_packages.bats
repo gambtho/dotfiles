@@ -82,6 +82,63 @@ compose_packages() {
   grep -Fq 'apt install -y ca-certificates docker-ce' "$events"
 }
 
+@test "package composition failure prevents apt installation" {
+  local events="$TEST_ROOT/events"
+
+  run env INSTALL_SOURCE_ONLY=1 EVENTS="$events" bash -c '
+    source "$1/bin/install"
+    OS=Ubuntu
+    PROFILE=missing
+    setup_package_repositories() { printf "repositories\n" >>"$EVENTS"; }
+    sudo() { printf "%s\n" "$*" >>"$EVENTS"; }
+    install_platform_packages
+  ' _ "$REPO_ROOT"
+
+  [ "$status" -ne 0 ]
+  ! grep -q '^apt install ' "$events"
+}
+
+@test "repository setup failure prevents later repositories and apt installation" {
+  local events="$TEST_ROOT/events"
+
+  run env INSTALL_SOURCE_ONLY=1 EVENTS="$events" bash -c '
+    source "$1/bin/install"
+    WORK_INSTALL_SOURCE_ONLY=1 source "$1/work/install.sh"
+    OS=Ubuntu
+    PROFILE=work
+    download_apt_key() { printf "key:%s\n" "$1" >>"$EVENTS"; return 1; }
+    setup_package_repositories() { setup_work_apt_repositories; }
+    sudo() { printf "sudo:%s\n" "$*" >>"$EVENTS"; }
+    install_platform_packages
+  ' _ "$REPO_ROOT"
+
+  [ "$status" -ne 0 ]
+  [ "$(grep -c '^key:' "$events")" -eq 1 ]
+  ! grep -q 'apt install' "$events"
+}
+
+@test "APT key download failure is never masked by cleanup" {
+  run env INSTALL_SOURCE_ONLY=1 bash -c '
+    WORK_INSTALL_SOURCE_ONLY=1 source "$1/work/install.sh"
+    curl() { return 1; }
+    sudo() { return 0; }
+    if download_apt_key https://example.test/key "$2/key.gpg"; then
+      exit 0
+    else
+      exit $?
+    fi
+  ' _ "$REPO_ROOT" "$TEST_ROOT"
+
+  [ "$status" -ne 0 ]
+}
+
+@test "Kubernetes repository follows the canonical channel pin" {
+  run rg -n 'core:/stable:/\$\{?KUBERNETES_CHANNEL\}?' "$REPO_ROOT/work/install.sh"
+  [ "$status" -eq 0 ]
+  run rg -n 'core:/stable:/v[0-9]' "$REPO_ROOT/work/install.sh"
+  [ "$status" -eq 1 ]
+}
+
 @test "package audit summarizes unmanaged extras in a sorted detail file" {
   local audit_root="$TEST_ROOT/audit-repo"
   mkdir -p "$audit_root/tmp"

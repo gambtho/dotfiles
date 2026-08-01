@@ -39,6 +39,19 @@ setup() {
   assert_symlink_target "$HOME/destination" "$TEST_ROOT/source"
 }
 
+@test "link creation failure restores the original destination" {
+  printf 'local\n' >"$HOME/destination"
+
+  run bash -c '
+    source "$1/bin/common.sh"
+    ln() { return 1; }
+    reconcile_link "$2" "$3" config replace apply
+  ' _ "$REPO_ROOT" "$TEST_ROOT/source" "$HOME/destination"
+
+  [ "$status" -ne 0 ]
+  [ "$(cat "$HOME/destination")" = local ]
+}
+
 @test "check mode describes replacement without mutation" {
   ln -s "$TEST_ROOT/old" "$HOME/destination"
   local before

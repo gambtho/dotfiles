@@ -16,15 +16,15 @@ done
 unset _vekil_override
 
 source "$(dirname "${BASH_SOURCE[0]}")/../../bin/common.sh"
+# shellcheck source=config/versions.env
+source "$(dirname "${BASH_SOURCE[0]}")/../../config/versions.env"
 
 DOTFILES_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
-VEKIL_VERSION="${VEKIL_VERSION:-v0.13.3}"
 INSTALL_DIR="${VEKIL_INSTALL_DIR:-$HOME/.local/bin}"
 STATE_DIR="${VEKIL_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/vekil}"
 VEKIL_BIN="${VEKIL_BIN:-$INSTALL_DIR/vekil}"
 VERSION_FILE="$STATE_DIR/installed-version"
 RESTART_REQUIRED_FILE="$STATE_DIR/restart-required"
-RELEASE_BASE="https://github.com/sozercan/vekil/releases/download/$VEKIL_VERSION"
 TOKEN_DIR="${VEKIL_TOKEN_DIR:-$HOME/.config/vekil}"
 ACCESS_TOKEN_FILE="$TOKEN_DIR/access-token"
 LIFECYCLE_BIN="$DOTFILES_ROOT/bin/vekil-proxy"
@@ -344,7 +344,7 @@ require_nonempty_access_token() {
 install_vekil() {
   VEKIL_CHANGED=0
 
-  local platform os arch asset expected actual bin_dir
+  local platform os arch asset digest bin_dir
   bin_dir=$(dirname "$VEKIL_BIN")
   prepare_destination_directory "$bin_dir"
   prepare_destination_directory "$STATE_DIR"
@@ -364,24 +364,17 @@ install_vekil() {
   platform=$(detect_platform)
   read -r os arch <<<"$platform"
   asset="vekil-${os}-${arch}"
+  case "$os/$arch" in
+    darwin/amd64) digest=$VEKIL_DARWIN_AMD64_SHA256 ;;
+    darwin/arm64) digest=$VEKIL_DARWIN_ARM64_SHA256 ;;
+    linux/amd64) digest=$VEKIL_LINUX_AMD64_SHA256 ;;
+    linux/arm64) digest=$VEKIL_LINUX_ARM64_SHA256 ;;
+    *) log_error "Unsupported Vekil artifact: $os/$arch" >&2 ;;
+  esac
   DOWNLOAD_DIR=$(mktemp -d)
 
   log_info "Downloading Vekil $VEKIL_VERSION for $os/$arch..."
-  curl -fsSL --connect-timeout 10 --max-time 120 --retry 3 "$RELEASE_BASE/$asset" -o "$DOWNLOAD_DIR/$asset"
-  curl -fsSL --connect-timeout 10 --max-time 120 --retry 3 "$RELEASE_BASE/checksums.txt" -o "$DOWNLOAD_DIR/checksums.txt"
-
-  expected=$(awk -v asset="$asset" '$2 == asset { print $1; exit }' "$DOWNLOAD_DIR/checksums.txt")
-  [[ -n "$expected" ]] || {
-    log_error "No checksum was published for $asset." >&2
-  }
-
-  actual=$(calculate_checksum "$DOWNLOAD_DIR/$asset")
-  [[ "$actual" == "$expected" ]] || {
-    printf 'Checksum mismatch for %s.\n' "$asset" >&2
-    printf 'Expected: %s\n' "$expected" >&2
-    printf 'Actual:   %s\n' "$actual" >&2
-    return 1
-  }
+  download_verified_artifact "$VEKIL_RELEASE_BASE/$asset" "$digest" "$DOWNLOAD_DIR/$asset" 0755
 
   STAGED_BIN=$(mktemp "$bin_dir/.vekil.XXXXXX")
   STAGED_VERSION=$(mktemp "$STATE_DIR/.installed-version.XXXXXX")

@@ -17,8 +17,8 @@ setup() {
   run env VEKIL_PROXY_SOURCE_ONLY=1 VEKIL_STATE_DIR="$STATE_DIR" bash -c '
     source "$1/bin/vekil-proxy"
     pid_record() { printf "123|start-id\n"; }
-    matches=0
-    process_matches_record() { (( matches += 1 )); (( matches == 1 )); }
+    process_matches_record() { return 0; }
+    process_matches_start_id() { return 1; }
     kill() { printf "%s\n" "$*" >>"$VEKIL_STATE_DIR/signals"; }
     stop
   ' _ "$REPO_ROOT" "$STATE_DIR"
@@ -34,8 +34,9 @@ setup() {
   run env VEKIL_PROXY_SOURCE_ONLY=1 VEKIL_STATE_DIR="$STATE_DIR" VEKIL_STOP_TIMEOUT=0 VEKIL_KILL_CONFIRM_TIMEOUT=0 bash -c '
     source "$1/bin/vekil-proxy"
     pid_record() { printf "123|start-id\n"; }
+    process_matches_record() { return 0; }
     matches=0
-    process_matches_record() { (( matches += 1 )); (( matches <= 3 )); }
+    process_matches_start_id() { (( matches += 1 )); (( matches <= 2 )); }
     kill() { printf "%s\n" "$*" >>"$VEKIL_STATE_DIR/signals"; }
     stop
   ' _ "$REPO_ROOT" "$STATE_DIR"
@@ -45,11 +46,27 @@ setup() {
   grep -Fq -- '-9 123' "$STATE_DIR/signals"
 }
 
+@test "Vekil stop keeps confirming the recorded process after it execs" {
+  run env VEKIL_PROXY_SOURCE_ONLY=1 VEKIL_STATE_DIR="$STATE_DIR" VEKIL_STOP_TIMEOUT=0 VEKIL_KILL_CONFIRM_TIMEOUT=0 bash -c '
+    source "$1/bin/vekil-proxy"
+    pid_record() { printf "123|start-id\n"; }
+    process_matches_record() { return 0; }
+    process_matches_start_id() { return 0; }
+    kill() { :; }
+    stop
+  ' _ "$REPO_ROOT"
+
+  [ "$status" -ne 0 ]
+  [ "$(cat "$STATE_DIR/proxy.pid")" = '123|start-id' ]
+  [ "$(cat "$STATE_DIR/proxy-stop-failed")" = '123|start-id' ]
+}
+
 @test "surviving Vekil process preserves PID and writes a private failure marker" {
   run env VEKIL_PROXY_SOURCE_ONLY=1 VEKIL_STATE_DIR="$STATE_DIR" VEKIL_STOP_TIMEOUT=0 VEKIL_KILL_CONFIRM_TIMEOUT=0 bash -c '
     source "$1/bin/vekil-proxy"
     pid_record() { printf "123|start-id\n"; }
     process_matches_record() { return 0; }
+    process_matches_start_id() { return 0; }
     kill() { :; }
     stop
   ' _ "$REPO_ROOT" "$STATE_DIR"
@@ -66,8 +83,8 @@ setup() {
   run env VEKIL_PROXY_SOURCE_ONLY=1 VEKIL_STATE_DIR="$STATE_DIR" bash -c '
     source "$1/bin/vekil-proxy"
     pid_record() { printf "123|start-id\n"; }
-    matches=0
-    process_matches_record() { (( matches += 1 )); (( matches == 1 )); }
+    process_matches_record() { return 0; }
+    process_matches_start_id() { return 1; }
     kill() { printf "%s\n" "$*" >>"$VEKIL_STATE_DIR/signals"; }
     stop
   ' _ "$REPO_ROOT" "$STATE_DIR"
@@ -93,7 +110,7 @@ setup() {
 
   run env VEKIL_PROXY_SOURCE_ONLY=1 VEKIL_STATE_DIR="$STATE_DIR" bash -c '
     source "$1/bin/vekil-proxy"
-    process_matches_record() { return 0; }
+    process_matches_start_id() { return 0; }
     is_ready() { return 0; }
     is_healthy() { return 0; }
     status
@@ -109,7 +126,7 @@ setup() {
 
   run env VEKIL_PROXY_SOURCE_ONLY=1 VEKIL_STATE_DIR="$STATE_DIR" bash -c '
     source "$1/bin/vekil-proxy"
-    process_matches_record() { return 1; }
+    process_matches_start_id() { return 1; }
     is_ready() { return 1; }
     is_healthy() { return 1; }
     pid_of() { return 1; }
@@ -121,6 +138,17 @@ setup() {
   [ ! -e "$STATE_DIR/proxy-stop-failed" ]
 }
 
+@test "printed environment uses the documented Claude model" {
+  run env VEKIL_PROXY_SOURCE_ONLY=1 VEKIL_STATE_DIR="$STATE_DIR" bash -c '
+    source "$1/bin/vekil-proxy"
+    print_env
+  ' _ "$REPO_ROOT"
+
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s\n' "$output" | grep -c 'ANTHROPIC_MODEL="claude-opus-5"')" -eq 2 ]
+  [[ "$output" != *"claude-opus-4.8"* ]]
+}
+
 @test "successful stop clears an earlier stop-failure marker" {
   printf '123|start-id\n' >"$STATE_DIR/proxy-stop-failed"
   chmod 0600 "$STATE_DIR/proxy-stop-failed"
@@ -129,6 +157,7 @@ setup() {
     source "$1/bin/vekil-proxy"
     pid_record() { printf "123|start-id\n"; }
     process_matches_record() { return 1; }
+    process_matches_start_id() { return 1; }
     stop
   ' _ "$REPO_ROOT"
 
