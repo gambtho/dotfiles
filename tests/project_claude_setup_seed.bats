@@ -416,6 +416,40 @@ extract_seed_script() {
   [ "$(cat "$SHELL_STATE")" = /bin/bash ]
 }
 
+@test "every documented bash block is syntactically valid" {
+  # These blocks are meant to be copy-pasted. A block that cannot even parse
+  # ships a broken command to whoever runs it, and nothing else in this suite
+  # would notice — the seed-script tests only extract one specific block.
+  # Fill-in values are written as shell variables assigned to a <placeholder>
+  # string, so the block still parses while remaining obviously templated.
+  local document block_file total=0
+  block_file="$TEST_ROOT/block.sh"
+
+  for document in "$SKILL_DOC" "$REFERENCE"; do
+    local count
+    count="$(awk '/^```bash$/ {n++} END {print n + 0}' "$document")"
+    [ "$count" -gt 0 ]
+    local i
+    for ((i = 1; i <= count; i++)); do
+      awk -v want="$i" '
+        /^```bash$/ { n++; if (n == want) { inb = 1; next } }
+        inb && /^```$/ { exit }
+        inb { print }
+      ' "$document" >"$block_file"
+      run bash -n "$block_file"
+      if [ "$status" -ne 0 ]; then
+        echo "block #$i in $document does not parse:" >&2
+        cat "$block_file" >&2
+        echo "$output" >&2
+        return 1
+      fi
+      total=$((total + 1))
+    done
+  done
+
+  [ "$total" -ge 10 ]
+}
+
 @test "login-shell troubleshooting excludes tracked rc and retry-loop changes" {
   grep -F "zsh -lic" "$SKILL_DOC" "$REFERENCE"
   grep -F "Empty endpoint variables or Codex resolving to the raw binary" \

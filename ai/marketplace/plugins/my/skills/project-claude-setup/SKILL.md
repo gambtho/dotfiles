@@ -95,7 +95,9 @@ Slug derivation: the basename of the project directory (e.g., for a project at `
 Detect what the project tracks (or has on disk) before calling the helper:
 
 ```bash
-cd <project>
+PROJECT_DIR="<project>"        # the project worktree
+SLUG="$(basename "$PROJECT_DIR")"   # verbatim basename; see the slug rule above
+cd "$PROJECT_DIR"
 PROJ_HAS_CLAUDE_MD=0
 PROJ_HAS_AGENTS_MD=0
 PROJ_CLAUDE_DIR_NEEDS_PER_FILE=0
@@ -126,7 +128,7 @@ flags=()
 (( PROJ_CLAUDE_DIR_NEEDS_PER_FILE )) && flags+=(--claude-dir-per-file)
 # Dedupe in case both CLAUDE.md and AGENTS.md triggered --local-md above.
 mapfile -t flags < <(printf '%s\n' "${flags[@]}" | awk '!seen[$0]++')
-claude-link-project --create "${flags[@]}" <project-dir>
+claude-link-project --create "${flags[@]}" "$PROJECT_DIR"
 ```
 
 `claude-link-project --create` scaffolds `~/.dotfiles/projects/<slug>/{CLAUDE.md,.claude/settings.local.json}` placeholders in the overlay if not already present, then links them into the project per the chosen flags:
@@ -358,7 +360,7 @@ Skip this step if the user only wants standalone subagents — the catalog still
 ## Step 8 — Final verification
 
 ```bash
-cd <project>
+cd "$PROJECT_DIR"    # from Step 7
 git status --short
 ```
 
@@ -369,7 +371,7 @@ Report to the user:
 - Symlinks created in the project worktree
 - Commands to commit dotfiles changes:
   ```bash
-  cd ~/.dotfiles && git add projects/<slug> && git commit -m "add project overlay for <slug>"
+  cd ~/.dotfiles && git add "projects/$SLUG" && git commit -m "add project overlay for $SLUG"
   ```
 - For case (a): rebuild the devcontainer to pick up new mounts —
   `devcontainer up --remove-existing-container --workspace-folder .` or VS Code "Dev Containers: Rebuild Container"
