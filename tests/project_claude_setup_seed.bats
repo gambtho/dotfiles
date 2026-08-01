@@ -35,27 +35,36 @@ exec "$@"
 EOF
   chmod +x "$STUB_BIN/sudo"
 
-  # The seed now hard-fails when it cannot make zsh the login shell, because a
-  # silent skip in a real container leaves a bash terminal that bypasses the
-  # Vekil proxy. Neither condition is satisfiable in a test sandbox — we cannot
-  # rewrite the runner's /etc/passwd — so stub chsh to accept the change. CI
-  # runners also default to bash, which is why this cannot rely on the
-  # already-zsh no-op path that happens to hold on a developer machine.
+  # The seed hard-fails when it cannot make zsh the login shell, because a silent
+  # skip in a real container leaves a bash terminal that bypasses the Vekil
+  # proxy. A test sandbox cannot rewrite the runner's /etc/passwd, so the login
+  # shell is faked through a state file: it starts as bash (what a fresh
+  # container and the CI runner both look like) and the chsh stub rewrites it.
+  # Reporting zsh unconditionally would be wrong — the seed would take the no-op
+  # branch and neither the chsh path nor its failure path would ever run, which
+  # is exactly how a broken fatal-exit shipped green from a developer machine.
+  SHELL_STATE="$TEST_ROOT/login-shell"
+  export SHELL_STATE
+  printf '/bin/bash\n' >"$SHELL_STATE"
+
   cat >"$STUB_BIN/chsh" <<'EOF'
 #!/usr/bin/env bash
+set -euo pipefail
+# chsh -s <shell> <user>
+[ "${1:-}" = -s ] || exit 1
+printf '%s\n' "$2" >"$SHELL_STATE"
 exit 0
 EOF
   chmod +x "$STUB_BIN/chsh"
 
-  # getent reports the sandbox user's real login shell (bash on CI), so report
-  # zsh instead once chsh has "run" — otherwise the seed's post-check would see
-  # an unchanged shell. Only field 7 is synthesized; the rest passes through.
+  # Only passwd field 7 is synthesized, from the state file; everything else
+  # passes through to the real getent.
   cat >"$STUB_BIN/getent" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 if [ "${1:-}" = passwd ]; then
   line="$(/usr/bin/getent passwd "${2:-}")" || exit 2
-  printf '%s\n' "$line" | awk -F: -v OFS=: -v z="$ZSH_STUB_PATH" '{$7=z; print}'
+  printf '%s\n' "$line" | awk -F: -v OFS=: -v s="$(cat "$SHELL_STATE")" '{$7=s; print}'
   exit 0
 fi
 exec /usr/bin/getent "$@"
@@ -346,6 +355,65 @@ extract_seed_script() {
   # asserted per-document rather than through one shared exact-match string.
   grep -Fqx 'Never edit a project Dockerfile or a base Compose file. Never edit `.devcontainer/devcontainer.json` **except** for the single user-approved change of adding `docker-compose.override.yml` to the `dockerComposeFile` array (Section 6c) — and even then, touch no other key. That edit only happens after the user explicitly approves it, knowing it is a tracked change.' "$SKILL_DOC"
   grep -Fqx 'Never edit a project Dockerfile or a base Compose file. Never edit `devcontainer.json` except for the user-approved `dockerComposeFile` entry above — and never touch any other key in it.' "$REFERENCE"
+}
+
+@test "a bash login shell is switched to zsh" {
+  # The starting state of both a fresh container and the CI runner. Asserting
+  # the state file changed proves the chsh branch actually ran, rather than the
+  # seed short-circuiting on an already-zsh shell as it does on a dev machine.
+  [ "$(cat "$SHELL_STATE")" = /bin/bash ]
+
+  run bash "$SEED_SCRIPT"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"default shell to zsh"* ]]
+  [ "$(cat "$SHELL_STATE")" = "$ZSH_STUB_PATH" ]
+}
+
+@test "an already-zsh login shell is left alone" {
+  printf '%s\n' "$ZSH_STUB_PATH" >"$SHELL_STATE"
+
+  run bash "$SEED_SCRIPT"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"default shell to zsh"* ]]
+}
+
+@test "a missing zsh aborts the seed instead of leaving a bash terminal" {
+  # Vekil's env.zsh is zsh-only. Continuing here would produce a container whose
+  # terminal silently bypasses the proxy — the failure this check exists to
+  # prevent — so the seed must stop and say why. zsh cannot be uninstalled, so
+  # run against a PATH that mirrors the real one minus zsh.
+  local nozsh="$TEST_ROOT/nozsh"
+  mkdir -p "$nozsh"
+  local entry
+  for entry in /usr/bin/* /bin/*; do
+    case "${entry##*/}" in
+      zsh | zsh?*) continue ;;
+    esac
+    ln -sf "$entry" "$nozsh/${entry##*/}" 2>/dev/null || true
+  done
+  [ ! -e "$nozsh/zsh" ]
+
+  PATH="$STUB_BIN:$nozsh" run bash "$SEED_SCRIPT"
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"zsh not found"* ]]
+}
+
+@test "an unchangeable login shell aborts the seed" {
+  # chsh fails and /etc/passwd is not writable (the seed runs unprivileged).
+  # Previously this was a non-fatal warning, which let a proxy-bypassing
+  # container look like a successful seed.
+  printf '#!/usr/bin/env bash\nexit 1\n' >"$STUB_BIN/chsh"
+  chmod +x "$STUB_BIN/chsh"
+  [ "$(cat "$SHELL_STATE")" = /bin/bash ]
+
+  run bash "$SEED_SCRIPT"
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"could not set"*"login shell to zsh"* ]]
+  [ "$(cat "$SHELL_STATE")" = /bin/bash ]
 }
 
 @test "login-shell troubleshooting excludes tracked rc and retry-loop changes" {
