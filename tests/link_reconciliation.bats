@@ -132,6 +132,38 @@ CASES
   [ "$(cat "$HOME/destination")" = local ]
 }
 
+@test "interactive bootstrap does not prompt for an already-correct link" {
+  ln -s "$TEST_ROOT/source" "$HOME/destination"
+
+  # No /dev/tty is available here, so any attempt to prompt fails loudly
+  # instead of silently skipping.
+  run env HOME="$HOME" BOOTSTRAP_SOURCE_ONLY=1 bash -c '
+    source "$1/bin/bootstrap"
+    overwrite_all=false
+    backup_all=false
+    skip_all=false
+    link_file "$2" "$3"
+  ' _ "$REPO_ROOT" "$TEST_ROOT/source" "$HOME/destination" </dev/null
+
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"already exists at"* ]]
+  [ "$(readlink "$HOME/destination")" = "$TEST_ROOT/source" ]
+}
+
+@test "interactive bootstrap still prompts for a genuine conflict" {
+  printf 'local\n' >"$HOME/destination"
+
+  run env HOME="$HOME" BOOTSTRAP_SOURCE_ONLY=1 bash -c '
+    source "$1/bin/bootstrap"
+    overwrite_all=false
+    backup_all=false
+    skip_all=false
+    link_file "$2" "$3"
+  ' _ "$REPO_ROOT" "$TEST_ROOT/source" "$HOME/destination" </dev/null
+
+  [[ "$output" == *"already exists at"* ]]
+}
+
 @test "relink replaces a different symlink" {
   ln -s "$TEST_ROOT/old" "$HOME/.zshrc"
 

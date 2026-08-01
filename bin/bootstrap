@@ -135,6 +135,12 @@ link_file() {
   local label policy
 
   label=$(basename "$src")
+  # An already-correct link is not a conflict. Check before consulting the
+  # user so re-bootstrapping a provisioned machine stays non-interactive.
+  if [[ -L "$dst" && "$(readlink "$dst")" == "$src" ]]; then
+    reconcile_link "$src" "$dst" "$label" skip apply
+    return
+  fi
   if [[ "$overwrite_all" == true ]]; then
     policy=replace
   elif [[ "$backup_all" == true ]]; then
