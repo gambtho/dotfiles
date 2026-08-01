@@ -7,7 +7,7 @@ integration (`env.zsh`) that points the clients at the proxy.
 
 - Proxy lifecycle script: `bin/vekil-proxy`
 - Autostart unit template: `ai/vekil/vekil.service`
-- Shell integration (sourced from `core/shell/load-custom.zsh`): `ai/vekil/env.zsh`
+- Shell integration (sourced early from `core/shell/zshrc.symlink`): `ai/vekil/env.zsh`
 - Codex config + auth installer: `ai/codex/install.sh`
 - Migration background: `VEKIL_MIGRATION_HANDOFF.md` (repo root)
 
@@ -46,6 +46,21 @@ Notes:
   user manager (containers, CI, macOS): set `VEKIL_SKIP_SERVICE=1` to force it.
 - Lingering needs polkit permission. If the installer warns, run
   `sudo loginctl enable-linger $USER`.
+
+## Shutdown failures
+
+`vekil-proxy stop` verifies the recorded PID and process start identity after
+both graceful termination and, when needed, SIGKILL. Graceful shutdown waits
+for `VEKIL_STOP_TIMEOUT` (15 seconds by default); confirmation after SIGKILL
+uses `VEKIL_KILL_CONFIRM_TIMEOUT` (2 seconds, accepted range 0–30).
+
+If the same process survives, the command returns nonzero, preserves
+`proxy.pid`, and writes a private `proxy-stop-failed` record. While that exact
+process remains alive, `vekil-proxy status` reports
+`STOP_FAILED host=... port=... pid=...` before considering endpoint health.
+Correct the condition preventing termination and rerun `vekil-proxy stop`;
+ownership and failure records are removed only after the recorded process is
+confirmed gone. A later successful start also clears the failure record.
 
 
 ## How the two clients reach the proxy

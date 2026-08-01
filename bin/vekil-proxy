@@ -12,10 +12,12 @@ ACCESS_TOKEN_FILE="$TOKEN_DIR/access-token"
 PORT="${VEKIL_PORT:-1337}"
 START_TIMEOUT="${VEKIL_START_TIMEOUT:-90}"
 STOP_TIMEOUT="${VEKIL_STOP_TIMEOUT:-15}"
+KILL_CONFIRM_TIMEOUT="${VEKIL_KILL_CONFIRM_TIMEOUT:-2}"
 PIDFILE="$STATE_DIR/proxy.pid"
 LOG="$STATE_DIR/proxy.log"
 HOSTFILE="$STATE_DIR/proxy-host"
 READYFILE="$STATE_DIR/proxy-ready"
+STOP_FAILED_FILE="$STATE_DIR/proxy-stop-failed"
 LOCKDIR="$STATE_DIR/.proxy.lock"
 LOCK_OWNER="$LOCKDIR/owner"
 START_RECORD=""
@@ -112,6 +114,7 @@ validate_configuration() {
   normalize_uint PORT VEKIL_PORT 1 65535
   normalize_uint START_TIMEOUT VEKIL_START_TIMEOUT 0 86400
   normalize_uint STOP_TIMEOUT VEKIL_STOP_TIMEOUT 0 86400
+  normalize_uint KILL_CONFIRM_TIMEOUT VEKIL_KILL_CONFIRM_TIMEOUT 0 30
   if [[ -n "${VEKIL_HOST:-}" ]]; then
     VEKIL_HOST=$(normalize_host "$VEKIL_HOST")
   fi
@@ -143,6 +146,7 @@ validate_state_entries() {
   require_safe_regular "$HOSTFILE" || return
   require_safe_regular "$LOG" || return
   require_safe_regular "$READYFILE" || return
+  require_safe_regular "$STOP_FAILED_FILE" || return
 }
 
 remove_ready_marker() {
@@ -152,6 +156,15 @@ remove_ready_marker() {
 
 publish_ready_marker() {
   atomic_write "$READYFILE" ready
+}
+
+write_stop_failed() {
+  atomic_write "$STOP_FAILED_FILE" "$1"
+}
+
+clear_stop_failed() {
+  require_safe_regular "$STOP_FAILED_FILE" || return
+  rm -f -- "$STOP_FAILED_FILE"
 }
 
 atomic_write() {
@@ -326,13 +339,22 @@ process_is_vekil() {
   [[ -n "$actual" && "$(canonical_path "$actual" 2>/dev/null || true)" == "$expected" ]]
 }
 
-read_pid_record() {
-  require_safe_regular "$PIDFILE" || return
-  [[ -e "$PIDFILE" ]] || return 1
+read_process_record_from() {
+  local path="$1"
   local record pid start_id extra
-  IFS='|' read -r pid start_id extra < "$PIDFILE" || return 1
+  require_safe_regular "$path" || return
+  [[ -e "$path" ]] || return 1
+  IFS='|' read -r pid start_id extra < "$path" || return 1
   [[ "$pid" =~ ^[0-9]+$ && -n "$start_id" && -z "${extra:-}" ]] || return 1
   printf '%s|%s\n' "$pid" "$start_id"
+}
+
+read_pid_record() {
+  read_process_record_from "$PIDFILE"
+}
+
+read_stop_failed_record() {
+  read_process_record_from "$STOP_FAILED_FILE"
 }
 
 process_matches_record() {
@@ -647,6 +669,7 @@ start() {
       remaining=$((deadline - SECONDS))
       if (( remaining > 0 )) && is_ready "$remaining"; then
         publish_ready_marker
+        clear_stop_failed
         STARTING=0
         echo "Vekil already ready on $(runtime_host):$PORT (pid $existing_pid)"
         return 0
@@ -658,6 +681,7 @@ start() {
     echo -n "waiting for Vekil readiness on $(runtime_host):$PORT (pid $existing_pid) "
     wait_until_ready "$existing_record" "$deadline"
     publish_ready_marker
+    clear_stop_failed
     STARTING=0
     echo " READY"
     return 0
@@ -698,8 +722,18 @@ start() {
   START_PID=""
   START_VERIFIED=0
   publish_ready_marker
+  clear_stop_failed
   STARTING=0
   echo " READY (pid $pid)"
+}
+
+wait_until_process_changes() {
+  local record="$1" timeout="$2" deadline
+  deadline=$((SECONDS + timeout))
+  while process_matches_record "$record"; do
+    (( SECONDS < deadline )) || return 1
+    sleep 1
+  done
 }
 
 stop() {
@@ -710,6 +744,7 @@ stop() {
   record=$(pid_record || true)
   if [[ -z "$record" ]]; then
     rm -f -- "$PIDFILE"
+    clear_stop_failed
     echo "Vekil is not running"
     return 0
   fi
@@ -721,24 +756,42 @@ stop() {
   fi
   deadline=$((SECONDS + STOP_TIMEOUT))
   while process_matches_record "$record"; do
-    if (( SECONDS >= deadline )); then
-      echo -n "force "
-      if process_matches_record "$record"; then
-        kill -9 "$pid" 2>/dev/null || true
-      fi
-      break
-    fi
+    (( SECONDS < deadline )) || break
     echo -n "."
     sleep 1
   done
+
+  if process_matches_record "$record"; then
+    echo -n "force "
+    kill -9 "$pid" 2>/dev/null || true
+    if ! wait_until_process_changes "$record" "$KILL_CONFIRM_TIMEOUT"; then
+      write_stop_failed "$record"
+      echo "FAILED"
+      echo "unable to stop Vekil pid $pid; ownership state preserved in $STOP_FAILED_FILE" >&2
+      return 1
+    fi
+  fi
+
   rm -f -- "$PIDFILE"
+  clear_stop_failed
   echo " STOPPED"
 }
 
 status() {
-  local host pid
+  local host pid failed_record
   validate_state_entries
   host=$(runtime_host)
+  failed_record=$(read_stop_failed_record || true)
+  if [[ -n "$failed_record" ]]; then
+    if process_matches_record "$failed_record"; then
+      pid=${failed_record%%|*}
+      echo "STOP_FAILED host=$host port=$PORT pid=$pid"
+      return 1
+    fi
+    clear_stop_failed
+  elif [[ -e "$STOP_FAILED_FILE" ]]; then
+    clear_stop_failed
+  fi
   pid=$(pid_of || true)
   if is_ready; then
     echo "READY host=$host port=$PORT pid=${pid:-unknown}"
@@ -818,30 +871,32 @@ logs() {
   tail -n "$lines" -f "$LOG"
 }
 
-validate_configuration
+if [[ "${VEKIL_PROXY_SOURCE_ONLY:-0}" != 1 ]]; then
+  validate_configuration
 
-case "${1:-default}" in
-  start|stop|restart|default)
-    secure_directory "$STATE_DIR"
-    validate_state_entries
-    acquire_lock
-    ;;
-esac
+  case "${1:-default}" in
+    start | stop | restart | default)
+      secure_directory "$STATE_DIR"
+      validate_state_entries
+      acquire_lock
+      ;;
+  esac
 
-case "${1:-default}" in
-  install) exec "$DOTFILES_ROOT/ai/vekil/install.sh" "${@:2}" ;;
-  login) login "${@:2}" ;;
-  logout) logout ;;
-  start) start ;;
-  stop) stop ;;
-  restart) stop; start ;;
-  status) status ;;
-  env) print_env ;;
-  logs) logs "${2:-50}" ;;
-  models) models ;;
-  default) start; echo; print_env ;;
-  *)
-    echo "usage: vekil-proxy [install|login|logout|start|stop|restart|status|env|logs [lines]|models]" >&2
-    exit 2
-    ;;
-esac
+  case "${1:-default}" in
+    install) exec "$DOTFILES_ROOT/ai/vekil/install.sh" "${@:2}" ;;
+    login) login "${@:2}" ;;
+    logout) logout ;;
+    start) start ;;
+    stop) stop ;;
+    restart) stop; start ;;
+    status) status ;;
+    env) print_env ;;
+    logs) logs "${2:-50}" ;;
+    models) models ;;
+    default) start; echo; print_env ;;
+    *)
+      echo "usage: vekil-proxy [install|login|logout|start|stop|restart|status|env|logs [lines]|models]" >&2
+      exit 2
+      ;;
+  esac
+fi
