@@ -45,14 +45,12 @@ validate: ## Validate AI config structure (agents, commands, skills)
 check: syntax lint test validate
 
 syntax:
-	@{ find bin -type f -not -name '*.zsh' -print0; find ai core fonts languages platforms work -type f -name '*.sh' -print0; } | \
-		bash -c 'while IFS= read -r -d "" file; do bash -n "$$file" || exit 1; done'
-	@find core languages platforms profiles tools work -type f \( -name '*.zsh' -o -path 'core/shell/*.symlink' \) -print0 | \
-		bash -c 'while IFS= read -r -d "" file; do zsh -n "$$file" || exit 1; done'
+	@bin/list-check-files bash | xargs -0 -r -n 1 bash -n
+	@bin/list-check-files zsh | xargs -0 -r -n 1 zsh -n
 
 lint:
-	shellcheck -x -S warning -e SC1091 $$(find bin -type f -not -name '*.zsh'; find ai core fonts languages platforms work -type f -name '*.sh')
-	shfmt -d -i 2 -ci $$(find bin ai core fonts languages platforms work -type f -name '*.sh') tests/test_helper.bash
+	@bin/list-check-files shellcheck | xargs -0 -r shellcheck -x -S warning -e SC1091
+	@bin/list-check-files shfmt | xargs -0 -r shfmt -d -i 2 -ci
 
 test:
 	bats tests
