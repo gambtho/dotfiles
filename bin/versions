@@ -85,7 +85,12 @@ check_git_ref() {
 
 latest_kubernetes_channel() {
   local stable
-  stable="$(curl "${CURL_DOWNLOAD_ARGS[@]}" --silent https://dl.k8s.io/release/stable.txt)"
+  # Return curl's status explicitly. `set -e` does not reach this assignment:
+  # bash unsets errexit inside command-substitution subshells unless
+  # `inherit_errexit` is on, and every caller invokes this as `$(...)`. Without
+  # the `|| return` the trailing printf would run anyway and hand the caller an
+  # empty channel with status 0.
+  stable="$(curl "${CURL_DOWNLOAD_ARGS[@]}" --silent https://dl.k8s.io/release/stable.txt)" || return
   printf '%s\n' "${stable%.*}"
 }
 
@@ -113,7 +118,10 @@ check_pins() {
   check_git_ref prezto "$PREZTO_REPO" "$PREZTO_REF"
   check_git_ref zsh-defer "$ZSH_DEFER_REPO" "$ZSH_DEFER_REF"
   local latest_channel
-  latest_channel="$(latest_kubernetes_channel)"
+  latest_channel="$(latest_kubernetes_channel)" || {
+    printf 'error channel kubernetes: unable to query upstream stable channel\n' >&2
+    return 1
+  }
   if [[ "$KUBERNETES_CHANNEL" == "$latest_channel" ]]; then
     printf 'current channel kubernetes %s\n' "$KUBERNETES_CHANNEL"
   else
@@ -137,12 +145,16 @@ update_pin() {
 }
 
 update_pins() {
-  # Resolve the upstream channel BEFORE any pin is written. The lookup is a
-  # network call and `set -e` aborts the function when it fails, so doing it
-  # after the mise upgrade and the two Git pin writes would leave the repo
-  # half-updated with no channel report explaining why.
+  # Resolve the upstream channel BEFORE any pin is written, and gate on the
+  # lookup's exit status as well as its shape. A truncated or retried transfer
+  # can still leave something that matches the regex on stdout, so a non-zero
+  # curl must reject the run on its own -- otherwise the mise upgrade and the two
+  # Git pin writes below would land against an unverified channel report.
   local latest_channel
-  latest_channel="$(latest_kubernetes_channel)"
+  latest_channel="$(latest_kubernetes_channel)" || {
+    printf 'error: upstream Kubernetes channel lookup failed; no pins were updated\n' >&2
+    exit 1
+  }
   [[ "$latest_channel" =~ ^v[0-9]+\.[0-9]+$ ]] || {
     printf 'error: unable to resolve upstream Kubernetes channel; no pins were updated\n' >&2
     exit 1

@@ -143,6 +143,68 @@ SCRIPT
   done
 }
 
+@test "versions check fails when the Kubernetes channel lookup fails" {
+  stub_command mise 'exit 0'
+  cat >"$STUB_BIN/git" <<SCRIPT
+#!/usr/bin/env bash
+case "\$*" in
+  *prezto*) printf '%s\tHEAD\n' '$PREZTO_REF' ;;
+  *zsh-defer*) printf '%s\tHEAD\n' '$ZSH_DEFER_REF' ;;
+esac
+SCRIPT
+  chmod +x "$STUB_BIN/git"
+  # Emit a plausible channel *and* exit non-zero, the shape a truncated or
+  # redirected transfer takes. Output alone must not be enough to pass.
+  cat >"$STUB_BIN/curl" <<'SCRIPT'
+#!/usr/bin/env bash
+url="${@: -1}"
+case "$url" in
+  *dl.k8s.io*)
+    printf 'v1.34.0\n'
+    exit 22
+    ;;
+esac
+SCRIPT
+  chmod +x "$STUB_BIN/curl"
+
+  run env PATH="$PATH" bash "$REPO_ROOT/bin/versions" check
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"error channel kubernetes: unable to query upstream stable channel"* ]]
+  [[ "$output" != *"outdated channel kubernetes"* ]]
+}
+
+@test "versions update writes no pins when the Kubernetes channel lookup fails" {
+  local fixture="$TEST_ROOT/fixture"
+  mkdir -p "$fixture"
+  cp -R "$REPO_ROOT/bin" "$fixture/bin"
+  cp -R "$REPO_ROOT/config" "$fixture/config"
+
+  stub_command mise 'exit 0'
+  stub_command make 'exit 0'
+  stub_command git 'printf "deadbeef\tHEAD\n"'
+  cat >"$STUB_BIN/curl" <<'SCRIPT'
+#!/usr/bin/env bash
+url="${@: -1}"
+case "$url" in
+  *dl.k8s.io*)
+    printf 'v9.99.0\n'
+    exit 22
+    ;;
+esac
+SCRIPT
+  chmod +x "$STUB_BIN/curl"
+
+  run bash "$fixture/bin/versions" update
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"no pins were updated"* ]]
+  # The Git pins are written after the lookup, so an unnoticed failure would
+  # show up here as a repo half-updated against an unverified channel.
+  [ "$(grep '^PREZTO_REF=' "$fixture/config/versions.env")" = "PREZTO_REF=$PREZTO_REF" ]
+  [ "$(grep '^ZSH_DEFER_REF=' "$fixture/config/versions.env")" = "ZSH_DEFER_REF=$ZSH_DEFER_REF" ]
+}
+
 @test "versions update keeps artifact bumps behind checksum review" {
   run rg -n 'checksum-reviewed manual update required' "$REPO_ROOT/bin/versions"
 
