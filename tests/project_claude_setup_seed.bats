@@ -652,6 +652,33 @@ extract_seed_script() {
   [ "$load_at" -lt "$vekil_at" ]
 }
 
+@test "the shell loader is inserted above a Vekil hook left by an earlier seed" {
+  # The upgrade path, and the one the test above cannot see: it writes both hooks
+  # in a single fresh run, where appending happens to land in the right order. On
+  # a volume already seeded by an older version the Vekil hook is present and the
+  # loader is not, so a plain append would place the loader *after* it and
+  # silently invert the precedence — core/ would then win over ai/vekil/env.zsh
+  # for ANTHROPIC_MODEL, pointing the container at the wrong model with no error.
+  local hook='[[ -r "$HOME/.dotfiles/core/shell/load-custom.zsh" ]] && source "$HOME/.dotfiles/core/shell/load-custom.zsh"'
+  local vekil='[[ -r "$HOME/.dotfiles/ai/vekil/env.zsh" ]] && source "$HOME/.dotfiles/ai/vekil/env.zsh"'
+  printf '%s\n' "$vekil" >"$HOME/.zshrc"
+
+  run bash "$SEED_SCRIPT"
+  [ "$status" -eq 0 ]
+
+  [ "$(grep -Fxc "$hook" "$HOME/.zshrc")" = 1 ]
+  [ "$(grep -Fxc "$vekil" "$HOME/.zshrc")" = 1 ]
+  local load_at vekil_at
+  load_at="$(grep -Fxn "$hook" "$HOME/.zshrc" | cut -d: -f1)"
+  vekil_at="$(grep -Fxn "$vekil" "$HOME/.zshrc" | cut -d: -f1)"
+  [ "$load_at" -lt "$vekil_at" ]
+
+  # And the rewrite is idempotent — a second start must not stack another copy.
+  run bash "$SEED_SCRIPT"
+  [ "$status" -eq 0 ]
+  [ "$(grep -Fxc "$hook" "$HOME/.zshrc")" = 1 ]
+}
+
 @test "codex reinstall is guarded on the binary, not the config" {
   # Guarding on ~/.codex/config.toml latches: the installer writes config even
   # when it cannot produce a binary, so config-present/codex-missing skipped the

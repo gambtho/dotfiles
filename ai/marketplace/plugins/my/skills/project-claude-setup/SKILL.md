@@ -425,21 +425,22 @@ Detect the old pattern before converting. Signals (any one → offer repair):
    already-registered guard must list the key explicitly or it re-adds forever.
    Repair, in the seed and **above** the version gate — the source is container
    runtime state, so `SEED_VERSION` cannot observe the poisoning and gating it
-   latches the break:
-   ```bash
-   # Writes back to each registry file; a bare `sed` here only transforms
-   # stdin and leaves the registry untouched, which reads as "the repair ran
-   # and did nothing".
-   for f in "$HOME"/.claude/plugins/known_marketplaces.json \
-            "$HOME"/.claude/plugins/installed_plugins.json; do
-     [ -f "$f" ] || continue
-     sed -E "s#(/root|/home/[^\"/]+)(/\.(claude|dotfiles))#${HOME}\2#g" "$f" >"$f.tmp" \
-       && mv "$f.tmp" "$f"
-   done
-   ```
-   Anchor on the `/.claude|/.dotfiles` suffix, not a bare `/root` — the official
-   catalog contains `//rootly.com` and `/Rootly-AI-Labs` URLs that a loose
-   pattern silently corrupts. Also delete `~/.claude` symlinks left dangling at
+   latches the break. Use the `plugin_home_repair()` function in
+   `devcontainer-host-mounts.md` rather than writing the rewrite inline: it
+   validates the rewritten JSON before replacing anything (a truncated registry
+   is worse than a stale one — Claude fails to start rather than reporting
+   cache-miss), carries owner and mode onto the temp file so the rename does not
+   hand the registry to the wrong user, skips files the rewrite left unchanged,
+   and replaces via atomic `mv` so an interrupt cannot leave a half-written
+   registry. A bare `sed >"$f.tmp" && mv` has none of that.
+
+   Two details in it are load-bearing and easy to lose in a re-implementation:
+   the rewrite must write back to the file (a plain `sed` transforms stdin and
+   leaves the registry untouched, which reads as "the repair ran and did
+   nothing"), and the pattern must anchor on the `/.claude|/.dotfiles` suffix
+   rather than a bare `/root` — the official catalog contains `//rootly.com` and
+   `/Rootly-AI-Labs` URLs that a loose pattern silently corrupts. Also delete
+   `~/.claude` symlinks left dangling at
    the old home. Rewriting is non-destructive and preserves the cache; wiping
    the volume also works but costs re-auth (`.credentials.json` lives there),
    re-download, and container-local history.

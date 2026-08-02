@@ -396,11 +396,30 @@ $SUDO touch "$ZSHRC"
 # $file set and load-custom.zsh re-declares it via `typeset`, which echoes
 # name=value when TYPESET_SILENT is off (zsh's default).
 #
-# Appended BEFORE the Vekil hook below so ai/vekil/env.zsh keeps the last word
-# on the endpoint/model variables it owns.
+# It must land BEFORE the Vekil hook: ai/vekil/env.zsh owns the endpoint/model
+# variables and has to get the last word, but core/ (which load-custom.zsh
+# sources) also sets some of them. Appending is only correct on a FRESH zshrc,
+# where the Vekil block below has not run yet. On an already-seeded volume —
+# which is exactly the upgrade path this block exists to serve — the Vekil hook
+# is already there from an earlier seed, so appending would place this after it
+# and silently invert the precedence. Insert above it in that case.
 DOTFILES_LOAD_HOOK='[[ -r "$HOME/.dotfiles/core/shell/load-custom.zsh" ]] && source "$HOME/.dotfiles/core/shell/load-custom.zsh"'
 if ! grep -Fqx "$DOTFILES_LOAD_HOOK" "$ZSHRC" 2>/dev/null; then
-  printf '\n%s\n' "$DOTFILES_LOAD_HOOK" | $SUDO tee -a "$ZSHRC" >/dev/null
+  if grep -Fqx "$VEKIL_ENV_HOOK" "$ZSHRC" 2>/dev/null; then
+    ZSHRC_TMP="$(mktemp)"
+    # Exact line match on the whole hook, not a substring: awk -v takes the
+    # value literally and neither hook contains a backslash.
+    awk -v hook="$DOTFILES_LOAD_HOOK" -v vekil="$VEKIL_ENV_HOOK" '
+      $0 == vekil && !ins { print hook; print ""; ins = 1 }
+      { print }
+    ' "$ZSHRC" >"$ZSHRC_TMP"
+    # cp, not mv: writing through the existing path keeps the file's owner and
+    # mode, which matter because the terminal user may not be the seed user.
+    $SUDO cp "$ZSHRC_TMP" "$ZSHRC"
+    rm -f "$ZSHRC_TMP"
+  else
+    printf '\n%s\n' "$DOTFILES_LOAD_HOOK" | $SUDO tee -a "$ZSHRC" >/dev/null
+  fi
   echo "🌱 seed: configured dotfiles shell integration"
 fi
 
@@ -679,17 +698,31 @@ elif [ -r "$DOTFILES_HOME/config/versions.env" ]; then
     echo "🌱 seed: installing neovim $NVIM_VERSION ($NVIM_ARCH)"
     NVIM_TMP="$(mktemp -d)"
     NVIM_URL="https://github.com/neovim/neovim/releases/download/v${NVIM_VERSION}/nvim-${NVIM_ARCH}.tar.gz"
-    if curl -fsSL -o "$NVIM_TMP/nvim.tar.gz" "$NVIM_URL" \
+    # Every step is inside the `if` condition, so a failure anywhere falls
+    # through to the non-fatal message instead of killing the seed under
+    # `set -e` — an optional editor must never cost the container its start.
+    # Deployment is part of the chain rather than a trailing block: an unchecked
+    # mv/ln can leave ~/.local/bin/nvim dangling while "neovim ready" prints,
+    # and a dangling EDITOR fails `git commit` with an error naming git.
+    #
+    # Timeouts are bounded for the same reason. curl's default is no timeout at
+    # all, so a blackholed connection to the release CDN hangs the seed forever
+    # and the container never finishes starting.
+    #
+    # The whole tree ships, not just the binary: nvim needs its runtime/ share
+    # dir, so symlinking the bare binary gives an nvim that starts and then
+    # cannot find its own runtime files.
+    if curl -fsSL --connect-timeout 10 --max-time 300 \
+      -o "$NVIM_TMP/nvim.tar.gz" "$NVIM_URL" \
       && echo "$NVIM_SHA  $NVIM_TMP/nvim.tar.gz" | sha256sum -c - >/dev/null 2>&1 \
-      && tar -xzf "$NVIM_TMP/nvim.tar.gz" -C "$NVIM_TMP"; then
-      # Ship the whole tree: nvim needs its runtime/ share dir, so symlinking the
-      # bare binary out of the tarball gives an nvim that starts and then cannot
-      # find its own runtime files.
-      as_user rm -rf "$SEED_HOME/.local/share/nvim-dist"
-      as_user mkdir -p "$SEED_HOME/.local/share" "$SEED_HOME/.local/bin"
-      mv "$NVIM_TMP/nvim-$NVIM_ARCH" "$SEED_HOME/.local/share/nvim-dist"
-      chown -R "$SEED_UID:$SEED_GID" "$SEED_HOME/.local/share/nvim-dist" 2>/dev/null || true
-      as_user ln -sf "$SEED_HOME/.local/share/nvim-dist/bin/nvim" "$SEED_HOME/.local/bin/nvim"
+      && tar -xzf "$NVIM_TMP/nvim.tar.gz" -C "$NVIM_TMP" \
+      && [ -d "$NVIM_TMP/nvim-$NVIM_ARCH" ] \
+      && as_user mkdir -p "$SEED_HOME/.local/share" "$SEED_HOME/.local/bin" \
+      && as_user rm -rf "$SEED_HOME/.local/share/nvim-dist" \
+      && mv "$NVIM_TMP/nvim-$NVIM_ARCH" "$SEED_HOME/.local/share/nvim-dist" \
+      && { chown -R "$SEED_UID:$SEED_GID" "$SEED_HOME/.local/share/nvim-dist" 2>/dev/null || true; } \
+      && as_user ln -sf "$SEED_HOME/.local/share/nvim-dist/bin/nvim" "$SEED_HOME/.local/bin/nvim" \
+      && as_user test -x "$SEED_HOME/.local/bin/nvim"; then
       echo "🌱 seed: neovim ready"
     else
       echo "⚠️  seed: neovim install failed (non-fatal; EDITOR falls back to vim)"
