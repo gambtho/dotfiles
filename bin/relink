@@ -67,10 +67,11 @@ link_file() {
   fi
 }
 
+if [ -d "$DOTFILES_ROOT/config" ]; then
+  mkdir -p "$HOME/.config"
+fi
+
 while IFS= read -r -d '' src && IFS= read -r -d '' dst; do
-  case "$dst" in
-    "$HOME"/.config/*) mkdir -p "$HOME/.config" ;;
-  esac
   link_file "$src" "$dst"
 done < <(managed_link_pairs "$DOTFILES_ROOT" "$HOME")
 
