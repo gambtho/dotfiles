@@ -55,7 +55,16 @@ is gitignored, but the tree is rarely *clean* — an in-flight branch has its ow
 modifications, so a bare `git status --porcelain` at the end proves nothing:
 
 ```bash
-git status --porcelain >"${TMPDIR:-/tmp}/seed-baseline.status"
+# Scoped to THIS repo's .git dir, not a shared /tmp path. Steps 2 and 3 run as
+# separate shell invocations, so the location has to be stable rather than
+# mktemp-random — but a fixed name under /tmp is worse than useless here: run
+# this procedure on two projects at once (or leave a stale file from last week)
+# and the second run silently overwrites the first's baseline, so Step 3 diffs
+# against another repo's status and reports a violation that isn't one, or
+# hides one that is. `git rev-parse --git-dir` is per-repo, never tracked, and
+# resolves correctly inside a linked worktree.
+SEED_BASELINE="$(git rev-parse --git-dir)/seed-baseline.status"
+git status --porcelain >"$SEED_BASELINE"
 ```
 
 Each entry gives the grep anchor to find it in the template. All of these live
@@ -115,8 +124,18 @@ shfmt -d -i 2 -ci .devcontainer/local-seed.sh
 # Nothing tracked may have moved. Diffed against the Step 2 baseline rather than
 # asserted empty: the seed and the override are gitignored, but any other
 # in-flight work in the tree is not, and would otherwise read as a violation.
-diff "${TMPDIR:-/tmp}/seed-baseline.status" <(git status --porcelain) \
-  || echo "TRACKED FILES CHANGED — inspect the diff above before continuing" >&2
+# Refuse to pass on a MISSING baseline — `diff` against /dev/null would compare
+# the current status to nothing and report every in-flight change as new, while
+# an accidental `touch` would make an empty file look like a clean baseline and
+# quietly bless whatever the port touched.
+SEED_BASELINE="$(git rev-parse --git-dir)/seed-baseline.status"
+if [ ! -f "$SEED_BASELINE" ]; then
+  echo "no Step 2 baseline at $SEED_BASELINE — cannot verify; re-run Step 2" >&2
+elif diff "$SEED_BASELINE" <(git status --porcelain); then
+  rm -f "$SEED_BASELINE"   # consumed; a stale one would mislead the next run
+else
+  echo "TRACKED FILES CHANGED — inspect the diff above before continuing" >&2
+fi
 ```
 
 Then rebuild the container and check, inside it:
