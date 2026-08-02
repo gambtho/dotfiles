@@ -141,10 +141,14 @@ extract_seed_script() {
 
   [ "$status" -eq 0 ]
   grep -F "chown -R $(id -u):$(id -g)" "$SUDO_LOG"
-  [ ! -e "$HOME/.claude/settings.json" ]
-  # ~/.dotfiles is mirrored above the sentinel gate on purpose: the installers
-  # live under it, so a warm restart must still get a current tree. Only the
-  # ~/.claude copies and the installers themselves are gated.
+  # The authored ~/.claude copy is ALSO above the gate. Its target persists, but
+  # its source is the host mount, and SEED_VERSION lives in the template — so a
+  # gated copy could never observe a host-side edit and would serve stale config
+  # through any number of rebuilds. Asserting absence here encoded that bug.
+  [ -f "$HOME/.claude/settings.json" ]
+  # ~/.dotfiles is mirrored above the sentinel gate for the same reason, plus the
+  # installers live under it, so a warm restart must still get a current tree.
+  # Only the installers themselves are gated.
   [ -f "$HOME/.dotfiles/ai/marketplace/marker" ]
   [[ "$output" == *"test-event: ownership repaired"*"already seeded"* ]]
 
@@ -173,14 +177,16 @@ extract_seed_script() {
   [ -f "$HOME/.dotfiles/ai/marketplace/marker" ]
   [ "$(cat "$HOME/.claude/.seeded")" = "$seed_version" ]
 
-  # Second run matches on version and skips the gated steps.
+  # Second run matches on version and skips the gated INSTALL steps — but the
+  # always-run authored-config copy still restores this file, which is the whole
+  # point of keeping it above the gate.
   rm -f "$HOME/.claude/settings.json"
 
   run bash "$SEED_SCRIPT"
 
   [ "$status" -eq 0 ]
   [[ "$output" == *"already seeded (v$seed_version)"* ]]
-  [ ! -e "$HOME/.claude/settings.json" ]
+  [ -f "$HOME/.claude/settings.json" ]
 }
 
 @test "a stale stamped sentinel is reseeded and restamped" {
@@ -222,6 +228,53 @@ extract_seed_script() {
   [ ! -e "$HOME/.claude/commands/commands" ]
   [ ! -e "$HOME/.claude/commands/removed-from-host.md" ]
   [ -f "$HOME/.claude/commands/live.md" ]
+}
+
+@test "host dotfiles edits reach a warm container on every start" {
+  # Regression: ~/.dotfiles used to be seeded only into an EMPTY volume. That
+  # volume survives --remove-existing-container, so the tree froze at first-seed
+  # state forever. It is the SOURCE of ~/.claude/settings.json (a symlink into
+  # it) and of ai/vekil/env.zsh, which exports ANTHROPIC_MODEL -- an env var that
+  # OUTRANKS settings.json. So a frozen tree silently overrode the correct model
+  # the ~/.claude copy had just written, and rebuilding never helped.
+  mkdir -p "$TEST_ROOT/host-seed/.dotfiles/ai/vekil"
+  printf 'export ANTHROPIC_MODEL=old-model\n' \
+    >"$TEST_ROOT/host-seed/.dotfiles/ai/vekil/env.zsh"
+
+  run bash "$SEED_SCRIPT"
+  [ "$status" -eq 0 ]
+  grep -Fq 'old-model' "$HOME/.dotfiles/ai/vekil/env.zsh"
+
+  # The host changes the model. No SEED_VERSION bump -- that is the point: the
+  # version lives in the template and cannot observe a host-side edit.
+  # Differ in LENGTH, not just content: rsync's default quick check is
+  # size+mtime at 1-second resolution, so two same-size writes inside the same
+  # second are skipped. Real host edits change size or cross a second boundary.
+  printf 'export ANTHROPIC_MODEL=claude-opus-5-brand-new\n' \
+    >"$TEST_ROOT/host-seed/.dotfiles/ai/vekil/env.zsh"
+
+  run bash "$SEED_SCRIPT"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"already seeded"* ]]
+  grep -Fq 'claude-opus-5-brand-new' "$HOME/.dotfiles/ai/vekil/env.zsh"
+}
+
+@test "dotfiles deleted on the host are pruned from the warm volume" {
+  # The always-run installers EXECUTE files from this persisted tree, so a
+  # non-pruning refresh would keep running an installer deleted upstream.
+  printf 'stale\n' >"$TEST_ROOT/host-seed/.dotfiles/ai/marketplace/doomed.sh"
+
+  run bash "$SEED_SCRIPT"
+  [ "$status" -eq 0 ]
+  [ -f "$HOME/.dotfiles/ai/marketplace/doomed.sh" ]
+
+  rm -f "$TEST_ROOT/host-seed/.dotfiles/ai/marketplace/doomed.sh"
+
+  run bash "$SEED_SCRIPT"
+
+  [ "$status" -eq 0 ]
+  [ ! -e "$HOME/.dotfiles/ai/marketplace/doomed.sh" ]
 }
 
 @test "config removed from the host is pruned from the persisted volume" {

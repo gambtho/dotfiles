@@ -473,7 +473,12 @@ fi
 # lingers until a manual wipe). Fall back to cp -a where rsync is absent.
 if [ -d "$SEED_DOTFILES" ]; then
   if command -v rsync >/dev/null 2>&1; then
-    as_user rsync -a --delete "$SEED_DOTFILES/" "$DOTFILES_HOME/"
+    # -c checksums instead of the default size+mtime quick check. The quick
+    # check compares mtime at 1-second resolution, so a same-size edit made
+    # within a second of the previous sync is skipped -- silently, and this
+    # tree decides the model. 40M of unchanged files hashes fast enough that
+    # correctness is the better trade here.
+    as_user rsync -ac --delete "$SEED_DOTFILES/" "$DOTFILES_HOME/"
     echo "🌱 seed: mirrored ~/.dotfiles via rsync ($(du -sh "$DOTFILES_HOME" | cut -f1))"
   else
     # No non-pruning fallback. DOTFILES_HOME persists across rebuilds and the
