@@ -46,6 +46,8 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
+from pathlib import Path
 
 from PIL import Image, ImageFile, ImageOps
 
@@ -161,37 +163,70 @@ def resolve_date(path, name, source):
 
 # ---------- derivative building ----------
 
+def publish_atomically(destination, writer, require_nonempty=True):
+    """Build beside destination and replace it only after a complete write."""
+    destination = Path(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, stage_name = tempfile.mkstemp(
+        dir=destination.parent,
+        prefix=f".{destination.stem}.stage.",
+        suffix=destination.suffix,
+    )
+    os.close(descriptor)
+    stage = Path(stage_name)
+    try:
+        writer(stage)
+        if require_nonempty and (not stage.exists() or stage.stat().st_size == 0):
+            raise RuntimeError(f"writer produced empty output for {destination}")
+        os.replace(stage, destination)
+    finally:
+        try:
+            stage.unlink()
+        except FileNotFoundError:
+            pass
+
+
 def build_photo(src, base, thumb_dir, full_dir, thumb_max, full_max, force):
     thumb = os.path.join(thumb_dir, base + ".jpg")
     full = os.path.join(full_dir, base + ".jpg")
     for dst, size, q in ((thumb, thumb_max, 78), (full, full_max, 82)):
         if not force and not newer(src, dst):
             continue
-        with Image.open(src) as im:
-            im = ImageOps.exif_transpose(im).convert("RGB")
-            im.thumbnail((size, size), Image.LANCZOS)
-            im.save(dst, "JPEG", quality=q, optimize=True, progressive=True)
+
+        def write_photo(stage):
+            with Image.open(src) as im:
+                im = ImageOps.exif_transpose(im).convert("RGB")
+                im.thumbnail((size, size), Image.LANCZOS)
+                im.save(stage, "JPEG", quality=q, optimize=True, progressive=True)
+
+        publish_atomically(dst, write_photo)
 
 
 def build_video(src, base, thumb_dir, full_dir, thumb_max, video_max_h, force):
     full = os.path.join(full_dir, base + ".mp4")
     thumb = os.path.join(thumb_dir, base + ".jpg")
     if force or newer(src, full):
-        subprocess.run(
-            ["ffmpeg", "-y", "-i", src, "-vf", f"scale=-2:'min({video_max_h},ih)'",
-             "-c:v", "libx264", "-preset", "medium", "-crf", "23",
-             "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", full],
-            check=True, stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
+        def transcode_video(stage):
+            subprocess.run(
+                ["ffmpeg", "-y", "-i", src, "-vf", f"scale=-2:'min({video_max_h},ih)'",
+                 "-c:v", "libx264", "-preset", "medium", "-crf", "23",
+                 "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", stage],
+                check=True, stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+
+        publish_atomically(full, transcode_video)
     if force or newer(src, thumb):
-        subprocess.run(
-            ["ffmpeg", "-y", "-i", src, "-vf",
-             f"thumbnail,scale={thumb_max}:{thumb_max}:force_original_aspect_ratio=decrease",
-             "-frames:v", "1", thumb],
-            check=True, stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
+        def render_poster(stage):
+            subprocess.run(
+                ["ffmpeg", "-y", "-i", src, "-vf",
+                 f"thumbnail,scale={thumb_max}:{thumb_max}:force_original_aspect_ratio=decrease",
+                 "-frames:v", "1", stage],
+                check=True, stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+
+        publish_atomically(thumb, render_poster)
 
 
 # ---------- manifest ----------
@@ -218,9 +253,11 @@ def write_manifest(path, days, start_date):
         lines.append("    items:")
         for base, typ in days[dstr]:
             lines.append(f"      - {{ file: {yaml_quote(base)}, type: {typ} }}")
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w") as f:
-        f.write("\n".join(lines) + "\n")
+    def write_yaml(stage):
+        with stage.open("w") as output:
+            output.write("\n".join(lines) + "\n")
+
+    publish_atomically(path, write_yaml)
 
 
 # ---------- main ----------

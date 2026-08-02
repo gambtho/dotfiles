@@ -40,6 +40,12 @@ setup() {
   [ -z "$output" ]
 }
 
+@test "tracked files do not contain Python bytecode" {
+  run git -C "$REPO_ROOT" ls-files '*.pyc' '*.pyo' '*.pyd' '*/__pycache__/*'
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
 @test "tracked blobs stay below five megabytes" {
   run bash -c '
     root="$1"

@@ -1,4 +1,4 @@
-.PHONY: install bootstrap update relink ai ai-check pins pins-check pins-update check syntax lint test validate
+.PHONY: install bootstrap update relink ai ai-check pins pins-check pins-update check syntax lint test python-test validate
 
 # ── Main targets ──────────────────────────────────────────────────────────────
 
@@ -42,7 +42,7 @@ validate: ## Validate AI config structure (agents, commands, skills)
 
 # ── Verification ───────────────────────────────────────────────────────────────
 
-check: syntax lint test validate
+check: syntax lint test python-test validate
 
 syntax:
 	@bash -o pipefail -c 'bin/list-check-files bash | xargs -0 -n 1 bash -n'
@@ -54,6 +54,9 @@ lint:
 
 test:
 	bats tests
+
+python-test:
+	python3 -m unittest discover -s tests/python -p 'test_*.py'
 
 # ── Help ──────────────────────────────────────────────────────────────────────
 

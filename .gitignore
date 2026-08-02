@@ -20,6 +20,10 @@ core/git/gitconfig.local.symlink
 .opencode/
 ai/codex/projects.local.toml
 
+# Python runtime artifacts
+__pycache__/
+*.py[cod]
+
 # The global ~/.gitignore ignores all CLAUDE.md files (project-local instructions).
 # Our repo-managed global CLAUDE.md is an intentional tracked exception.
 !ai/claude/CLAUDE.md
