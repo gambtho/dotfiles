@@ -20,8 +20,8 @@ SEED_VERSION=8
 # ~/.claude Claude Code reads. NOT necessarily the user running this script.
 #
 # Resolve BOTH values empirically and once. Do not assume uid 1000 is the
-# remoteUser, and do not assume the home is /home/$SEED_USER: images pin homes
-# like /home/node, /home/vscode, or /root independently of the name, and a
+# remoteUser, and do not assume the home directory follows the username: images
+# pin homes (e.g. under node, vscode, or root) independently of the name, and a
 # guessed home seeds a directory the login shell never reads (mounts "work",
 # seed logs success, Claude Code sees nothing). Every mount target and seed
 # path below derives from SEED_HOME, so getting it wrong here is silent.
@@ -164,7 +164,7 @@ as_user git config --global core.excludesFile "$GITIGNORE"
 # set changes as the overlay grows, so discover the exact overlay symlinks each
 # launch and maintain them in a marked, rewritten section of ~/.gitignore. Match
 # by the symlink's target TEXT (find -lname), which works in the container even
-# though the /home/<host-user>/... target is unresolvable here. Discover the
+# though the host user's home-directory target is unresolvable here. Discover the
 # enclosing worktree from this mounted script's path. The fallback keeps the
 # seed usable when the project is not a Git checkout.
 WORKSPACE="$(git -C "$(dirname "$0")" rev-parse --show-toplevel 2>/dev/null || dirname "$0")"
