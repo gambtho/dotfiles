@@ -24,6 +24,10 @@ It replaces the old narrower `devcontainer-host-mounts` skill. The host-mounts l
 
 ## Prerequisites — verify first, bail clearly if any fail
 
+All of these are blocking except item 4, which downgrades the deliverable
+instead of stopping it. That single exception is stated inline below and again
+at the end of this section; nothing else here is advisory.
+
 1. **WSL host, not a devcontainer.** `uname -a` contains `microsoft` and `/.dockerenv` does NOT exist and `$REMOTE_CONTAINERS` is unset. If we're already in a container, the symlinks won't work — abort with: "Run this on the WSL host, not inside the container."
 2. **Project root.** `.git/` exists in the current dir. If not, ask the user to `cd` first.
 3. **Dotfiles repo present.** `~/.dotfiles/` exists with `core/git/gitignore.symlink` and `projects/` subdir. If not, point at `~/.dotfiles/projects/README.md` for the setup story.
@@ -31,7 +35,10 @@ It replaces the old narrower `devcontainer-host-mounts` skill. The host-mounts l
 5. **Global gitignore wired.** `git config --global core.excludesFile` resolves to a real file that includes `.claude/`, `CLAUDE.md`, `CLAUDE.local.md`, and `AGENTS.local.md`. Without these, the symlinks and import shims this skill creates will leak to `git status` inside the project. Stop and tell the user to add the missing patterns.
 6. **`yq` (mikefarah/yq) and `jq` available.** Probe in order: `command -v yq` and, if that misses (PATH/cache lag in fresh shells), also `[ -x /usr/local/bin/yq ]` directly. Confirm flavor via `yq --version 2>&1 | grep -q mikefarah` — if it doesn't match, refuse. **Never suggest `apt install yq`** — Ubuntu/Debian ship the Python `kislyuk/yq`, which has incompatible merge semantics. If `yq` is missing or has the wrong flavor, stop and ask the user to run `~/.dotfiles/bin/setup-agent-teams` separately. After it completes, rerun this skill and repeat every prerequisite check before continuing. `jq` should already be present; `sudo apt install jq` is fine (only one flavor).
 
-Don't continue past failed prereqs — they're not auto-recoverable from inside this skill.
+Don't continue past failed prereqs — they're not auto-recoverable from inside
+this skill. The one exception is item 4: an absent stable root is recoverable
+later (`~/.dotfiles/bin/relink`, one `sudo` per machine) and blocks nothing on
+this host, so continue — but deliver it as **host-only**, never as done.
 
 ## Step 1 — Classify the devcontainer setup
 
@@ -340,8 +347,10 @@ Detect the old pattern before converting. Signals (any one → offer repair):
    `/.claude|/.dotfiles` suffix, not a bare `/root`, or the catalog's
    `//rootly.com` URLs match and every host trips this signal; require a path
    boundary after it too, so a neighbour like `/home/vscode/.claude-backup`
-   does not:
-   `grep -rhoE '(/root|/home/[^/"]+)/\.(claude|dotfiles)(/|"|$)' ~/.claude/plugins/*.json 2>/dev/null | grep -v "^$HOME/" | sort -u`
+   does not. Strip URLs before matching rather than after: a source URL that
+   happens to contain `/home/<x>/.claude/` is not a filesystem path, and no
+   amount of anchoring distinguishes it once the scheme has scrolled past:
+   `cat ~/.claude/plugins/*.json 2>/dev/null | sed 's#[a-z][a-z0-9+.-]*://[^"[:space:]]*##g' | grep -hoE '(/root|/home/[^/"]+)/\.(claude|dotfiles)(/|"|$)' | grep -v "^$HOME/" | sort -u`
 4. foreign home symlinks the shim created:
    `ls -l /home/*/ 2>/dev/null | grep -- '-> /home/'` (inside a container only)
 5. **stale gated config copy** (the clause-2 bug in item 15) — an existing
@@ -416,10 +425,13 @@ Detect the old pattern before converting. Signals (any one → offer repair):
    # Test each file's CONTENT: `grep -l` prints filenames, and every one of them
    # is under $HOME by construction, so filtering the filename list by $HOME
    # discards every hit and the check silently never fires.
+   # URLs are stripped first: a marketplace source containing /home/<x>/.claude/
+   # is not a filesystem path and would otherwise trip this on every container.
    docker exec -u "$REMOTE_USER" "$CID" sh -c '
      for f in "$HOME"/.claude/plugins/*.json; do
        [ -f "$f" ] || continue
-       grep -oE "(/root|/home/[^/\"]*)/\.(claude|dotfiles)(/|\"|$)" "$f" 2>/dev/null \
+       sed "s#[a-z][a-z0-9+.-]*://[^\"[:space:]]*##g" "$f" 2>/dev/null \
+         | grep -oE "(/root|/home/[^/\"]*)/\.(claude|dotfiles)(/|\"|$)" \
          | grep -v "^$HOME/" | sed "s#^#$f: #"
      done'
    ```
