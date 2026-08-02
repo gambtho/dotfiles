@@ -52,7 +52,7 @@ Read concrete files. **Don't infer**; cite the file you read.
 |---|---|
 | Primary language | `go.mod` / `package.json` / `pyproject.toml` / `Gemfile` / `Cargo.toml` / `mix.exs` |
 | Build/test/lint commands | `Makefile` (parse target names), `package.json` scripts, `justfile`, `Taskfile.yml`, `.github/workflows/*.yml` |
-| Container **remoteUser** (terminal/extension user — what mounts + seed target) | **Best: ask the user to run `id; echo $HOME` in their VS Code terminal.** Else `remoteUser` in `devcontainer.json`, or read the *VS Code-launched* container (`docker ps -q --filter "label=devcontainer.local_folder=$PWD"` — scoped to *this* workspace, never the first devcontainer running. **Require exactly one non-empty ID before any `docker exec`**: zero means rebuild first, more than one must be disambiguated by hand. Then `docker exec <it> sh -c 'id -un'` and `sh -c 'getent passwd "$1" \| cut -d: -f6' _ <user>` for the home, treating empty passwd output as "no such user" rather than falling through to a guess). NOT uid 1000, NOT `docker inspect .Config.User`, and NOT a container you `docker compose up` yourself — each can resolve to a different user than the one VS Code opens terminals as. Record the resulting user/home pair once and reuse it for every mount target, the seed, and verification. |
+| Container **remoteUser** (terminal/extension user — what mounts + seed target) | **Best: ask the user to run `id; echo $HOME` in their VS Code terminal.** Else `remoteUser` in `devcontainer.json`, or read the *VS Code-launched* container (`docker ps -q --filter "label=devcontainer.local_folder=$PWD"` — scoped to *this* workspace, never the first devcontainer running. **On Windows+WSL that label holds a UNC path** (`\\wsl.localhost\Ubuntu\home\you\proj`), so a POSIX `$PWD` match returns nothing even when the container is healthy; fall back to `devcontainer.config_file=$PWD/.devcontainer/devcontainer.json` or `com.docker.compose.project.working_dir=$PWD/.devcontainer`, which are always POSIX. See `devcontainer_cid()` in Step 8. **Require exactly one non-empty ID before any `docker exec`**: zero means rebuild first, more than one must be disambiguated by hand. Then `docker exec <it> sh -c 'id -un'` and `sh -c 'getent passwd "$1" \| cut -d: -f6' _ <user>` for the home, treating empty passwd output as "no such user" rather than falling through to a guess). NOT uid 1000, NOT `docker inspect .Config.User`, and NOT a container you `docker compose up` yourself — each can resolve to a different user than the one VS Code opens terminals as. Record the resulting user/home pair once and reuse it for every mount target, the seed, and verification. |
 | Container service name | `service` in `devcontainer.json` if set, else the first key under `services:` in the base compose file |
 | Seed privilege (Compose, non-root user) | Passwordless `sudo` already supplied by the image or existing Dockerfile; inspect only, and verify a running container with `sudo -n true` when available |
 
@@ -255,7 +255,32 @@ Write or merge the gitignored `docker-compose.override.yml` directly. The overri
 12. Install the Claude Code CLI **binary** in the seed, not just its config. Most base images ship without `claude`, so seeding `~/.claude` alone leaves no runnable CLI — the exact "claude isn't installed in the devcontainer" failure. Run `~/.dotfiles/ai/claude/install.sh` with `ALLOW_REMOTE_INSTALLERS=1` (the dotfiles guard blocks remote installers by default). Note the tradeoff: that installer fetches `https://claude.ai/install.sh` unpinned, so a rebuild executes whatever upstream currently serves. This is accepted as the default because the seed only ever runs against the user's own devcontainer and the alternative (vendoring a pinned release) would go stale silently. **If the project needs supply-chain pinning, set `CLAUDE_CLI_INSTALL_CMD` in the override's `environment:`** to a command that installs a pinned, checksum-verified artifact into the remoteUser's `~/.local/bin`; the seed takes that branch instead and never invokes the remote installer. (`ai/claude/install.sh` has no version/checksum support of its own, so the pinned artifact must be supplied by the project.) Either way the step lives in the **always-run block, NOT the versioned gate** (see #15), guarded by a `command -v claude` skip so an image that already provides it is left alone. The installer drops the binary in `~/.local/bin`, so the always-run block must also add `~/.local/bin` to PATH in `~/.zshrc` (and export it for the seed's own install steps) or `claude` won't resolve.
 13. Ensure the override is actually loaded (see Step 1 / Section 6c). Writing the override is pointless if `docker-compose.override.yml` is not in `dockerComposeFile` (string or array) — the CLI ignores unlisted files. This is checked and resolved separately because it may require a user-approved edit to the tracked `devcontainer.json`.
 14. Make **zsh the container's default (login) shell** in the always-run block. Vekil's `env.zsh` is zsh-only and is what points claude/codex at the proxy (`ANTHROPIC_BASE_URL`/`OPENAI_BASE_URL`). If the default shell is bash, an interactive terminal never sources it, so `claude` launched from that terminal silently bypasses the proxy — the "claude isn't picking up the vekil proxy" symptom, even though the Vekil `~/.zshrc` hook, the proxy, and `claude` are all fine. Set the login shell with `chsh -s "$(command -v zsh)"` (fall back to editing `/etc/passwd` if writable), guarded so it's a no-op when already zsh. Keep it in the always-run block, not the version gate: `/etc/passwd` is in the container's writable layer and resets on every rebuild, so it must re-apply each launch. If zsh is missing, or neither `chsh` nor a writable `/etc/passwd` can set it, fail the seed loudly with the reason rather than skipping quietly — a silent skip produces exactly the bypassed-proxy symptom this rule exists to prevent, and the fix (a supported base image, or an override that installs zsh) is the user's to make.
-15. **Split seed steps by where their target lives — this is the rule that keeps a rebuild working.** The sentinel (`~/.claude/.seeded`) lives in the persisted `claude-local-home` named volume, which survives `--remove-existing-container`. So the version gate only correctly guards steps whose target *also* persists: the authored `~/.claude` config copy and the marketplace/plugins install. Anything whose target lives in the container's **ephemeral writable layer** must go in the **always-run block**, guarded by its own presence check — because a rebuild wipes that layer while the sentinel persists, so a gated ephemeral install would be skipped ("already seeded") yet be gone. Ephemeral targets in this setup: the `claude` binary (`~/.local/bin`), codex config (`~/.codex`), the default shell (`/etc/passwd`), the `~/.zshrc` hooks, and the `~/.dotfiles` refresh (do it in the always-run block so the installers exist before the claude/codex steps that need them). Symptom of getting this wrong: everything works on the first build, then after a rebuild `claude` is missing / the proxy isn't wired, even though the seed log says "already seeded."
+15. **Split seed steps by BOTH clauses below — this is the rule that keeps a rebuild working.** A step may sit under the version gate only if it satisfies *both*; failing either puts it in the **always-run block** with its own presence check.
+
+    **Clause 1 — the target must persist.** The sentinel (`~/.claude/.seeded`) lives in the persisted `claude-local-home` named volume, which survives `--remove-existing-container`. Anything targeting the container's **ephemeral writable layer** would be skipped as "already seeded" yet be gone after a rebuild. Ephemeral targets here: the `claude` binary (`~/.local/bin`), codex config (`~/.codex`), the default shell (`/etc/passwd`), the `~/.zshrc` hooks, and the `~/.dotfiles` refresh (always-run so the installers exist before the claude/codex steps that need them). Symptom of getting this wrong: everything works on the first build, then after a rebuild `claude` is missing / the proxy isn't wired, though the log says "already seeded."
+
+    **Clause 2 — the source must be this template.** `SEED_VERSION` lives in `local-seed.sh`, so the gate can only observe changes to that file. A step whose source is the **host** (`/host-seed/...`) is invisible to it: editing `~/.claude/settings.json` on the host bumps no version, so the gate skips the copy and the container serves stale config through any number of rebuilds — with the correct value sitting unread in the read-only mount. **The authored `~/.claude` config copy fails this clause and belongs in the always-run block**, even though its target persists. Gating it costs nothing to give up: the subset is ~12K with no regular files at the top level (`skills/` is symlinks), measured at ~9ms for a full `cp -a`. Symptom: a host config change (model, commands, skills) never reaches the container, and rebuilding doesn't help because the named volume survives.
+
+    For the small `~/.claude` subset, `rm -rf` + `cp -a` is sufficient — `rsync` buys nothing at ~12K and is absent from some base images.
+
+    **`~/.dotfiles` is NOT an exception to clause 2 — it is the worst case of it.** An empty-volume guard here looks like a reasonable cost optimization and is not, because this tree is the *source* of the config the other steps copy: `~/.claude/settings.json` is a symlink into it, and `ai/vekil/env.zsh` exports `ANTHROPIC_MODEL`, which **outranks `settings.json`**. Freezing the volume therefore pins the model to whatever the host had at first seed, and no amount of fixing the `~/.claude` copy can dislodge it — the correct value is copied, then overridden by the stale env var. Rebuilding does not help; the named volume survives `--remove-existing-container`. A missing `hooks/overlay-sync.sh` presents at the same time as a `SessionStart` hook error.
+
+    So mirror it on every launch, host-authoritative:
+    ```bash
+    if [ -d "$SEED_DOTFILES" ]; then
+      if command -v rsync >/dev/null 2>&1; then
+        rsync -a --delete "$SEED_DOTFILES/" "$HOME/.dotfiles/"
+      else
+        # No non-pruning fallback: the always-run installers EXECUTE files from
+        # this persisted tree, so one deleted upstream would keep running.
+        find "$HOME/.dotfiles" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+        cp -a "$SEED_DOTFILES/." "$HOME/.dotfiles/"
+      fi
+    fi
+    ```
+    State the cost plainly to the user: container-local edits under `~/.dotfiles` are reverted every start, including the runtime toggles Claude Code writes into `ai/claude/settings.json` (theme, `agentPushNotifEnabled`). Those must be made on the host to persist. That is the right trade — a 40M rsync of an unchanged tree is near-instant, and the alternative is a class of bug that costs hours.
+
+    Net: **only the marketplace/plugins install stays gated** — it alone is both expensive and template-sourced.
 
 Do **not** use `claude-merge-compose-override` for this step until that helper emits the seed model; its current output contains writable and dual-home mounts.
 
@@ -300,6 +325,64 @@ Detect the old pattern before converting. Signals (any one → offer repair):
    `grep -rl '/home/vscode\|/home/node' ~/.claude/plugins/*.json 2>/dev/null`
 4. foreign home symlinks the shim created:
    `ls -l /home/*/ 2>/dev/null | grep -- '-> /home/'` (inside a container only)
+5. **stale gated config copy** (the clause-2 bug in item 15) — an existing
+   `local-seed.sh` that copies the authored `~/.claude` subset *inside* the
+   version gate. Cheap to detect: the copy loop appears after the sentinel
+   check rather than before it.
+   ```bash
+   # non-zero line number => the settings.json copy sits AFTER the gate: stale
+   awk '/VERSION GATE/{g=NR} /cp -a "\$SEED_CLAUDE\/\$item"/{if(g)print NR}' \
+     .devcontainer/local-seed.sh
+   ```
+   Confirm against the running container — the definitive test, since it
+   compares content rather than reading the script. Compare all five seed-owned paths, in both directions — a subset check passes
+   while `commands/` or `skills/` are stale, and a source-exists guard hides the
+   path deleted on the host but still present in the persisted volume:
+   ```bash
+   docker exec -u "$REMOTE_USER" "$CID" sh -s <<'EOF'
+   for i in settings.json CLAUDE.md config commands skills; do
+     s=/host-seed/.claude/$i; d=$HOME/.claude/$i
+     if   [ -e "$s" ] && [ ! -e "$d" ]; then echo "STALE $i (missing)"
+     elif [ ! -e "$s" ] && [ -e "$d" ]; then echo "STALE $i (orphaned)"
+     elif [ -d "$s" ] || [ -d "$d" ]; then
+       # --no-dereference: skills/ is symlinks into the unmounted ~/.agents
+       diff --no-dereference -rq "$s" "$d" >/dev/null 2>&1 || echo "STALE $i"
+     elif [ -e "$s" ]; then cmp -s "$s" "$d" || echo "STALE $i"
+     fi
+   done
+   EOF
+   ```
+   Any `STALE` line means the item-15 fix has not been applied.
+   Repair: move the authored-config copy from the gated section into the
+   always-run block (leave the marketplace install gated), then restart. No
+   `SEED_VERSION` bump is needed — that is the point of the fix. Seeds written
+   before this change also lack the `a0` self-check below, so add it too; it is
+   what surfaces this class of drift on every start instead of on the day
+   someone notices the wrong model.
+
+6. **frozen `~/.dotfiles` volume** — a `local-seed.sh` that only populates
+   `~/.dotfiles` when the volume is empty. Higher-impact than signal 5 and it
+   masks the fix for it, since `~/.claude/settings.json` symlinks into this tree
+   and `ai/vekil/env.zsh` exports `ANTHROPIC_MODEL`, which outranks
+   `settings.json`.
+   ```bash
+   # any output => populate-once guard still present: host edits never land
+   grep -n 'mindepth 1 -maxdepth 1 -print -quit' .devcontainer/local-seed.sh
+   ```
+   Confirm against the container — this is the check that names the real symptom:
+   ```bash
+   docker exec -u "$REMOTE_USER" "$CID" \
+     cmp /host-seed/.dotfiles/ai/vekil/env.zsh "$REMOTE_HOME/.dotfiles/ai/vekil/env.zsh" \
+     || echo "dotfiles FROZEN — model/hooks stale regardless of settings.json"
+   ```
+   Repair: replace the guard with the unconditional `rsync -a --delete` mirror
+   from item 15 and restart. Tell the user their container-local `~/.dotfiles`
+   edits will be reverted from now on.
+
+Anything scaffolded before the two-clause rule existed will trip signals 5 and 6,
+so run both during **any** repair pass, not just rw-mount conversions. Signal 6
+first: while the dotfiles tree is frozen, fixing signal 5 changes nothing
+observable, which makes the fix look ineffective.
 
 Remediation (confirm with user before each write):
 
@@ -411,12 +494,60 @@ Report to the user:
   `devcontainer up --remove-existing-container --workspace-folder .` or VS Code "Dev Containers: Rebuild Container"
 - For case (a): after rebuild, run the checks below against the **VS Code-launched container and the remoteUser resolved in Step 2** — not `docker compose exec <service>`, which can hit a container you started by hand and defaults to the image user (often root), passing checks that the real terminal user would fail. Resolve the handles once:
   ```bash
-  CID="$(docker ps -q --filter "label=devcontainer.local_folder=$PWD")"   # THIS workspace only
+  # `devcontainer.local_folder` holds the path as the CLIENT saw it. On
+  # Windows+WSL, VS Code writes a UNC path (\\wsl.localhost\Ubuntu\home\you\proj)
+  # so matching it against a POSIX $PWD silently returns nothing and every check
+  # below reports "no devcontainer running" on a perfectly healthy container.
+  # Fall back to labels that are always POSIX and always exact.
+  devcontainer_cid() {
+    # $1 workspace folder (default $PWD); $2 optional service name override.
+    local d="${1:-$PWD}" svc="${2:-}" cfg wd cid
+    cfg="$d/.devcontainer/devcontainer.json"
+    [ -f "$cfg" ] || cfg="$d/devcontainer.json"
+    # Compose working_dir is the dir holding the FIRST dockerComposeFile, which is
+    # not always <root>/.devcontainer — nested and root-level layouts both exist.
+    wd="$(dirname "$cfg")"
+    if command -v jq >/dev/null 2>&1 && [ -f "$cfg" ]; then
+      local first
+      first="$(sed 's://.*::' "$cfg" | jq -r '
+        (.dockerComposeFile // empty) | if type=="array" then .[0] else . end' \
+        2>/dev/null)"
+      [ -n "$first" ] && [ "$first" != null ] \
+        && wd="$(cd "$(dirname "$cfg")" && cd "$(dirname "$first")" && pwd)"
+      [ -n "$svc" ] || svc="$(sed 's://.*::' "$cfg" | jq -r '.service // empty' 2>/dev/null)"
+    fi
+    # local_folder first: exact and unambiguous when it matches. It records the
+    # path as the CLIENT saw it, so under Windows+WSL it is a UNC path and a POSIX
+    # $PWD never matches — hence the POSIX fallbacks below.
+    cid="$(docker ps -q --filter "label=devcontainer.local_folder=$d")"
+    [ -z "$cid" ] && cid="$(docker ps -q --filter "label=devcontainer.config_file=$cfg")"
+    if [ -z "$cid" ]; then
+      # working_dir alone matches EVERY service in the project — the app container
+      # AND every sidecar (postgres, redis). Without an exact service filter this
+      # returns several IDs and the caller's one-ID guard aborts on a healthy
+      # setup. Require the service; if devcontainer.json does not name one, say so
+      # rather than guessing which sidecar is the dev container.
+      if [ -z "$svc" ]; then
+        echo "devcontainer_cid: no 'service' in $cfg — pass it as \$2" >&2
+        return 1
+      fi
+      cid="$(docker ps -q \
+        --filter "label=com.docker.compose.project.working_dir=$wd" \
+        --filter "label=com.docker.compose.service=$svc")"
+    fi
+    printf '%s' "$cid"
+  }
+  CID="$(devcontainer_cid)"   # THIS workspace only
   [ -n "$CID" ] && [ "$(printf '%s\n' "$CID" | wc -l)" -eq 1 ] \
     || { echo "no single VS Code devcontainer for $PWD — rebuild first"; exit 1; }
   REMOTE_USER="<from Step 2>"    # never .Config.User, never uid 1000
   # pass the user as a positional arg, never interpolated into the sh -c text:
   REMOTE_HOME="$(docker exec "$CID" sh -c 'getent passwd "$1" | cut -d: -f6' _ "$REMOTE_USER")"
+  ```
+  If all three filters miss, list what is actually running and match by eye —
+  do NOT fall back to "the first devcontainer", which can be another project:
+  ```bash
+  docker ps --format '{{.ID}}\t{{.Names}}\t{{.Label "devcontainer.local_folder"}}'
   ```
 - For case (a): verify the `claude` CLI binary is installed AND on PATH — this is the check that catches the "claude isn't installed in the devcontainer" failure:
   ```bash
@@ -465,7 +596,10 @@ Report to the user:
 # Preferred — the VS Code-launched container, as the remoteUser VS Code uses.
 # NOT `docker compose exec <svc>` (may hit a container you started by hand) and
 # NOT `docker inspect .Config.User` (the image/seed user, frequently root).
-CID="$(docker ps -q --filter "label=devcontainer.local_folder=$PWD")"   # THIS workspace only
+# Uses the devcontainer_cid() helper from Step 8: `devcontainer.local_folder`
+# is a Windows UNC path under Windows+WSL, so a bare $PWD match finds nothing
+# on a healthy container. The helper falls back to POSIX-valued labels.
+CID="$(devcontainer_cid)"   # THIS workspace only
 # Check non-empty BEFORE counting: `printf '%s\n' ""` still prints one line, so
 # a bare `wc -l` test passes when no container matched at all.
 [ -n "$CID" ] || { echo "no devcontainer running for $PWD — rebuild first"; exit 1; }

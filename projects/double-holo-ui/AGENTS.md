@@ -7,8 +7,9 @@ This file holds my personal workflow preferences for this project. Loaded via
 ## Standing agents — prefer dispatch over main-thread execution
 
 For non-trivial work in a given surface, dispatch the matching role agent via
-the `Agent` tool instead of executing in the main thread. The catalog lives at
-`.claude/agents/` (symlinked from this overlay):
+the `Agent` tool instead of executing in the main thread.
+
+These four are **mine**, symlinked into `.claude/agents/` from this overlay:
 
 - **rails-dev** — anything under `double-holo-api/` (controllers, services,
   jobs, migrations, RSpec). Knows the controller/service/migration/test
@@ -17,14 +18,21 @@ the `Agent` tool instead of executing in the main thread. The catalog lives at
   work in `double-holo-admin-ui/`, React Native in `double-holo-mobile/`,
   Discord bot TS in `double-holo-{discord-bot,admin-discord-bot,discord-ai,reports-bot}/`.
   Knows the frontend rules in `.claude/rules/frontend/`.
-- **code-reviewer** — Read-only review against the project's conventions.
-  Dispatch before declaring work done (mandatory per `AGENTS.md` post-impl
-  review step) and before opening a PR.
+- **dh-conventions-reviewer** — Read-only review against the project's
+  conventions, with file:line citations. Dispatch before declaring work done
+  (mandatory per the tracked `AGENTS.md` post-implementation review step) and
+  before opening a PR.
 - **ux-polisher** — UI polish, copy review, and visual hardening for the
-  customer-facing surfaces. Pairs with the `impeccable`, `frontend-design`,
-  and `design-system` skills.
+  customer-facing surfaces. Pairs with the `frontend-design` and
+  `design-system` skills.
 
-The two tracked investigation agents stay as-is:
+These are **tracked project agents** (not mine — shared with the team, don't
+edit them from this overlay):
+- `code-reviewer` — the team's general-purpose review agent. Complementary to
+  `dh-conventions-reviewer`: that one checks project conventions, this one
+  checks bugs/security/edge cases.
+- `sonnet-high` — default implementation worker for the
+  `orchestrating-implementation` skill.
 - `data-quality-investigator` — set remapping, misclassified cards, DH vs
   TCGPlayer cross-references.
 - `matching-pipeline-investigator` — TAG / Countdown / GemRate / TCGPlayer
