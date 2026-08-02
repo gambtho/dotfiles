@@ -62,11 +62,30 @@ run_loader() {
 
   run env HOME="$HOME" DOTFILES="$REPO_ROOT" PATH="$PATH" zsh -dfc '
     source "$DOTFILES/core/shell/zshrc.symlink" || exit 1
-    print -r -- "$OPENAI_BASE_URL|$ANTHROPIC_BASE_URL"
+    print -r -- "$OPENAI_BASE_URL|$ANTHROPIC_BASE_URL|$CLAUDE_CODE_DISABLE_ADVISOR_TOOL|$VEKIL_MANAGED_CLAUDE_CODE_DISABLE_ADVISOR_TOOL"
   '
 
   [ "$status" -eq 0 ]
-  [[ "$output" == *"http://127.0.0.1:1337/v1|http://127.0.0.1:1337"* ]]
+  [[ "$output" == *"http://127.0.0.1:1337/v1|http://127.0.0.1:1337|1|1"* ]]
+}
+
+@test "Vekil preserves a user-owned Claude Advisor Tool setting" {
+  local state_dir="$HOME/.local/state/vekil"
+  mkdir -p "$state_dir"
+  printf '127.0.0.1\n' >"$state_dir/proxy-host"
+  : >"$state_dir/proxy-ready"
+  chmod 0700 "$HOME/.local" "$HOME/.local/state" "$state_dir"
+  chmod 0600 "$state_dir/proxy-host" "$state_dir/proxy-ready"
+  stub_command curl 'exit 0'
+
+  run env HOME="$HOME" DOTFILES="$REPO_ROOT" PATH="$PATH" \
+    CLAUDE_CODE_DISABLE_ADVISOR_TOOL=0 zsh -dfc '
+      source "$DOTFILES/ai/vekil/env.zsh" || exit 1
+      print -r -- "$CLAUDE_CODE_DISABLE_ADVISOR_TOOL|${VEKIL_MANAGED_CLAUDE_CODE_DISABLE_ADVISOR_TOOL-unset}"
+    '
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"0|unset"* ]]
 }
 
 @test "zshrc loads Vekil before deferred customizations run" {
@@ -239,17 +258,19 @@ SCRIPT
     VEKIL_CURL_LOG="$curl_log" VEKIL_PROBE_STATE="$TEST_ROOT/probe-state" zsh -dfc '
       unset OPENAI_BASE_URL OPENAI_API_KEY
       unset ANTHROPIC_BASE_URL ANTHROPIC_API_KEY ANTHROPIC_MODEL
+      unset CLAUDE_CODE_DISABLE_ADVISOR_TOOL
       unset VEKIL_MANAGED_OPENAI_BASE_URL VEKIL_MANAGED_OPENAI_API_KEY
       unset VEKIL_MANAGED_ANTHROPIC_BASE_URL VEKIL_MANAGED_ANTHROPIC_API_KEY
       unset VEKIL_MANAGED_ANTHROPIC_MODEL
+      unset VEKIL_MANAGED_CLAUDE_CODE_DISABLE_ADVISOR_TOOL
       source "$DOTFILES/ai/vekil/env.zsh"
       first=$OPENAI_BASE_URL
       print unavailable >"$VEKIL_PROBE_STATE"
       source "$DOTFILES/ai/vekil/env.zsh"
-      print -r -- "$first|${OPENAI_BASE_URL-unset}|${OPENAI_API_KEY-unset}|${ANTHROPIC_BASE_URL-unset}|${ANTHROPIC_API_KEY-unset}|${ANTHROPIC_MODEL-unset}"
+      print -r -- "$first|${OPENAI_BASE_URL-unset}|${OPENAI_API_KEY-unset}|${ANTHROPIC_BASE_URL-unset}|${ANTHROPIC_API_KEY-unset}|${ANTHROPIC_MODEL-unset}|${CLAUDE_CODE_DISABLE_ADVISOR_TOOL-unset}|${VEKIL_MANAGED_CLAUDE_CODE_DISABLE_ADVISOR_TOOL-unset}"
     '
 
   [ "$status" -eq 0 ]
   [ "$(grep -c '/readyz' "$curl_log")" -eq 2 ]
-  [[ "$output" == *"http://127.0.0.1:1337/v1|unset|unset|unset|unset|unset"* ]]
+  [[ "$output" == *"http://127.0.0.1:1337/v1|unset|unset|unset|unset|unset|unset|unset"* ]]
 }

@@ -73,6 +73,15 @@ because they fail independently.
 | Claude | Reads `ANTHROPIC_BASE_URL` from the environment | `env.zsh` exports it |
 | Codex  | Ignores base-URL env vars; needs `config.toml` or a `-c` override | `env.zsh` defines a `codex` shell function injecting `-c openai_base_url=…` |
 
+Vekil v0.14.0 sends Copilot Claude models through their native Anthropic
+Messages route. That preserves Claude Code's `Anthropic-Beta` headers, but
+Copilot rejects the experimental Advisor Tool header. While `env.zsh` manages
+the Anthropic proxy endpoint it therefore also exports
+`CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1`. The value uses the same ownership rules as
+the managed endpoint: an explicit user value is preserved, unavailable-proxy
+cleanup removes only the Vekil-owned value, and `claude-direct` removes the
+managed value so direct Anthropic sessions can use Advisor Tool.
+
 Because Codex ignores `OPENAI_BASE_URL`, the managed `codex` shell function is
 what actually routes it. In an interactive shell, confirm both are active:
 
