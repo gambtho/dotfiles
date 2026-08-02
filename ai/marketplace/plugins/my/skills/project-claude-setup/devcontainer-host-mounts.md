@@ -340,6 +340,11 @@ CLAUDE_HOME="$SEED_HOME/.claude"
 DOTFILES_HOME="$SEED_HOME/.dotfiles"
 SENTINEL="$CLAUDE_HOME/.seeded"
 
+# Stable root for personal overlay symlinks (see the block that creates it).
+# Constant in production; DOTFILES_LINK_ROOT is a test-only override, and it is
+# the same variable bin/common.sh honours, so both branches below agree.
+STABLE_LINK_ROOT="${DOTFILES_LINK_ROOT:-/opt/dotfiles}"
+
 # Run a command as the remoteUser regardless of who this script runs as. If the
 # script runs as root, `runuser` needs no password; if it runs as a non-root
 # user that differs from SEED_USER, prefix with sudo (confirmed available in
@@ -376,6 +381,29 @@ VEKIL_ENV_HOOK='[[ -r "$HOME/.dotfiles/ai/vekil/env.zsh" ]] && source "$HOME/.do
 ZSHRC="$SEED_HOME/.zshrc"
 
 $SUDO touch "$ZSHRC"
+
+# Source the mirrored dotfiles via their own entry point, so container shells
+# get the same aliases, PATH, and EDITOR fallback as the host. This belongs in
+# the seed rather than the tracked Dockerfile: it is only meaningful alongside
+# the ~/.dotfiles mount from the (gitignored) override, and a teammate without
+# that mount would just carry dead code.
+#
+# load-custom.zsh is the supported entry point and sources core/, languages/,
+# tools/, platforms/ and the profile itself. Do NOT glob `$DOTFILES/**/*.zsh`:
+# that glob also matches load-custom.zsh, so the whole tree loads twice —
+# aliases redefined, PATH entries duplicated. It also prints a stray
+# `file=/…/load-custom.zsh` line before every prompt, because the loop leaves
+# $file set and load-custom.zsh re-declares it via `typeset`, which echoes
+# name=value when TYPESET_SILENT is off (zsh's default).
+#
+# Appended BEFORE the Vekil hook below so ai/vekil/env.zsh keeps the last word
+# on the endpoint/model variables it owns.
+DOTFILES_LOAD_HOOK='[[ -r "$HOME/.dotfiles/core/shell/load-custom.zsh" ]] && source "$HOME/.dotfiles/core/shell/load-custom.zsh"'
+if ! grep -Fqx "$DOTFILES_LOAD_HOOK" "$ZSHRC" 2>/dev/null; then
+  printf '\n%s\n' "$DOTFILES_LOAD_HOOK" | $SUDO tee -a "$ZSHRC" >/dev/null
+  echo "🌱 seed: configured dotfiles shell integration"
+fi
+
 if ! grep -Fqx "$VEKIL_ENV_HOOK" "$ZSHRC" 2>/dev/null; then
   printf '\n%s\n' "$VEKIL_ENV_HOOK" | $SUDO tee -a "$ZSHRC" >/dev/null
   echo "🌱 seed: configured Vekil shell integration"
@@ -464,13 +492,16 @@ as_user git config --global core.excludesFile "$GITIGNORE"
 # set changes as the overlay grows, so discover the exact overlay symlinks each
 # launch and maintain them in a marked, rewritten section of ~/.gitignore. Match
 # by the symlink's target TEXT (find -lname), which works in the container even
-# though the /home/<host-user>/... target is unresolvable here. {WORKSPACE} is
-# the workspaceFolder from Step 2. Repo-relative paths.
+# though the /home/<host-user>/... target is unresolvable here. The pattern is
+# deliberately NOT '*/.dotfiles/projects/*': links created after the stable-root
+# change target /opt/dotfiles/projects/... with no leading dot, and missing them
+# puts personal overlay files — CLAUDE.md included — into container git status.
+# {WORKSPACE} is the workspaceFolder from Step 2. Repo-relative paths.
 WORKSPACE="{WORKSPACE}"
 GI_MARK_BEGIN="# >>> overlay symlinks (auto, do not edit) >>>"
 GI_MARK_END="# <<< overlay symlinks (auto) <<<"
 if [ -d "$WORKSPACE" ]; then
-  overlay_links="$(cd "$WORKSPACE" && find . -type l -lname '*/.dotfiles/projects/*' \
+  overlay_links="$(cd "$WORKSPACE" && find . -type l -lname '*dotfiles/projects/*' \
     -not -path './node_modules/*' 2>/dev/null | sed 's#^\./##' | sort)"
   # Rewrite the marked block: strip any existing one, then append the current set.
   new_gitignore="$(as_user sed "/^${GI_MARK_BEGIN}$/,/^${GI_MARK_END}$/d" "$GITIGNORE")"
@@ -517,6 +548,44 @@ if [ -d "$SEED_DOTFILES" ]; then
     as_user cp -a "$SEED_DOTFILES/." "$DOTFILES_HOME/"
     echo "🌱 seed: rebuilt ~/.dotfiles via wipe+cp (no rsync) ($(du -sh "$DOTFILES_HOME" | cut -f1))"
   fi
+fi
+
+# Stable link root: /opt/dotfiles -> this container's dotfiles checkout.
+#
+# Personal overlay symlinks in the workspace (.claude/skills, .claude/agents,
+# CLAUDE.md, ...) are bind-mounted from the host and store an ABSOLUTE target.
+# Written as /home/<host-user>/.dotfiles/... they dangle here, because this
+# container has a different $HOME — that is the "devcontainer can't see the
+# project skills" bug, and it silently takes out CLAUDE.md too. They are now
+# written as /opt/dotfiles/projects/..., which each environment points at its
+# own checkout. The host side is established by ~/.dotfiles/bin/relink; this is
+# the container side. Both sides stay writable and independent: this root
+# resolves into the dotfiles named volume, so container writes never reach the
+# host.
+#
+# ALWAYS-RUN, never gated: /opt lives in the ephemeral writable layer and is
+# wiped by every rebuild, while the sentinel persists in a named volume. Gating
+# it would leave a rebuilt container reporting "already seeded" with every
+# overlay link dangling. Must come after the mirror above — the helper refuses
+# a target that is not a directory.
+#
+# The mirrored dotfiles own the root path so it is defined once; the literal
+# fallback keeps this seed working against a checkout predating the helper.
+if [ -r "$DOTFILES_HOME/bin/common.sh" ]; then
+  # shellcheck source=/dev/null
+  . "$DOTFILES_HOME/bin/common.sh"
+fi
+if command -v ensure_stable_link_root >/dev/null 2>&1; then
+  ensure_stable_link_root "$DOTFILES_HOME"
+elif $SUDO mkdir -p "$(dirname "$STABLE_LINK_ROOT")" \
+  && $SUDO ln -sfn "$DOTFILES_HOME" "$STABLE_LINK_ROOT"; then
+  echo "🌱 seed: $STABLE_LINK_ROOT -> $DOTFILES_HOME (literal fallback)"
+else
+  # Non-fatal, and deliberately so: overlay links then keep their
+  # $HOME-absolute targets, which is the pre-existing behaviour rather than a
+  # regression. Taking the container down over it would be worse.
+  echo "⚠️  seed: could not create $STABLE_LINK_ROOT — personal overlay links" >&2
+  echo "   (.claude/skills, CLAUDE.md, ...) will dangle in this container." >&2
 fi
 
 # Managed global git hooks — most importantly commit-msg, which strips
@@ -568,11 +637,80 @@ elif [ -x "$DOTFILES_HOME/ai/claude/install.sh" ]; then
 fi
 
 # Codex config (ephemeral target ~/.codex).
-if as_user test -f "$SEED_HOME/.codex/config.toml"; then
-  : # already linked
+#
+# Guard on the BINARY, not the config. Both ~/.codex/config.toml and
+# ~/.local/bin live in the ephemeral layer, but the installer writes config even
+# when it cannot produce a binary (it treats a missing CLI as a soft skip).
+# Testing config.toml therefore latches: config present, `codex` missing, and
+# the installer skipped on every subsequent start.
+if as_user test -x "$SEED_HOME/.local/bin/codex"; then
+  echo "🌱 seed: codex already present"
 elif [ -x "$DOTFILES_HOME/ai/codex/install.sh" ]; then
   echo "🌱 seed: linking Codex config"
   as_user bash "$DOTFILES_HOME/ai/codex/install.sh" || echo "⚠️  seed: codex install failed (non-fatal)"
+fi
+
+# Neovim (ephemeral target ~/.local). The dotfiles set EDITOR=nvim and ship
+# config/nvim, but nothing in them installs the binary — on a normal host it
+# arrives via the apt/brew package lists, which a devcontainer image never runs.
+# An EDITOR pointing at a missing command breaks `git commit` and
+# `git rebase -i` with an error that names git, not the editor. (core/env.zsh
+# falls back to vim, so this is the intended editor rather than a hard
+# requirement — hence non-fatal throughout.)
+#
+# Not apt: Debian bookworm ships 0.7.2 and config/nvim uses vim.uv + lazy.nvim,
+# which need 0.10+. Not the Dockerfile either: this is a personal-dotfiles
+# requirement, so it belongs with the mount that enables it. Version and
+# checksums come from the mirrored config/versions.env, so the download is
+# pinned and verified — unlike the claude CLI path above.
+if as_user test -x "$SEED_HOME/.local/bin/nvim"; then
+  echo "🌱 seed: nvim already present"
+elif [ -r "$DOTFILES_HOME/config/versions.env" ]; then
+  # shellcheck source=/dev/null
+  . "$DOTFILES_HOME/config/versions.env"
+  case "$(uname -m)" in
+    x86_64) NVIM_ARCH=linux-x86_64 NVIM_SHA="${NVIM_SHA256_X86_64:-}" ;;
+    aarch64 | arm64) NVIM_ARCH=linux-arm64 NVIM_SHA="${NVIM_SHA256_ARM64:-}" ;;
+    *) NVIM_ARCH="" ;;
+  esac
+  if [ -z "$NVIM_ARCH" ]; then
+    echo "⚠️  seed: no neovim build for $(uname -m) — skipping (EDITOR falls back to vim)"
+  else
+    echo "🌱 seed: installing neovim $NVIM_VERSION ($NVIM_ARCH)"
+    NVIM_TMP="$(mktemp -d)"
+    NVIM_URL="https://github.com/neovim/neovim/releases/download/v${NVIM_VERSION}/nvim-${NVIM_ARCH}.tar.gz"
+    if curl -fsSL -o "$NVIM_TMP/nvim.tar.gz" "$NVIM_URL" \
+      && echo "$NVIM_SHA  $NVIM_TMP/nvim.tar.gz" | sha256sum -c - >/dev/null 2>&1 \
+      && tar -xzf "$NVIM_TMP/nvim.tar.gz" -C "$NVIM_TMP"; then
+      # Ship the whole tree: nvim needs its runtime/ share dir, so symlinking the
+      # bare binary out of the tarball gives an nvim that starts and then cannot
+      # find its own runtime files.
+      as_user rm -rf "$SEED_HOME/.local/share/nvim-dist"
+      as_user mkdir -p "$SEED_HOME/.local/share" "$SEED_HOME/.local/bin"
+      mv "$NVIM_TMP/nvim-$NVIM_ARCH" "$SEED_HOME/.local/share/nvim-dist"
+      chown -R "$SEED_UID:$SEED_GID" "$SEED_HOME/.local/share/nvim-dist" 2>/dev/null || true
+      as_user ln -sf "$SEED_HOME/.local/share/nvim-dist/bin/nvim" "$SEED_HOME/.local/bin/nvim"
+      echo "🌱 seed: neovim ready"
+    else
+      echo "⚠️  seed: neovim install failed (non-fatal; EDITOR falls back to vim)"
+    fi
+    rm -rf "$NVIM_TMP"
+  fi
+fi
+
+# Point nvim at the mirrored dotfiles config, the way the host install does.
+# Without this the binary starts bare and none of config/nvim applies.
+# Always-run: ~/.config is in the ephemeral layer. Replaced unconditionally when
+# it is a symlink, but a real directory is left alone — that would be someone's
+# own container-local config, and clobbering it is not this script's call.
+if [ -d "$DOTFILES_HOME/config/nvim" ]; then
+  as_user mkdir -p "$SEED_HOME/.config"
+  if as_user test -L "$SEED_HOME/.config/nvim" || ! as_user test -e "$SEED_HOME/.config/nvim"; then
+    as_user ln -sfn "$DOTFILES_HOME/config/nvim" "$SEED_HOME/.config/nvim"
+    echo "🌱 seed: linked ~/.config/nvim to dotfiles"
+  else
+    echo "⚠️  seed: ~/.config/nvim is a real directory — leaving it alone"
+  fi
 fi
 
 # --- Versioned gate --------------------------------------------------------

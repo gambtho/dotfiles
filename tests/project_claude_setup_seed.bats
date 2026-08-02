@@ -11,6 +11,11 @@ setup() {
   SUDO_LOG="$TEST_ROOT/sudo.log"
   export REFERENCE SKILL_DOC SEED_SCRIPT SUDO_LOG
 
+  # The seed publishes a stable root that overlay symlinks target, so they
+  # resolve under both the host's $HOME and the container's. In production that
+  # is /opt/dotfiles; pin it into the sandbox so the suite never touches /opt.
+  export DOTFILES_LINK_ROOT="$TEST_ROOT/opt/dotfiles"
+
   mkdir -p "$TEST_ROOT/host-seed/.claude" \
     "$TEST_ROOT/host-seed/.dotfiles/ai/marketplace" \
     "$HOME/.claude" "$HOME/.dotfiles"
@@ -543,4 +548,122 @@ extract_seed_script() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"global git"* ]]
   [[ "$output" == *"trailers will not be stripped"* ]]
+}
+
+@test "the stable link root is published and points at the mirrored dotfiles" {
+  # Personal overlay symlinks in the workspace store an ABSOLUTE target. Written
+  # under the host's $HOME they dangle in the container, taking out .claude/skills,
+  # .claude/agents, .claude/references and CLAUDE.md at once. They now target this
+  # root, which each environment aims at its own checkout.
+  touch "$TEST_ROOT/host-seed/.dotfiles/ai/marketplace/marker"
+
+  run bash "$SEED_SCRIPT"
+
+  [ "$status" -eq 0 ]
+  [ -L "$DOTFILES_LINK_ROOT" ]
+  [ "$(readlink "$DOTFILES_LINK_ROOT")" = "$HOME/.dotfiles" ]
+  # Ordering guard: the root must be published after the mirror, or it names a
+  # directory that is still empty when the links are first followed.
+  [ -f "$DOTFILES_LINK_ROOT/ai/marketplace/marker" ]
+}
+
+@test "the stable link root is re-published on a warm start" {
+  # It lives in the container's EPHEMERAL layer and is wiped by every rebuild,
+  # while the sentinel persists in a named volume. Gating it would leave a
+  # rebuilt container reporting "already seeded" with every overlay link broken.
+  local seed_version
+  seed_version="$(sed -n 's/^SEED_VERSION=//p' "$SEED_SCRIPT")"
+  printf '%s\n' "$seed_version" >"$HOME/.claude/.seeded"
+
+  run bash "$SEED_SCRIPT"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"already seeded"* ]]
+  [ "$(readlink "$DOTFILES_LINK_ROOT")" = "$HOME/.dotfiles" ]
+}
+
+@test "overlay symlinks through the stable root are added to the container gitignore" {
+  # The matcher keys on the symlink's target TEXT, since the target is often
+  # unresolvable here. A '*/.dotfiles/projects/*' pattern requires a literal
+  # dot-prefixed .dotfiles and silently misses every /opt/dotfiles link — which
+  # puts personal overlay files, CLAUDE.md included, into container git status.
+  mkdir -p "$TEST_ROOT/workspace"
+  ln -s "$DOTFILES_LINK_ROOT/projects/demo/.claude/skills" \
+    "$TEST_ROOT/workspace/skills-link"
+  ln -s "$HOME/.dotfiles/projects/demo/CLAUDE.md" \
+    "$TEST_ROOT/workspace/CLAUDE.md"
+  sed -i "s|^WORKSPACE=.*|WORKSPACE=\"$TEST_ROOT/workspace\"|" "$SEED_SCRIPT"
+
+  run bash "$SEED_SCRIPT"
+  [ "$status" -eq 0 ]
+
+  grep -Fx 'skills-link' "$HOME/.gitignore"
+  grep -Fx 'CLAUDE.md' "$HOME/.gitignore"
+}
+
+@test "the seed installs neovim and links its dotfiles config" {
+  # The dotfiles set EDITOR=nvim but never install the binary — on a host it
+  # arrives via the apt/brew package lists, which no devcontainer image runs.
+  # An EDITOR naming a missing command breaks `git commit` with an error that
+  # blames git. Guarded on the binary, so this asserts the wiring, not a download.
+  mkdir -p "$TEST_ROOT/host-seed/.dotfiles/config/nvim" "$HOME/.local/bin"
+  touch "$TEST_ROOT/host-seed/.dotfiles/config/nvim/init.lua"
+  printf '#!/usr/bin/env bash\nexit 0\n' >"$HOME/.local/bin/nvim"
+  chmod +x "$HOME/.local/bin/nvim"
+
+  run bash "$SEED_SCRIPT"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"nvim already present"* ]]
+  [ "$(readlink "$HOME/.config/nvim")" = "$HOME/.dotfiles/config/nvim" ]
+}
+
+@test "a real ~/.config/nvim is left alone" {
+  mkdir -p "$TEST_ROOT/host-seed/.dotfiles/config/nvim" "$HOME/.config/nvim" \
+    "$HOME/.local/bin"
+  echo mine >"$HOME/.config/nvim/init.lua"
+  printf '#!/usr/bin/env bash\nexit 0\n' >"$HOME/.local/bin/nvim"
+  chmod +x "$HOME/.local/bin/nvim"
+
+  run bash "$SEED_SCRIPT"
+
+  [ "$status" -eq 0 ]
+  [ ! -L "$HOME/.config/nvim" ]
+  [ "$(cat "$HOME/.config/nvim/init.lua")" = mine ]
+}
+
+@test "the dotfiles shell loader is installed exactly once" {
+  # load-custom.zsh is the supported entry point. Globbing **/*.zsh instead also
+  # matches load-custom.zsh itself, so the whole tree loads twice — aliases
+  # redefined, PATH entries duplicated, and a stray `file=...` line per prompt.
+  local hook='[[ -r "$HOME/.dotfiles/core/shell/load-custom.zsh" ]] && source "$HOME/.dotfiles/core/shell/load-custom.zsh"'
+
+  run bash "$SEED_SCRIPT"
+  [ "$status" -eq 0 ]
+  run bash "$SEED_SCRIPT"
+  [ "$status" -eq 0 ]
+
+  [ "$(grep -Fxc "$hook" "$HOME/.zshrc")" = 1 ]
+  # It must precede the Vekil hook, which owns the endpoint/model variables and
+  # has to get the last word.
+  local load_at vekil_at
+  load_at="$(grep -Fxn "$hook" "$HOME/.zshrc" | cut -d: -f1)"
+  vekil_at="$(grep -n 'ai/vekil/env.zsh' "$HOME/.zshrc" | head -n1 | cut -d: -f1)"
+  [ "$load_at" -lt "$vekil_at" ]
+}
+
+@test "codex reinstall is guarded on the binary, not the config" {
+  # Guarding on ~/.codex/config.toml latches: the installer writes config even
+  # when it cannot produce a binary, so config-present/codex-missing skipped the
+  # install on every subsequent start.
+  mkdir -p "$HOME/.codex" "$TEST_ROOT/host-seed/.dotfiles/ai/codex"
+  printf 'x\n' >"$HOME/.codex/config.toml"
+  printf '#!/usr/bin/env bash\nmkdir -p "$HOME/.local/bin"\ntouch "$HOME/.local/bin/codex"\nchmod +x "$HOME/.local/bin/codex"\n' \
+    >"$TEST_ROOT/host-seed/.dotfiles/ai/codex/install.sh"
+  chmod +x "$TEST_ROOT/host-seed/.dotfiles/ai/codex/install.sh"
+
+  run bash "$SEED_SCRIPT"
+
+  [ "$status" -eq 0 ]
+  [ -x "$HOME/.local/bin/codex" ]
 }
