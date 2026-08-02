@@ -331,8 +331,10 @@ Detect the old pattern before converting. Signals (any one → offer repair):
    `grep -rn '${HOME}:${HOME}' .devcontainer/ 2>/dev/null || grep -rnE '\$\{HOME\}/\.claude:\$\{HOME\}/\.claude' .devcontainer/`
 3. container-user paths written back into HOST config — anchor on the
    `/.claude|/.dotfiles` suffix, not a bare `/root`, or the catalog's
-   `//rootly.com` URLs match and every host trips this signal:
-   `grep -rlE '(/home/vscode|/home/node|/root)/\.(claude|dotfiles)' ~/.claude/plugins/*.json 2>/dev/null`
+   `//rootly.com` URLs match and every host trips this signal. Require a path
+   boundary after the suffix too, so a neighbour like `/home/vscode/.claude-backup`
+   does not:
+   `grep -rlE '(/home/vscode|/home/node|/root)/\.(claude|dotfiles)(/|"|$)' ~/.claude/plugins/*.json 2>/dev/null`
 4. foreign home symlinks the shim created:
    `ls -l /home/*/ 2>/dev/null | grep -- '-> /home/'` (inside a container only)
 5. **stale gated config copy** (the clause-2 bug in item 15) — an existing

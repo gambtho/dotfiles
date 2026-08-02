@@ -50,6 +50,14 @@ the version — so two seeds can both say `v8` and differ. Grep is the only chec
 
 ## Step 2 — port the missing blocks
 
+Capture the baseline first, so Step 3 has something to compare against. The seed
+is gitignored, but the tree is rarely *clean* — an in-flight branch has its own
+modifications, so a bare `git status --porcelain` at the end proves nothing:
+
+```bash
+git status --porcelain >"${TMPDIR:-/tmp}/seed-baseline.status"
+```
+
 Each entry gives the grep anchor to find it in the template. All of these live
 in the **always-run block, above the sentinel gate** — keep them there. Moving
 one below the gate means a container that is already stamped will never run it.
@@ -103,7 +111,12 @@ Two substitutions are templated and must be replaced when pasting: `{USER}` and
 bash -n .devcontainer/local-seed.sh
 shellcheck -x -S warning -e SC1091 .devcontainer/local-seed.sh
 shfmt -d -i 2 -ci .devcontainer/local-seed.sh
-git status --porcelain          # must be unchanged — the seed is gitignored
+
+# Nothing tracked may have moved. Diffed against the Step 2 baseline rather than
+# asserted empty: the seed and the override are gitignored, but any other
+# in-flight work in the tree is not, and would otherwise read as a violation.
+diff "${TMPDIR:-/tmp}/seed-baseline.status" <(git status --porcelain) \
+  || echo "TRACKED FILES CHANGED — inspect the diff above before continuing" >&2
 ```
 
 Then rebuild the container and check, inside it:
@@ -122,7 +135,12 @@ Back on the host afterwards, confirm the overlay links still resolve — the who
 point of the stable root is that neither side repairs at the other's expense:
 
 ```bash
-find . -maxdepth 3 -type l -lname '*dotfiles/projects/*' -exec test -e {} \; -print
+# Prints every managed overlay link that no longer resolves, and exits non-zero
+# if there are any. Match on -xtype l, not on `-exec test -e`: the older form
+# printed the links that DID resolve, so a real break printed nothing — which is
+# exactly what a reader scanning for "no output means fine" wants to see.
+broken="$(find . -maxdepth 3 -lname '*dotfiles/projects/*' -xtype l)"
+[ -z "$broken" ] || { printf 'dangling overlay link:\n%s\n' "$broken" >&2; false; }
 ```
 
 If the root is missing on the host, publish it once per machine — it needs
