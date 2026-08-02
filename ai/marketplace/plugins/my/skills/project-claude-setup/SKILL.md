@@ -24,30 +24,19 @@ It replaces the old narrower `devcontainer-host-mounts` skill. The host-mounts l
 
 ## Prerequisites — verify first, bail clearly if any fail
 
-All of these are blocking except items 4 and 7, whose handling depends on
-whether a Compose devcontainer is in play. Both exceptions are stated inline
+All of these are blocking except items 4 and 7, which depend on the devcontainer
+classification and so cannot be settled here. Both exceptions are stated inline
 below and again at the end of this section; nothing else here is advisory.
 
-**Probe the devcontainer shape first** — items 4 and 7 read differently
-depending on the answer, and both would otherwise stop a plain repo over
-container machinery it will never use:
-
-```bash
-DEVCONTAINER_JSON=.devcontainer/devcontainer.json
-[ -f "$DEVCONTAINER_JSON" ] || DEVCONTAINER_JSON=.devcontainer.json
-MAYBE_COMPOSE=0
-if [ -f "$DEVCONTAINER_JSON" ] &&
-  sed 's://.*::' "$DEVCONTAINER_JSON" | grep -q 'dockerComposeFile'; then
-  MAYBE_COMPOSE=1
-fi
-```
-
-This is a cheap presence probe, not the classification — Step 1 is
-authoritative and runs the real parse. It only has to be right about "could
-this possibly be case (a)", so it errs toward yes: a `dockerComposeFile`
-mentioned anywhere outside a `//` comment counts. If Step 1 then lands on case
-(a) while `MAYBE_COMPOSE` was 0 (a `/* … */` comment, an unusual layout), stop
-and run item 7 before generating anything.
+**Items 4 and 7 defer to Step 1's classification — don't try to shortcut it
+with a grep here.** A substring probe for `dockerComposeFile` looks like a cheap
+way to answer this early, and it is wrong in both directions: it fires on the
+key appearing in a `/* … */` comment or a string value, which reinstates exactly
+the "blocked a plain repo over `yq`" bug this section exists to avoid, and it
+cannot distinguish case (b) (image-only devcontainer — a container *is* in play)
+from case (c) (none at all), which is the distinction item 4 turns on. Step 1
+already does the real JSONC parse. Deferring costs nothing: Steps 1 and 2 are
+read-only, so item 7 still bails before Step 3 writes anything.
 
 1. **WSL host, not a devcontainer.** `uname -a` contains `microsoft` and `/.dockerenv` does NOT exist and `$REMOTE_CONTAINERS` is unset. If we're already in a container, the symlinks won't work — abort with: "Run this on the WSL host, not inside the container."
 2. **Project root.** `.git/` exists in the current dir. If not, ask the user to `cd` first.
@@ -58,7 +47,7 @@ and run item 7 before generating anything.
    - **No devcontainer** (case (c)): nothing reads these links from a foreign `$HOME`, so the `$HOME`-absolute fallback is a correct and complete result — not a downgrade. Report the setup as **done**, and mention `relink` only as optional future-proofing for the day this repo gains a devcontainer or is opened from a second machine. Don't label a case (c) delivery "host-only"; there is no other host to be partial about.
 5. **Global gitignore wired.** `git config --global core.excludesFile` resolves to a real file that includes `.claude/`, `CLAUDE.md`, `CLAUDE.local.md`, and `AGENTS.local.md`. Without these, the symlinks and import shims this skill creates will leak to `git status` inside the project. Stop and tell the user to add the missing patterns.
 6. **`jq` available.** Blocking on every path, including case (c): `claude-link-project` merges `settings.local.json` with it, and Section 6c parses `dockerComposeFile` with it. `sudo apt install jq` is fine — there is only one flavor.
-7. **`yq` (mikefarah/yq) available — only when `MAYBE_COMPOSE=1`.** `yq` exists in this skill solely to merge the Compose override in Step 6; nothing on the overlay path calls it. Skip this check outright for a plain repo, or the skill sends the user off to install a tool it will never invoke. When the probe did flag a possible Compose devcontainer: probe in order — `command -v yq` and, if that misses (PATH/cache lag in fresh shells), `[ -x /usr/local/bin/yq ]` directly. Confirm flavor via `yq --version 2>&1 | grep -q mikefarah` — if it doesn't match, refuse. **Never suggest `apt install yq`** — Ubuntu/Debian ship the Python `kislyuk/yq`, which has incompatible merge semantics. If `yq` is missing or has the wrong flavor, stop and ask the user to run `~/.dotfiles/bin/setup-agent-teams` separately. After it completes, rerun this skill and repeat every prerequisite check before continuing.
+7. **`yq` (mikefarah/yq) available — case (a) only, checked after Step 1.** `yq` exists in this skill solely to merge the Compose override in Step 6; nothing on the overlay path calls it, so a plain repo must never be stopped for it. Don't evaluate this item here — you don't yet know the case. Run it the moment Step 1 classifies **case (a)**, and skip it permanently for (b) and (c). When it does apply: probe in order — `command -v yq` and, if that misses (PATH/cache lag in fresh shells), `[ -x /usr/local/bin/yq ]` directly. Confirm flavor via `yq --version 2>&1 | grep -q mikefarah` — if it doesn't match, refuse. **Never suggest `apt install yq`** — Ubuntu/Debian ship the Python `kislyuk/yq`, which has incompatible merge semantics. If `yq` is missing or has the wrong flavor, stop before Step 3 and ask the user to run `~/.dotfiles/bin/setup-agent-teams` separately. After it completes, rerun this skill and repeat every prerequisite check before continuing.
 
 Don't continue past failed prereqs — they're not auto-recoverable from inside
 this skill. Two carry conditions rather than a flat stop:
@@ -67,8 +56,8 @@ this skill. Two carry conditions rather than a flat stop:
   (`~/.dotfiles/bin/relink`, one `sudo` per machine) and blocks nothing on this
   host, so continue. With a devcontainer, deliver it as **host-only**, never as
   done; without one (case (c)), it is simply done.
-- **Item 7** — skipped entirely when `MAYBE_COMPOSE=0`. Blocking as written
-  when the probe flagged Compose.
+- **Item 7** — not evaluated here at all. Checked immediately after Step 1
+  classifies case (a); skipped permanently for (b) and (c).
 
 ## Step 1 — Classify the devcontainer setup
 
@@ -77,6 +66,17 @@ Read `.devcontainer/devcontainer.json` if present. Categorize:
 - **(a) Compose-based**: `dockerComposeFile` key is set. The override file logic in Section 6 applies.
 - **(b) Dockerfile / image-only**: `build` or `image` set, no `dockerComposeFile`. The host-mount override doesn't apply directly — Compose features won't merge into a non-Compose devcontainer.
 - **(c) No devcontainer**: file doesn't exist. Skip Section 6 entirely.
+
+**Record the resulting case — deferred prerequisites read it.** This is the
+authoritative classification, and two prereqs were held back waiting for it:
+
+- **Case (a)** → run prerequisite item 7 (`yq`) now, before Step 3 writes
+  anything. Cases (b) and (c) skip it permanently.
+- **Any case** → item 4's stable-root reporting branches on this. Cases (a) and
+  (b) both have a container that will read the overlay links, so an absent root
+  is a **host-only** delivery. Only case (c) may be reported as simply done.
+  Note (b) and (c) are easy to conflate — both are "not Compose" — but they land
+  on opposite sides of this line.
 
 For case (b), stop and ask: "This project uses a Dockerfile-based devcontainer, not Compose. Options: (1) add a thin `docker-compose.yml` wrapper so we can apply host mounts, (2) skip the container side and just do the overlay symlinks. Which?" Don't auto-convert.
 
@@ -197,18 +197,19 @@ find <project>/.claude -xtype l
 # target whether or not it exists — so compare canonical paths. Anything but a
 # match means bootstrap/relink has not run on this machine, or could not get
 # sudo; the linker then falls back to $HOME-absolute targets. What that costs
-# depends on Step 1: with a devcontainer the links dangle inside it, so report
-# host-only, not done. For case (c) the fallback resolves everywhere anything
-# will ever read it — report done, and mention relink only as future-proofing.
-# MAYBE_COMPOSE defaults to 1 if it didn't survive from the prereq probe: an
-# unknown shape must never print the reassuring "done" line.
+# depends on the case Step 1 recorded: (a) and (b) both have a container that
+# reads these links, so they dangle there — report host-only, not done. Only
+# (c) has nothing else to resolve them, making the fallback complete.
+# Set from Step 1; defaults to "a" so an unrecorded case never prints the
+# reassuring "done" line.
 # See ~/.dotfiles/projects/README.md.
+DEVCONTAINER_CASE="${DEVCONTAINER_CASE:-a}"   # a|b|c, recorded in Step 1
 if [ -d /opt/dotfiles ] && [ "$(cd -P /opt/dotfiles && pwd -P)" = "$(cd -P ~/.dotfiles && pwd -P)" ]; then
   echo "stable root OK (host + container)"
-elif [ "${MAYBE_COMPOSE:-1}" = 1 ]; then
-  echo "NO stable root — host-only, links will dangle in the container"
-else
+elif [ "$DEVCONTAINER_CASE" = c ]; then
   echo "NO stable root — fine for this no-devcontainer project; relink only if it gains one"
+else
+  echo "NO stable root — host-only, links will dangle in the container"
 fi
 ```
 
