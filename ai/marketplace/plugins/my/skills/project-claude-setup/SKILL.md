@@ -419,7 +419,7 @@ Detect the old pattern before converting. Signals (any one → offer repair):
    docker exec -u "$REMOTE_USER" "$CID" sh -c '
      for f in "$HOME"/.claude/plugins/*.json; do
        [ -f "$f" ] || continue
-       grep -o "\(/root\|/home/[^/\"]*\)/\.\(claude\|dotfiles\)" "$f" 2>/dev/null \
+       grep -oE "(/root|/home/[^/\"]*)/\.(claude|dotfiles)(/|\"|$)" "$f" 2>/dev/null \
          | grep -v "^$HOME/" | sed "s#^#$f: #"
      done'
    ```

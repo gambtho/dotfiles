@@ -76,6 +76,12 @@ exec /usr/bin/getent "$@"
 EOF
   chmod +x "$STUB_BIN/getent"
 
+  # A real container has the claude CLI installed before the marketplace step,
+  # and the seed now refuses to stamp the sentinel when it is missing. The
+  # helper sanitizes PATH to $STUB_BIN:/usr/bin:/bin, so without this stub every
+  # test would exercise the no-CLI failure path instead of the normal one.
+  stub_command claude 'exit 0'
+
   ZSH_STUB_PATH="$(command -v zsh || true)"
   if [ -z "$ZSH_STUB_PATH" ]; then
     ZSH_STUB_PATH="$STUB_BIN/zsh"
@@ -701,6 +707,38 @@ extract_seed_script() {
   [ "$load_at" -lt "$vekil_at" ]
   # Unrelated lines survive the rewrite.
   grep -Fqx '# keep me' "$HOME/.zshrc"
+}
+
+@test "duplicate loaders left by repeated appends collapse to one" {
+  # A guard that only asks "where is the first copy?" reads a zshrc whose first
+  # hook sits correctly as already-fixed, and the extra copies below it source
+  # the whole tree a second time — duplicate aliases, duplicate PATH entries.
+  local hook='[[ -r "$HOME/.dotfiles/core/shell/load-custom.zsh" ]] && source "$HOME/.dotfiles/core/shell/load-custom.zsh"'
+  local vekil='[[ -r "$HOME/.dotfiles/ai/vekil/env.zsh" ]] && source "$HOME/.dotfiles/ai/vekil/env.zsh"'
+  printf '%s\n%s\n%s\n' "$hook" "$vekil" "$hook" >"$HOME/.zshrc"
+
+  run bash "$SEED_SCRIPT"
+  [ "$status" -eq 0 ]
+
+  [ "$(grep -Fxc "$hook" "$HOME/.zshrc")" = 1 ]
+  [ "$(grep -Fxc "$vekil" "$HOME/.zshrc")" = 1 ]
+  local load_at vekil_at
+  load_at="$(grep -Fxn "$hook" "$HOME/.zshrc" | cut -d: -f1)"
+  vekil_at="$(grep -Fxn "$vekil" "$HOME/.zshrc" | cut -d: -f1)"
+  [ "$load_at" -lt "$vekil_at" ]
+}
+
+@test "a missing claude CLI leaves the sentinel unstamped" {
+  # Skipping registration and stamping anyway is the worst outcome: the gated
+  # block never runs again, so the marketplaces stay unregistered for the life
+  # of the volume with no further complaint.
+  rm -f "$STUB_BIN/claude"
+
+  run bash "$SEED_SCRIPT"
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"NOT stamping sentinel"* ]]
+  [ ! -e "$HOME/.claude/.seeded" ]
 }
 
 @test "codex reinstall is guarded on the binary, not the config" {

@@ -409,30 +409,37 @@ $SUDO touch "$ZSHRC"
 # So compare positions, and let one awk cover both repairs: it drops any
 # existing copy wherever it sits, then re-emits it above the Vekil line.
 DOTFILES_LOAD_HOOK='[[ -r "$HOME/.dotfiles/core/shell/load-custom.zsh" ]] && source "$HOME/.dotfiles/core/shell/load-custom.zsh"'
+# Count, don't just locate. The first match's position says nothing about copies
+# below it, so a zshrc holding two hooks — one correctly placed — reads as
+# already-correct and the tree sources twice forever, which is the duplicate-
+# alias/duplicate-PATH failure this hook exists to avoid.
 # `|| true`: under `set -o pipefail` a non-matching grep would abort the seed.
+load_n="$(grep -Fxc "$DOTFILES_LOAD_HOOK" "$ZSHRC" 2>/dev/null || true)"
 load_at="$(grep -Fxn "$DOTFILES_LOAD_HOOK" "$ZSHRC" 2>/dev/null | head -n1 | cut -d: -f1 || true)"
 vekil_at="$(grep -Fxn "$VEKIL_ENV_HOOK" "$ZSHRC" 2>/dev/null | head -n1 | cut -d: -f1 || true)"
-if [ -z "$vekil_at" ]; then
-  # No Vekil hook yet — its own block below appends after this one, so a plain
-  # append already lands in the right order.
-  if [ -z "$load_at" ]; then
-    printf '\n%s\n' "$DOTFILES_LOAD_HOOK" | $SUDO tee -a "$ZSHRC" >/dev/null
-    echo "🌱 seed: configured dotfiles shell integration"
-  fi
-elif [ -z "$load_at" ] || [ "$load_at" -gt "$vekil_at" ]; then
+if [ "${load_n:-0}" -gt 1 ] \
+  || { [ -n "$vekil_at" ] && { [ "${load_n:-0}" -eq 0 ] || [ "$load_at" -gt "$vekil_at" ]; }; }; then
   ZSHRC_TMP="$(mktemp)"
   # Exact line match on the whole hook, not a substring: awk -v takes the
-  # value literally and neither hook contains a backslash. Dropping the hook
-  # before re-emitting it is what makes the reorder path duplicate-free.
+  # value literally and neither hook contains a backslash. Dropping every copy
+  # before re-emitting one is what makes both the reorder and the de-duplicate
+  # path converge on the same single correctly-placed line; the END clause
+  # covers de-duplicating a zshrc that has no Vekil hook to anchor against.
   awk -v hook="$DOTFILES_LOAD_HOOK" -v vekil="$VEKIL_ENV_HOOK" '
     $0 == hook { next }
     $0 == vekil && !ins { print hook; print ""; ins = 1 }
     { print }
+    END { if (!ins) print hook }
   ' "$ZSHRC" >"$ZSHRC_TMP"
   # cp, not mv: writing through the existing path keeps the file's owner and
   # mode, which matter because the terminal user may not be the seed user.
   $SUDO cp "$ZSHRC_TMP" "$ZSHRC"
   rm -f "$ZSHRC_TMP"
+  echo "🌱 seed: configured dotfiles shell integration"
+elif [ "${load_n:-0}" -eq 0 ]; then
+  # No Vekil hook yet — its own block below appends after this one, so a plain
+  # append already lands in the right order.
+  printf '\n%s\n' "$DOTFILES_LOAD_HOOK" | $SUDO tee -a "$ZSHRC" >/dev/null
   echo "🌱 seed: configured dotfiles shell integration"
 fi
 
@@ -609,6 +616,12 @@ if [ -r "$DOTFILES_HOME/bin/common.sh" ]; then
 fi
 if command -v ensure_stable_link_root >/dev/null 2>&1; then
   ensure_stable_link_root "$DOTFILES_HOME"
+elif [ -e "$STABLE_LINK_ROOT" ] && [ ! -L "$STABLE_LINK_ROOT" ]; then
+  # Same guard the helper applies: a real file or directory there is somebody
+  # else's, and `ln -sfn` would either fail obscurely or plant the link inside
+  # it. Say what to do instead of reporting a generic creation failure.
+  echo "⚠️  seed: $STABLE_LINK_ROOT exists and is not a symlink — move it aside" >&2
+  echo "   and restart; overlay links will dangle in this container until then." >&2
 elif $SUDO mkdir -p "$(dirname "$STABLE_LINK_ROOT")" \
   && $SUDO ln -sfn "$DOTFILES_HOME" "$STABLE_LINK_ROOT"; then
   echo "🌱 seed: $STABLE_LINK_ROOT -> $DOTFILES_HOME (literal fallback)"
@@ -734,6 +747,10 @@ elif [ -r "$DOTFILES_HOME/config/versions.env" ]; then
     # make room for a download that may not survive the checksum or the chown —
     # reachable whenever bin/nvim is missing or broken but the tree beneath it
     # is fine, which is precisely when this branch runs on a warm container.
+    #
+    # The chown must land or the tree must already belong to the seed user: a
+    # runtime the remoteUser cannot write is one lazy.nvim cannot update, and
+    # `test -x` alone would happily accept it.
     NVIM_DIST="$SEED_HOME/.local/share/nvim-dist"
     if curl -fsSL --connect-timeout 10 --max-time 300 \
       -o "$NVIM_TMP/nvim.tar.gz" "$NVIM_URL" \
@@ -743,7 +760,8 @@ elif [ -r "$DOTFILES_HOME/config/versions.env" ]; then
       && as_user mkdir -p "$SEED_HOME/.local/share" "$SEED_HOME/.local/bin" \
       && as_user rm -rf "$NVIM_DIST.new" \
       && mv "$NVIM_TMP/nvim-$NVIM_ARCH" "$NVIM_DIST.new" \
-      && { chown -R "$SEED_UID:$SEED_GID" "$NVIM_DIST.new" 2>/dev/null || true; } \
+      && { chown -R "$SEED_UID:$SEED_GID" "$NVIM_DIST.new" 2>/dev/null \
+        || [ -z "$(find "$NVIM_DIST.new" \( ! -uid "$SEED_UID" -o ! -gid "$SEED_GID" \) -print -quit 2>/dev/null)" ]; } \
       && as_user test -x "$NVIM_DIST.new/bin/nvim" \
       && as_user rm -rf "$NVIM_DIST" \
       && mv "$NVIM_DIST.new" "$NVIM_DIST" \
@@ -844,7 +862,10 @@ plugin_home_repair() {
   local repaired="" f tmp
   for f in "$dir/known_marketplaces.json" "$dir/installed_plugins.json"; do
     [ -f "$f" ] || continue
-    tmp="$f.seed.$$"
+    # mktemp in the registry's OWN directory: an exclusive create beats the
+    # predictable "$f.seed.$$", and staying on the same filesystem is what keeps
+    # the later rename atomic rather than a copy.
+    tmp="$(mktemp "$f.seed.XXXXXX" 2>/dev/null)" || continue
     sed -E "s#(/root|/home/[^\"/]+)(/\.(claude|dotfiles))#${SEED_HOME}\2#g" \
       "$f" >"$tmp" 2>/dev/null || { rm -f "$tmp"; continue; }
     if cmp -s "$f" "$tmp"; then
@@ -870,17 +891,36 @@ plugin_home_repair() {
     # interrupt mid-write leaves a half-written registry with no way back.
     # rename(2) is atomic, so the file is either fully old or fully new.
     #
-    # Both must succeed. Renaming a temp file that kept the seed user's owner or
-    # a default mode hands the registry to the wrong identity, and Claude then
+    # Both must hold. Renaming a temp file that kept the seed user's owner or a
+    # default mode hands the registry to the wrong identity, and Claude then
     # cannot write it — the same cache-miss symptom this function exists to fix,
     # now permanent. A stale registry is the better failure.
+    #
+    # chown FAILING is not itself the problem, though: a non-root seed cannot
+    # call chown(2) at all on some kernels, yet mktemp already created the file
+    # as that same user, so the ownership is right anyway. Test the outcome, not
+    # the exit status — that covers the root and non-root seeds with one branch.
     if ! chown --reference="$f" "$tmp" 2>/dev/null \
-      || ! chmod --reference="$f" "$tmp" 2>/dev/null; then
-      echo "⚠️  seed: could not carry owner/mode onto $(basename "$f") — leaving original"
+      && [ "$(stat -c '%u:%g' "$tmp" 2>/dev/null)" != "$(stat -c '%u:%g' "$f" 2>/dev/null)" ]; then
+      echo "⚠️  seed: could not carry owner onto $(basename "$f") — leaving original"
       rm -f "$tmp"
       continue
     fi
-    mv -f "$tmp" "$f" && repaired="$repaired $(basename "$f")"
+    if ! chmod --reference="$f" "$tmp" 2>/dev/null; then
+      echo "⚠️  seed: could not carry mode onto $(basename "$f") — leaving original"
+      rm -f "$tmp"
+      continue
+    fi
+    # A failed rename leaves the ORIGINAL in place, which is the safe outcome —
+    # but say so. Silence here is indistinguishable from "nothing needed
+    # repairing", and $repaired stays empty either way, so the next start would
+    # be the only hint. Not stamping is handled by the caller; this just has to
+    # not claim success.
+    if mv -f "$tmp" "$f"; then
+      repaired="$repaired $(basename "$f")"
+    else
+      echo "⚠️  seed: could not replace $(basename "$f") — original left intact, retrying next start"
+    fi
     rm -f "$tmp"
   done
   # Same fallout: ~/.claude symlinks aimed at the dead home. Match the TARGET
@@ -1009,7 +1049,12 @@ fi
 # marketplace MANIFEST, not the repo path (techwolf-ai/ai-first-toolkit
 # registers as `techwolf-ai-first`), so it cannot be derived, and a guard that
 # guesses it never matches and re-adds on every single seed.
-if command -v claude >/dev/null 2>&1; then
+# Probed as SEED_USER, not as whoever runs the seed: the CLI installs into
+# $SEED_HOME/.local/bin, which is not on root's PATH, so a root-run seed asking
+# `command -v claude` gets "no" while the user's shell finds it fine. And an
+# unavailable CLI clears MARKETPLACE_OK rather than silently skipping — skipping
+# stamps the sentinel, and the gated block then never retries the registration.
+if as_user sh -c 'command -v claude >/dev/null 2>&1'; then
   mp_registry="$CLAUDE_HOME/plugins/known_marketplaces.json"
   while read -r mp_name mp_repo; do
     [ -n "$mp_name" ] || continue
@@ -1031,6 +1076,9 @@ if command -v claude >/dev/null 2>&1; then
   done <<'MARKETPLACES'
 claude-plugins-official anthropics/claude-plugins-official
 MARKETPLACES
+else
+  MARKETPLACE_OK=0
+  echo "⚠️  seed: claude CLI not on $SEED_USER's PATH — marketplaces not registered, NOT stamping sentinel"
 fi
 
 # 3. Stamp the sentinel with the current version, but only on a clean run.
