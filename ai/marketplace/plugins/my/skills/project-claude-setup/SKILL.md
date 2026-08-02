@@ -261,15 +261,26 @@ Write or merge the gitignored `docker-compose.override.yml` directly. The overri
 
     **Clause 2 — the source must be this template.** `SEED_VERSION` lives in `local-seed.sh`, so the gate can only observe changes to that file. A step whose source is the **host** (`/host-seed/...`) is invisible to it: editing `~/.claude/settings.json` on the host bumps no version, so the gate skips the copy and the container serves stale config through any number of rebuilds — with the correct value sitting unread in the read-only mount. **The authored `~/.claude` config copy fails this clause and belongs in the always-run block**, even though its target persists. Gating it costs nothing to give up: the subset is ~12K with no regular files at the top level (`skills/` is symlinks), measured at ~9ms for a full `cp -a`. Symptom: a host config change (model, commands, skills) never reaches the container, and rebuilding doesn't help because the named volume survives.
 
-    Do **not** reach for `rsync` to solve clause 2 — it is absent from many base images, and its only advantage (skipping unchanged bytes in a large tree) is worth nothing at this size, while `rm -rf` + `cp -a` already deletes host-removed files. Net result: **only the marketplace/plugins install stays gated** — it is both expensive and template-sourced.
+    For the small `~/.claude` subset, `rm -rf` + `cp -a` is sufficient — `rsync` buys nothing at ~12K and is absent from some base images.
 
-    Large host-sourced trees (`~/.dotfiles`) are the one case where a guard still pays for itself. Keep the empty-volume check, but make the escape hatch **visible in the start log** rather than buried in a comment — silent staleness is what makes this class of bug expensive to diagnose:
+    **`~/.dotfiles` is NOT an exception to clause 2 — it is the worst case of it.** An empty-volume guard here looks like a reasonable cost optimization and is not, because this tree is the *source* of the config the other steps copy: `~/.claude/settings.json` is a symlink into it, and `ai/vekil/env.zsh` exports `ANTHROPIC_MODEL`, which **outranks `settings.json`**. Freezing the volume therefore pins the model to whatever the host had at first seed, and no amount of fixing the `~/.claude` copy can dislodge it — the correct value is copied, then overridden by the stale env var. Rebuilding does not help; the named volume survives `--remove-existing-container`. A missing `hooks/overlay-sync.sh` presents at the same time as a `SessionStart` hook error.
+
+    So mirror it on every launch, host-authoritative:
     ```bash
-    else
-      echo "🌱 seed: ~/.dotfiles already populated (host edits NOT picked up)"
-      echo "         to refresh: docker volume rm <project>_dotfiles-local-home"
+    if [ -d "$SEED_DOTFILES" ]; then
+      if command -v rsync >/dev/null 2>&1; then
+        rsync -a --delete "$SEED_DOTFILES/" "$HOME/.dotfiles/"
+      else
+        # No non-pruning fallback: the always-run installers EXECUTE files from
+        # this persisted tree, so one deleted upstream would keep running.
+        find "$HOME/.dotfiles" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+        cp -a "$SEED_DOTFILES/." "$HOME/.dotfiles/"
+      fi
     fi
     ```
+    State the cost plainly to the user: container-local edits under `~/.dotfiles` are reverted every start, including the runtime toggles Claude Code writes into `ai/claude/settings.json` (theme, `agentPushNotifEnabled`). Those must be made on the host to persist. That is the right trade — a 40M rsync of an unchanged tree is near-instant, and the alternative is a class of bug that costs hours.
+
+    Net: **only the marketplace/plugins install stays gated** — it alone is both expensive and template-sourced.
 
 Do **not** use `claude-merge-compose-override` for this step until that helper emits the seed model; its current output contains writable and dual-home mounts.
 
@@ -337,8 +348,29 @@ Detect the old pattern before converting. Signals (any one → offer repair):
    what surfaces this class of drift on every start instead of on the day
    someone notices the wrong model.
 
-Anything scaffolded before the two-clause rule existed will trip signal 5, so
-run it during **any** repair pass, not just rw-mount conversions.
+6. **frozen `~/.dotfiles` volume** — a `local-seed.sh` that only populates
+   `~/.dotfiles` when the volume is empty. Higher-impact than signal 5 and it
+   masks the fix for it, since `~/.claude/settings.json` symlinks into this tree
+   and `ai/vekil/env.zsh` exports `ANTHROPIC_MODEL`, which outranks
+   `settings.json`.
+   ```bash
+   # any output => populate-once guard still present: host edits never land
+   grep -n 'mindepth 1 -maxdepth 1 -print -quit' .devcontainer/local-seed.sh
+   ```
+   Confirm against the container — this is the check that names the real symptom:
+   ```bash
+   docker exec -u "$REMOTE_USER" "$CID" \
+     cmp /host-seed/.dotfiles/ai/vekil/env.zsh "$REMOTE_HOME/.dotfiles/ai/vekil/env.zsh" \
+     || echo "dotfiles FROZEN — model/hooks stale regardless of settings.json"
+   ```
+   Repair: replace the guard with the unconditional `rsync -a --delete` mirror
+   from item 15 and restart. Tell the user their container-local `~/.dotfiles`
+   edits will be reverted from now on.
+
+Anything scaffolded before the two-clause rule existed will trip signals 5 and 6,
+so run both during **any** repair pass, not just rw-mount conversions. Signal 6
+first: while the dotfiles tree is frozen, fixing signal 5 changes nothing
+observable, which makes the fix look ineffective.
 
 Remediation (confirm with user before each write):
 
