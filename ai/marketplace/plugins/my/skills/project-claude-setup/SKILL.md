@@ -319,6 +319,8 @@ The merged output should show the seed `command` and the `/host-seed` mounts.
 
 See `devcontainer-host-mounts.md` for the copy-pasteable override and seed script, service/user/path substitutions, and verification commands.
 
+For a project that **already has** a `.devcontainer/local-seed.sh` predating a template change, see `catch-up-local-seed.md`. Don't regenerate the file from the template to close the gap — the drift runs both ways, and a wholesale regeneration silently deletes whatever that project fixed locally first. `SEED_VERSION` is not a reliable indicator either: always-run blocks correctly don't bump it, so two seeds can both report the same version and differ.
+
 ## Step 6b — Repair an existing corrupted rw-mount setup
 
 Detect the old pattern before converting. Signals (any one → offer repair):

@@ -1,0 +1,133 @@
+# Catching an existing `local-seed.sh` up to the template
+
+A per-project `.devcontainer/local-seed.sh` is **gitignored and hand-owned**, so
+it drifts from `devcontainer-host-mounts.md` the moment the template gains a
+block. This is the procedure for closing that gap on one project at a time.
+
+Run it in a **separate session per project**, from that project's directory. Do
+not batch it — the seeds are structurally different from one another (see
+"Vocabulary differs per seed" below), so a block that pastes cleanly into one
+aborts another under `set -euo pipefail`.
+
+## Prompt
+
+> Catch this project's `.devcontainer/local-seed.sh` up to the current template
+> at `~/.dotfiles/ai/marketplace/plugins/my/skills/project-claude-setup/devcontainer-host-mounts.md`,
+> following `catch-up-local-seed.md` in that same directory. Audit first, show me
+> what's missing and what you plan to port, then apply it.
+
+## Why not just regenerate from the template
+
+Because the drift runs **both ways**. When wanderer was caught up, its local
+seed was three blocks behind the template *and* carried two blocks the template
+did not have — a pinned neovim install and the `load-custom.zsh` shell loader.
+Regenerating would have silently deleted both, and neither was
+wanderer-specific. Those two have since been promoted up, but the same shape
+recurs every time someone fixes something locally first.
+
+So: **port block by block, and diff before overwriting anything.** Treat a block
+present locally but absent from the template as a candidate for promotion, not
+as cruft.
+
+## Step 1 — audit
+
+From the project directory:
+
+```bash
+f=.devcontainer/local-seed.sh
+printf 'SEED_VERSION=%s\n' "$(sed -n 's/^SEED_VERSION=//p' "$f")"
+for k in 'STABLE_LINK_ROOT' 'ensure_stable_link_root' 'NVIM_VERSION' \
+         'load-custom.zsh' 'core.hooksPath' 'core.excludesFile' \
+         'local/bin/codex' 'config/nvim'; do
+  grep -q "$k" "$f" && printf '  %-24s present\n' "$k" || printf '  %-24s MISSING\n' "$k"
+done
+grep -o "lname '[^']*'" "$f" || echo "  overlay-gitignore matcher MISSING"
+```
+
+**`SEED_VERSION` does not tell you what's in the file.** Every block below is
+always-run, and by the two-clause gating rule an always-run change must not bump
+the version — so two seeds can both say `v8` and differ. Grep is the only check.
+
+## Step 2 — port the missing blocks
+
+Each entry gives the grep anchor to find it in the template. All of these live
+in the **always-run block, above the sentinel gate** — keep them there. Moving
+one below the gate means a container that is already stamped will never run it.
+
+| Block | Anchor in template | Why it matters |
+|---|---|---|
+| Stable link root | `ensure_stable_link_root` | Publishes `/opt/dotfiles`. Without it every personal overlay symlink dangles in the container — `.claude/skills`, `agents`, `references`, **and `CLAUDE.md`**, so the project instructions never load either. |
+| Overlay-link gitignore | `lname '*dotfiles/projects/*'` | Adds overlay links to the container's `~/.gitignore`. If the seed has the **old narrow** `'*/.dotfiles/projects/*'`, it must be widened: that glob needs a literal dot-prefixed `.dotfiles` and misses every `/opt/dotfiles` link, so overlay files start appearing in container `git status`. |
+| `core.excludesFile` | `core.excludesFile` | The host's global gitignore is not seeded; without this the container has no exclude file at all. |
+| `core.hooksPath` | `core.hooksPath` | Same reason, for the dotfiles git hooks. |
+| neovim install | `NVIM_VERSION` | The dotfiles set `EDITOR=nvim` but nothing in them installs the binary — on a host it arrives via the package lists, which no devcontainer image runs. An `EDITOR` naming a missing command breaks `git commit` with an error that blames git. Pinned and sha256-verified from `config/versions.env`; non-fatal. |
+| `~/.config/nvim` link | `config/nvim` | Without it the binary starts bare and none of `config/nvim` applies. Must not clobber a real directory. |
+| `load-custom.zsh` loader | `DOTFILES_LOAD_HOOK` | The supported entry point for the shell tree. Append it **before** the Vekil hook — `ai/vekil/env.zsh` exports `ANTHROPIC_MODEL`, which outranks `settings.json`, so it has to get the last word. |
+| codex guard | `local/bin/codex` | Guard the reinstall on the **binary**, not `~/.codex/config.toml`. The installer writes config even when it fails to produce a binary, so a config-based guard latches shut and codex never reinstalls. |
+
+## Vocabulary differs per seed — do not paste blindly
+
+The template is written against `as_user`, `$SUDO`, `$SEED_HOME`,
+`$DOTFILES_HOME`, and `$WORKSPACE`. Existing seeds do not all define those:
+
+- Seeds for a **root** container user tend to have no `as_user` and no
+  `$SEED_HOME`, and call `sudo` directly against `$HOME`.
+- Some seeds define no `$WORKSPACE` at all — the overlay-gitignore block needs
+  one, so add it (`WORKSPACE="/app"`, or wherever the compose file mounts the
+  repo) rather than assuming it exists.
+- `$DOTFILES_HOME` is frequently just `$HOME/.dotfiles` locally.
+
+Read the target file's variable block first and translate each pasted block into
+**that file's** vocabulary. An undefined variable under `set -u` aborts the whole
+seed, and the failure surfaces as an unrelated-looking container start error.
+
+Two substitutions are templated and must be replaced when pasting: `{USER}` and
+`{WORKSPACE}`.
+
+## Non-negotiable scope
+
+- **Never edit the project's `Dockerfile` or its base compose file.** The only
+  sanctioned tracked-file change is adding `docker-compose.override.yml` to
+  `dockerComposeFile` in `devcontainer.json`, and only with explicit approval.
+- `local-seed.sh` and `docker-compose.override.yml` are gitignored. Confirm with
+  `git check-ignore -v` before writing, and confirm `git status --porcelain` is
+  unchanged after.
+- **Never mount all of `~/.claude`.** Read-only still exposes
+  `.credentials.json`, `history.jsonl`, and `projects/` session transcripts.
+  Mount only the authored allowlist the seed actually copies.
+- Host SSH keys and `gh` auth are not shared unless the user explicitly opts in.
+
+## Step 3 — verify
+
+```bash
+bash -n .devcontainer/local-seed.sh
+shellcheck -x -S warning -e SC1091 .devcontainer/local-seed.sh
+shfmt -d -i 2 -ci .devcontainer/local-seed.sh
+git status --porcelain          # must be unchanged — the seed is gitignored
+```
+
+Then rebuild the container and check, inside it:
+
+```bash
+readlink /opt/dotfiles                      # -> the container's own ~/.dotfiles
+find .claude -xtype l                       # must print nothing
+git status --porcelain | grep -i claude     # must print nothing
+nvim --version | head -1
+zsh -lic 'whence -v nvim; print $EDITOR'
+git config --global core.hooksPath
+git config --global core.excludesFile
+```
+
+Back on the host afterwards, confirm the overlay links still resolve — the whole
+point of the stable root is that neither side repairs at the other's expense:
+
+```bash
+find . -maxdepth 3 -type l -lname '*dotfiles/projects/*' -exec test -e {} \; -print
+```
+
+If the root is missing on the host, publish it once per machine — it needs
+`sudo`, because `/opt` is root-owned:
+
+```bash
+bash -c 'source ~/.dotfiles/bin/common.sh && ensure_stable_link_root "$HOME/.dotfiles"'
+```
