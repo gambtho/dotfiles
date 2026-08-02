@@ -73,12 +73,41 @@ These values vary per project and must be filled in correctly, otherwise mounts 
    # devcontainer.config_file and the compose working_dir label are always
    # POSIX — try them before giving up.
    devcontainer_cid() {
-     local d="${1:-$PWD}" cid
+     # $1 workspace folder (default $PWD); $2 optional service name override.
+     local d="${1:-$PWD}" svc="${2:-}" cfg wd cid
+     cfg="$d/.devcontainer/devcontainer.json"
+     [ -f "$cfg" ] || cfg="$d/devcontainer.json"
+     # Compose working_dir is the dir holding the FIRST dockerComposeFile, which is
+     # not always <root>/.devcontainer — nested and root-level layouts both exist.
+     wd="$(dirname "$cfg")"
+     if command -v jq >/dev/null 2>&1 && [ -f "$cfg" ]; then
+       local first
+       first="$(sed 's://.*::' "$cfg" | jq -r '
+         (.dockerComposeFile // empty) | if type=="array" then .[0] else . end' \
+         2>/dev/null)"
+       [ -n "$first" ] && [ "$first" != null ] \
+         && wd="$(cd "$(dirname "$cfg")" && cd "$(dirname "$first")" && pwd)"
+       [ -n "$svc" ] || svc="$(sed 's://.*::' "$cfg" | jq -r '.service // empty' 2>/dev/null)"
+     fi
+     # local_folder first: exact and unambiguous when it matches. It records the
+     # path as the CLIENT saw it, so under Windows+WSL it is a UNC path and a POSIX
+     # $PWD never matches — hence the POSIX fallbacks below.
      cid="$(docker ps -q --filter "label=devcontainer.local_folder=$d")"
-     [ -z "$cid" ] && cid="$(docker ps -q \
-       --filter "label=devcontainer.config_file=$d/.devcontainer/devcontainer.json")"
-     [ -z "$cid" ] && cid="$(docker ps -q \
-       --filter "label=com.docker.compose.project.working_dir=$d/.devcontainer")"
+     [ -z "$cid" ] && cid="$(docker ps -q --filter "label=devcontainer.config_file=$cfg")"
+     if [ -z "$cid" ]; then
+       # working_dir alone matches EVERY service in the project — the app container
+       # AND every sidecar (postgres, redis). Without an exact service filter this
+       # returns several IDs and the caller's one-ID guard aborts on a healthy
+       # setup. Require the service; if devcontainer.json does not name one, say so
+       # rather than guessing which sidecar is the dev container.
+       if [ -z "$svc" ]; then
+         echo "devcontainer_cid: no 'service' in $cfg — pass it as \$2" >&2
+         return 1
+       fi
+       cid="$(docker ps -q \
+         --filter "label=com.docker.compose.project.working_dir=$wd" \
+         --filter "label=com.docker.compose.service=$svc")"
+     fi
      printf '%s' "$cid"
    }
    CID="$(devcontainer_cid)"
@@ -597,9 +626,6 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# VERSION GATE — installers only, from here down.
-# ---------------------------------------------------------------------------
-# ---------------------------------------------------------------------------
 # DRIFT CHECK — runs on BOTH the gated-skip and reseed paths.
 # Compares CONTENT against the host mount rather than trusting the sentinel, so
 # it reports staleness no matter the cause — including a seed still running the
@@ -608,11 +634,29 @@ fi
 # Advisory only: never exits nonzero, so a false positive cannot block startup.
 # ---------------------------------------------------------------------------
 config_drift_check() {
-  [ -d "$SEED_CLAUDE" ] || return 0
   local drift=""
-  for item in settings.json CLAUDE.md; do
-    [ -e "$SEED_CLAUDE/$item" ] || continue
-    cmp -s "$SEED_CLAUDE/$item" "$CLAUDE_HOME/$item" || drift="$drift $item"
+  # The SAME five seed-owned paths the copy above manages. Comparing a subset
+  # would pass while commands/ or skills/ were stale.
+  for item in settings.json CLAUDE.md config commands skills; do
+    local src="$SEED_CLAUDE/$item" dst="$CLAUDE_HOME/$item"
+    # Both directions. An `[ -e "$src" ] || continue` guard is the bug it is
+    # meant to catch: a path DELETED on the host but still present in the
+    # persisted volume is exactly the stale-copy case, and skipping absent
+    # sources makes it invisible.
+    if [ -e "$src" ] && [ ! -e "$dst" ]; then
+      drift="$drift $item(missing)"
+    elif [ ! -e "$src" ] && [ -e "$dst" ]; then
+      drift="$drift $item(orphaned)"
+    elif [ -d "$src" ] || [ -d "$dst" ]; then
+      # --no-dereference is REQUIRED here, not a nicety. ~/.claude/skills is a
+      # tree of symlinks into ~/.agents, which is deliberately NOT mounted, so a
+      # dereferencing diff compares two unreachable targets and reports drift
+      # between byte-identical trees — a FAIL on every single start.
+      diff --no-dereference -rq "$src" "$dst" >/dev/null 2>&1 \
+        || drift="$drift $item"
+    elif [ -e "$src" ]; then
+      cmp -s "$src" "$dst" || drift="$drift $item"
+    fi
   done
   if [ -n "$drift" ]; then
     echo "   FAIL  ~/.claude differs from host mount:$drift"
@@ -624,6 +668,14 @@ config_drift_check() {
   return 0
 }
 
+# Invoked here, ABOVE the gate, so it runs on BOTH paths — the gated-skip exit
+# below and the reseed path. Placed after the copy so it verifies the result of
+# this run rather than the previous one.
+config_drift_check
+
+# ---------------------------------------------------------------------------
+# VERSION GATE — installers only, from here down.
+# ---------------------------------------------------------------------------
 # Skip the gated INSTALL steps only when the sentinel already records this
 # SEED_VERSION. An empty legacy sentinel (the pre-versioning contract) is NOT
 # treated as current: it falls through once so the versioned steps run and the
@@ -639,7 +691,6 @@ config_drift_check() {
 if [ -f "$SENTINEL" ] && SEEN_VERSION="$(cat "$SENTINEL")" 2>/dev/null \
    && [ "$SEEN_VERSION" = "$SEED_VERSION" ]; then
   echo "🌱 seed: already seeded (v$SEEN_VERSION) — skipping installers"
-  config_drift_check
   exit 0
 fi
 if [ -f "$SENTINEL" ] && [ -z "${SEEN_VERSION:-}" ]; then

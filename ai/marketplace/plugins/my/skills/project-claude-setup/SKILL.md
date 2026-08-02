@@ -335,12 +335,24 @@ Detect the old pattern before converting. Signals (any one → offer repair):
      .devcontainer/local-seed.sh
    ```
    Confirm against the running container — the definitive test, since it
-   compares content rather than reading the script:
+   compares content rather than reading the script. Compare all five seed-owned paths, in both directions — a subset check passes
+   while `commands/` or `skills/` are stale, and a source-exists guard hides the
+   path deleted on the host but still present in the persisted volume:
    ```bash
-   docker exec -u "$REMOTE_USER" "$CID" \
-     cmp /host-seed/.claude/settings.json "$REMOTE_HOME/.claude/settings.json" \
-     || echo "container config is STALE vs the host mount — apply the item-15 fix"
+   docker exec -u "$REMOTE_USER" "$CID" sh -s <<'EOF'
+   for i in settings.json CLAUDE.md config commands skills; do
+     s=/host-seed/.claude/$i; d=$HOME/.claude/$i
+     if   [ -e "$s" ] && [ ! -e "$d" ]; then echo "STALE $i (missing)"
+     elif [ ! -e "$s" ] && [ -e "$d" ]; then echo "STALE $i (orphaned)"
+     elif [ -d "$s" ] || [ -d "$d" ]; then
+       # --no-dereference: skills/ is symlinks into the unmounted ~/.agents
+       diff --no-dereference -rq "$s" "$d" >/dev/null 2>&1 || echo "STALE $i"
+     elif [ -e "$s" ]; then cmp -s "$s" "$d" || echo "STALE $i"
+     fi
+   done
+   EOF
    ```
+   Any `STALE` line means the item-15 fix has not been applied.
    Repair: move the authored-config copy from the gated section into the
    always-run block (leave the marketplace install gated), then restart. No
    `SEED_VERSION` bump is needed — that is the point of the fix. Seeds written
@@ -488,12 +500,41 @@ Report to the user:
   # below reports "no devcontainer running" on a perfectly healthy container.
   # Fall back to labels that are always POSIX and always exact.
   devcontainer_cid() {
-    local d="${1:-$PWD}" cid
+    # $1 workspace folder (default $PWD); $2 optional service name override.
+    local d="${1:-$PWD}" svc="${2:-}" cfg wd cid
+    cfg="$d/.devcontainer/devcontainer.json"
+    [ -f "$cfg" ] || cfg="$d/devcontainer.json"
+    # Compose working_dir is the dir holding the FIRST dockerComposeFile, which is
+    # not always <root>/.devcontainer — nested and root-level layouts both exist.
+    wd="$(dirname "$cfg")"
+    if command -v jq >/dev/null 2>&1 && [ -f "$cfg" ]; then
+      local first
+      first="$(sed 's://.*::' "$cfg" | jq -r '
+        (.dockerComposeFile // empty) | if type=="array" then .[0] else . end' \
+        2>/dev/null)"
+      [ -n "$first" ] && [ "$first" != null ] \
+        && wd="$(cd "$(dirname "$cfg")" && cd "$(dirname "$first")" && pwd)"
+      [ -n "$svc" ] || svc="$(sed 's://.*::' "$cfg" | jq -r '.service // empty' 2>/dev/null)"
+    fi
+    # local_folder first: exact and unambiguous when it matches. It records the
+    # path as the CLIENT saw it, so under Windows+WSL it is a UNC path and a POSIX
+    # $PWD never matches — hence the POSIX fallbacks below.
     cid="$(docker ps -q --filter "label=devcontainer.local_folder=$d")"
-    [ -z "$cid" ] && cid="$(docker ps -q \
-      --filter "label=devcontainer.config_file=$d/.devcontainer/devcontainer.json")"
-    [ -z "$cid" ] && cid="$(docker ps -q \
-      --filter "label=com.docker.compose.project.working_dir=$d/.devcontainer")"
+    [ -z "$cid" ] && cid="$(docker ps -q --filter "label=devcontainer.config_file=$cfg")"
+    if [ -z "$cid" ]; then
+      # working_dir alone matches EVERY service in the project — the app container
+      # AND every sidecar (postgres, redis). Without an exact service filter this
+      # returns several IDs and the caller's one-ID guard aborts on a healthy
+      # setup. Require the service; if devcontainer.json does not name one, say so
+      # rather than guessing which sidecar is the dev container.
+      if [ -z "$svc" ]; then
+        echo "devcontainer_cid: no 'service' in $cfg — pass it as \$2" >&2
+        return 1
+      fi
+      cid="$(docker ps -q \
+        --filter "label=com.docker.compose.project.working_dir=$wd" \
+        --filter "label=com.docker.compose.service=$svc")"
+    fi
     printf '%s' "$cid"
   }
   CID="$(devcontainer_cid)"   # THIS workspace only
