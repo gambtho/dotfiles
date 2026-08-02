@@ -23,3 +23,15 @@ ai/codex/projects.local.toml
 # The global ~/.gitignore ignores all CLAUDE.md files (project-local instructions).
 # Our repo-managed global CLAUDE.md is an intentional tracked exception.
 !ai/claude/CLAUDE.md
+
+# The global ~/.gitignore also hides `.claude/` and `CLAUDE.md` so that personal
+# Claude config stays out of the project repos it is symlinked into. Inside THIS
+# repo those files are the payload, not noise, so re-include them. The parent
+# directory has to be re-included first — git will not descend into an excluded
+# directory to reach a negated file inside it.
+!projects/*/.claude/
+!projects/*/CLAUDE.md
+
+# ...except host-specific state, which stays local. (Also covered by the global
+# ignore; repeated here so this repo is self-explanatory.)
+projects/*/.claude/settings.local.json
