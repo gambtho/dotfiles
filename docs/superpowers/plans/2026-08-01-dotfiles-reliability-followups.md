@@ -185,16 +185,16 @@ git commit -m "docs: route devcontainer setup through safe generator"
 - Modify: `bin/claude-link-project`
 - Modify: `tests/claude_link_project.bats`
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
 Cover owned same-home and cross-home top-level links; foreign slug preservation; cross-home `.claude`; dangling cross-home per-file links; exact cross-home shims; different-slug shims; and matching shims with a second line.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run `bats tests/claude_link_project.bats --filter 'unlink|cross-home'`.
 Expected: absolute-prefix skips and foreign top-level removal.
 
-- [ ] **Step 3: Implement suffix ownership**
+- [x] **Step 3: Implement suffix ownership**
 
 Reuse the migration invariant:
 
@@ -207,7 +207,7 @@ owned_overlay_target() {
 
 Resolve with `readlink -m` when available; otherwise combine relative textual targets with the link directory without requiring existence. Match exact suffixes `projects/$NAME/CLAUDE.md`, `.claude`, or `.claude/$relative`. Shims require one line and the exact slug/path suffix.
 
-- [ ] **Step 4: Verify GREEN and commit**
+- [x] **Step 4: Verify GREEN and commit**
 
 ```bash
 bats tests/claude_link_project.bats

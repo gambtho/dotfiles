@@ -185,13 +185,34 @@ overlay_target_matches() {
 }
 
 # ── unlink ───────────────────────────────────────────────────────────────────
+owned_overlay_target() {
+  local target="$1" expected_suffix="$2"
+  [[ "$target" == *"/$expected_suffix" ]]
+}
+
+link_ownership_target() {
+  local link="$1" target
+  if target="$(readlink -m -- "$link" 2>/dev/null)" && [[ -n "$target" ]]; then
+    printf '%s\n' "$target"
+    return
+  fi
+  target="$(readlink -- "$link")" || return
+  [[ "$target" == /* ]] || target="$(dirname "$link")/$target"
+  printf '%s\n' "$target"
+}
+
 unlink_one() {
-  local target="$1"
-  if [[ -L "$target" ]]; then
-    rm "$target"
-    ok "removed symlink: $target"
-  elif [[ -e "$target" ]]; then
-    warn "skipping $target — not a symlink (real file). Leave it as-is."
+  local link="$1" expected_suffix="$2" target
+  if [[ -L "$link" ]]; then
+    target="$(link_ownership_target "$link")" || return
+    if owned_overlay_target "$target" "$expected_suffix"; then
+      rm "$link"
+      ok "removed symlink: $link"
+    else
+      warn "skipping $link — symlink is not owned by overlay '$NAME'. Leave it as-is."
+    fi
+  elif [[ -e "$link" ]]; then
+    warn "skipping $link — not a symlink (real file). Leave it as-is."
   fi
 }
 
@@ -199,15 +220,18 @@ unlink_one() {
 # 1-line @~/ import this script would have written. Anything else (user
 # additions, hand-edited content) is left in place.
 unlink_local_md_shim() {
-  local dst="$1"
+  local dst="$1" expected_suffix="$2"
   [[ -e "$dst" && ! -L "$dst" ]] || return 0 # nothing to do
-  local first_line
+  local first_line import_target
   first_line="$(head -n1 "$dst" 2>/dev/null || true)"
   local line_count
   line_count="$(wc -l <"$dst" 2>/dev/null || echo 0)"
-  # Expected shim: single line "@~/.dotfiles/projects/<slug>/..." (with a
-  # trailing newline, so wc -l reports 1).
-  if [[ "$line_count" == "1" && "$first_line" =~ ^@~?/.dotfiles/projects/ ]]; then
+  import_target="${first_line#@}"
+  # Expected shim: exactly one @ import line whose target ends in this
+  # overlay's exact slug and managed file. The home prefix is intentionally
+  # irrelevant so a host-created shim can be removed from a container home.
+  if [[ "$line_count" == "1" && "$first_line" == @* ]] &&
+    owned_overlay_target "$import_target" "$expected_suffix"; then
     rm "$dst"
     ok "removed import shim: $dst"
   else
@@ -222,19 +246,23 @@ unlink_claude_dir_per_file() {
   local project_dir="$1" # <project>/.claude
   [[ -d "$project_dir" ]] || return 0
 
-  # Phase 1: remove every symlink whose target sits under our OVERLAY.
+  # Phase 1: remove every symlink whose target ends in the exact managed path
+  # for this overlay, regardless of which home created it.
   while IFS= read -r -d '' link; do
-    local target
-    target="$(readlink "$link")"
-    # Check both roots: links written before the stable root existed are
-    # $HOME-absolute, links written after go through $LINK_ROOT. Missing
-    # either one makes --unlink silently leave our own links behind.
-    local overlay_link
-    overlay_link="$(link_target "$OVERLAY")"
-    if [[ "$target" == "$OVERLAY/.claude/"* || "$target" == "$OVERLAY/.claude" ]] ||
-      [[ "$target" == "$overlay_link/.claude/"* || "$target" == "$overlay_link/.claude" ]]; then
+    # Ownership is decided by an exact managed SUFFIX, not by comparing against
+    # a list of roots. That is deliberately root-agnostic: it matches the
+    # $HOME-absolute targets written before the stable link root existed and the
+    # $LINK_ROOT ones written after, without either root having to be
+    # enumerated here or kept in sync as more are added.
+    local target rel expected_suffix
+    target="$(link_ownership_target "$link")" || continue
+    rel="${link#"$project_dir"/}"
+    expected_suffix="projects/$NAME/.claude/$rel"
+    if owned_overlay_target "$target" "$expected_suffix"; then
       rm "$link"
       ok "removed symlink: $link"
+    else
+      warn "skipping $link — symlink is not owned by overlay '$NAME'. Leave it as-is."
     fi
   done < <(find "$project_dir" -type l -print0)
 
@@ -244,13 +272,13 @@ unlink_claude_dir_per_file() {
 }
 
 if [[ "$MODE" == "unlink" ]]; then
-  unlink_one "$PROJECT_DIR/CLAUDE.md"
-  unlink_local_md_shim "$PROJECT_DIR/CLAUDE.local.md"
-  unlink_local_md_shim "$PROJECT_DIR/AGENTS.local.md"
+  unlink_one "$PROJECT_DIR/CLAUDE.md" "projects/$NAME/CLAUDE.md"
+  unlink_local_md_shim "$PROJECT_DIR/CLAUDE.local.md" "projects/$NAME/CLAUDE.md"
+  unlink_local_md_shim "$PROJECT_DIR/AGENTS.local.md" "projects/$NAME/AGENTS.md"
   # If .claude/ is itself a symlink to our overlay (legacy mode), remove it.
   # Otherwise treat it as per-file mode and walk for our symlinks.
   if [[ -L "$PROJECT_DIR/.claude" ]]; then
-    unlink_one "$PROJECT_DIR/.claude"
+    unlink_one "$PROJECT_DIR/.claude" "projects/$NAME/.claude"
   else
     unlink_claude_dir_per_file "$PROJECT_DIR/.claude"
   fi
@@ -522,18 +550,12 @@ migrate_legacy_per_file_dir() {
   while IFS= read -r -d '' entry; do
     found=1
     [[ -L "$entry" ]] || return 1
-    # Resolve where the link aims without requiring the target to exist —
-    # a dangling cross-home link is precisely the case we repair. BSD/macOS
-    # readlink has no -m, so fall back to reading the link value directly
-    # and resolving it against the link's own directory.
-    if target="$(readlink -m -- "$entry" 2>/dev/null)" && [[ -n "$target" ]]; then
-      :
-    else
-      target="$(readlink -- "$entry")" || return 1
-      [[ "$target" == /* ]] || target="$(dirname "$entry")/$target"
-    fi
+    # Resolve without requiring existence; dangling cross-home links are the
+    # primary migration case. Reuse unlink's ownership resolver and suffix
+    # predicate so the two paths cannot disagree about what this overlay owns.
+    target="$(link_ownership_target "$entry")" || return 1
     rel="${entry#"$dst"/}"
-    [[ "$target" == *"/$suffix/$rel" ]] || return 1
+    owned_overlay_target "$target" "$suffix/$rel" || return 1
   done < <(find "$dst" -mindepth 1 \! -type d -print0)
 
   ((found)) || return 1
