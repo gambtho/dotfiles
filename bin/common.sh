@@ -69,6 +69,30 @@ next_backup_path() {
   printf '%s\n' "$candidate"
 }
 
+managed_link_pairs() {
+  local dotfiles_root="$1"
+  local home_root="$2"
+  local src dst
+
+  while IFS= read -r -d '' src; do
+    dst="$home_root/.$(basename "${src%.*}")"
+    printf '%s\0%s\0' "$src" "$dst"
+  done < <(find -H "$dotfiles_root" \
+    -not -path '*/archived/*' \
+    -not -path '*/.git/*' \
+    -not -path "$dotfiles_root/.claude/worktrees/*" \
+    -name '*.symlink' -print0)
+
+  if [[ -d "$dotfiles_root/config" ]]; then
+    for src in "$dotfiles_root/config"/*/; do
+      [[ -d "$src" ]] || continue
+      src="${src%/}"
+      dst="$home_root/.config/$(basename "$src")"
+      printf '%s\0%s\0' "$src" "$dst"
+    done
+  fi
+}
+
 link_policy_for_action() {
   case "$1" in
     s) printf '%s\n' skip ;;

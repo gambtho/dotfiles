@@ -67,27 +67,12 @@ link_file() {
   fi
 }
 
-while IFS= read -r -d '' src; do
-  dst="$HOME/.$(basename "${src%.*}")"
+while IFS= read -r -d '' src && IFS= read -r -d '' dst; do
+  case "$dst" in
+    "$HOME"/.config/*) mkdir -p "$HOME/.config" ;;
+  esac
   link_file "$src" "$dst"
-done < <(find -H "$DOTFILES_ROOT" \
-  -not -path '*/archived/*' \
-  -not -path '*/.git/*' \
-  -not -path "$DOTFILES_ROOT/.claude/worktrees/*" \
-  -name '*.symlink' -print0)
-
-# ── Step 3: Re-create config/ directory symlinks ──────────────────────────────
-
-if [ -d "$DOTFILES_ROOT/config" ]; then
-  mkdir -p "$HOME/.config"
-  for config_dir in "$DOTFILES_ROOT/config"/*/; do
-    [ -d "$config_dir" ] || continue
-    config_name=$(basename "$config_dir")
-    dst="$HOME/.config/$config_name"
-
-    link_file "$config_dir" "$dst"
-  done
-fi
+done < <(managed_link_pairs "$DOTFILES_ROOT" "$HOME")
 
 if [ ${#SKIPPED_DESTINATIONS[@]} -gt 0 ]; then
   # log_error exits on its own, so the per-path list is emitted as warnings and
