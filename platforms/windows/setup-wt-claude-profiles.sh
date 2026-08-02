@@ -103,7 +103,7 @@ matches_any() {
 publish_settings() {
   local merged="$1"
   local destination="$2"
-  local backup stage
+  local backup stage mode
 
   backup="$(next_backup_path "$destination")" || return 1
   stage="$(mktemp "${destination}.stage.XXXXXX")" || return 1
@@ -111,6 +111,14 @@ publish_settings() {
   if ! cp -- "$merged" "$stage"; then
     rm -f -- "$stage"
     return 1
+  fi
+
+  # mktemp creates the stage 0600 and mv preserves that mode, so without this
+  # the published settings would silently lose the destination's original
+  # permissions. Best-effort: a chmod failure is not worth aborting a
+  # publication whose content is already staged correctly.
+  if mode="$(stat -c '%a' "$destination" 2>/dev/null)"; then
+    chmod "$mode" -- "$stage" || true
   fi
 
   if ! mv -- "$destination" "$backup"; then

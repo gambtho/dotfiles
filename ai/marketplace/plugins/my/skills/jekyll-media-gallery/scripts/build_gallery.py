@@ -44,6 +44,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -178,6 +179,18 @@ def publish_atomically(destination, writer, require_nonempty=True):
         writer(stage)
         if require_nonempty and (not stage.exists() or stage.stat().st_size == 0):
             raise RuntimeError(f"writer produced empty output for {destination}")
+        # mkstemp creates the stage 0600 and os.replace preserves the source
+        # mode, so publishing without this would silently narrow permissions on
+        # derivatives that are committed and served by a static web server.
+        # Keep an existing destination's mode; otherwise use the umask-adjusted
+        # default a plain open() would have produced.
+        try:
+            mode = stat.S_IMODE(destination.stat().st_mode)
+        except FileNotFoundError:
+            umask = os.umask(0)
+            os.umask(umask)
+            mode = 0o666 & ~umask
+        os.chmod(stage, mode)
         os.replace(stage, destination)
     finally:
         try:

@@ -299,17 +299,29 @@ fi
 
 SEED_PUBLISHED=0
 OVERRIDE_PUBLISHED=0
+ROLLBACK_INCOMPLETE=0
 rollback() {
+  # Restores are best-effort: a failing restore must not abort rollback via
+  # errexit, because that would skip the remaining file and leave the operator
+  # with no message naming what was lost. Each failure is reported instead.
   if ((OVERRIDE_PUBLISHED)); then
     if ((OVERRIDE_EXISTED)); then
-      cp -p -- "$OVERRIDE_BACKUP" "$OVERRIDE"
+      if ! cp -p -- "$OVERRIDE_BACKUP" "$OVERRIDE"; then
+        ROLLBACK_INCOMPLETE=1
+        printf 'warning: %s could not be restored; recover it from %s\n' \
+          "$OVERRIDE" "$OVERRIDE_BACKUP" >&2
+      fi
     else
       rm -f -- "$OVERRIDE"
     fi
   fi
   if ((SEED_PUBLISHED)); then
     if ((SEED_EXISTED)); then
-      cp -p -- "$SEED_BACKUP" "$SEED_FILE"
+      if ! cp -p -- "$SEED_BACKUP" "$SEED_FILE"; then
+        ROLLBACK_INCOMPLETE=1
+        printf 'warning: %s could not be restored; recover it from %s\n' \
+          "$SEED_FILE" "$SEED_BACKUP" >&2
+      fi
     else
       rm -f -- "$SEED_FILE"
     fi
@@ -319,6 +331,7 @@ rollback() {
 if ((SEED_CHANGED)); then
   if ! mv -- "$SEED_STAGE" "$SEED_FILE"; then
     rollback
+    ((ROLLBACK_INCOMPLETE)) && die "failed to publish seed; rollback incomplete (see warnings above)"
     die "failed to publish seed; restored previous outputs"
   fi
   SEED_PUBLISHED=1
@@ -326,6 +339,7 @@ fi
 if ((OVERRIDE_CHANGED)); then
   if ! mv -- "$OVERRIDE_STAGE" "$OVERRIDE"; then
     rollback
+    ((ROLLBACK_INCOMPLETE)) && die "failed to publish override; rollback incomplete (see warnings above)"
     die "failed to publish override; restored previous outputs"
   fi
   OVERRIDE_PUBLISHED=1

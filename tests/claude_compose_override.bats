@@ -210,3 +210,36 @@ EOF
   run rg -n '\{USER\}|\{WORKSPACE\}' "$SEED_FILE"
   [ "$status" -eq 1 ]
 }
+
+@test "failed rollback restore reports the unrecovered destination" {
+  run_helper >/dev/null 2>&1 || true
+  [ -f "$OVERRIDE" ]
+  [ -f "$SEED_FILE" ]
+  printf 'drifted\n' >>"$SEED_FILE"
+  printf 'services:\n  app:\n    image: drifted\n' >"$OVERRIDE"
+
+  # Publish the seed successfully, fail the override publish to trigger
+  # rollback, then fail the restoring cp as well. The operator must be told the
+  # seed was left unrecovered rather than seeing a bare abort.
+  cat >"$STUB_BIN/mv" <<'EOF'
+#!/usr/bin/env bash
+if [[ "${@: -1}" == *docker-compose.override.yml ]]; then
+  exit 1
+fi
+exec /usr/bin/mv "$@"
+EOF
+  cat >"$STUB_BIN/cp" <<'EOF'
+#!/usr/bin/env bash
+if [[ "${@: -1}" == *local-seed.sh ]]; then
+  exit 1
+fi
+exec /usr/bin/cp "$@"
+EOF
+  chmod +x "$STUB_BIN/mv" "$STUB_BIN/cp"
+
+  run_helper
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"could not be restored"* ]]
+  [[ "$output" != *"restored previous outputs"* ]]
+}

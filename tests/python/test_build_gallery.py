@@ -1,6 +1,7 @@
 import importlib.util
 import os
 from pathlib import Path
+import stat
 import subprocess
 import sys
 import tempfile
@@ -174,6 +175,27 @@ class AtomicOutputTests(unittest.TestCase):
 
         self.assertEqual(manifest.read_text(), "valid-old\n")
         self.assert_no_stages()
+
+    def test_atomic_output_publishes_world_readable_permissions(self):
+        destination = self.path / "photo.jpg"
+
+        gallery.publish_atomically(destination, lambda stage: stage.write_bytes(b"new"))
+
+        mode = stat.S_IMODE(destination.stat().st_mode)
+        # Gallery derivatives are committed to a static site and served by a web
+        # server, so a private mkstemp stage (0600) must not become the
+        # published mode.
+        self.assertTrue(mode & stat.S_IRGRP, f"group-unreadable mode {oct(mode)}")
+        self.assertTrue(mode & stat.S_IROTH, f"world-unreadable mode {oct(mode)}")
+
+    def test_atomic_output_preserves_existing_destination_permissions(self):
+        destination = self.path / "photo.jpg"
+        destination.write_bytes(b"old")
+        os.chmod(destination, 0o640)
+
+        gallery.publish_atomically(destination, lambda stage: stage.write_bytes(b"new"))
+
+        self.assertEqual(stat.S_IMODE(destination.stat().st_mode), 0o640)
 
 
 if __name__ == "__main__":

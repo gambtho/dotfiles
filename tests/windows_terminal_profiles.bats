@@ -136,3 +136,23 @@ EOF
   [ "$status" -ne 0 ]
   [[ "$output" == *"together"* || "$output" == *"all three"* ]]
 }
+
+@test "publish_settings preserves the destination file mode" {
+  SETTINGS="$TEST_ROOT/settings.json"
+  MERGED="$TEST_ROOT/merged.json"
+  printf '{"old":true}\n' >"$SETTINGS"
+  printf '{"new":true}\n' >"$MERGED"
+  chmod 0644 "$SETTINGS"
+
+  run env WT_PROFILES_SOURCE_ONLY=1 bash -c '
+    source "$1"
+    publish_settings "$2" "$3"
+  ' _ "$(SCRIPT_PATH)" "$MERGED" "$SETTINGS"
+
+  [ "$status" -eq 0 ]
+  [ "$(cat "$SETTINGS")" = '{"new":true}' ]
+  # mktemp stages at 0600 and mv preserves that mode, so publishing must
+  # restore the destination's original permissions rather than silently
+  # tightening a file the user may read from another account.
+  [ "$(stat -c '%a' "$SETTINGS")" = "644" ]
+}
