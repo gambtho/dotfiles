@@ -17,10 +17,14 @@ setup() {
   export HOOK
   command -v jq >/dev/null || skip "jq not available"
 
-  # The hook invokes the real linker out of $DOTFILES.
+  # The hook invokes the real linker out of $DOTFILES. It sources common.sh and
+  # log-helper as siblings — the same unguarded pattern every other bin/ script
+  # uses — so a bin/ holding the linker alone aborts it under `set -e`, and the
+  # hook then fails open with no overlay and nothing to explain why.
   export DOTFILES="$HOME/.dotfiles"
   mkdir -p "$DOTFILES/bin"
-  cp "$REPO_ROOT/bin/claude-link-project" "$DOTFILES/bin/"
+  cp "$REPO_ROOT/bin/claude-link-project" "$REPO_ROOT/bin/common.sh" \
+    "$REPO_ROOT/bin/log-helper" "$DOTFILES/bin/"
   chmod +x "$DOTFILES/bin/claude-link-project"
 
   PROJECT="$TEST_ROOT/demo"

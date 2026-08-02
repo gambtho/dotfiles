@@ -27,8 +27,9 @@ It replaces the old narrower `devcontainer-host-mounts` skill. The host-mounts l
 1. **WSL host, not a devcontainer.** `uname -a` contains `microsoft` and `/.dockerenv` does NOT exist and `$REMOTE_CONTAINERS` is unset. If we're already in a container, the symlinks won't work — abort with: "Run this on the WSL host, not inside the container."
 2. **Project root.** `.git/` exists in the current dir. If not, ask the user to `cd` first.
 3. **Dotfiles repo present.** `~/.dotfiles/` exists with `core/git/gitignore.symlink` and `projects/` subdir. If not, point at `~/.dotfiles/projects/README.md` for the setup story.
-4. **Global gitignore wired.** `git config --global core.excludesFile` resolves to a real file that includes `.claude/`, `CLAUDE.md`, `CLAUDE.local.md`, and `AGENTS.local.md`. Without these, the symlinks and import shims this skill creates will leak to `git status` inside the project. Stop and tell the user to add the missing patterns.
-5. **`yq` (mikefarah/yq) and `jq` available.** Probe in order: `command -v yq` and, if that misses (PATH/cache lag in fresh shells), also `[ -x /usr/local/bin/yq ]` directly. Confirm flavor via `yq --version 2>&1 | grep -q mikefarah` — if it doesn't match, refuse. **Never suggest `apt install yq`** — Ubuntu/Debian ship the Python `kislyuk/yq`, which has incompatible merge semantics. If `yq` is missing or has the wrong flavor, stop and ask the user to run `~/.dotfiles/bin/setup-agent-teams` separately. After it completes, rerun this skill and repeat every prerequisite check before continuing. `jq` should already be present; `sudo apt install jq` is fine (only one flavor).
+4. **Stable link root published.** `readlink /opt/dotfiles` resolves to `~/.dotfiles`. Overlay symlinks target this root so they resolve under both the host's `$HOME` and the container's. If it's missing, run `~/.dotfiles/bin/relink` — it creates the root and needs `sudo` once per machine, since `/opt` is root-owned. Don't block on it: the linker falls back to `$HOME`-absolute targets with a warning, which works on this host but dangles inside the devcontainer. Tell the user which case they're in.
+5. **Global gitignore wired.** `git config --global core.excludesFile` resolves to a real file that includes `.claude/`, `CLAUDE.md`, `CLAUDE.local.md`, and `AGENTS.local.md`. Without these, the symlinks and import shims this skill creates will leak to `git status` inside the project. Stop and tell the user to add the missing patterns.
+6. **`yq` (mikefarah/yq) and `jq` available.** Probe in order: `command -v yq` and, if that misses (PATH/cache lag in fresh shells), also `[ -x /usr/local/bin/yq ]` directly. Confirm flavor via `yq --version 2>&1 | grep -q mikefarah` — if it doesn't match, refuse. **Never suggest `apt install yq`** — Ubuntu/Debian ship the Python `kislyuk/yq`, which has incompatible merge semantics. If `yq` is missing or has the wrong flavor, stop and ask the user to run `~/.dotfiles/bin/setup-agent-teams` separately. After it completes, rerun this skill and repeat every prerequisite check before continuing. `jq` should already be present; `sudo apt install jq` is fine (only one flavor).
 
 Don't continue past failed prereqs — they're not auto-recoverable from inside this skill.
 
@@ -148,12 +149,17 @@ ls -L <project>/.claude/settings.local.json
 # and picks up newly added skills with no re-run.
 ls -ld <project>/.claude/skills <project>/.claude/agents
 
-# Must print nothing. Any output is a dangling link — most often one created
-# under a different $HOME (host /home/<user> vs container /root), which makes
-# the overlay silently invisible. Re-running the helper repairs CLAUDE.md and
-# the skills/ and agents/ directory links. Individually linked files (commands/)
-# are only reported, not repaired: delete the dangling link and re-run.
+# Must print nothing. Any output is a dangling link. Overlay links target the
+# stable root /opt/dotfiles rather than an absolute $HOME path, so the same link
+# resolves on the host and inside a container that publishes its own root.
+# Re-running the helper migrates any link still written against a bare $HOME —
+# directory links, per-file links, and CLAUDE.md alike — and repoints it.
 find <project>/.claude -xtype l
+
+# The root itself. Absent here means bootstrap/relink has not run on this
+# machine, or could not get sudo; the linker then falls back to $HOME-absolute
+# targets and warns. See ~/.dotfiles/projects/README.md.
+readlink /opt/dotfiles
 ```
 
 Skills and agents are discovered when a session starts, so anything linked

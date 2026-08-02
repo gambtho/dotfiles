@@ -286,6 +286,10 @@ main() {
 
   setup_gitconfig
   setup_profile
+  # $HOME/.dotfiles, not $DOTFILES_ROOT: the latter is wherever this script was
+  # run from, which may be a disposable linked worktree. The stable root must
+  # name the canonical checkout.
+  ensure_stable_link_root "$HOME/.dotfiles"
   install_dotfiles
 
   log_success "Bootstrap complete. Run 'bin/install' to complete setup."
