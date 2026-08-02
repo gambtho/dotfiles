@@ -405,6 +405,24 @@ extract_seed_script() {
   grep -Fqx '.claude/personal-agent.md' "$HOME/.gitignore"
 }
 
+@test "a failed marketplace install still starts the container's base command" {
+  # This script IS the compose `command:` — it exec's the base command from its
+  # own dispatch — so exiting on a failed installer means the container never
+  # boots at all. A degraded container the user can debug beats one that will
+  # not start, and the unstamped sentinel already forces a retry next launch.
+  mkdir -p "$TEST_ROOT/host-seed/.dotfiles/ai/marketplace"
+  printf '#!/usr/bin/env bash\nexit 1\n' \
+    >"$TEST_ROOT/host-seed/.dotfiles/ai/marketplace/install.sh"
+  chmod +x "$TEST_ROOT/host-seed/.dotfiles/ai/marketplace/install.sh"
+
+  run bash "$SEED_SCRIPT" --argv echo container-started
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"NOT stamping sentinel"* ]]
+  [[ "$output" == *"container-started"* ]]
+  [ ! -e "$HOME/.claude/.seeded" ]
+}
+
 @test "a failed marketplace install leaves the sentinel unstamped" {
   local seed_version
   seed_version="$(sed -n 's/^SEED_VERSION=//p' "$SEED_SCRIPT")"
@@ -477,6 +495,15 @@ extract_seed_script() {
   grep -Fq '[Compose skeleton](templates/compose-override.yml)' "$REFERENCE"
   grep -Fq '[seed script](templates/local-seed.sh)' "$REFERENCE"
   grep -Fq '[safe renderer](../../../../../../bin/claude-merge-compose-override)' "$REFERENCE"
+  # Exact link text alone only proves the prose was not rewritten. Resolve each
+  # target relative to the reference document so moving or renaming a linked
+  # file fails here instead of shipping a dead link in the skill.
+  local reference_dir target
+  reference_dir="$(dirname "$REFERENCE")"
+  for target in templates/compose-override.yml templates/local-seed.sh \
+    ../../../../../../bin/claude-merge-compose-override; do
+    [ -f "$reference_dir/$target" ]
+  done
   run grep -F 'Write the seed script at `{SEED_SCRIPT}`' "$REFERENCE"
   [ "$status" -eq 1 ]
   run grep -F 'Use this template, filling in' "$REFERENCE"

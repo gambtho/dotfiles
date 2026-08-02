@@ -42,9 +42,15 @@ write_pi_skills() {
 
   [ -f "$skill/templates/local-seed.sh" ]
   [ -f "$skill/templates/compose-override.yml" ]
-  grep -Fq 'templates/local-seed.sh' "$skill/SKILL.md" "$skill/devcontainer-host-mounts.md"
-  grep -Fq 'templates/compose-override.yml' "$skill/SKILL.md" "$skill/devcontainer-host-mounts.md"
-  grep -Fq 'bin/claude-merge-compose-override' "$skill/SKILL.md" "$skill/devcontainer-host-mounts.md"
+  # One grep per file, not one grep over both: a multi-file grep succeeds when
+  # EITHER matches, so a reference dropped from SKILL.md would pass silently as
+  # long as the other document still mentioned it.
+  local doc
+  for doc in "$skill/SKILL.md" "$skill/devcontainer-host-mounts.md"; do
+    grep -Fq 'templates/local-seed.sh' "$doc"
+    grep -Fq 'templates/compose-override.yml' "$doc"
+    grep -Fq 'bin/claude-merge-compose-override' "$doc"
+  done
 }
 
 @test "validator rejects a nonexistent declared Pi skill" {

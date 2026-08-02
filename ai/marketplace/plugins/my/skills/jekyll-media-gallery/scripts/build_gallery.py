@@ -217,7 +217,11 @@ def build_photo(src, base, thumb_dir, full_dir, thumb_max, full_max, force):
         if not force and not newer(src, dst):
             continue
 
-        def write_photo(stage):
+        # Bind size and q as defaults rather than closing over the loop
+        # variables: publish_atomically calls this back within the iteration
+        # today, but a late-binding closure would silently render every
+        # derivative at the last iteration's dimensions if that ever changed.
+        def write_photo(stage, size=size, q=q):
             with Image.open(src) as im:
                 im = ImageOps.exif_transpose(im).convert("RGB")
                 im.thumbnail((size, size), Image.LANCZOS)

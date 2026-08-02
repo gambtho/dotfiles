@@ -40,31 +40,37 @@ setup() {
   [ "$(cat "$SETTINGS.backup.20260801T120000Z.1")" = '{"old":true}' ]
 }
 
-@test "publish_settings failure restores destination and backup and leaves no stage" {
+@test "publish_settings failure leaves destination and backup intact with no stage" {
   SETTINGS="$TEST_ROOT/settings.json"
   MERGED="$TEST_ROOT/merged.json"
   printf '{"old":true}\n' >"$SETTINGS"
   printf '{"new":true}\n' >"$MERGED"
   MV_FAILURE_MARKER="$TEST_ROOT/mv-failed"
   export MV_FAILURE_MARKER
+  # Resolve the real mv off a PATH with STUB_BIN removed rather than hardcoding
+  # /usr/bin/mv: it lives in /bin on several distros, and a wrong absolute path
+  # makes this stub fail for a reason that has nothing to do with the test.
   cat >"$STUB_BIN/mv" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 src="${@: -2:1}"
-dst="${@: -1}"
 if [[ "$src" == *.stage.* && ! -e "$MV_FAILURE_MARKER" ]]; then
   : >"$MV_FAILURE_MARKER"
   exit 1
 fi
-exec /usr/bin/mv "$@"
+PATH="$(printf '%s' "$PATH" | tr ':' '\n' | grep -Fxv "$STUB_BIN" | paste -sd:)"
+exec mv "$@"
 EOF
   chmod +x "$STUB_BIN/mv"
 
-  run env WT_PROFILES_SOURCE_ONLY=1 MV_FAILURE_MARKER="$MV_FAILURE_MARKER" bash -c '
+  run env WT_PROFILES_SOURCE_ONLY=1 MV_FAILURE_MARKER="$MV_FAILURE_MARKER" \
+    STUB_BIN="$STUB_BIN" bash -c '
     source "$1"
     publish_settings "$2" "$3"
   ' _ "$(SCRIPT_PATH)" "$MERGED" "$SETTINGS"
 
+  # The single rename is the only mutation, so a failure means the destination
+  # was never touched — there is nothing to roll back.
   [ "$status" -ne 0 ]
   [ "$(cat "$SETTINGS")" = '{"old":true}' ]
   [ -e "$SETTINGS.backup" ]

@@ -75,7 +75,7 @@ die() {
 dim() { printf '%s%s%s\n' "$C_DIM" "$*" "$C_OFF"; }
 
 usage() {
-  sed -n '2,38p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,44p' "$0" | sed 's/^# \{0,1\}//'
   exit "${1:-0}"
 }
 
@@ -127,17 +127,19 @@ publish_settings() {
     chmod "$mode" -- "$stage" || true
   fi
 
-  if ! mv -- "$destination" "$backup"; then
+  # Copy rather than move the destination aside. A move would leave settings.json
+  # absent between the two renames, and Windows Terminal reads this file on a
+  # watcher; the copy keeps the original in place until the single rename below
+  # replaces it, so the destination is never observably missing and there is no
+  # rollback path to get wrong.
+  if ! cp -p -- "$destination" "$backup"; then
     rm -f -- "$stage"
     return 1
   fi
 
+  # The only mutation of the destination. On failure the original is untouched
+  # and the backup is already on disk.
   if ! mv -- "$stage" "$destination"; then
-    if ! cp -p -- "$backup" "$destination"; then
-      warn "rollback also failed; restoring $destination from $backup manually is required."
-      rm -f -- "$stage"
-      return 1
-    fi
     rm -f -- "$stage"
     return 1
   fi
@@ -547,7 +549,7 @@ main() {
 
   # ── Publish ──────────────────────────────────────────────────────────────
   if ! publish_settings "$MERGED" "$SETTINGS"; then
-    die "failed to publish settings.json; restored previous contents"
+    die "failed to publish settings.json"
   fi
   ok "Updated: $SETTINGS"
 

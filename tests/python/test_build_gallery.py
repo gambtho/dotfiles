@@ -179,7 +179,16 @@ class AtomicOutputTests(unittest.TestCase):
     def test_atomic_output_publishes_world_readable_permissions(self):
         destination = self.path / "photo.jpg"
 
-        gallery.publish_atomically(destination, lambda stage: stage.write_bytes(b"new"))
+        # Pin the umask: with no existing destination the published mode is
+        # derived from it, so a restrictive umask on the runner would fail this
+        # test for a reason that has nothing to do with the code under test.
+        previous_umask = os.umask(0o022)
+        try:
+            gallery.publish_atomically(
+                destination, lambda stage: stage.write_bytes(b"new")
+            )
+        finally:
+            os.umask(previous_umask)
 
         mode = stat.S_IMODE(destination.stat().st_mode)
         # Gallery derivatives are committed to a static site and served by a web

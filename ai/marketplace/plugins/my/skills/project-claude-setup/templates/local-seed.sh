@@ -40,6 +40,11 @@ CLAUDE_HOME="$SEED_HOME/.claude"
 DOTFILES_HOME="$SEED_HOME/.dotfiles"
 SENTINEL="$CLAUDE_HOME/.seeded"
 
+# Set when a gated installer ran and failed. Consulted only by the no-base-command
+# dispatch branch at the bottom; a dispatched base command exec's regardless so
+# the container still starts.
+SEED_FAILED=0
+
 # Run a command as the remoteUser regardless of who this script runs as. If the
 # script runs as root, `runuser` needs no password; if it runs as a non-root
 # user that differs from SEED_USER, prefix with sudo (confirmed available in
@@ -421,13 +426,16 @@ if [ "$SEED_ALREADY_CURRENT" -eq 0 ]; then
     printf '%s\n' "$SEED_VERSION" | as_user tee "$SENTINEL" >/dev/null
     echo "🌱 seed: done (v$SEED_VERSION)"
   else
-    # Exit non-zero so the failure is visible to anything that checks. Note the
-    # compose command uses `;` (not `&&`) before `exec {BASE_COMMAND}`, so the
-    # container still starts — deliberately, since a degraded container the user
-    # can debug beats one that will not boot. A missing installer stays non-fatal;
-    # only an installer that ran and failed reports an error.
+    # Record the failure but do NOT exit here. This script is itself the compose
+    # `command:` — it exec's the base command from the dispatch below — so an
+    # early exit means the container never starts at all. A degraded container
+    # the user can debug beats one that will not boot, and the unstamped
+    # sentinel already guarantees the next launch retries. The failure is
+    # reported on stderr and, when no base command is dispatched, surfaces as a
+    # non-zero exit. A missing installer stays non-fatal; only an installer that
+    # ran and failed reports an error.
+    SEED_FAILED=1
     echo "❌ seed: marketplace install failed (sentinel left at previous version)" >&2
-    exit 1
   fi
 fi
 
@@ -442,7 +450,10 @@ case "${1:-}" in
     (($# == 1)) || exit 2
     exec bash -lc -- "$1"
     ;;
-  "") ;;
+  # No base command to hand off to, so this exit status is the only channel the
+  # seed failure has left. With a base command, exec replaces this process and
+  # the container runs degraded by design.
+  "") exit "$SEED_FAILED" ;;
   *)
     printf 'seed: unknown command mode: %s\n' "$1" >&2
     exit 2
