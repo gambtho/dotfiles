@@ -182,3 +182,25 @@ CASES
   [ "$(cat "$HOME/.zshrc")" = local ]
   [[ "$output" == *"left UNLINKED"* ]]
 }
+
+@test "next_backup_path reports failure instead of a malformed name when date fails" {
+  printf 'old\n' >"$HOME/settings.json"
+  printf 'old\n' >"$HOME/settings.json.backup"
+  stub_command date 'exit 1'
+
+  # errexit is suspended for callers invoked as an `if !` condition, so
+  # next_backup_path must surface a date failure via its own exit status
+  # rather than emitting a path built from an empty timestamp.
+  run bash -c '
+    set -e
+    source "$1/bin/common.sh"
+    if candidate="$(next_backup_path "$2")"; then
+      printf "REPORTED SUCCESS %s\n" "$candidate"
+    else
+      printf "REPORTED FAILURE\n"
+    fi
+  ' _ "$REPO_ROOT" "$HOME/settings.json"
+
+  [[ "$output" == *"REPORTED FAILURE"* ]]
+  [[ "$output" != *".backup..1"* ]]
+}

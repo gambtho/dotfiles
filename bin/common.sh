@@ -57,7 +57,10 @@ next_backup_path() {
     return
   fi
 
-  timestamp=$(date -u +%Y%m%dT%H%M%SZ)
+  # Callers may invoke this from a function used as an `if`/`!` condition, which
+  # suspends errexit for the whole call chain. Check explicitly so a date
+  # failure surfaces here instead of yielding a path with an empty timestamp.
+  timestamp=$(date -u +%Y%m%dT%H%M%SZ) || return 1
   candidate="${destination}.backup.${timestamp}"
   while [[ -e "$candidate" || -L "$candidate" ]]; do
     suffix=$((suffix + 1))
