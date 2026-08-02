@@ -140,3 +140,42 @@ SCRIPT
 
   [ "$status" -eq 0 ]
 }
+
+@test "versions update leaves the Kubernetes channel operator-owned" {
+  local fixture="$TEST_ROOT/fixture"
+  mkdir -p "$fixture/bin" "$fixture/config/mise"
+  cp "$REPO_ROOT/bin/versions" "$fixture/bin/versions"
+  cp "$REPO_ROOT/bin/common.sh" "$fixture/bin/common.sh"
+  cp "$REPO_ROOT/bin/log-helper" "$fixture/bin/log-helper"
+  cp "$REPO_ROOT/config/versions.env" "$fixture/config/versions.env"
+  cp "$REPO_ROOT/config/mise/config.toml" "$fixture/config/mise/config.toml"
+
+  stub_command mise 'exit 0'
+  stub_command make 'exit 0'
+  cat >"$STUB_BIN/git" <<SCRIPT
+#!/usr/bin/env bash
+case "\$*" in
+  *ls-remote*prezto*) printf '%s\tHEAD\n' '$PREZTO_REF' ;;
+  *ls-remote*zsh-defer*) printf '%s\tHEAD\n' '$ZSH_DEFER_REF' ;;
+  *diff*) exit 0 ;;
+esac
+SCRIPT
+  chmod +x "$STUB_BIN/git"
+  cat >"$STUB_BIN/curl" <<'SCRIPT'
+#!/usr/bin/env bash
+url="${@: -1}"
+case "$url" in
+  *dl.k8s.io*) printf 'v9.99.0\n' ;;
+esac
+SCRIPT
+  chmod +x "$STUB_BIN/curl"
+
+  run bash "$fixture/bin/versions" update
+
+  [ "$status" -eq 0 ]
+  [ "$(grep '^KUBERNETES_CHANNEL=' "$fixture/config/versions.env")" = \
+    "KUBERNETES_CHANNEL=$KUBERNETES_CHANNEL" ]
+  [[ "$output" == *"operator-managed Kubernetes channel"* ]]
+  [[ "$output" == *"current: $KUBERNETES_CHANNEL"* ]]
+  [[ "$output" == *"upstream: v9.99"* ]]
+}

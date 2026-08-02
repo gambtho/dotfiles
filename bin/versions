@@ -140,7 +140,11 @@ update_pins() {
   with_mise_config write upgrade --bump --interactive
   update_pin PREZTO_REF "$(git ls-remote "$PREZTO_REPO" HEAD | awk 'NR == 1 { print $1 }')"
   update_pin ZSH_DEFER_REF "$(git ls-remote "$ZSH_DEFER_REPO" HEAD | awk 'NR == 1 { print $1 }')"
-  update_pin KUBERNETES_CHANNEL "$(latest_kubernetes_channel)"
+  local latest_channel
+  latest_channel="$(latest_kubernetes_channel)"
+  printf 'operator-managed Kubernetes channel: current: %s upstream: %s\n' \
+    "$KUBERNETES_CHANNEL" "$latest_channel"
+  printf '%s\n' 'select a cluster-compatible minor manually if upstream has moved'
   printf '%s\n' 'artifact versions unchanged: checksum-reviewed manual update required'
   "$0" list
   make -C "$ROOT" check
