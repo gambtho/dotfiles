@@ -105,7 +105,7 @@ SCRIPT
 
 @test "vekil installer restarts only when refreshed credentials change" {
   mkdir -p "$HOME/.local/bin" "$HOME/.local/state/vekil" "$HOME/.config/vekil"
-  printf 'v0.13.3\n' >"$HOME/.local/state/vekil/installed-version"
+  printf 'v0.14.0\n' >"$HOME/.local/state/vekil/installed-version"
   printf 'old-token\n' >"$HOME/.config/vekil/access-token"
   chmod 0600 "$HOME/.config/vekil/access-token"
   cat >"$HOME/.local/bin/vekil" <<'SCRIPT'
@@ -148,7 +148,7 @@ SCRIPT
   # `systemctl --user` ignores HOME and targets the invoking user's real
   # manager, so a sandboxed run must never install or enable the unit.
   mkdir -p "$HOME/.local/bin" "$HOME/.local/state/vekil" "$HOME/.config/vekil"
-  printf 'v0.13.3\n' >"$HOME/.local/state/vekil/installed-version"
+  printf 'v0.14.0\n' >"$HOME/.local/state/vekil/installed-version"
   printf 'token\n' >"$HOME/.config/vekil/access-token"
   chmod 0600 "$HOME/.config/vekil/access-token"
   printf '#!/bin/bash\nexit 0\n' >"$HOME/.local/bin/vekil"

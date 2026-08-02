@@ -92,7 +92,7 @@ done
 installer_dir="$TMP/installer-directory-race"
 mkdir -p "$installer_dir/bin" "$installer_dir/home/.local/state/vekil" "$installer_dir/token" "$installer_dir/token-target"
 : >"$installer_dir/invocations"
-printf 'v0.13.3\n' >"$installer_dir/home/.local/state/vekil/installed-version"
+printf 'v0.14.0\n' >"$installer_dir/home/.local/state/vekil/installed-version"
 cat >"$installer_dir/bin/chmod" <<'EOF'
 #!/bin/bash
 set -euo pipefail

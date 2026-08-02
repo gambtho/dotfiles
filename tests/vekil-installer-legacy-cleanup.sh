@@ -31,7 +31,7 @@ prepare_home() {
 exit 0
 EOF
   chmod +x "$home/.local/bin/vekil"
-  printf 'v0.13.3\n' > "$home/.local/state/vekil/installed-version"
+  printf 'v0.14.0\n' > "$home/.local/state/vekil/installed-version"
   : > "$home/.config/litellm/config.yaml"
   cat > "$home/bin/litellm" <<'EOF'
 #!/usr/bin/env bash
