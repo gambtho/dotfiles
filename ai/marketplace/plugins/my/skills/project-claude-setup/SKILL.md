@@ -24,21 +24,51 @@ It replaces the old narrower `devcontainer-host-mounts` skill. The host-mounts l
 
 ## Prerequisites — verify first, bail clearly if any fail
 
-All of these are blocking except item 4, which downgrades the deliverable
-instead of stopping it. That single exception is stated inline below and again
-at the end of this section; nothing else here is advisory.
+All of these are blocking except items 4 and 7, whose handling depends on
+whether a Compose devcontainer is in play. Both exceptions are stated inline
+below and again at the end of this section; nothing else here is advisory.
+
+**Probe the devcontainer shape first** — items 4 and 7 read differently
+depending on the answer, and both would otherwise stop a plain repo over
+container machinery it will never use:
+
+```bash
+DEVCONTAINER_JSON=.devcontainer/devcontainer.json
+[ -f "$DEVCONTAINER_JSON" ] || DEVCONTAINER_JSON=.devcontainer.json
+MAYBE_COMPOSE=0
+if [ -f "$DEVCONTAINER_JSON" ] &&
+  sed 's://.*::' "$DEVCONTAINER_JSON" | grep -q 'dockerComposeFile'; then
+  MAYBE_COMPOSE=1
+fi
+```
+
+This is a cheap presence probe, not the classification — Step 1 is
+authoritative and runs the real parse. It only has to be right about "could
+this possibly be case (a)", so it errs toward yes: a `dockerComposeFile`
+mentioned anywhere outside a `//` comment counts. If Step 1 then lands on case
+(a) while `MAYBE_COMPOSE` was 0 (a `/* … */` comment, an unusual layout), stop
+and run item 7 before generating anything.
 
 1. **WSL host, not a devcontainer.** `uname -a` contains `microsoft` and `/.dockerenv` does NOT exist and `$REMOTE_CONTAINERS` is unset. If we're already in a container, the symlinks won't work — abort with: "Run this on the WSL host, not inside the container."
 2. **Project root.** `.git/` exists in the current dir. If not, ask the user to `cd` first.
 3. **Dotfiles repo present.** `~/.dotfiles/` exists with `core/git/gitignore.symlink` and `projects/` subdir. If not, point at `~/.dotfiles/projects/README.md` for the setup story.
-4. **Stable link root published.** `[ -d /opt/dotfiles ] && [ "$(cd -P /opt/dotfiles && pwd -P)" = "$(cd -P ~/.dotfiles && pwd -P)" ]`. Compare canonical paths rather than trusting `readlink` output: `readlink` prints the recorded target whether or not it exists, so a root left over from another machine or an earlier `$HOME` reads as published while every overlay link through it dangles. Overlay symlinks target this root so they resolve under both the host's `$HOME` and the container's. If it's missing or points elsewhere, run `~/.dotfiles/bin/relink` — it creates the root and needs `sudo` once per machine, since `/opt` is root-owned. Don't block on it, but the two outcomes are different products, so say which one you delivered: **root validated** → the overlay works on this host *and* in the devcontainer; **root absent** → host-only, the linker falls back to `$HOME`-absolute targets with a warning and the links dangle inside any container. Never describe the fallback as container-ready.
+4. **Stable link root published.** `[ -d /opt/dotfiles ] && [ "$(cd -P /opt/dotfiles && pwd -P)" = "$(cd -P ~/.dotfiles && pwd -P)" ]`. Compare canonical paths rather than trusting `readlink` output: `readlink` prints the recorded target whether or not it exists, so a root left over from another machine or an earlier `$HOME` reads as published while every overlay link through it dangles. Overlay symlinks target this root so they resolve under both the host's `$HOME` and the container's. If it's missing or points elsewhere, run `~/.dotfiles/bin/relink` — it creates the root and needs `sudo` once per machine, since `/opt` is root-owned. Don't block on it either way, but what an absent root costs depends entirely on whether a container will ever read these links:
+
+   - **A devcontainer is in play** (Step 1 case (a) or (b)): the two outcomes are different products, so say which one you delivered. **Root validated** → the overlay works on this host *and* in the devcontainer; **root absent** → host-only, the linker falls back to `$HOME`-absolute targets with a warning and the links dangle inside the container. Never describe the fallback as container-ready.
+   - **No devcontainer** (case (c)): nothing reads these links from a foreign `$HOME`, so the `$HOME`-absolute fallback is a correct and complete result — not a downgrade. Report the setup as **done**, and mention `relink` only as optional future-proofing for the day this repo gains a devcontainer or is opened from a second machine. Don't label a case (c) delivery "host-only"; there is no other host to be partial about.
 5. **Global gitignore wired.** `git config --global core.excludesFile` resolves to a real file that includes `.claude/`, `CLAUDE.md`, `CLAUDE.local.md`, and `AGENTS.local.md`. Without these, the symlinks and import shims this skill creates will leak to `git status` inside the project. Stop and tell the user to add the missing patterns.
-6. **`yq` (mikefarah/yq) and `jq` available.** Probe in order: `command -v yq` and, if that misses (PATH/cache lag in fresh shells), also `[ -x /usr/local/bin/yq ]` directly. Confirm flavor via `yq --version 2>&1 | grep -q mikefarah` — if it doesn't match, refuse. **Never suggest `apt install yq`** — Ubuntu/Debian ship the Python `kislyuk/yq`, which has incompatible merge semantics. If `yq` is missing or has the wrong flavor, stop and ask the user to run `~/.dotfiles/bin/setup-agent-teams` separately. After it completes, rerun this skill and repeat every prerequisite check before continuing. `jq` should already be present; `sudo apt install jq` is fine (only one flavor).
+6. **`jq` available.** Blocking on every path, including case (c): `claude-link-project` merges `settings.local.json` with it, and Section 6c parses `dockerComposeFile` with it. `sudo apt install jq` is fine — there is only one flavor.
+7. **`yq` (mikefarah/yq) available — only when `MAYBE_COMPOSE=1`.** `yq` exists in this skill solely to merge the Compose override in Step 6; nothing on the overlay path calls it. Skip this check outright for a plain repo, or the skill sends the user off to install a tool it will never invoke. When the probe did flag a possible Compose devcontainer: probe in order — `command -v yq` and, if that misses (PATH/cache lag in fresh shells), `[ -x /usr/local/bin/yq ]` directly. Confirm flavor via `yq --version 2>&1 | grep -q mikefarah` — if it doesn't match, refuse. **Never suggest `apt install yq`** — Ubuntu/Debian ship the Python `kislyuk/yq`, which has incompatible merge semantics. If `yq` is missing or has the wrong flavor, stop and ask the user to run `~/.dotfiles/bin/setup-agent-teams` separately. After it completes, rerun this skill and repeat every prerequisite check before continuing.
 
 Don't continue past failed prereqs — they're not auto-recoverable from inside
-this skill. The one exception is item 4: an absent stable root is recoverable
-later (`~/.dotfiles/bin/relink`, one `sudo` per machine) and blocks nothing on
-this host, so continue — but deliver it as **host-only**, never as done.
+this skill. Two carry conditions rather than a flat stop:
+
+- **Item 4** — an absent stable root is recoverable later
+  (`~/.dotfiles/bin/relink`, one `sudo` per machine) and blocks nothing on this
+  host, so continue. With a devcontainer, deliver it as **host-only**, never as
+  done; without one (case (c)), it is simply done.
+- **Item 7** — skipped entirely when `MAYBE_COMPOSE=0`. Blocking as written
+  when the probe flagged Compose.
 
 ## Step 1 — Classify the devcontainer setup
 
@@ -166,11 +196,20 @@ find <project>/.claude -xtype l
 # The root itself. `readlink` alone is not a check — it prints the recorded
 # target whether or not it exists — so compare canonical paths. Anything but a
 # match means bootstrap/relink has not run on this machine, or could not get
-# sudo; the linker then falls back to $HOME-absolute targets, which resolve
-# here and dangle in the container. Report that as host-only, not as done.
+# sudo; the linker then falls back to $HOME-absolute targets. What that costs
+# depends on Step 1: with a devcontainer the links dangle inside it, so report
+# host-only, not done. For case (c) the fallback resolves everywhere anything
+# will ever read it — report done, and mention relink only as future-proofing.
+# MAYBE_COMPOSE defaults to 1 if it didn't survive from the prereq probe: an
+# unknown shape must never print the reassuring "done" line.
 # See ~/.dotfiles/projects/README.md.
-[ -d /opt/dotfiles ] && [ "$(cd -P /opt/dotfiles && pwd -P)" = "$(cd -P ~/.dotfiles && pwd -P)" ] \
-  && echo "stable root OK (host + container)" || echo "NO stable root — host-only"
+if [ -d /opt/dotfiles ] && [ "$(cd -P /opt/dotfiles && pwd -P)" = "$(cd -P ~/.dotfiles && pwd -P)" ]; then
+  echo "stable root OK (host + container)"
+elif [ "${MAYBE_COMPOSE:-1}" = 1 ]; then
+  echo "NO stable root — host-only, links will dangle in the container"
+else
+  echo "NO stable root — fine for this no-devcontainer project; relink only if it gains one"
+fi
 ```
 
 Skills and agents are discovered when a session starts, so anything linked
