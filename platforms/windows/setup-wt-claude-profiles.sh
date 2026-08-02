@@ -96,14 +96,22 @@ matches_any() {
 #   - move SETTINGS to its backup, then rename the stage over SETTINGS
 # On any failure after the backup move, restore SETTINGS from the backup and
 # remove the stage.
+# Note: this function is always invoked as the condition of an `if`/`!`
+# (e.g. `if ! publish_settings ...`), which suspends errexit for the entire
+# function body, including nested calls. Every command below is therefore
+# checked explicitly rather than relying on `set -e`.
 publish_settings() {
   local merged="$1"
   local destination="$2"
   local backup stage
 
-  backup="$(next_backup_path "$destination")"
-  stage="$(mktemp "${destination}.stage.XXXXXX")"
-  cp -- "$merged" "$stage"
+  backup="$(next_backup_path "$destination")" || return 1
+  stage="$(mktemp "${destination}.stage.XXXXXX")" || return 1
+
+  if ! cp -- "$merged" "$stage"; then
+    rm -f -- "$stage"
+    return 1
+  fi
 
   if ! mv -- "$destination" "$backup"; then
     rm -f -- "$stage"
@@ -111,12 +119,21 @@ publish_settings() {
   fi
 
   if ! mv -- "$stage" "$destination"; then
-    cp -p -- "$backup" "$destination"
+    if ! cp -p -- "$backup" "$destination"; then
+      warn "rollback also failed; restoring $destination from $backup manually is required."
+      rm -f -- "$stage"
+      return 1
+    fi
     rm -f -- "$stage"
     return 1
   fi
 }
 
+# Note: main() uses `exit 0`/`exit N` in several branches (nothing selected,
+# aborted, dry-run, etc). That's correct for real invocation of the script,
+# but means main is NOT safe to call in-process after sourcing (it would exit
+# the sourcing shell/test runner) — tests source this file to reach helpers
+# like publish_settings without invoking main.
 main() {
   # ── Defaults ─────────────────────────────────────────────────────────────
   PROJECT_ROOT="${HOME}/workspace"

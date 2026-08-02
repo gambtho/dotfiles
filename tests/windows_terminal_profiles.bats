@@ -72,6 +72,33 @@ EOF
   [ "$status" -ne 0 ]
 }
 
+@test "publish_settings reports failure and leaves destination untouched when the stage copy fails" {
+  SETTINGS="$TEST_ROOT/settings.json"
+  MERGED="$TEST_ROOT/merged.json"
+  printf '{"old":true}\n' >"$SETTINGS"
+  printf '{"new":true}\n' >"$MERGED"
+  cat >"$STUB_BIN/cp" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+  chmod +x "$STUB_BIN/cp"
+
+  run env WT_PROFILES_SOURCE_ONLY=1 bash -c '
+    source "$1"
+    if publish_settings "$2" "$3"; then
+      echo REPORTED SUCCESS
+    else
+      echo REPORTED FAILURE
+    fi
+  ' _ "$(SCRIPT_PATH)" "$MERGED" "$SETTINGS"
+
+  [[ "$output" == *"REPORTED FAILURE"* ]]
+  [ "$(cat "$SETTINGS")" = '{"old":true}' ]
+  [ ! -e "$SETTINGS.backup" ]
+  run bash -c 'compgen -G "$1/"*.stage.*' _ "$TEST_ROOT"
+  [ "$status" -ne 0 ]
+}
+
 @test "explicit fixture overrides run end-to-end without host discovery" {
   mkdir -p "$TEST_ROOT/projects/demo"
   git -C "$TEST_ROOT/projects/demo" init -q
