@@ -321,8 +321,10 @@ Detect the old pattern before converting. Signals (any one → offer repair):
    `grep -rnE '~/\.claude:/home/[^:]+:cached' .devcontainer/`
 2. parallel dual-mount lines:
    `grep -rn '${HOME}:${HOME}' .devcontainer/ 2>/dev/null || grep -rnE '\$\{HOME\}/\.claude:\$\{HOME\}/\.claude' .devcontainer/`
-3. container-user paths written back into HOST config:
-   `grep -rl '/home/vscode\|/home/node\|/root' ~/.claude/plugins/*.json 2>/dev/null`
+3. container-user paths written back into HOST config — anchor on the
+   `/.claude|/.dotfiles` suffix, not a bare `/root`, or the catalog's
+   `//rootly.com` URLs match and every host trips this signal:
+   `grep -rlE '(/home/vscode|/home/node|/root)/\.(claude|dotfiles)' ~/.claude/plugins/*.json 2>/dev/null`
 4. foreign home symlinks the shim created:
    `ls -l /home/*/ 2>/dev/null | grep -- '-> /home/'` (inside a container only)
 5. **stale gated config copy** (the clause-2 bug in item 15) — an existing
@@ -393,10 +395,16 @@ Detect the old pattern before converting. Signals (any one → offer repair):
    The removed home-symlink shim used to mask this by making the old path
    resolve, so it typically surfaces right after that shim is cleaned up.
    ```bash
-   # inside the container: any output => registry points at a dead home
-   docker exec -u "$REMOTE_USER" "$CID" sh -c \
-     'grep -l "\(/root\|/home/[^/\"]*\)/\.\(claude\|dotfiles\)" ~/.claude/plugins/*.json 2>/dev/null \
-      | grep -v "$HOME"'
+   # inside the container: any output => registry points at a dead home.
+   # Test each file's CONTENT: `grep -l` prints filenames, and every one of them
+   # is under $HOME by construction, so filtering the filename list by $HOME
+   # discards every hit and the check silently never fires.
+   docker exec -u "$REMOTE_USER" "$CID" sh -c '
+     for f in "$HOME"/.claude/plugins/*.json; do
+       [ -f "$f" ] || continue
+       grep -o "\(/root\|/home/[^/\"]*\)/\.\(claude\|dotfiles\)" "$f" 2>/dev/null \
+         | grep -v "^$HOME/" | sed "s#^#$f: #"
+     done'
    ```
    Distinguish from a genuinely absent marketplace before repairing — same error
    string, unrelated cause: a marketplace referenced by `settings.json`'s
@@ -411,7 +419,15 @@ Detect the old pattern before converting. Signals (any one → offer repair):
    runtime state, so `SEED_VERSION` cannot observe the poisoning and gating it
    latches the break:
    ```bash
-   sed -E "s#(/root|/home/[^\"/]+)(/\.(claude|dotfiles))#${HOME}\2#g"
+   # Writes back to each registry file; a bare `sed` here only transforms
+   # stdin and leaves the registry untouched, which reads as "the repair ran
+   # and did nothing".
+   for f in "$HOME"/.claude/plugins/known_marketplaces.json \
+            "$HOME"/.claude/plugins/installed_plugins.json; do
+     [ -f "$f" ] || continue
+     sed -E "s#(/root|/home/[^\"/]+)(/\.(claude|dotfiles))#${HOME}\2#g" "$f" >"$f.tmp" \
+       && mv "$f.tmp" "$f"
+   done
    ```
    Anchor on the `/.claude|/.dotfiles` suffix, not a bare `/root` — the official
    catalog contains `//rootly.com` and `/Rootly-AI-Labs` URLs that a loose

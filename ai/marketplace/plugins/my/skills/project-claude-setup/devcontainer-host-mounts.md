@@ -647,27 +647,46 @@ plugin_home_repair() {
   for f in "$dir/known_marketplaces.json" "$dir/installed_plugins.json"; do
     [ -f "$f" ] || continue
     tmp="$f.seed.$$"
-    # No as_user on sed: the redirect is performed by THIS shell, so as_user
-    # would not affect the temp file's owner anyway. The `cat > "$f"` below
-    # writes through the existing inode, which is what preserves owner + mode.
     sed -E "s#(/root|/home/[^\"/]+)(/\.(claude|dotfiles))#${SEED_HOME}\2#g" \
       "$f" >"$tmp" 2>/dev/null || { rm -f "$tmp"; continue; }
     if cmp -s "$f" "$tmp"; then
       rm -f "$tmp"
-    else
-      cat "$tmp" >"$f" && repaired="$repaired $(basename "$f")"
+      continue
+    fi
+    # Validate BEFORE replacing: a truncated or malformed registry is worse than
+    # a stale one — Claude fails to start rather than reporting cache-miss.
+    if command -v jq >/dev/null 2>&1 && ! jq -e . "$tmp" >/dev/null 2>&1; then
+      echo "⚠️  seed: rewritten $(basename "$f") is not valid JSON — leaving original"
       rm -f "$tmp"
+      continue
     fi
+    # Carry owner+mode onto the temp file, then rename. `cat >"$f"` would
+    # preserve them by writing through the inode, but it truncates first: an
+    # interrupt mid-write leaves a half-written registry with no way back.
+    # rename(2) is atomic, so the file is either fully old or fully new.
+    chown --reference="$f" "$tmp" 2>/dev/null || true
+    chmod --reference="$f" "$tmp" 2>/dev/null || true
+    mv -f "$tmp" "$f" && repaired="$repaired $(basename "$f")"
+    rm -f "$tmp"
   done
-  # Same fallout: ~/.claude symlinks aimed at the dead home. Use `if`, not a
-  # trailing && chain — under `set -e` a loop body ending false kills the script,
-  # and on a fresh volume nothing matches, so that is the NORMAL path.
-  local link
+  # Same fallout: ~/.claude symlinks aimed at the dead home. Match the TARGET
+  # against the legacy-home pattern — a bare "is it dangling" test also deletes
+  # the user's own broken symlinks, which this script has no business touching.
+  # Use `if`, not a trailing && chain: under `set -e` a loop body ending false
+  # kills the script, and on a fresh volume nothing matches, so that is NORMAL.
+  local link target
   for link in "$CLAUDE_HOME"/*; do
-    if [ -L "$link" ] && [ ! -e "$link" ]; then
-      rm -f "$link"
-      repaired="$repaired $(basename "$link")"
-    fi
+    [ -L "$link" ] || continue
+    [ -e "$link" ] && continue
+    target="$(readlink "$link" 2>/dev/null || true)"
+    case "$target" in
+      "$SEED_HOME"/*) ;;                                  # correct home: not ours to judge
+      /root/.claude/* | /root/.dotfiles/* \
+        | /home/*/.claude/* | /home/*/.dotfiles/*)
+        rm -f "$link"
+        repaired="$repaired $(basename "$link")"
+        ;;
+    esac
   done
   [ -n "$repaired" ] && echo "🌱 seed: repaired stale home paths in plugin registry:$repaired"
   return 0
@@ -777,9 +796,17 @@ fi
 # registers as `techwolf-ai-first`), so it cannot be derived, and a guard that
 # guesses it never matches and re-adds on every single seed.
 if command -v claude >/dev/null 2>&1; then
+  mp_registry="$CLAUDE_HOME/plugins/known_marketplaces.json"
   while read -r mp_name mp_repo; do
     [ -n "$mp_name" ] || continue
-    if grep -q "\"${mp_name}\"" "$CLAUDE_HOME/plugins/known_marketplaces.json" 2>/dev/null; then
+    # Exact top-level key, not a substring of arbitrary file text: a plain grep
+    # for "name" also matches it inside a description, a plugin entry, or
+    # another marketplace's nested JSON, and then silently skips registration.
+    # No jq (or unreadable/invalid JSON) => fall through and register; adding an
+    # already-present marketplace is idempotent, skipping a missing one is not.
+    if [ -f "$mp_registry" ] && command -v jq >/dev/null 2>&1 \
+       && jq -e --arg n "$mp_name" 'type == "object" and has($n)' \
+            "$mp_registry" >/dev/null 2>&1; then
       continue
     fi
     echo "🌱 seed: registering marketplace $mp_name ($mp_repo)"
