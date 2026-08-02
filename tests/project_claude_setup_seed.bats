@@ -679,6 +679,30 @@ extract_seed_script() {
   [ "$(grep -Fxc "$hook" "$HOME/.zshrc")" = 1 ]
 }
 
+@test "a loader left below the Vekil hook by an older seed is moved above it" {
+  # The population the previous fix does NOT reach: every container seeded
+  # before it has both hooks, in the wrong order. Keying the repair on "is our
+  # hook present?" declares that state fixed and latches the inverted
+  # precedence permanently — core/ beats ai/vekil/env.zsh on ANTHROPIC_MODEL
+  # and the container talks to the wrong model with nothing in the log.
+  local hook='[[ -r "$HOME/.dotfiles/core/shell/load-custom.zsh" ]] && source "$HOME/.dotfiles/core/shell/load-custom.zsh"'
+  local vekil='[[ -r "$HOME/.dotfiles/ai/vekil/env.zsh" ]] && source "$HOME/.dotfiles/ai/vekil/env.zsh"'
+  printf '# keep me\n%s\n%s\n' "$vekil" "$hook" >"$HOME/.zshrc"
+
+  run bash "$SEED_SCRIPT"
+  [ "$status" -eq 0 ]
+
+  # Reordered, not duplicated — the rewrite drops the old copy before re-emitting.
+  [ "$(grep -Fxc "$hook" "$HOME/.zshrc")" = 1 ]
+  [ "$(grep -Fxc "$vekil" "$HOME/.zshrc")" = 1 ]
+  local load_at vekil_at
+  load_at="$(grep -Fxn "$hook" "$HOME/.zshrc" | cut -d: -f1)"
+  vekil_at="$(grep -Fxn "$vekil" "$HOME/.zshrc" | cut -d: -f1)"
+  [ "$load_at" -lt "$vekil_at" ]
+  # Unrelated lines survive the rewrite.
+  grep -Fqx '# keep me' "$HOME/.zshrc"
+}
+
 @test "codex reinstall is guarded on the binary, not the config" {
   # Guarding on ~/.codex/config.toml latches: the installer writes config even
   # when it cannot produce a binary, so config-present/codex-missing skipped the

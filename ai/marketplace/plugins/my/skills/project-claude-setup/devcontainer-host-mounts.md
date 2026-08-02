@@ -399,27 +399,40 @@ $SUDO touch "$ZSHRC"
 # It must land BEFORE the Vekil hook: ai/vekil/env.zsh owns the endpoint/model
 # variables and has to get the last word, but core/ (which load-custom.zsh
 # sources) also sets some of them. Appending is only correct on a FRESH zshrc,
-# where the Vekil block below has not run yet. On an already-seeded volume —
-# which is exactly the upgrade path this block exists to serve — the Vekil hook
-# is already there from an earlier seed, so appending would place this after it
-# and silently invert the precedence. Insert above it in that case.
+# where the Vekil block below has not run yet. Two other states exist on an
+# already-seeded volume, which is exactly the upgrade path this block serves:
+# the Vekil hook present and this one absent (appending would land after it),
+# and — left behind by every seed older than this one — BOTH present in the
+# wrong order. Checking only for our own hook's presence declares that second
+# state fixed and latches the inverted precedence forever.
+#
+# So compare positions, and let one awk cover both repairs: it drops any
+# existing copy wherever it sits, then re-emits it above the Vekil line.
 DOTFILES_LOAD_HOOK='[[ -r "$HOME/.dotfiles/core/shell/load-custom.zsh" ]] && source "$HOME/.dotfiles/core/shell/load-custom.zsh"'
-if ! grep -Fqx "$DOTFILES_LOAD_HOOK" "$ZSHRC" 2>/dev/null; then
-  if grep -Fqx "$VEKIL_ENV_HOOK" "$ZSHRC" 2>/dev/null; then
-    ZSHRC_TMP="$(mktemp)"
-    # Exact line match on the whole hook, not a substring: awk -v takes the
-    # value literally and neither hook contains a backslash.
-    awk -v hook="$DOTFILES_LOAD_HOOK" -v vekil="$VEKIL_ENV_HOOK" '
-      $0 == vekil && !ins { print hook; print ""; ins = 1 }
-      { print }
-    ' "$ZSHRC" >"$ZSHRC_TMP"
-    # cp, not mv: writing through the existing path keeps the file's owner and
-    # mode, which matter because the terminal user may not be the seed user.
-    $SUDO cp "$ZSHRC_TMP" "$ZSHRC"
-    rm -f "$ZSHRC_TMP"
-  else
+# `|| true`: under `set -o pipefail` a non-matching grep would abort the seed.
+load_at="$(grep -Fxn "$DOTFILES_LOAD_HOOK" "$ZSHRC" 2>/dev/null | head -n1 | cut -d: -f1 || true)"
+vekil_at="$(grep -Fxn "$VEKIL_ENV_HOOK" "$ZSHRC" 2>/dev/null | head -n1 | cut -d: -f1 || true)"
+if [ -z "$vekil_at" ]; then
+  # No Vekil hook yet — its own block below appends after this one, so a plain
+  # append already lands in the right order.
+  if [ -z "$load_at" ]; then
     printf '\n%s\n' "$DOTFILES_LOAD_HOOK" | $SUDO tee -a "$ZSHRC" >/dev/null
+    echo "🌱 seed: configured dotfiles shell integration"
   fi
+elif [ -z "$load_at" ] || [ "$load_at" -gt "$vekil_at" ]; then
+  ZSHRC_TMP="$(mktemp)"
+  # Exact line match on the whole hook, not a substring: awk -v takes the
+  # value literally and neither hook contains a backslash. Dropping the hook
+  # before re-emitting it is what makes the reorder path duplicate-free.
+  awk -v hook="$DOTFILES_LOAD_HOOK" -v vekil="$VEKIL_ENV_HOOK" '
+    $0 == hook { next }
+    $0 == vekil && !ins { print hook; print ""; ins = 1 }
+    { print }
+  ' "$ZSHRC" >"$ZSHRC_TMP"
+  # cp, not mv: writing through the existing path keeps the file's owner and
+  # mode, which matter because the terminal user may not be the seed user.
+  $SUDO cp "$ZSHRC_TMP" "$ZSHRC"
+  rm -f "$ZSHRC_TMP"
   echo "🌱 seed: configured dotfiles shell integration"
 fi
 
@@ -682,7 +695,10 @@ fi
 # requirement, so it belongs with the mount that enables it. Version and
 # checksums come from the mirrored config/versions.env, so the download is
 # pinned and verified — unlike the claude CLI path above.
-if as_user test -x "$SEED_HOME/.local/bin/nvim"; then
+# `-f` as well as `-x`: both follow symlinks, so the normal shape (bin/nvim ->
+# nvim-dist/bin/nvim) still passes, while a directory — which `-x` alone reports
+# as executable — no longer counts as "already installed" and silently skips.
+if as_user test -f "$SEED_HOME/.local/bin/nvim" && as_user test -x "$SEED_HOME/.local/bin/nvim"; then
   echo "🌱 seed: nvim already present"
 elif [ -r "$DOTFILES_HOME/config/versions.env" ]; then
   # shellcheck source=/dev/null
@@ -712,21 +728,32 @@ elif [ -r "$DOTFILES_HOME/config/versions.env" ]; then
     # The whole tree ships, not just the binary: nvim needs its runtime/ share
     # dir, so symlinking the bare binary gives an nvim that starts and then
     # cannot find its own runtime files.
+    #
+    # Staged into nvim-dist.new and validated there before the existing runtime
+    # is touched. Removing nvim-dist first would destroy a working editor to
+    # make room for a download that may not survive the checksum or the chown —
+    # reachable whenever bin/nvim is missing or broken but the tree beneath it
+    # is fine, which is precisely when this branch runs on a warm container.
+    NVIM_DIST="$SEED_HOME/.local/share/nvim-dist"
     if curl -fsSL --connect-timeout 10 --max-time 300 \
       -o "$NVIM_TMP/nvim.tar.gz" "$NVIM_URL" \
       && echo "$NVIM_SHA  $NVIM_TMP/nvim.tar.gz" | sha256sum -c - >/dev/null 2>&1 \
       && tar -xzf "$NVIM_TMP/nvim.tar.gz" -C "$NVIM_TMP" \
       && [ -d "$NVIM_TMP/nvim-$NVIM_ARCH" ] \
       && as_user mkdir -p "$SEED_HOME/.local/share" "$SEED_HOME/.local/bin" \
-      && as_user rm -rf "$SEED_HOME/.local/share/nvim-dist" \
-      && mv "$NVIM_TMP/nvim-$NVIM_ARCH" "$SEED_HOME/.local/share/nvim-dist" \
-      && { chown -R "$SEED_UID:$SEED_GID" "$SEED_HOME/.local/share/nvim-dist" 2>/dev/null || true; } \
-      && as_user ln -sf "$SEED_HOME/.local/share/nvim-dist/bin/nvim" "$SEED_HOME/.local/bin/nvim" \
+      && as_user rm -rf "$NVIM_DIST.new" \
+      && mv "$NVIM_TMP/nvim-$NVIM_ARCH" "$NVIM_DIST.new" \
+      && { chown -R "$SEED_UID:$SEED_GID" "$NVIM_DIST.new" 2>/dev/null || true; } \
+      && as_user test -x "$NVIM_DIST.new/bin/nvim" \
+      && as_user rm -rf "$NVIM_DIST" \
+      && mv "$NVIM_DIST.new" "$NVIM_DIST" \
+      && as_user ln -sf "$NVIM_DIST/bin/nvim" "$SEED_HOME/.local/bin/nvim" \
       && as_user test -x "$SEED_HOME/.local/bin/nvim"; then
       echo "🌱 seed: neovim ready"
     else
       echo "⚠️  seed: neovim install failed (non-fatal; EDITOR falls back to vim)"
     fi
+    as_user rm -rf "$NVIM_DIST.new"
     rm -rf "$NVIM_TMP"
   fi
 fi
@@ -825,8 +852,15 @@ plugin_home_repair() {
       continue
     fi
     # Validate BEFORE replacing: a truncated or malformed registry is worse than
-    # a stale one — Claude fails to start rather than reporting cache-miss.
-    if command -v jq >/dev/null 2>&1 && ! jq -e . "$tmp" >/dev/null 2>&1; then
+    # a stale one — Claude fails to start rather than reporting cache-miss. No
+    # jq means no way to know which one we produced, so skip rather than write
+    # unverified: the un-repaired registry still works, just with cache-miss.
+    if ! command -v jq >/dev/null 2>&1; then
+      echo "⚠️  seed: jq unavailable — cannot verify rewritten $(basename "$f"), leaving original"
+      rm -f "$tmp"
+      continue
+    fi
+    if ! jq -e . "$tmp" >/dev/null 2>&1; then
       echo "⚠️  seed: rewritten $(basename "$f") is not valid JSON — leaving original"
       rm -f "$tmp"
       continue
@@ -835,8 +869,17 @@ plugin_home_repair() {
     # preserve them by writing through the inode, but it truncates first: an
     # interrupt mid-write leaves a half-written registry with no way back.
     # rename(2) is atomic, so the file is either fully old or fully new.
-    chown --reference="$f" "$tmp" 2>/dev/null || true
-    chmod --reference="$f" "$tmp" 2>/dev/null || true
+    #
+    # Both must succeed. Renaming a temp file that kept the seed user's owner or
+    # a default mode hands the registry to the wrong identity, and Claude then
+    # cannot write it — the same cache-miss symptom this function exists to fix,
+    # now permanent. A stale registry is the better failure.
+    if ! chown --reference="$f" "$tmp" 2>/dev/null \
+      || ! chmod --reference="$f" "$tmp" 2>/dev/null; then
+      echo "⚠️  seed: could not carry owner/mode onto $(basename "$f") — leaving original"
+      rm -f "$tmp"
+      continue
+    fi
     mv -f "$tmp" "$f" && repaired="$repaired $(basename "$f")"
     rm -f "$tmp"
   done

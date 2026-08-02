@@ -27,7 +27,7 @@ It replaces the old narrower `devcontainer-host-mounts` skill. The host-mounts l
 1. **WSL host, not a devcontainer.** `uname -a` contains `microsoft` and `/.dockerenv` does NOT exist and `$REMOTE_CONTAINERS` is unset. If we're already in a container, the symlinks won't work — abort with: "Run this on the WSL host, not inside the container."
 2. **Project root.** `.git/` exists in the current dir. If not, ask the user to `cd` first.
 3. **Dotfiles repo present.** `~/.dotfiles/` exists with `core/git/gitignore.symlink` and `projects/` subdir. If not, point at `~/.dotfiles/projects/README.md` for the setup story.
-4. **Stable link root published.** `readlink /opt/dotfiles` resolves to `~/.dotfiles`. Overlay symlinks target this root so they resolve under both the host's `$HOME` and the container's. If it's missing, run `~/.dotfiles/bin/relink` — it creates the root and needs `sudo` once per machine, since `/opt` is root-owned. Don't block on it: the linker falls back to `$HOME`-absolute targets with a warning, which works on this host but dangles inside the devcontainer. Tell the user which case they're in.
+4. **Stable link root published.** `[ -d /opt/dotfiles ] && [ "$(cd -P /opt/dotfiles && pwd -P)" = "$(cd -P ~/.dotfiles && pwd -P)" ]`. Compare canonical paths rather than trusting `readlink` output: `readlink` prints the recorded target whether or not it exists, so a root left over from another machine or an earlier `$HOME` reads as published while every overlay link through it dangles. Overlay symlinks target this root so they resolve under both the host's `$HOME` and the container's. If it's missing or points elsewhere, run `~/.dotfiles/bin/relink` — it creates the root and needs `sudo` once per machine, since `/opt` is root-owned. Don't block on it, but the two outcomes are different products, so say which one you delivered: **root validated** → the overlay works on this host *and* in the devcontainer; **root absent** → host-only, the linker falls back to `$HOME`-absolute targets with a warning and the links dangle inside any container. Never describe the fallback as container-ready.
 5. **Global gitignore wired.** `git config --global core.excludesFile` resolves to a real file that includes `.claude/`, `CLAUDE.md`, `CLAUDE.local.md`, and `AGENTS.local.md`. Without these, the symlinks and import shims this skill creates will leak to `git status` inside the project. Stop and tell the user to add the missing patterns.
 6. **`yq` (mikefarah/yq) and `jq` available.** Probe in order: `command -v yq` and, if that misses (PATH/cache lag in fresh shells), also `[ -x /usr/local/bin/yq ]` directly. Confirm flavor via `yq --version 2>&1 | grep -q mikefarah` — if it doesn't match, refuse. **Never suggest `apt install yq`** — Ubuntu/Debian ship the Python `kislyuk/yq`, which has incompatible merge semantics. If `yq` is missing or has the wrong flavor, stop and ask the user to run `~/.dotfiles/bin/setup-agent-teams` separately. After it completes, rerun this skill and repeat every prerequisite check before continuing. `jq` should already be present; `sudo apt install jq` is fine (only one flavor).
 
@@ -156,10 +156,14 @@ ls -ld <project>/.claude/skills <project>/.claude/agents
 # directory links, per-file links, and CLAUDE.md alike — and repoints it.
 find <project>/.claude -xtype l
 
-# The root itself. Absent here means bootstrap/relink has not run on this
-# machine, or could not get sudo; the linker then falls back to $HOME-absolute
-# targets and warns. See ~/.dotfiles/projects/README.md.
-readlink /opt/dotfiles
+# The root itself. `readlink` alone is not a check — it prints the recorded
+# target whether or not it exists — so compare canonical paths. Anything but a
+# match means bootstrap/relink has not run on this machine, or could not get
+# sudo; the linker then falls back to $HOME-absolute targets, which resolve
+# here and dangle in the container. Report that as host-only, not as done.
+# See ~/.dotfiles/projects/README.md.
+[ -d /opt/dotfiles ] && [ "$(cd -P /opt/dotfiles && pwd -P)" = "$(cd -P ~/.dotfiles && pwd -P)" ] \
+  && echo "stable root OK (host + container)" || echo "NO stable root — host-only"
 ```
 
 Skills and agents are discovered when a session starts, so anything linked
@@ -329,12 +333,15 @@ Detect the old pattern before converting. Signals (any one → offer repair):
    `grep -rnE '~/\.claude:/home/[^:]+:cached' .devcontainer/`
 2. parallel dual-mount lines:
    `grep -rn '${HOME}:${HOME}' .devcontainer/ 2>/dev/null || grep -rnE '\$\{HOME\}/\.claude:\$\{HOME\}/\.claude' .devcontainer/`
-3. container-user paths written back into HOST config — anchor on the
+3. container-user paths written back into HOST config — match any foreign home
+   and subtract this one, rather than listing `/home/vscode|/home/node`: the
+   `remoteUser` varies per project (wanderer's is `developer`), and a fixed list
+   silently reports "clean" for every user not on it. Anchor on the
    `/.claude|/.dotfiles` suffix, not a bare `/root`, or the catalog's
-   `//rootly.com` URLs match and every host trips this signal. Require a path
-   boundary after the suffix too, so a neighbour like `/home/vscode/.claude-backup`
+   `//rootly.com` URLs match and every host trips this signal; require a path
+   boundary after it too, so a neighbour like `/home/vscode/.claude-backup`
    does not:
-   `grep -rlE '(/home/vscode|/home/node|/root)/\.(claude|dotfiles)(/|"|$)' ~/.claude/plugins/*.json 2>/dev/null`
+   `grep -rhoE '(/root|/home/[^/"]+)/\.(claude|dotfiles)(/|"|$)' ~/.claude/plugins/*.json 2>/dev/null | grep -v "^$HOME/" | sort -u`
 4. foreign home symlinks the shim created:
    `ls -l /home/*/ 2>/dev/null | grep -- '-> /home/'` (inside a container only)
 5. **stale gated config copy** (the clause-2 bug in item 15) — an existing
