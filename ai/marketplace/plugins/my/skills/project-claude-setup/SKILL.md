@@ -24,13 +24,21 @@ It replaces the old narrower `devcontainer-host-mounts` skill. The host-mounts l
 
 ## Prerequisites — verify first, bail clearly if any fail
 
+All of these are blocking except item 4, which downgrades the deliverable
+instead of stopping it. That single exception is stated inline below and again
+at the end of this section; nothing else here is advisory.
+
 1. **WSL host, not a devcontainer.** `uname -a` contains `microsoft` and `/.dockerenv` does NOT exist and `$REMOTE_CONTAINERS` is unset. If we're already in a container, the symlinks won't work — abort with: "Run this on the WSL host, not inside the container."
 2. **Project root.** `.git/` exists in the current dir. If not, ask the user to `cd` first.
 3. **Dotfiles repo present.** `~/.dotfiles/` exists with `core/git/gitignore.symlink` and `projects/` subdir. If not, point at `~/.dotfiles/projects/README.md` for the setup story.
-4. **Global gitignore wired.** `git config --global core.excludesFile` resolves to a real file that includes `.claude/`, `CLAUDE.md`, `CLAUDE.local.md`, and `AGENTS.local.md`. Without these, the symlinks and import shims this skill creates will leak to `git status` inside the project. Stop and tell the user to add the missing patterns.
-5. **`yq` (mikefarah/yq) and `jq` available.** Probe in order: `command -v yq` and, if that misses (PATH/cache lag in fresh shells), also `[ -x /usr/local/bin/yq ]` directly. Confirm flavor via `yq --version 2>&1 | grep -q mikefarah` — if it doesn't match, refuse. **Never suggest `apt install yq`** — Ubuntu/Debian ship the Python `kislyuk/yq`, which has incompatible merge semantics. If `yq` is missing or has the wrong flavor, stop and ask the user to run `~/.dotfiles/bin/setup-agent-teams` separately. After it completes, rerun this skill and repeat every prerequisite check before continuing. `jq` should already be present; `sudo apt install jq` is fine (only one flavor).
+4. **Stable link root published.** `[ -d /opt/dotfiles ] && [ "$(cd -P /opt/dotfiles && pwd -P)" = "$(cd -P ~/.dotfiles && pwd -P)" ]`. Compare canonical paths rather than trusting `readlink` output: `readlink` prints the recorded target whether or not it exists, so a root left over from another machine or an earlier `$HOME` reads as published while every overlay link through it dangles. Overlay symlinks target this root so they resolve under both the host's `$HOME` and the container's. If it's missing or points elsewhere, run `~/.dotfiles/bin/relink` — it creates the root and needs `sudo` once per machine, since `/opt` is root-owned. Don't block on it, but the two outcomes are different products, so say which one you delivered: **root validated** → the overlay works on this host *and* in the devcontainer; **root absent** → host-only, the linker falls back to `$HOME`-absolute targets with a warning and the links dangle inside any container. Never describe the fallback as container-ready.
+5. **Global gitignore wired.** `git config --global core.excludesFile` resolves to a real file that includes `.claude/`, `CLAUDE.md`, `CLAUDE.local.md`, and `AGENTS.local.md`. Without these, the symlinks and import shims this skill creates will leak to `git status` inside the project. Stop and tell the user to add the missing patterns.
+6. **`yq` (mikefarah/yq) and `jq` available.** Probe in order: `command -v yq` and, if that misses (PATH/cache lag in fresh shells), also `[ -x /usr/local/bin/yq ]` directly. Confirm flavor via `yq --version 2>&1 | grep -q mikefarah` — if it doesn't match, refuse. **Never suggest `apt install yq`** — Ubuntu/Debian ship the Python `kislyuk/yq`, which has incompatible merge semantics. If `yq` is missing or has the wrong flavor, stop and ask the user to run `~/.dotfiles/bin/setup-agent-teams` separately. After it completes, rerun this skill and repeat every prerequisite check before continuing. `jq` should already be present; `sudo apt install jq` is fine (only one flavor).
 
-Don't continue past failed prereqs — they're not auto-recoverable from inside this skill.
+Don't continue past failed prereqs — they're not auto-recoverable from inside
+this skill. The one exception is item 4: an absent stable root is recoverable
+later (`~/.dotfiles/bin/relink`, one `sudo` per machine) and blocks nothing on
+this host, so continue — but deliver it as **host-only**, never as done.
 
 ## Step 1 — Classify the devcontainer setup
 
@@ -148,12 +156,21 @@ ls -L <project>/.claude/settings.local.json
 # and picks up newly added skills with no re-run.
 ls -ld <project>/.claude/skills <project>/.claude/agents
 
-# Must print nothing. Any output is a dangling link — most often one created
-# under a different $HOME (host /home/<user> vs container /root), which makes
-# the overlay silently invisible. Re-running the helper repairs CLAUDE.md and
-# the skills/ and agents/ directory links. Individually linked files (commands/)
-# are only reported, not repaired: delete the dangling link and re-run.
+# Must print nothing. Any output is a dangling link. Overlay links target the
+# stable root /opt/dotfiles rather than an absolute $HOME path, so the same link
+# resolves on the host and inside a container that publishes its own root.
+# Re-running the helper migrates any link still written against a bare $HOME —
+# directory links, per-file links, and CLAUDE.md alike — and repoints it.
 find <project>/.claude -xtype l
+
+# The root itself. `readlink` alone is not a check — it prints the recorded
+# target whether or not it exists — so compare canonical paths. Anything but a
+# match means bootstrap/relink has not run on this machine, or could not get
+# sudo; the linker then falls back to $HOME-absolute targets, which resolve
+# here and dangle in the container. Report that as host-only, not as done.
+# See ~/.dotfiles/projects/README.md.
+[ -d /opt/dotfiles ] && [ "$(cd -P /opt/dotfiles && pwd -P)" = "$(cd -P ~/.dotfiles && pwd -P)" ] \
+  && echo "stable root OK (host + container)" || echo "NO stable root — host-only"
 ```
 
 Skills and agents are discovered when a session starts, so anything linked
@@ -313,6 +330,8 @@ The merged output should show the seed `command` and the `/host-seed` mounts.
 
 See `devcontainer-host-mounts.md` for the copy-pasteable override and seed script, service/user/path substitutions, and verification commands.
 
+For a project that **already has** a `.devcontainer/local-seed.sh` predating a template change, see `catch-up-local-seed.md`. Don't regenerate the file from the template to close the gap — the drift runs both ways, and a wholesale regeneration silently deletes whatever that project fixed locally first. `SEED_VERSION` is not a reliable indicator either: always-run blocks correctly don't bump it, so two seeds can both report the same version and differ.
+
 ## Step 6b — Repair an existing corrupted rw-mount setup
 
 Detect the old pattern before converting. Signals (any one → offer repair):
@@ -321,8 +340,21 @@ Detect the old pattern before converting. Signals (any one → offer repair):
    `grep -rnE '~/\.claude:/home/[^:]+:cached' .devcontainer/`
 2. parallel dual-mount lines:
    `grep -rn '${HOME}:${HOME}' .devcontainer/ 2>/dev/null || grep -rnE '\$\{HOME\}/\.claude:\$\{HOME\}/\.claude' .devcontainer/`
-3. container-user paths written back into HOST config:
-   `grep -rl '/home/vscode\|/home/node' ~/.claude/plugins/*.json 2>/dev/null`
+3. container-user paths written back into HOST config — match any foreign home
+   and subtract this one, rather than listing `/home/vscode|/home/node`: the
+   `remoteUser` varies per project (wanderer's is `developer`), and a fixed list
+   silently reports "clean" for every user not on it. Anchor on the
+   `/.claude|/.dotfiles` suffix, not a bare `/root`, or the catalog's
+   `//rootly.com` URLs match and every host trips this signal; require a path
+   boundary after it too, so a neighbour like `/home/vscode/.claude-backup`
+   does not. Strip URLs before matching rather than after: a source URL that
+   happens to contain `/home/<x>/.claude/` is not a filesystem path, and no
+   amount of anchoring distinguishes it once the scheme has scrolled past.
+   Subtract this home with a fixed-string prefix test, not `grep -v "^$HOME/"`:
+   interpolating the path into a regex turns every `.` in it into a wildcard, so
+   a `/home/user.name` host silently drops a foreign `/home/userXname/.claude/`.
+   `grep -F` cannot express the anchor, hence awk's `index() != 1`:
+   `cat ~/.claude/plugins/*.json 2>/dev/null | sed 's#[a-z][a-z0-9+.-]*://[^"[:space:]]*##g' | grep -hoE '(/root|/home/[^/"]+)/\.(claude|dotfiles)(/|"|$)' | awk -v h="$HOME/" 'index($0, h) != 1' | sort -u`
 4. foreign home symlinks the shim created:
    `ls -l /home/*/ 2>/dev/null | grep -- '-> /home/'` (inside a container only)
 5. **stale gated config copy** (the clause-2 bug in item 15) — an existing
@@ -339,7 +371,9 @@ Detect the old pattern before converting. Signals (any one → offer repair):
    while `commands/` or `skills/` are stale, and a source-exists guard hides the
    path deleted on the host but still present in the persisted volume:
    ```bash
-   docker exec -u "$REMOTE_USER" "$CID" sh -s <<'EOF'
+   docker exec -u "$REMOTE_USER" "$CID" sh -s "$REMOTE_HOME" <<'EOF'
+   # Same reason as the plugin scan below: -u switches the uid, not HOME.
+   HOME="$1"
    for i in settings.json CLAUDE.md config commands skills; do
      s=/host-seed/.claude/$i; d=$HOME/.claude/$i
      if   [ -e "$s" ] && [ ! -e "$d" ]; then echo "STALE $i (missing)"
@@ -378,6 +412,71 @@ Detect the old pattern before converting. Signals (any one → offer repair):
    Repair: replace the guard with the unconditional `rsync -a --delete` mirror
    from item 15 and restart. Tell the user their container-local `~/.dotfiles`
    edits will be reverted from now on.
+
+7. **stale home paths in the CONTAINER plugin registry** — presents to the user
+   as every plugin failing at once with `Failed to load marketplace "<name>":
+   cache-miss`, which reads like the marketplace was never downloaded. It was:
+   the payloads are present and correctly owned, but the registry records
+   ABSOLUTE paths, and they still name the home of a *previous* container user.
+   This is signal 3 in the opposite direction — 3 is container paths leaking
+   into host config, 7 is a dead container home stranded in container config —
+   so check both; neither grep finds the other.
+   Trigger: the container user changed (commonly root → `vscode`/`node`/
+   `developer`) while `~/.claude` lived in a **persisted named volume**. No
+   rebuild clears it, because the volume is precisely what rebuilds preserve.
+   The removed home-symlink shim used to mask this by making the old path
+   resolve, so it typically surfaces right after that shim is cleaned up.
+   ```bash
+   # inside the container: any output => registry points at a dead home.
+   # Test each file's CONTENT: `grep -l` prints filenames, and every one of them
+   # is under $HOME by construction, so filtering the filename list by $HOME
+   # discards every hit and the check silently never fires.
+   # URLs are stripped first: a marketplace source containing /home/<x>/.claude/
+   # is not a filesystem path and would otherwise trip this on every container.
+   # HOME comes from the resolved REMOTE_HOME, not from the exec environment:
+   # `docker exec -u <user>` switches the uid but leaves HOME at the image's
+   # ENV value (usually /root), so the glob would scan a directory that does not
+   # exist, match nothing, and read as clean — and the exclusion would subtract
+   # the wrong home even if it did.
+   docker exec -u "$REMOTE_USER" "$CID" sh -c '
+     HOME="$1"
+     for f in "$HOME"/.claude/plugins/*.json; do
+       [ -f "$f" ] || continue
+       sed "s#[a-z][a-z0-9+.-]*://[^\"[:space:]]*##g" "$f" 2>/dev/null \
+         | grep -oE "(/root|/home/[^/\"]*)/\.(claude|dotfiles)(/|\"|$)" \
+         | awk -v h="$HOME/" "index(\$0, h) != 1" | sed "s#^#$f: #"
+     done' _ "$REMOTE_HOME"
+   ```
+   Distinguish from a genuinely absent marketplace before repairing — same error
+   string, unrelated cause: a marketplace referenced by `settings.json`'s
+   `enabledPlugins` but missing from `known_marketplaces.json` was never
+   registered in this container at all. The authored `~/.claude` allowlist
+   deliberately excludes `plugins/` (hundreds of MB), so it cannot arrive by
+   copy; it has to be re-registered with `claude plugin marketplace add <repo>`.
+   The registry key comes from the marketplace manifest, not the repo path
+   (`techwolf-ai/ai-first-toolkit` → `techwolf-ai-first`), so an
+   already-registered guard must list the key explicitly or it re-adds forever.
+   Repair, in the seed and **above** the version gate — the source is container
+   runtime state, so `SEED_VERSION` cannot observe the poisoning and gating it
+   latches the break. Use the `plugin_home_repair()` function in
+   `devcontainer-host-mounts.md` rather than writing the rewrite inline: it
+   validates the rewritten JSON before replacing anything (a truncated registry
+   is worse than a stale one — Claude fails to start rather than reporting
+   cache-miss), carries owner and mode onto the temp file so the rename does not
+   hand the registry to the wrong user, skips files the rewrite left unchanged,
+   and replaces via atomic `mv` so an interrupt cannot leave a half-written
+   registry. A bare `sed >"$f.tmp" && mv` has none of that.
+
+   Two details in it are load-bearing and easy to lose in a re-implementation:
+   the rewrite must write back to the file (a plain `sed` transforms stdin and
+   leaves the registry untouched, which reads as "the repair ran and did
+   nothing"), and the pattern must anchor on the `/.claude|/.dotfiles` suffix
+   rather than a bare `/root` — the official catalog contains `//rootly.com` and
+   `/Rootly-AI-Labs` URLs that a loose pattern silently corrupts. Also delete
+   `~/.claude` symlinks left dangling at
+   the old home. Rewriting is non-destructive and preserves the cache; wiping
+   the volume also works but costs re-auth (`.credentials.json` lives there),
+   re-download, and container-local history.
 
 Anything scaffolded before the two-clause rule existed will trip signals 5 and 6,
 so run both during **any** repair pass, not just rw-mount conversions. Signal 6

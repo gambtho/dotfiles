@@ -29,6 +29,12 @@
 
 set -euo pipefail
 
+# Sourced for stable_link_root(), so the root path is defined in exactly one
+# place — duplicating it here is the same drift risk this change exists to fix.
+# Sourcing is silent and defines only log_*/phase helpers, none of which collide
+# with this script's info/ok/warn/die.
+source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
+
 DOTFILES="${DOTFILES:-$HOME/.dotfiles}"
 OVERLAY_ROOT="$DOTFILES/projects"
 
@@ -136,6 +142,48 @@ die() {
   exit 1
 }
 
+# ── Link targets ─────────────────────────────────────────────────────────────
+# The string stored IN a symlink is not the same as the path we read the overlay
+# FROM. A project's working tree gets bind-mounted into devcontainers under a
+# different $HOME, so a $HOME-absolute target dangles there — and on any second
+# machine whose username differs. Writing links through a stable root that each
+# environment points at its own checkout fixes it everywhere at once.
+#
+# Use that root only when it genuinely resolves to THIS checkout; otherwise we
+# would cheerfully write links through a root aimed somewhere else. When it is
+# absent, fall back to the old $HOME-absolute behaviour so a machine that has
+# not run bin/bootstrap keeps working exactly as before.
+STABLE_ROOT="$(stable_link_root)"
+if [[ -d "$STABLE_ROOT" ]] &&
+  [[ "$(cd "$STABLE_ROOT" && pwd -P)" == "$(cd "$DOTFILES" && pwd -P)" ]]; then
+  LINK_ROOT="$STABLE_ROOT"
+else
+  LINK_ROOT="$DOTFILES"
+  warn "Stable link root $STABLE_ROOT is missing or points elsewhere."
+  warn "Links will use \$HOME-absolute targets, which dangle inside containers"
+  warn "and on machines with a different username. Run 'bin/relink' to fix."
+fi
+
+# Map a real overlay path to the string we store in the symlink.
+link_target() {
+  printf '%s' "$LINK_ROOT/${1#"$DOTFILES"/}"
+}
+
+# Do two symlink targets name the same overlay item, regardless of which root or
+# $HOME produced them? Compares the home-independent "projects/<slug>/..." tail —
+# the same technique migrate_legacy_per_file_dir uses, and for the same reason:
+# an absolute comparison never matches the cross-environment case, which is the
+# only case worth repairing.
+overlay_target_matches() {
+  local current="$1" want="$2"
+  [[ "$current" == "$want" ]] && return 0
+  local cur_tail="${current#*/projects/}"
+  local want_tail="${want#*/projects/}"
+  [[ "$cur_tail" != "$current" ]] || return 1
+  [[ "$want_tail" != "$want" ]] || return 1
+  [[ "$cur_tail" == "$want_tail" ]]
+}
+
 # ── unlink ───────────────────────────────────────────────────────────────────
 unlink_one() {
   local target="$1"
@@ -178,7 +226,13 @@ unlink_claude_dir_per_file() {
   while IFS= read -r -d '' link; do
     local target
     target="$(readlink "$link")"
-    if [[ "$target" == "$OVERLAY/.claude/"* || "$target" == "$OVERLAY/.claude" ]]; then
+    # Check both roots: links written before the stable root existed are
+    # $HOME-absolute, links written after go through $LINK_ROOT. Missing
+    # either one makes --unlink silently leave our own links behind.
+    local overlay_link
+    overlay_link="$(link_target "$OVERLAY")"
+    if [[ "$target" == "$OVERLAY/.claude/"* || "$target" == "$OVERLAY/.claude" ]] ||
+      [[ "$target" == "$overlay_link/.claude/"* || "$target" == "$overlay_link/.claude" ]]; then
       rm "$link"
       ok "removed symlink: $link"
     fi
@@ -242,6 +296,8 @@ fi
 
 link_one() {
   local src="$1" dst="$2"
+  local want
+  want="$(link_target "$src")"
   [[ -e "$src" ]] || {
     warn "skip: $src does not exist in overlay"
     return
@@ -249,8 +305,18 @@ link_one() {
   if [[ -L "$dst" ]]; then
     local cur
     cur="$(readlink "$dst")"
-    if [[ "$cur" == "$src" ]]; then
+    if [[ "$cur" == "$want" ]]; then
       ok "already linked: $dst"
+      return
+    fi
+    # Same overlay item reached through a different root or $HOME — created on
+    # another machine, or by an older version of this script. The link is ours
+    # either way, and leaving it is exactly what makes the overlay invisible
+    # inside a container.
+    if overlay_target_matches "$cur" "$want"; then
+      rm -f "$dst"
+      ln -s "$want" "$dst"
+      ok "repointed: $dst -> $want (was $cur)"
       return
     fi
     # A dangling link is broken by definition, so it cannot be a
@@ -260,8 +326,8 @@ link_one() {
     # the overlay silently invisible. Repoint it.
     if [[ ! -e "$dst" ]]; then
       rm -f "$dst"
-      ln -s "$src" "$dst"
-      ok "repaired dangling link: $dst -> $src (was $cur)"
+      ln -s "$want" "$dst"
+      ok "repaired dangling link: $dst -> $want (was $cur)"
       return
     fi
     warn "$dst already a symlink to $cur — leave it alone (remove manually if you want to relink)"
@@ -276,8 +342,8 @@ link_one() {
         ;;
     esac
   fi
-  ln -s "$src" "$dst"
-  ok "linked: $dst -> $src"
+  ln -s "$want" "$dst"
+  ok "linked: $dst -> $want"
 }
 
 # Write a 1-line .local.md import shim that pulls in the overlay's master
@@ -423,7 +489,7 @@ merge_settings_local_json() {
 # directory. A per-file tree also silently drops non-file payloads a
 # skill needs — scripts/, references/ — and makes each new overlay file
 # require a re-run to appear. Directory links avoid all three.
-DIR_LINK_SUBDIRS=(skills agents)
+DIR_LINK_SUBDIRS=(skills agents references)
 
 # Replace a legacy per-file symlink tree with a single directory link.
 #
@@ -475,6 +541,59 @@ migrate_legacy_per_file_dir() {
   rm -rf "$dst"
   ok "migrated legacy per-file tree: $dst (now a directory symlink)"
   return 0
+}
+
+# Repoint one managed destination when it is our own link reached through a
+# different root or a different $HOME. Anything else is a silent no-op: a
+# foreign link at a managed destination is left for the linking pass to report,
+# so this pre-pass never changes what the user is told.
+repoint_if_ours() {
+  local dst="$1" src="$2"
+  [[ -L "$dst" ]] || return 0
+  local cur want
+  cur="$(readlink "$dst")"
+  want="$(link_target "$src")"
+  [[ "$cur" != "$want" ]] || return 0
+  overlay_target_matches "$cur" "$want" || return 0
+  rm -f "$dst"
+  ln -s "$want" "$dst"
+  ok "repointed: $dst -> $want (was $cur)"
+}
+
+# Pre-pass: retarget already-existing overlay links onto $LINK_ROOT before any
+# linking runs.
+#
+# Enumeration is driven by the OVERLAY, not the project: we derive the set of
+# destinations this tool manages and inspect only those. A project-wide scan of
+# <project>/.claude would sweep in links we did not create — wanderer alone has
+# ~80 under .claude/worktrees/ — and warn about them on every run. Enumerating
+# managed destinations makes unrelated links invisible by construction.
+#
+# Both the directory form and the per-file form of each DIR_LINK_SUBDIRS entry
+# are enumerated. The per-file form is not redundant: when such a directory
+# holds our links *and* real project files, migrate_legacy_per_file_dir bails
+# and link_claude_dir_per_file warns and prunes the subtree from its walk, so
+# nothing else would ever reach those links.
+migrate_overlay_links() {
+  repoint_if_ours "$PROJECT_DIR/CLAUDE.md" "$OVERLAY/CLAUDE.md"
+  repoint_if_ours "$PROJECT_DIR/.claude" "$OVERLAY/.claude"
+
+  [[ -d "$OVERLAY/.claude" ]] || return 0
+
+  local sub
+  for sub in "${DIR_LINK_SUBDIRS[@]}"; do
+    [[ -d "$OVERLAY/.claude/$sub" ]] || continue
+    repoint_if_ours "$PROJECT_DIR/.claude/$sub" "$OVERLAY/.claude/$sub"
+  done
+
+  # settings.local.json is merged rather than linked, so it has no managed
+  # link destination.
+  local src rel
+  while IFS= read -r -d '' src; do
+    rel="${src#"$OVERLAY"/.claude/}"
+    [[ "$rel" != "settings.local.json" ]] || continue
+    repoint_if_ours "$PROJECT_DIR/.claude/$rel" "$OVERLAY/.claude/$rel"
+  done < <(find "$OVERLAY/.claude" -type f -print0)
 }
 
 link_claude_dir_per_file() {
@@ -534,11 +653,23 @@ link_claude_dir_per_file() {
 
     mkdir -p "$(dirname "$dst")"
 
+    local want
+    want="$(link_target "$src")"
+
     if [[ -L "$dst" ]]; then
       local cur
       cur="$(readlink "$dst")"
-      if [[ "$cur" == "$src" ]]; then
+      if [[ "$cur" == "$want" ]]; then
         ok "already linked: $dst"
+        continue
+      fi
+      # Ours, reached through a different root or $HOME. Repoint rather than
+      # warn — this is the path that carries per-file links (commands/, and
+      # agent files inside a directory we could not convert to a dir link).
+      if overlay_target_matches "$cur" "$want"; then
+        rm -f "$dst"
+        ln -s "$want" "$dst"
+        ok "repointed: $dst -> $want (was $cur)"
         continue
       fi
       warn "$dst is a symlink to $cur — leaving as-is."
@@ -553,10 +684,14 @@ link_claude_dir_per_file() {
       warn "$dst exists (untracked, not a symlink). Skipping — move or remove it manually if you want to link the overlay version."
       continue
     fi
-    ln -s "$src" "$dst"
+    ln -s "$want" "$dst"
     ok "linked: $dst -> $src"
   done 3< <(find "$overlay_dir" "${find_prune[@]}" -type f -print0)
 }
+
+# Retarget any pre-existing overlay links before linking, so the passes below
+# see them as already correct instead of as foreign links to warn about.
+migrate_overlay_links
 
 # CLAUDE.md handling: three paths.
 #   --local-md   → write CLAUDE.local.md import shim (project tracks its own CLAUDE.md)

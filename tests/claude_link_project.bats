@@ -43,9 +43,31 @@ make_project() {
   git -C "$PROJECT" init -q .
 }
 
+# Pin the stable link root at a path that does not exist, so links fall back to
+# $HOME-absolute targets and the assertions below stay deterministic whether or
+# not the machine running the suite has a real /opt/dotfiles.
 run_linker() {
-  DOTFILES="$HOME/.dotfiles" run "$LINKER" \
-    --claude-dir-per-file --no-claude-md "$PROJECT"
+  DOTFILES="$HOME/.dotfiles" DOTFILES_LINK_ROOT="$TEST_ROOT/absent-root" \
+    run "$LINKER" --claude-dir-per-file --no-claude-md "$PROJECT"
+}
+
+# Establish a stable root pointing at the test's dotfiles checkout, the way
+# ensure_stable_link_root does on a real machine. Never touches real /opt.
+setup_stable_root() {
+  mkdir -p "$HOME/.dotfiles"
+  STABLE_ROOT="$TEST_ROOT/opt-dotfiles"
+  ln -sfn "$HOME/.dotfiles" "$STABLE_ROOT"
+  export STABLE_ROOT
+}
+
+run_linker_stable() {
+  DOTFILES="$HOME/.dotfiles" DOTFILES_LINK_ROOT="$STABLE_ROOT" \
+    run "$LINKER" --claude-dir-per-file --no-claude-md "$PROJECT"
+}
+
+unlink_stable() {
+  DOTFILES="$HOME/.dotfiles" DOTFILES_LINK_ROOT="$STABLE_ROOT" \
+    run "$LINKER" --unlink "$PROJECT"
 }
 
 @test "skills and agents are linked as directories, not per-file" {
@@ -264,4 +286,176 @@ run_linker() {
   run_linker
 
   [ -z "$(find "$PROJECT/.claude" -xtype l)" ]
+}
+
+# ── stable link root ─────────────────────────────────────────────────────────
+#
+# Overlay links stored an absolute, $HOME-derived target, so they resolved only
+# on the machine that created them: a devcontainer bind-mounting the project at
+# a different $HOME saw every one of them dangle — skills, agents, references,
+# and CLAUDE.md alike. Links now go through a stable root that each environment
+# points at its own checkout.
+
+@test "links target the stable root when it resolves to the checkout" {
+  make_overlay
+  make_project
+  setup_stable_root
+
+  run_linker_stable
+  [ "$status" -eq 0 ]
+  assert_symlink_target "$PROJECT/.claude/skills" \
+    "$STABLE_ROOT/projects/demo/.claude/skills"
+  assert_symlink_target "$PROJECT/.claude/commands/baz.md" \
+    "$STABLE_ROOT/projects/demo/.claude/commands/baz.md"
+  # Still resolves — indirection, not breakage.
+  [ "$(cat "$PROJECT/.claude/skills/foo/SKILL.md")" = skill ]
+}
+
+@test "an absent stable root falls back to \$HOME-absolute targets with a warning" {
+  make_overlay
+  make_project
+
+  run_linker
+  [ "$status" -eq 0 ]
+  assert_symlink_target "$PROJECT/.claude/skills" "$OVERLAY/.claude/skills"
+  [[ "$output" == *"Stable link root"* ]]
+}
+
+@test "a stable root pointing at a different checkout is not used" {
+  # Guards the worktree hazard: a root aimed somewhere else must never become
+  # the link target, or every overlay link resolves into the wrong tree.
+  make_overlay
+  make_project
+  mkdir -p "$TEST_ROOT/other-dotfiles"
+  STABLE_ROOT="$TEST_ROOT/opt-dotfiles"
+  ln -sfn "$TEST_ROOT/other-dotfiles" "$STABLE_ROOT"
+  export STABLE_ROOT
+
+  run_linker_stable
+  [ "$status" -eq 0 ]
+  assert_symlink_target "$PROJECT/.claude/skills" "$OVERLAY/.claude/skills"
+}
+
+@test "a host-absolute directory link is repointed at the stable root" {
+  make_overlay
+  make_project
+  setup_stable_root
+  mkdir -p "$PROJECT/.claude"
+  ln -s /home/ghost/.dotfiles/projects/demo/.claude/skills \
+    "$PROJECT/.claude/skills"
+
+  run_linker_stable
+  [ "$status" -eq 0 ]
+  assert_symlink_target "$PROJECT/.claude/skills" \
+    "$STABLE_ROOT/projects/demo/.claude/skills"
+}
+
+@test "a host-absolute nested per-file link is repointed at the stable root" {
+  # commands/ stays per-file, so a link two levels deep is only reached by the
+  # per-file path — the site a directory-link-only fix would have missed.
+  make_overlay
+  make_project
+  setup_stable_root
+  mkdir -p "$PROJECT/.claude/commands"
+  ln -s /home/ghost/.dotfiles/projects/demo/.claude/commands/baz.md \
+    "$PROJECT/.claude/commands/baz.md"
+
+  run_linker_stable
+  [ "$status" -eq 0 ]
+  assert_symlink_target "$PROJECT/.claude/commands/baz.md" \
+    "$STABLE_ROOT/projects/demo/.claude/commands/baz.md"
+}
+
+@test "overlay links inside a mixed directory are repointed in place" {
+  # agents/ holding our links AND the project's own files can never become a
+  # directory link (migration bails on the first real file), and the per-file
+  # walk prunes the subtree — so nothing but the overlay-driven pre-pass ever
+  # reaches these links. Without it they stay host-absolute forever, silently.
+  make_overlay
+  make_project
+  setup_stable_root
+  mkdir -p "$PROJECT/.claude/agents"
+  ln -s /home/ghost/.dotfiles/projects/demo/.claude/agents/bar.md \
+    "$PROJECT/.claude/agents/bar.md"
+  echo "project agent" >"$PROJECT/.claude/agents/mine.md"
+
+  run_linker_stable
+  [ "$status" -eq 0 ]
+
+  [ ! -L "$PROJECT/.claude/agents" ]
+  assert_symlink_target "$PROJECT/.claude/agents/bar.md" \
+    "$STABLE_ROOT/projects/demo/.claude/agents/bar.md"
+  [ ! -L "$PROJECT/.claude/agents/mine.md" ]
+  [ "$(cat "$PROJECT/.claude/agents/mine.md")" = "project agent" ]
+}
+
+@test "a foreign link at a managed destination is left alone with a warning" {
+  make_overlay
+  make_project
+  setup_stable_root
+  mkdir -p "$TEST_ROOT/other-skills" "$PROJECT/.claude"
+  ln -s "$TEST_ROOT/other-skills" "$PROJECT/.claude/skills"
+
+  run_linker_stable
+  assert_symlink_target "$PROJECT/.claude/skills" "$TEST_ROOT/other-skills"
+  [[ "$output" == *"leave it alone"* ]]
+}
+
+@test "unrelated links elsewhere in the project are untouched and unmentioned" {
+  # Enumeration is overlay-driven, not a scan of <project>/.claude. wanderer
+  # alone carries ~80 dependency links under .claude/worktrees/; a project-wide
+  # scan would warn about every one of them on every run.
+  make_overlay
+  make_project
+  setup_stable_root
+  mkdir -p "$PROJECT/.claude/worktrees/wt" "$TEST_ROOT/dep"
+  ln -s "$TEST_ROOT/dep" "$PROJECT/.claude/worktrees/wt/dep"
+
+  run_linker_stable
+  [ "$status" -eq 0 ]
+  assert_symlink_target "$PROJECT/.claude/worktrees/wt/dep" "$TEST_ROOT/dep"
+  [[ "$output" != *"worktrees"* ]]
+}
+
+@test "--unlink removes links made through the stable root" {
+  make_overlay
+  make_project
+  setup_stable_root
+  run_linker_stable
+  [ "$status" -eq 0 ]
+
+  unlink_stable
+  [ "$status" -eq 0 ]
+  [ ! -e "$PROJECT/.claude/skills" ]
+  [ ! -e "$PROJECT/.claude/commands/baz.md" ]
+}
+
+@test "references is linked as a directory" {
+  # CLAUDE.md points at .claude/references; without a directory link the
+  # per-file walk skips the existing one with a warning on every run.
+  make_overlay
+  make_project
+  setup_stable_root
+  mkdir -p "$OVERLAY/.claude/references"
+  echo ref >"$OVERLAY/.claude/references/notes.md"
+
+  run_linker_stable
+  [ "$status" -eq 0 ]
+  assert_symlink_target "$PROJECT/.claude/references" \
+    "$STABLE_ROOT/projects/demo/.claude/references"
+}
+
+@test "re-running through the stable root is idempotent and quiet" {
+  make_overlay
+  make_project
+  setup_stable_root
+  run_linker_stable
+  run_linker_stable </dev/null
+
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"repointed"* ]]
+  [[ "$output" != *"leave it alone"* ]]
+  [[ "$output" != *"leaving as-is"* ]]
+  assert_symlink_target "$PROJECT/.claude/skills" \
+    "$STABLE_ROOT/projects/demo/.claude/skills"
 }

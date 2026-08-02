@@ -11,6 +11,11 @@ setup() {
   SUDO_LOG="$TEST_ROOT/sudo.log"
   export REFERENCE SKILL_DOC SEED_SCRIPT SUDO_LOG
 
+  # The seed publishes a stable root that overlay symlinks target, so they
+  # resolve under both the host's $HOME and the container's. In production that
+  # is /opt/dotfiles; pin it into the sandbox so the suite never touches /opt.
+  export DOTFILES_LINK_ROOT="$TEST_ROOT/opt/dotfiles"
+
   mkdir -p "$TEST_ROOT/host-seed/.claude" \
     "$TEST_ROOT/host-seed/.dotfiles/ai/marketplace" \
     "$HOME/.claude" "$HOME/.dotfiles"
@@ -70,6 +75,12 @@ fi
 exec /usr/bin/getent "$@"
 EOF
   chmod +x "$STUB_BIN/getent"
+
+  # A real container has the claude CLI installed before the marketplace step,
+  # and the seed now refuses to stamp the sentinel when it is missing. The
+  # helper sanitizes PATH to $STUB_BIN:/usr/bin:/bin, so without this stub every
+  # test would exercise the no-CLI failure path instead of the normal one.
+  stub_command claude 'exit 0'
 
   ZSH_STUB_PATH="$(command -v zsh || true)"
   if [ -z "$ZSH_STUB_PATH" ]; then
@@ -543,4 +554,205 @@ extract_seed_script() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"global git"* ]]
   [[ "$output" == *"trailers will not be stripped"* ]]
+}
+
+@test "the stable link root is published and points at the mirrored dotfiles" {
+  # Personal overlay symlinks in the workspace store an ABSOLUTE target. Written
+  # under the host's $HOME they dangle in the container, taking out .claude/skills,
+  # .claude/agents, .claude/references and CLAUDE.md at once. They now target this
+  # root, which each environment aims at its own checkout.
+  touch "$TEST_ROOT/host-seed/.dotfiles/ai/marketplace/marker"
+
+  run bash "$SEED_SCRIPT"
+
+  [ "$status" -eq 0 ]
+  [ -L "$DOTFILES_LINK_ROOT" ]
+  [ "$(readlink "$DOTFILES_LINK_ROOT")" = "$HOME/.dotfiles" ]
+  # Ordering guard: the root must be published after the mirror, or it names a
+  # directory that is still empty when the links are first followed.
+  [ -f "$DOTFILES_LINK_ROOT/ai/marketplace/marker" ]
+}
+
+@test "the stable link root is re-published on a warm start" {
+  # It lives in the container's EPHEMERAL layer and is wiped by every rebuild,
+  # while the sentinel persists in a named volume. Gating it would leave a
+  # rebuilt container reporting "already seeded" with every overlay link broken.
+  local seed_version
+  seed_version="$(sed -n 's/^SEED_VERSION=//p' "$SEED_SCRIPT")"
+  printf '%s\n' "$seed_version" >"$HOME/.claude/.seeded"
+
+  run bash "$SEED_SCRIPT"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"already seeded"* ]]
+  [ "$(readlink "$DOTFILES_LINK_ROOT")" = "$HOME/.dotfiles" ]
+}
+
+@test "overlay symlinks through the stable root are added to the container gitignore" {
+  # The matcher keys on the symlink's target TEXT, since the target is often
+  # unresolvable here. A '*/.dotfiles/projects/*' pattern requires a literal
+  # dot-prefixed .dotfiles and silently misses every /opt/dotfiles link — which
+  # puts personal overlay files, CLAUDE.md included, into container git status.
+  mkdir -p "$TEST_ROOT/workspace"
+  ln -s "$DOTFILES_LINK_ROOT/projects/demo/.claude/skills" \
+    "$TEST_ROOT/workspace/skills-link"
+  ln -s "$HOME/.dotfiles/projects/demo/CLAUDE.md" \
+    "$TEST_ROOT/workspace/CLAUDE.md"
+  sed -i "s|^WORKSPACE=.*|WORKSPACE=\"$TEST_ROOT/workspace\"|" "$SEED_SCRIPT"
+
+  run bash "$SEED_SCRIPT"
+  [ "$status" -eq 0 ]
+
+  grep -Fx 'skills-link' "$HOME/.gitignore"
+  grep -Fx 'CLAUDE.md' "$HOME/.gitignore"
+}
+
+@test "the seed installs neovim and links its dotfiles config" {
+  # The dotfiles set EDITOR=nvim but never install the binary — on a host it
+  # arrives via the apt/brew package lists, which no devcontainer image runs.
+  # An EDITOR naming a missing command breaks `git commit` with an error that
+  # blames git. Guarded on the binary, so this asserts the wiring, not a download.
+  mkdir -p "$TEST_ROOT/host-seed/.dotfiles/config/nvim" "$HOME/.local/bin"
+  touch "$TEST_ROOT/host-seed/.dotfiles/config/nvim/init.lua"
+  printf '#!/usr/bin/env bash\nexit 0\n' >"$HOME/.local/bin/nvim"
+  chmod +x "$HOME/.local/bin/nvim"
+
+  run bash "$SEED_SCRIPT"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"nvim already present"* ]]
+  [ "$(readlink "$HOME/.config/nvim")" = "$HOME/.dotfiles/config/nvim" ]
+}
+
+@test "a real ~/.config/nvim is left alone" {
+  mkdir -p "$TEST_ROOT/host-seed/.dotfiles/config/nvim" "$HOME/.config/nvim" \
+    "$HOME/.local/bin"
+  echo mine >"$HOME/.config/nvim/init.lua"
+  printf '#!/usr/bin/env bash\nexit 0\n' >"$HOME/.local/bin/nvim"
+  chmod +x "$HOME/.local/bin/nvim"
+
+  run bash "$SEED_SCRIPT"
+
+  [ "$status" -eq 0 ]
+  [ ! -L "$HOME/.config/nvim" ]
+  [ "$(cat "$HOME/.config/nvim/init.lua")" = mine ]
+}
+
+@test "the dotfiles shell loader is installed exactly once" {
+  # load-custom.zsh is the supported entry point. Globbing **/*.zsh instead also
+  # matches load-custom.zsh itself, so the whole tree loads twice — aliases
+  # redefined, PATH entries duplicated, and a stray `file=...` line per prompt.
+  local hook='[[ -r "$HOME/.dotfiles/core/shell/load-custom.zsh" ]] && source "$HOME/.dotfiles/core/shell/load-custom.zsh"'
+
+  run bash "$SEED_SCRIPT"
+  [ "$status" -eq 0 ]
+  run bash "$SEED_SCRIPT"
+  [ "$status" -eq 0 ]
+
+  [ "$(grep -Fxc "$hook" "$HOME/.zshrc")" = 1 ]
+  # It must precede the Vekil hook, which owns the endpoint/model variables and
+  # has to get the last word.
+  local load_at vekil_at
+  load_at="$(grep -Fxn "$hook" "$HOME/.zshrc" | cut -d: -f1)"
+  vekil_at="$(grep -n 'ai/vekil/env.zsh' "$HOME/.zshrc" | head -n1 | cut -d: -f1)"
+  [ "$load_at" -lt "$vekil_at" ]
+}
+
+@test "the shell loader is inserted above a Vekil hook left by an earlier seed" {
+  # The upgrade path, and the one the test above cannot see: it writes both hooks
+  # in a single fresh run, where appending happens to land in the right order. On
+  # a volume already seeded by an older version the Vekil hook is present and the
+  # loader is not, so a plain append would place the loader *after* it and
+  # silently invert the precedence — core/ would then win over ai/vekil/env.zsh
+  # for ANTHROPIC_MODEL, pointing the container at the wrong model with no error.
+  local hook='[[ -r "$HOME/.dotfiles/core/shell/load-custom.zsh" ]] && source "$HOME/.dotfiles/core/shell/load-custom.zsh"'
+  local vekil='[[ -r "$HOME/.dotfiles/ai/vekil/env.zsh" ]] && source "$HOME/.dotfiles/ai/vekil/env.zsh"'
+  printf '%s\n' "$vekil" >"$HOME/.zshrc"
+
+  run bash "$SEED_SCRIPT"
+  [ "$status" -eq 0 ]
+
+  [ "$(grep -Fxc "$hook" "$HOME/.zshrc")" = 1 ]
+  [ "$(grep -Fxc "$vekil" "$HOME/.zshrc")" = 1 ]
+  local load_at vekil_at
+  load_at="$(grep -Fxn "$hook" "$HOME/.zshrc" | cut -d: -f1)"
+  vekil_at="$(grep -Fxn "$vekil" "$HOME/.zshrc" | cut -d: -f1)"
+  [ "$load_at" -lt "$vekil_at" ]
+
+  # And the rewrite is idempotent — a second start must not stack another copy.
+  run bash "$SEED_SCRIPT"
+  [ "$status" -eq 0 ]
+  [ "$(grep -Fxc "$hook" "$HOME/.zshrc")" = 1 ]
+}
+
+@test "a loader left below the Vekil hook by an older seed is moved above it" {
+  # The population the previous fix does NOT reach: every container seeded
+  # before it has both hooks, in the wrong order. Keying the repair on "is our
+  # hook present?" declares that state fixed and latches the inverted
+  # precedence permanently — core/ beats ai/vekil/env.zsh on ANTHROPIC_MODEL
+  # and the container talks to the wrong model with nothing in the log.
+  local hook='[[ -r "$HOME/.dotfiles/core/shell/load-custom.zsh" ]] && source "$HOME/.dotfiles/core/shell/load-custom.zsh"'
+  local vekil='[[ -r "$HOME/.dotfiles/ai/vekil/env.zsh" ]] && source "$HOME/.dotfiles/ai/vekil/env.zsh"'
+  printf '# keep me\n%s\n%s\n' "$vekil" "$hook" >"$HOME/.zshrc"
+
+  run bash "$SEED_SCRIPT"
+  [ "$status" -eq 0 ]
+
+  # Reordered, not duplicated — the rewrite drops the old copy before re-emitting.
+  [ "$(grep -Fxc "$hook" "$HOME/.zshrc")" = 1 ]
+  [ "$(grep -Fxc "$vekil" "$HOME/.zshrc")" = 1 ]
+  local load_at vekil_at
+  load_at="$(grep -Fxn "$hook" "$HOME/.zshrc" | cut -d: -f1)"
+  vekil_at="$(grep -Fxn "$vekil" "$HOME/.zshrc" | cut -d: -f1)"
+  [ "$load_at" -lt "$vekil_at" ]
+  # Unrelated lines survive the rewrite.
+  grep -Fqx '# keep me' "$HOME/.zshrc"
+}
+
+@test "duplicate loaders left by repeated appends collapse to one" {
+  # A guard that only asks "where is the first copy?" reads a zshrc whose first
+  # hook sits correctly as already-fixed, and the extra copies below it source
+  # the whole tree a second time — duplicate aliases, duplicate PATH entries.
+  local hook='[[ -r "$HOME/.dotfiles/core/shell/load-custom.zsh" ]] && source "$HOME/.dotfiles/core/shell/load-custom.zsh"'
+  local vekil='[[ -r "$HOME/.dotfiles/ai/vekil/env.zsh" ]] && source "$HOME/.dotfiles/ai/vekil/env.zsh"'
+  printf '%s\n%s\n%s\n' "$hook" "$vekil" "$hook" >"$HOME/.zshrc"
+
+  run bash "$SEED_SCRIPT"
+  [ "$status" -eq 0 ]
+
+  [ "$(grep -Fxc "$hook" "$HOME/.zshrc")" = 1 ]
+  [ "$(grep -Fxc "$vekil" "$HOME/.zshrc")" = 1 ]
+  local load_at vekil_at
+  load_at="$(grep -Fxn "$hook" "$HOME/.zshrc" | cut -d: -f1)"
+  vekil_at="$(grep -Fxn "$vekil" "$HOME/.zshrc" | cut -d: -f1)"
+  [ "$load_at" -lt "$vekil_at" ]
+}
+
+@test "a missing claude CLI leaves the sentinel unstamped" {
+  # Skipping registration and stamping anyway is the worst outcome: the gated
+  # block never runs again, so the marketplaces stay unregistered for the life
+  # of the volume with no further complaint.
+  rm -f "$STUB_BIN/claude"
+
+  run bash "$SEED_SCRIPT"
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"NOT stamping sentinel"* ]]
+  [ ! -e "$HOME/.claude/.seeded" ]
+}
+
+@test "codex reinstall is guarded on the binary, not the config" {
+  # Guarding on ~/.codex/config.toml latches: the installer writes config even
+  # when it cannot produce a binary, so config-present/codex-missing skipped the
+  # install on every subsequent start.
+  mkdir -p "$HOME/.codex" "$TEST_ROOT/host-seed/.dotfiles/ai/codex"
+  printf 'x\n' >"$HOME/.codex/config.toml"
+  printf '#!/usr/bin/env bash\nmkdir -p "$HOME/.local/bin"\ntouch "$HOME/.local/bin/codex"\nchmod +x "$HOME/.local/bin/codex"\n' \
+    >"$TEST_ROOT/host-seed/.dotfiles/ai/codex/install.sh"
+  chmod +x "$TEST_ROOT/host-seed/.dotfiles/ai/codex/install.sh"
+
+  run bash "$SEED_SCRIPT"
+
+  [ "$status" -eq 0 ]
+  [ -x "$HOME/.local/bin/codex" ]
 }
