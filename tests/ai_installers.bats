@@ -317,7 +317,7 @@ SCRIPT
 @test "vekil environment provides direct client commands without proxy variables" {
   cat >"$STUB_BIN/claude" <<'SCRIPT'
 #!/bin/bash
-printf 'claude:%s|%s|%s|%s\n' "$*" "${ANTHROPIC_BASE_URL-unset}" "${ANTHROPIC_API_KEY-unset}" "${ANTHROPIC_MODEL-unset}"
+printf 'claude:%s|%s|%s|%s|%s\n' "$*" "${ANTHROPIC_BASE_URL-unset}" "${ANTHROPIC_API_KEY-unset}" "${ANTHROPIC_MODEL-unset}" "${CLAUDE_CODE_DISABLE_ADVISOR_TOOL-unset}"
 SCRIPT
   cat >"$STUB_BIN/codex" <<'SCRIPT'
 #!/bin/bash
@@ -329,21 +329,24 @@ SCRIPT
     source "$1"
     export ANTHROPIC_BASE_URL=proxy ANTHROPIC_API_KEY=dummy ANTHROPIC_MODEL=proxy-model
     export VEKIL_MANAGED_ANTHROPIC_BASE_URL=proxy VEKIL_MANAGED_ANTHROPIC_API_KEY=dummy VEKIL_MANAGED_ANTHROPIC_MODEL=proxy-model
+    export CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1 VEKIL_MANAGED_CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1
     export OPENAI_BASE_URL=proxy OPENAI_API_KEY=dummy VEKIL_MANAGED_OPENAI_BASE_URL=proxy VEKIL_MANAGED_OPENAI_API_KEY=dummy
     claude-direct --model direct-model
     codex-direct exec prompt
     unset VEKIL_MANAGED_ANTHROPIC_BASE_URL VEKIL_MANAGED_ANTHROPIC_API_KEY VEKIL_MANAGED_ANTHROPIC_MODEL
+    unset VEKIL_MANAGED_CLAUDE_CODE_DISABLE_ADVISOR_TOOL
     unset VEKIL_MANAGED_OPENAI_BASE_URL VEKIL_MANAGED_OPENAI_API_KEY
     export ANTHROPIC_BASE_URL=custom-anthropic ANTHROPIC_API_KEY=real-anthropic ANTHROPIC_MODEL=direct-model
+    export CLAUDE_CODE_DISABLE_ADVISOR_TOOL=0
     export OPENAI_BASE_URL=custom-openai OPENAI_API_KEY=real-openai
     claude-direct direct-prompt
     codex-direct direct-prompt
   ' _ "$REPO_ROOT/ai/vekil/env.zsh"
 
   [ "$status" -eq 0 ]
-  [[ "$output" == *"claude:--model direct-model|unset|unset|unset"* ]]
+  [[ "$output" == *"claude:--model direct-model|unset|unset|unset|unset"* ]]
   [[ "$output" == *"codex:exec prompt|unset|unset"* ]]
-  [[ "$output" == *"claude:direct-prompt|custom-anthropic|real-anthropic|direct-model"* ]]
+  [[ "$output" == *"claude:direct-prompt|custom-anthropic|real-anthropic|direct-model|0"* ]]
   [[ "$output" == *"codex:direct-prompt|custom-openai|real-openai"* ]]
 }
 
