@@ -65,8 +65,23 @@ These values vary per project and must be filled in correctly, otherwise mounts 
    ```bash
    # find the container the Dev Containers CLI / VS Code started FOR THIS
    # WORKSPACE — the label records the host folder, so filter on it rather than
-   # taking whatever devcontainer happens to be running first:
-   CID="$(docker ps -q --filter "label=devcontainer.local_folder=$PWD")"
+   # taking whatever devcontainer happens to be running first.
+   #
+   # `devcontainer.local_folder` records the path as the CLIENT saw it. Under
+   # Windows+WSL that is a UNC path (\\wsl.localhost\Ubuntu\home\you\proj), so
+   # matching a POSIX $PWD finds nothing on a container that is running fine.
+   # devcontainer.config_file and the compose working_dir label are always
+   # POSIX — try them before giving up.
+   devcontainer_cid() {
+     local d="${1:-$PWD}" cid
+     cid="$(docker ps -q --filter "label=devcontainer.local_folder=$d")"
+     [ -z "$cid" ] && cid="$(docker ps -q \
+       --filter "label=devcontainer.config_file=$d/.devcontainer/devcontainer.json")"
+     [ -z "$cid" ] && cid="$(docker ps -q \
+       --filter "label=com.docker.compose.project.working_dir=$d/.devcontainer")"
+     printf '%s' "$cid"
+   }
+   CID="$(devcontainer_cid)"
    [ -n "$CID" ] || { docker ps --filter label=devcontainer.local_folder \
      --format '{{.ID}}\t{{.Names}}\t{{.Label "devcontainer.local_folder"}}'
      echo "no devcontainer for $PWD — pick the matching ID above"; exit 1; }
@@ -527,27 +542,18 @@ elif [ -x "$DOTFILES_HOME/ai/codex/install.sh" ]; then
 fi
 
 # --- Versioned gate --------------------------------------------------------
-# Skip the gated copy/install steps only when the sentinel already records this
-# SEED_VERSION. An empty legacy sentinel (the pre-versioning contract) is NOT
-# treated as current: it falls through once so the versioned copy/install steps
-# run and the sentinel gets stamped, after which the gate is a plain version
-# match. A bump likewise re-runs the steps. The Vekil hook above runs
-# regardless. A read that FAILS (permission/IO) also falls through to the
-# reseed path so the later sentinel write surfaces the error.
-if [ -f "$SENTINEL" ] && SEEN_VERSION="$(cat "$SENTINEL")" 2>/dev/null \
-   && [ "$SEEN_VERSION" = "$SEED_VERSION" ]; then
-  echo "🌱 seed: already seeded (v$SEEN_VERSION) — skipping copies/installers"
-  exit 0
-fi
-if [ -f "$SENTINEL" ] && [ -z "${SEEN_VERSION:-}" ]; then
-  echo "🌱 seed: migrating legacy unstamped sentinel to v$SEED_VERSION"
-fi
-echo "🌱 seed: seeding to v$SEED_VERSION"
-
-echo "🌱 seed: creating container-local $CLAUDE_HOME"
-as_user mkdir -p "$CLAUDE_HOME"
-
-# 1. Copy authored config subset (skip runtime state + 1.6G plugins).
+# ---------------------------------------------------------------------------
+# AUTHORED ~/.claude COPY — ALWAYS-RUN, deliberately ABOVE the version gate.
+#
+# Clause 2 of the two-clause rule: the target persists (claude-local-home), but
+# the SOURCE IS THE HOST. SEED_VERSION lives in this script, so the gate cannot
+# observe a host-side edit — gating this copy pins the container to whatever the
+# host looked like at first seed, through any number of rebuilds, with the fresh
+# value sitting unread in the read-only mount one directory away. Unconditional
+# costs ~9ms for a ~12K tree, so there is nothing worth protecting. Do NOT
+# substitute rsync: absent from many base images, pointless at this size, and
+# `rm -rf` + `cp -a` already deletes host-removed files.
+#
 # PRUNE FIRST, UNCONDITIONALLY. The destination lives in the PERSISTED
 # claude-local-home volume, so anything not removed here survives every rebuild.
 # Removing inside an `if source exists` guard is the bug: when the host DELETES
@@ -556,13 +562,17 @@ as_user mkdir -p "$CLAUDE_HOME"
 # forever. Clearing first makes the seed converge on the host in both
 # directions. It also fixes nesting: `cp -a src/commands dst/commands` copies
 # *into* an existing destination, producing ~/.claude/commands/commands on the
-# second (version-gated) reseed.
+# second copy.
 #
 # Only these five seed-owned paths are pruned. ~/.claude/plugins (marketplace),
 # the sentinel, and all runtime state are deliberately untouched.
 # The prune runs even when $SEED_CLAUDE is absent entirely — removing the whole
 # mount is just the limiting case of deleting every file in it, and leaving the
 # stale copies behind there would be the same bug.
+# ---------------------------------------------------------------------------
+echo "🌱 seed: creating container-local $CLAUDE_HOME"
+as_user mkdir -p "$CLAUDE_HOME"
+
 for item in settings.json CLAUDE.md; do
   as_user rm -rf "$CLAUDE_HOME/$item"
   if [ -e "$SEED_CLAUDE/$item" ]; then
@@ -576,12 +586,63 @@ for dir in config commands skills; do
   fi
 done
 if [ -d "$SEED_CLAUDE" ]; then
-  echo "🌱 seed: copied authored ~/.claude subset"
+  echo "🌱 seed: refreshed authored ~/.claude subset from host"
 else
   echo "🌱 seed: no $SEED_CLAUDE mount — pruned seed-owned ~/.claude paths"
 fi
 
-# 2. Reinstall my@guarzo marketplace + plugins into container-local ~/.claude.
+# ---------------------------------------------------------------------------
+# VERSION GATE — installers only, from here down.
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# DRIFT CHECK — runs on BOTH the gated-skip and reseed paths.
+# Compares CONTENT against the host mount rather than trusting the sentinel, so
+# it reports staleness no matter the cause — including a seed still running the
+# old layout where this copy sat below the gate. This is the check that turns
+# "why is my model wrong" from a debugging session into a line in the log.
+# Advisory only: never exits nonzero, so a false positive cannot block startup.
+# ---------------------------------------------------------------------------
+config_drift_check() {
+  [ -d "$SEED_CLAUDE" ] || return 0
+  local drift=""
+  for item in settings.json CLAUDE.md; do
+    [ -e "$SEED_CLAUDE/$item" ] || continue
+    cmp -s "$SEED_CLAUDE/$item" "$CLAUDE_HOME/$item" || drift="$drift $item"
+  done
+  if [ -n "$drift" ]; then
+    echo "   FAIL  ~/.claude differs from host mount:$drift"
+    echo "         seed may predate the always-run config copy — re-copy"
+    echo "         local-seed.sh from the project-claude-setup skill"
+  else
+    echo "   PASS  authored ~/.claude matches host mount"
+  fi
+  return 0
+}
+
+# Skip the gated INSTALL steps only when the sentinel already records this
+# SEED_VERSION. An empty legacy sentinel (the pre-versioning contract) is NOT
+# treated as current: it falls through once so the versioned steps run and the
+# sentinel gets stamped, after which the gate is a plain version match. A bump
+# likewise re-runs them. The Vekil hook and the authored-config copy above run
+# regardless. A read that FAILS (permission/IO) also falls through to the
+# reseed path so the later sentinel write surfaces the error.
+#
+# NOTE what is NOT below this gate: the authored ~/.claude copy. Its target
+# persists, but its SOURCE IS THE HOST, and SEED_VERSION lives in this file —
+# so a host-side edit bumps no version and a gated copy would never see it.
+# See clause 2 of the two-clause rule (SKILL.md item 15).
+if [ -f "$SENTINEL" ] && SEEN_VERSION="$(cat "$SENTINEL")" 2>/dev/null \
+   && [ "$SEEN_VERSION" = "$SEED_VERSION" ]; then
+  echo "🌱 seed: already seeded (v$SEEN_VERSION) — skipping installers"
+  config_drift_check
+  exit 0
+fi
+if [ -f "$SENTINEL" ] && [ -z "${SEEN_VERSION:-}" ]; then
+  echo "🌱 seed: migrating legacy unstamped sentinel to v$SEED_VERSION"
+fi
+echo "🌱 seed: seeding to v$SEED_VERSION"
+
+# Reinstall my@guarzo marketplace + plugins into container-local ~/.claude.
 # This is correctly gated: it targets the PERSISTED claude-local-home named
 # volume, so once installed it survives rebuilds and only needs re-running on a
 # SEED_VERSION bump. (Dotfiles refresh, claude binary, and codex config moved to
@@ -614,7 +675,7 @@ else
 fi
 ```
 
-The sentinel stores a version number rather than being a bare touch-file. The always-run block (ownership, Vekil hook, PATH, default-shell, **plus the ephemeral-target installs**) executes before the gate, so those land on every container start — including after a rebuild that wiped `~/.local/bin`, `~/.codex`, and `/etc/passwd`. Only steps whose target is a **persisted named volume** (authored `~/.claude` config copy, marketplace plugins) belong in the gate, since the sentinel that guards them lives in that same volume. Getting this split wrong is the "claude is missing after rebuild" bug: gating an install whose target is ephemeral means the persisted sentinel says "done" while the binary is gone. A legacy bare sentinel (empty file) predates versioning and is *not* treated as current: it migrates once through the gated steps and is then stamped, after which the gate is a plain version match. That one extra reseed is idempotent — the copies overwrite with the same authored config and the installer is re-entrant.
+The sentinel stores a version number rather than being a bare touch-file. The always-run block (ownership, Vekil hook, PATH, default-shell, **plus the ephemeral-target installs**) executes before the gate, so those land on every container start — including after a rebuild that wiped `~/.local/bin`, `~/.codex`, and `/etc/passwd`. Only steps that satisfy **both** clauses of the gating rule (target persists in a named volume **and** source is this template) belong in the gate — in practice just the marketplace install. The authored `~/.claude` config copy targets a persisted volume but is sourced from the host mount, so it stays always-run: `SEED_VERSION` lives in this file and can never observe a host-side edit. Getting this split wrong is the "claude is missing after rebuild" bug: gating an install whose target is ephemeral means the persisted sentinel says "done" while the binary is gone. A legacy bare sentinel (empty file) predates versioning and is *not* treated as current: it migrates once through the gated steps and is then stamped, after which the gate is a plain version match. That one extra reseed is idempotent — the copies overwrite with the same authored config and the installer is re-entrant. On the skip path, `config_drift_check` compares the authored subset against the read-only mount and prints a FAIL line if they diverge — which is exactly what a seed still using the old below-the-gate layout will do.
 
 Execute it with `bash`; an executable bit is optional. Keep both files untracked. If the project does not already ignore them, add the actual override path plus the seed script path (`$OVERRIDE_COMPOSE` and `$SEED_SCRIPT` as resolved in Step 1) to `.git/info/exclude`. For the common `.devcontainer/` layout that is:
 
@@ -688,7 +749,8 @@ REMOTE_USER="<resolved in Step 2>"; REMOTE_HOME="<resolved in Step 2>"
    Then run the mechanical checks against the **VS Code-launched** container, not a bare service name — `docker compose exec {SERVICE}` can resolve to a container you started by hand, and its default user is often root. Re-confirm the container ID against the Step 2 identity first, then drive every check off those variables:
 
 ```bash
-CID="$(docker ps -q --filter "label=devcontainer.local_folder=$PWD")"   # this workspace's VS Code container
+CID="$(devcontainer_cid)"   # this workspace's VS Code container (helper from Step 2;
+                            # plain local_folder match fails on Windows+WSL UNC paths)
 [ -n "$CID" ] && [ "$(printf '%s\n' "$CID" | wc -l)" -eq 1 ] \
   || { echo "no single VS Code devcontainer for $PWD — rebuild first"; exit 1; }
 # REMOTE_USER / REMOTE_HOME come from Step 2. Do NOT re-derive them here from
