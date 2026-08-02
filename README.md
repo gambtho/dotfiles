@@ -5,7 +5,7 @@ Personal dotfiles for Linux, macOS, and WSL. Built around zsh + Prezto + Powerle
 ## Quick Start
 
 ```bash
-git clone https://github.com/tng/dotfiles.git ~/.dotfiles
+git clone https://github.com/gambtho/dotfiles.git ~/.dotfiles
 cd ~/.dotfiles
 bin/bootstrap
 ```
@@ -15,6 +15,19 @@ bin/bootstrap
 2. Set up `.gitconfig.local` from template (prompts for name and email)
 3. Prompt for profile selection (`personal` or `work`)
 4. Symlink all dotfiles and `config/` directories
+
+On a pristine macOS machine without Homebrew, `bin/bootstrap` needs to run the
+upstream Homebrew installer script. That remote installer execution is
+disabled by default; review the Homebrew install script source, then opt in
+explicitly:
+
+```bash
+ALLOW_REMOTE_INSTALLERS=1 bin/bootstrap
+```
+
+Without that consent, `bin/bootstrap` fails at the Homebrew install step with
+`Remote installer execution is disabled. Re-run with ALLOW_REMOTE_INSTALLERS=1
+after reviewing the installer source.`
 
 After bootstrap, run `bin/install` (or `bin/dot-update`) to install packages and language runtimes.
 
@@ -78,9 +91,13 @@ ssh -T git@github-work
 ## Routine Updates
 
 ```bash
-bin/dot-update    # update packages, language runtimes, neovim plugins
+bin/dot-update    # update packages and language runtimes; restore Neovim plugins to the tracked lockfile
 make check        # run syntax, lint, tests, and AI config validation
 ```
+
+`bin/dot-update` delegates to `bin/install`, which runs `nvim --headless "+Lazy!
+restore" +qa` — this restores plugins to match `config/nvim/lazy-lock.json`
+exactly. It never advances the lockfile itself.
 
 Run `make check` before pushing changes. Installer tests use temporary home
 directories and stubbed commands, so they verify behavior without changing the
@@ -112,6 +129,13 @@ ALLOW_REMOTE_INSTALLERS=1 bin/install
 Neovim config lives in `config/nvim/init.lua` (based on [kickstart.nvim](https://github.com/nvim-lua/kickstart.nvim)),
 symlinked to `~/.config/nvim`. Plugins are bootstrapped via lazy.nvim on first launch.
 
+Routine updates (`bin/install`, `bin/dot-update`) only restore plugins to the
+versions recorded in `config/nvim/lazy-lock.json`; they never advance that
+lockfile. To intentionally update Neovim plugins, open Neovim and run
+`:Lazy update` (or `:Lazy sync`) manually, review the resulting diff to
+`config/nvim/lazy-lock.json`, and commit it once you're satisfied with the
+change.
+
 ## Runtime Manager
 
 All language runtimes are managed by [mise](https://mise.jdx.dev/). Versions are defined
@@ -121,8 +145,11 @@ in `config/mise/config.toml` (linked to `~/.config/mise/config.toml`).
 
 Run `make pins` to list every managed version and Git ref. Run `make pins-check`
 to query upstreams without changing files. Run `make pins-update` to select mise
-upgrades interactively, refresh Git refs and the Kubernetes channel, run the full
-test suite, and display the resulting version diff for review.
+upgrades interactively, refresh Git refs, run the full test suite, and display
+the resulting version diff for review. The Kubernetes channel is
+operator-selected: `pins-update` reports Kubernetes channel drift against
+upstream but never rewrites `KUBERNETES_CHANNEL` itself — choose and edit a
+compatible minor in `config/versions.env` by hand.
 
 ## Key Symlinks
 

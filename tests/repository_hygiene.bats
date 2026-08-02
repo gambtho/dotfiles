@@ -27,6 +27,30 @@ setup() {
   [ "$status" -eq 1 ]
 }
 
+@test "README Quick Start uses the canonical repository owner" {
+  run rg -n 'git clone .*github\.com[:/]gambtho/dotfiles' "$REPO_ROOT/README.md"
+  [ "$status" -eq 0 ]
+}
+
+@test "README documents pristine macOS bootstrap consent" {
+  run rg -n 'ALLOW_REMOTE_INSTALLERS=1' "$REPO_ROOT/README.md"
+  [ "$status" -eq 0 ]
+  run rg -n 'review.*Homebrew|Homebrew.*script' "$REPO_ROOT/README.md"
+  [ "$status" -eq 0 ]
+}
+
+@test "README does not claim dot-update advances Neovim plugins" {
+  run rg -n 'dot-update.*(update|advance)s? [Nn]eovim [Pp]lugin|update packages, language runtimes, neovim plugins' "$REPO_ROOT/README.md"
+  [ "$status" -eq 1 ]
+  run rg -n 'restore.*lazy-lock\.json|lazy-lock\.json.*restore' "$REPO_ROOT/README.md"
+  [ "$status" -eq 0 ]
+}
+
+@test "README documents manual lazy.nvim lockfile advancement" {
+  run rg -n ':Lazy (sync|update)' "$REPO_ROOT/README.md"
+  [ "$status" -eq 0 ]
+}
+
 @test "dot-update delegates without manipulating mise versions" {
   run rg -n 'mise (upgrade|outdated|latest|use)' "$REPO_ROOT/bin/dot-update"
   [ "$status" -eq 1 ]

@@ -7,6 +7,14 @@ setup() {
   source "$REPO_ROOT/config/versions.env"
 }
 
+@test "README documents Kubernetes channel as operator-selected" {
+  run rg -n 'pins-update.*report.*[Kk]ubernetes|[Kk]ubernetes channel.*drift|reports.*[Kk]ubernetes.*drift' \
+    "$REPO_ROOT/README.md"
+  [ "$status" -eq 0 ]
+  run rg -n 'refresh.*Git refs and the Kubernetes channel|automatically.*[Kk]ubernetes channel' "$REPO_ROOT/README.md"
+  [ "$status" -eq 1 ]
+}
+
 @test "versions list shows mise and non-mise pins" {
   run bash "$REPO_ROOT/bin/versions" list
   [ "$status" -eq 0 ]
