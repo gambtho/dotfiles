@@ -69,6 +69,12 @@ next_backup_path() {
   printf '%s\n' "$candidate"
 }
 
+# Emit every dotfile that this repo manages, as NUL-delimited (source,
+# destination) pairs. Both fields are NUL-terminated rather than newline- or
+# space-separated so paths containing whitespace survive the round trip; read
+# them back with a paired `while IFS= read -r -d '' src && IFS= read -r -d '' dst`.
+# Covers *.symlink files (mapped to ~/.<name>, minus the suffix) and each
+# directory under config/ (mapped to ~/.config/<name>).
 managed_link_pairs() {
   local dotfiles_root="$1"
   local home_root="$2"
