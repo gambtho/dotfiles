@@ -367,7 +367,9 @@ Detect the old pattern before converting. Signals (any one → offer repair):
    while `commands/` or `skills/` are stale, and a source-exists guard hides the
    path deleted on the host but still present in the persisted volume:
    ```bash
-   docker exec -u "$REMOTE_USER" "$CID" sh -s <<'EOF'
+   docker exec -u "$REMOTE_USER" "$CID" sh -s "$REMOTE_HOME" <<'EOF'
+   # Same reason as the plugin scan below: -u switches the uid, not HOME.
+   HOME="$1"
    for i in settings.json CLAUDE.md config commands skills; do
      s=/host-seed/.claude/$i; d=$HOME/.claude/$i
      if   [ -e "$s" ] && [ ! -e "$d" ]; then echo "STALE $i (missing)"
@@ -427,13 +429,19 @@ Detect the old pattern before converting. Signals (any one → offer repair):
    # discards every hit and the check silently never fires.
    # URLs are stripped first: a marketplace source containing /home/<x>/.claude/
    # is not a filesystem path and would otherwise trip this on every container.
+   # HOME comes from the resolved REMOTE_HOME, not from the exec environment:
+   # `docker exec -u <user>` switches the uid but leaves HOME at the image's
+   # ENV value (usually /root), so the glob would scan a directory that does not
+   # exist, match nothing, and read as clean — and the exclusion would subtract
+   # the wrong home even if it did.
    docker exec -u "$REMOTE_USER" "$CID" sh -c '
+     HOME="$1"
      for f in "$HOME"/.claude/plugins/*.json; do
        [ -f "$f" ] || continue
        sed "s#[a-z][a-z0-9+.-]*://[^\"[:space:]]*##g" "$f" 2>/dev/null \
          | grep -oE "(/root|/home/[^/\"]*)/\.(claude|dotfiles)(/|\"|$)" \
          | grep -v "^$HOME/" | sed "s#^#$f: #"
-     done'
+     done' _ "$REMOTE_HOME"
    ```
    Distinguish from a genuinely absent marketplace before repairing — same error
    string, unrelated cause: a marketplace referenced by `settings.json`'s
