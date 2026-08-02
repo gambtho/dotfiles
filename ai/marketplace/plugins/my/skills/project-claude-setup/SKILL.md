@@ -349,8 +349,12 @@ Detect the old pattern before converting. Signals (any one → offer repair):
    boundary after it too, so a neighbour like `/home/vscode/.claude-backup`
    does not. Strip URLs before matching rather than after: a source URL that
    happens to contain `/home/<x>/.claude/` is not a filesystem path, and no
-   amount of anchoring distinguishes it once the scheme has scrolled past:
-   `cat ~/.claude/plugins/*.json 2>/dev/null | sed 's#[a-z][a-z0-9+.-]*://[^"[:space:]]*##g' | grep -hoE '(/root|/home/[^/"]+)/\.(claude|dotfiles)(/|"|$)' | grep -v "^$HOME/" | sort -u`
+   amount of anchoring distinguishes it once the scheme has scrolled past.
+   Subtract this home with a fixed-string prefix test, not `grep -v "^$HOME/"`:
+   interpolating the path into a regex turns every `.` in it into a wildcard, so
+   a `/home/user.name` host silently drops a foreign `/home/userXname/.claude/`.
+   `grep -F` cannot express the anchor, hence awk's `index() != 1`:
+   `cat ~/.claude/plugins/*.json 2>/dev/null | sed 's#[a-z][a-z0-9+.-]*://[^"[:space:]]*##g' | grep -hoE '(/root|/home/[^/"]+)/\.(claude|dotfiles)(/|"|$)' | awk -v h="$HOME/" 'index($0, h) != 1' | sort -u`
 4. foreign home symlinks the shim created:
    `ls -l /home/*/ 2>/dev/null | grep -- '-> /home/'` (inside a container only)
 5. **stale gated config copy** (the clause-2 bug in item 15) — an existing
@@ -440,7 +444,7 @@ Detect the old pattern before converting. Signals (any one → offer repair):
        [ -f "$f" ] || continue
        sed "s#[a-z][a-z0-9+.-]*://[^\"[:space:]]*##g" "$f" 2>/dev/null \
          | grep -oE "(/root|/home/[^/\"]*)/\.(claude|dotfiles)(/|\"|$)" \
-         | grep -v "^$HOME/" | sed "s#^#$f: #"
+         | awk -v h="$HOME/" "index(\$0, h) != 1" | sed "s#^#$f: #"
      done' _ "$REMOTE_HOME"
    ```
    Distinguish from a genuinely absent marketplace before repairing — same error
