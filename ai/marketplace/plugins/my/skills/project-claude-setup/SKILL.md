@@ -322,7 +322,7 @@ Detect the old pattern before converting. Signals (any one → offer repair):
 2. parallel dual-mount lines:
    `grep -rn '${HOME}:${HOME}' .devcontainer/ 2>/dev/null || grep -rnE '\$\{HOME\}/\.claude:\$\{HOME\}/\.claude' .devcontainer/`
 3. container-user paths written back into HOST config:
-   `grep -rl '/home/vscode\|/home/node' ~/.claude/plugins/*.json 2>/dev/null`
+   `grep -rl '/home/vscode\|/home/node\|/root' ~/.claude/plugins/*.json 2>/dev/null`
 4. foreign home symlinks the shim created:
    `ls -l /home/*/ 2>/dev/null | grep -- '-> /home/'` (inside a container only)
 5. **stale gated config copy** (the clause-2 bug in item 15) — an existing
@@ -378,6 +378,47 @@ Detect the old pattern before converting. Signals (any one → offer repair):
    Repair: replace the guard with the unconditional `rsync -a --delete` mirror
    from item 15 and restart. Tell the user their container-local `~/.dotfiles`
    edits will be reverted from now on.
+
+7. **stale home paths in the CONTAINER plugin registry** — presents to the user
+   as every plugin failing at once with `Failed to load marketplace "<name>":
+   cache-miss`, which reads like the marketplace was never downloaded. It was:
+   the payloads are present and correctly owned, but the registry records
+   ABSOLUTE paths, and they still name the home of a *previous* container user.
+   This is signal 3 in the opposite direction — 3 is container paths leaking
+   into host config, 7 is a dead container home stranded in container config —
+   so check both; neither grep finds the other.
+   Trigger: the container user changed (commonly root → `vscode`/`node`/
+   `developer`) while `~/.claude` lived in a **persisted named volume**. No
+   rebuild clears it, because the volume is precisely what rebuilds preserve.
+   The removed home-symlink shim used to mask this by making the old path
+   resolve, so it typically surfaces right after that shim is cleaned up.
+   ```bash
+   # inside the container: any output => registry points at a dead home
+   docker exec -u "$REMOTE_USER" "$CID" sh -c \
+     'grep -l "\(/root\|/home/[^/\"]*\)/\.\(claude\|dotfiles\)" ~/.claude/plugins/*.json 2>/dev/null \
+      | grep -v "$HOME"'
+   ```
+   Distinguish from a genuinely absent marketplace before repairing — same error
+   string, unrelated cause: a marketplace referenced by `settings.json`'s
+   `enabledPlugins` but missing from `known_marketplaces.json` was never
+   registered in this container at all. The authored `~/.claude` allowlist
+   deliberately excludes `plugins/` (hundreds of MB), so it cannot arrive by
+   copy; it has to be re-registered with `claude plugin marketplace add <repo>`.
+   The registry key comes from the marketplace manifest, not the repo path
+   (`techwolf-ai/ai-first-toolkit` → `techwolf-ai-first`), so an
+   already-registered guard must list the key explicitly or it re-adds forever.
+   Repair, in the seed and **above** the version gate — the source is container
+   runtime state, so `SEED_VERSION` cannot observe the poisoning and gating it
+   latches the break:
+   ```bash
+   sed -E "s#(/root|/home/[^\"/]+)(/\.(claude|dotfiles))#${HOME}\2#g"
+   ```
+   Anchor on the `/.claude|/.dotfiles` suffix, not a bare `/root` — the official
+   catalog contains `//rootly.com` and `/Rootly-AI-Labs` URLs that a loose
+   pattern silently corrupts. Also delete `~/.claude` symlinks left dangling at
+   the old home. Rewriting is non-destructive and preserves the cache; wiping
+   the volume also works but costs re-auth (`.credentials.json` lives there),
+   re-download, and container-local history.
 
 Anything scaffolded before the two-clause rule existed will trip signals 5 and 6,
 so run both during **any** repair pass, not just rw-mount conversions. Signal 6

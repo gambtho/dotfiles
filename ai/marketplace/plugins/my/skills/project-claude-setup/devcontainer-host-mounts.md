@@ -626,6 +626,55 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# PLUGIN REGISTRY HOME-PATH REPAIR — always-run, deliberately ABOVE the gate.
+# The registry records ABSOLUTE paths. When the container user changes (root →
+# vscode/node/developer), every recorded path still names the OLD home while the
+# payloads live under the new one, and Claude reports `cache-miss` for every
+# plugin — the marketplace looks un-downloaded when nothing is actually missing.
+# This lives in the persisted volume, so no rebuild clears it.
+#
+# NOT gated: the source is container runtime state, which SEED_VERSION cannot
+# observe, so gating latches the break the way any state-blind guard does.
+# The rewrite is a no-op once paths are correct, so running it always is free.
+#
+# The /.claude|/.dotfiles suffix is a load-bearing anchor: a bare /root also
+# matches the //rootly.com and /Rootly-AI-Labs URLs in the official catalog.
+# ---------------------------------------------------------------------------
+plugin_home_repair() {
+  local dir="$CLAUDE_HOME/plugins"
+  [ -d "$dir" ] || return 0
+  local repaired="" f tmp
+  for f in "$dir/known_marketplaces.json" "$dir/installed_plugins.json"; do
+    [ -f "$f" ] || continue
+    tmp="$f.seed.$$"
+    # No as_user on sed: the redirect is performed by THIS shell, so as_user
+    # would not affect the temp file's owner anyway. The `cat > "$f"` below
+    # writes through the existing inode, which is what preserves owner + mode.
+    sed -E "s#(/root|/home/[^\"/]+)(/\.(claude|dotfiles))#${SEED_HOME}\2#g" \
+      "$f" >"$tmp" 2>/dev/null || { rm -f "$tmp"; continue; }
+    if cmp -s "$f" "$tmp"; then
+      rm -f "$tmp"
+    else
+      cat "$tmp" >"$f" && repaired="$repaired $(basename "$f")"
+      rm -f "$tmp"
+    fi
+  done
+  # Same fallout: ~/.claude symlinks aimed at the dead home. Use `if`, not a
+  # trailing && chain — under `set -e` a loop body ending false kills the script,
+  # and on a fresh volume nothing matches, so that is the NORMAL path.
+  local link
+  for link in "$CLAUDE_HOME"/*; do
+    if [ -L "$link" ] && [ ! -e "$link" ]; then
+      rm -f "$link"
+      repaired="$repaired $(basename "$link")"
+    fi
+  done
+  [ -n "$repaired" ] && echo "🌱 seed: repaired stale home paths in plugin registry:$repaired"
+  return 0
+}
+plugin_home_repair
+
+# ---------------------------------------------------------------------------
 # DRIFT CHECK — runs on BOTH the gated-skip and reseed paths.
 # Compares CONTENT against the host mount rather than trusting the sentinel, so
 # it reports staleness no matter the cause — including a seed still running the
@@ -714,6 +763,33 @@ if [ -x "$DOTFILES_HOME/ai/marketplace/install.sh" ]; then
     MARKETPLACE_OK=0
     echo "⚠️  seed: marketplace install failed — NOT stamping sentinel; next launch retries"
   }
+fi
+
+# Register the GitHub-hosted marketplaces that settings.json's `enabledPlugins`
+# refers to. A marketplace that is enabled but never registered fails with the
+# SAME `cache-miss` string as a stale path (signal 7) for an unrelated reason,
+# so fix both or the errors only half clear. The authored ~/.claude allowlist
+# deliberately excludes plugins/ (hundreds of MB), so this cannot arrive by copy.
+#
+# Correctly gated: target persists in the volume, source is this template.
+# List "registry-name repo" pairs explicitly — the key comes from the
+# marketplace MANIFEST, not the repo path (techwolf-ai/ai-first-toolkit
+# registers as `techwolf-ai-first`), so it cannot be derived, and a guard that
+# guesses it never matches and re-adds on every single seed.
+if command -v claude >/dev/null 2>&1; then
+  while read -r mp_name mp_repo; do
+    [ -n "$mp_name" ] || continue
+    if grep -q "\"${mp_name}\"" "$CLAUDE_HOME/plugins/known_marketplaces.json" 2>/dev/null; then
+      continue
+    fi
+    echo "🌱 seed: registering marketplace $mp_name ($mp_repo)"
+    as_user claude plugin marketplace add "$mp_repo" >/dev/null 2>&1 || {
+      MARKETPLACE_OK=0
+      echo "⚠️  seed: could not register $mp_repo (needs network) — NOT stamping sentinel"
+    }
+  done <<'MARKETPLACES'
+claude-plugins-official anthropics/claude-plugins-official
+MARKETPLACES
 fi
 
 # 3. Stamp the sentinel with the current version, but only on a clean run.
