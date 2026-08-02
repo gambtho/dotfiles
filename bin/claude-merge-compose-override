@@ -300,6 +300,21 @@ fi
 SEED_PUBLISHED=0
 OVERRIDE_PUBLISHED=0
 ROLLBACK_INCOMPLETE=0
+# One of three stage-then-publish sites in this repo (see publish_atomically in
+# build_gallery.py and publish_settings in setup-wt-claude-profiles.sh). They
+# share an invariant rather than an implementation: replace a destination only
+# with a complete file, leave previous contents intact on failure, keep the
+# destination's mode rather than the stage's private default, and leave no stage
+# behind. Mirror changes to those rules across all three.
+#
+# Publication limit: POSIX offers no way to rename two files as one transaction,
+# so a reader sampling the directory between the two `mv` calls below can
+# observe a new seed alongside the old override. Both renames are individually
+# atomic and everything fallible (rendering, YAML validation, backups) happens
+# before the first one, so the window is two adjacent renames wide and any
+# failure inside it triggers rollback. That is the floor for two files without a
+# directory-level commit; callers that cannot tolerate it should stop the stack
+# before running this.
 rollback() {
   # Restores are best-effort: a failing restore must not abort rollback via
   # errexit, because that would skip the remaining file and leave the operator
@@ -328,7 +343,17 @@ rollback() {
   fi
 }
 
+# mktemp stages at 0600 and mv preserves the stage's mode, so carry the
+# destination's permissions over before publishing.
+preserve_mode() {
+  local destination="$1" stage="$2" mode
+  if mode="$(stat -c '%a' "$destination" 2>/dev/null)"; then
+    chmod "$mode" -- "$stage" || true
+  fi
+}
+
 if ((SEED_CHANGED)); then
+  preserve_mode "$SEED_FILE" "$SEED_STAGE"
   if ! mv -- "$SEED_STAGE" "$SEED_FILE"; then
     rollback
     ((ROLLBACK_INCOMPLETE)) && die "failed to publish seed; rollback incomplete (see warnings above)"
@@ -337,6 +362,7 @@ if ((SEED_CHANGED)); then
   SEED_PUBLISHED=1
 fi
 if ((OVERRIDE_CHANGED)); then
+  preserve_mode "$OVERRIDE" "$OVERRIDE_STAGE"
   if ! mv -- "$OVERRIDE_STAGE" "$OVERRIDE"; then
     rollback
     ((ROLLBACK_INCOMPLETE)) && die "failed to publish override; rollback incomplete (see warnings above)"

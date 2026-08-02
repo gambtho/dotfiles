@@ -165,7 +165,18 @@ def resolve_date(path, name, source):
 # ---------- derivative building ----------
 
 def publish_atomically(destination, writer, require_nonempty=True):
-    """Build beside destination and replace it only after a complete write."""
+    """Build beside destination and replace it only after a complete write.
+
+    One of three stage-then-publish helpers in this repo. They deliberately do
+    not share an implementation -- this one is Python and takes a writer
+    callback, setup-wt-claude-profiles.sh publishes a single pre-built file in
+    shell, and bin/claude-merge-compose-override publishes two files with a
+    shared rollback. What they do share is the invariant, and every one of them
+    has to honour it: the destination is only ever replaced by a complete file,
+    a failed write leaves the previous contents intact, no stage file survives,
+    and the published mode is the destination's rather than the stage's private
+    default. A change to any of these should be mirrored in the other two.
+    """
     destination = Path(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
     descriptor, stage_name = tempfile.mkstemp(

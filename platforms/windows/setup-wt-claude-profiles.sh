@@ -100,6 +100,12 @@ matches_any() {
 # (e.g. `if ! publish_settings ...`), which suspends errexit for the entire
 # function body, including nested calls. Every command below is therefore
 # checked explicitly rather than relying on `set -e`.
+# One of three stage-then-publish helpers in this repo (see publish_atomically
+# in build_gallery.py and the two-file publish in claude-merge-compose-override).
+# They share an invariant rather than an implementation: replace the destination
+# only with a complete file, leave the previous contents intact on failure, keep
+# the destination's mode rather than the stage's private default, and leave no
+# stage behind. Mirror changes to those rules across all three.
 publish_settings() {
   local merged="$1"
   local destination="$2"

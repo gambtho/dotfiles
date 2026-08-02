@@ -151,12 +151,13 @@ SCRIPT
 
 @test "versions update leaves the Kubernetes channel operator-owned" {
   local fixture="$TEST_ROOT/fixture"
-  mkdir -p "$fixture/bin" "$fixture/config/mise"
-  cp "$REPO_ROOT/bin/versions" "$fixture/bin/versions"
-  cp "$REPO_ROOT/bin/common.sh" "$fixture/bin/common.sh"
-  cp "$REPO_ROOT/bin/log-helper" "$fixture/bin/log-helper"
-  cp "$REPO_ROOT/config/versions.env" "$fixture/config/versions.env"
-  cp "$REPO_ROOT/config/mise/config.toml" "$fixture/config/mise/config.toml"
+  # Copy whole directories rather than a hand-maintained file list: bin/versions
+  # sources siblings, and naming them individually makes an unrelated new
+  # dependency fail this test for a reason that has nothing to do with the
+  # Kubernetes channel.
+  mkdir -p "$fixture"
+  cp -R "$REPO_ROOT/bin" "$fixture/bin"
+  cp -R "$REPO_ROOT/config" "$fixture/config"
 
   stub_command mise 'exit 0'
   stub_command make 'exit 0'

@@ -243,3 +243,19 @@ EOF
   [[ "$output" == *"could not be restored"* ]]
   [[ "$output" != *"restored previous outputs"* ]]
 }
+
+@test "publication preserves existing file modes" {
+  run_helper >/dev/null 2>&1 || true
+  chmod 0644 "$OVERRIDE" "$SEED_FILE"
+  printf 'drifted\n' >>"$SEED_FILE"
+  printf 'services:\n  app:\n    image: drifted\n' >"$OVERRIDE"
+
+  run_helper
+
+  [ "$status" -eq 0 ]
+  # mktemp stages at 0600 and mv preserves the stage mode, so publishing must
+  # restore the destination's permissions. The seed is executed inside the
+  # container and the override is read by Compose.
+  [ "$(stat -c '%a' "$OVERRIDE")" = "644" ]
+  [ "$(stat -c '%a' "$SEED_FILE")" = "644" ]
+}
