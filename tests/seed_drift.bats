@@ -725,3 +725,26 @@ sd_drift() { run "$SEED_DRIFT" --template "$FIXTURE_TEMPLATE" --doc "$FIXTURE_DO
   [[ "$output" == *"MISSING  global gitignore     anchor absent from seed"* ]]
   [[ "$output" == *"1 blocks drifted (1 missing)"* ]]
 }
+
+@test "a nonexistent argument is skipped and named, exit 0" {
+  setup_drift_fixtures
+
+  sd_drift "$SEED_DRIFT_ROOT/absent-project"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"absent-project - not present on this machine - skipped"* ]]
+  [[ "$output" == *"0 checked, 1 skipped, 0 blocks drifted"* ]]
+}
+
+@test "an argument is accepted as a project directory or as a direct seed path" {
+  setup_drift_fixtures
+  seed_from_template clean
+
+  sd_drift "$SEED_DRIFT_ROOT/clean"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"1 checked, 0 skipped"* ]]
+
+  sd_drift "$(seed_path clean)"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"1 checked, 0 skipped"* ]]
+}

@@ -596,13 +596,37 @@ sd_visit_dir() {
 }
 
 sd_visit_candidates() {
-  local root="${SEED_DRIFT_ROOT:-$HOME/workspace}" cand
-  shopt -s nullglob
-  for cand in "$root"/*/; do
-    cand="${cand%/}"
-    # A directory without .devcontainer/ is not a candidate: silent, not skipped.
-    [ -d "$cand/.devcontainer" ] || continue
-    sd_visit_dir "$cand"
+  local root="${SEED_DRIFT_ROOT:-$HOME/workspace}" cand rc=0
+  # The scalar, not `${#SD_CANDIDATES[@]}`: expanding an empty array under
+  # `set -u` errors on bash 3.2, still the system bash on macOS
+  # (bin/common.sh:392). The `"${SD_CANDIDATES[@]}"` below is reached only
+  # when the count is non-zero, so it is safe.
+  if [ "$SD_CANDIDATE_COUNT" -eq 0 ]; then
+    shopt -s nullglob
+    for cand in "$root"/*/; do
+      cand="${cand%/}"
+      # A directory without .devcontainer/ is not a candidate: silent, not skipped.
+      [ -d "$cand/.devcontainer" ] || continue
+      sd_visit_dir "$cand"
+    done
+    return 0
+  fi
+  for cand in "${SD_CANDIDATES[@]}"; do
+    if [ -d "$cand" ]; then
+      [ -d "$cand/.devcontainer" ] || continue
+      sd_visit_dir "$cand"
+    elif [ -e "$cand" ]; then
+      # An existing file is a direct local-seed.sh path.
+      SD_CHECKED=$((SD_CHECKED + 1))
+      rc=0
+      sd_check_seed "$cand" || rc=$?
+      sd_worst "$rc"
+    else
+      # Not checked out here. A skip, so the same project list works on every
+      # machine; it names the path and is counted, so a typo stays visible.
+      printf '%s - not present on this machine - skipped\n' "$cand"
+      SD_SKIPPED=$((SD_SKIPPED + 1))
+    fi
   done
 }
 
