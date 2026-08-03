@@ -294,3 +294,42 @@ make_scan() {
   run bash -n "$FIX/split.sh"
   [ "$status" -eq 0 ]
 }
+
+@test "sd_window grows forward past a blank line between an if condition and its body" {
+  printf 'if [ -n "$ANCHOR" ]; then\n\n  echo hi\nfi\n' >"$FIX/f.sh"
+  make_scan "$FIX/f.sh"
+  sd_source sd_window "$FIX/f.sh" "$FIX/f.sh.scan" 1
+  [ "$status" -eq 0 ]
+  [ "$output" = "1 4" ]
+}
+
+@test "sd_window grows backward when the anchor is in the body and the header is above" {
+  printf 'if [ -n "$x" ]; then\n\n  echo ANCHOR\nfi\n' >"$FIX/f.sh"
+  make_scan "$FIX/f.sh"
+  sd_source sd_window "$FIX/f.sh" "$FIX/f.sh.scan" 2
+  [ "$status" -eq 0 ]
+  [ "$output" = "1 4" ]
+}
+
+@test "sd_window returns a single paragraph unchanged when it already parses" {
+  printf 'echo one\n\necho ANCHOR\n\necho three\n' >"$FIX/f.sh"
+  make_scan "$FIX/f.sh"
+  sd_source sd_window "$FIX/f.sh" "$FIX/f.sh.scan" 2
+  [ "$status" -eq 0 ]
+  [ "$output" = "3 3" ]
+}
+
+@test "sd_window exits 3 when neither direction ever parses" {
+  printf 'echo ok\n\nfi\n' >"$FIX/f.sh"
+  make_scan "$FIX/f.sh"
+  sd_source sd_window "$FIX/f.sh" "$FIX/f.sh.scan" 2
+  [ "$status" -eq 3 ]
+}
+
+@test "sd_window reads the raw fragment from the file, not the comment-stripped scan" {
+  printf 'if [ -n "$x" ]; then # start\n\n  echo hi\nfi\n' >"$FIX/f.sh"
+  make_scan "$FIX/f.sh"
+  sd_source sd_window "$FIX/f.sh" "$FIX/f.sh.scan" 1
+  [ "$status" -eq 0 ]
+  [ "$output" = "1 4" ]
+}

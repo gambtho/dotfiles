@@ -201,6 +201,37 @@ sd_para_range() {
   awk -F'\t' -v p="$2" '$1 == p { if (!s) s = $2; e = $2 } END { if (s) print s, e }' "$1"
 }
 
+# Grows the window until the extracted fragment parses: forward first, then
+# backward once the end of file is reached. The fragment is read straight from
+# FILE by line number, because the scan text is comment-stripped and would not
+# parse the same way.
+sd_window() {
+  local file="$1" scan="$2" para="$3"
+  local first last lo hi start end range
+
+  first=$(awk -F'\t' 'NR == 1 { print $1; exit }' "$scan")
+  last=$(awk -F'\t' 'END { print $1 }' "$scan")
+  range=$(sd_para_range "$scan" "$para")
+  [ -n "$range" ] || return 3
+
+  lo="$para" hi="$para"
+  start="${range% *}" end="${range#* }"
+  while ! sed -n "${start},${end}p" "$file" | bash -n 2>/dev/null; do
+    if [ "$hi" -lt "$last" ]; then
+      hi=$((hi + 1))
+      range=$(sd_para_range "$scan" "$hi")
+      end="${range#* }"
+    elif [ "$lo" -gt "$first" ]; then
+      lo=$((lo - 1))
+      range=$(sd_para_range "$scan" "$lo")
+      start="${range% *}"
+    else
+      return 3
+    fi
+  done
+  printf '%s %s\n' "$start" "$end"
+}
+
 sd_main() {
   local template="$SD_TEMPLATE_DEFAULT" doc="$SD_DOC_DEFAULT"
   SD_CANDIDATES=()
