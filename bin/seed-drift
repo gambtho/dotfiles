@@ -167,6 +167,13 @@ function scan(line,   n, i, c, j, d, w) {
   emit("C", scan($0))
   if (nq > 0) popq()
 }
+END {
+  if (failed) exit 3
+  if (hd) {
+    printf("seed-drift: unterminated heredoc %s\n", hdelim) >"/dev/stderr"
+    exit 3
+  }
+}
 SDAWK
 )
 

@@ -241,3 +241,13 @@ FIX
   [ "${lines[4]}" = "$(printf '1\t5\tC\t\tB')" ]
   [ "${lines[5]}" = "$(printf '1\t6\tC\techo tail')" ]
 }
+
+@test "sd_scan fails closed on an unterminated heredoc" {
+  local f="$TEST_ROOT/unterminated.sh"
+  printf "cat <<'E'\nbody\n" >"$f"
+
+  sd_source sd_scan "$f"
+
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"unterminated heredoc E"* ]]
+}
