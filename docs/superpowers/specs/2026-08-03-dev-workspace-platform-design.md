@@ -14,8 +14,22 @@ against the machine.
 | Repos under `~/src` | `~/workspace`, 37 repos, 7 with `.devcontainer/` | filesystem |
 | Shell is bash | `/usr/bin/zsh` (Prezto + p10k); scripts remain bash | `$SHELL` |
 | Container runtime unresolved | Native Docker Engine - Community, `unix:///var/run/docker.sock` | `docker context ls` |
-| devcontainer CLI presence unknown | Installed at `~/.local/share/mise/shims/devcontainer` | `command -v` |
+| devcontainer CLI presence unknown | Shim present but **non-functional**; see below | `command -v`, execution |
 | systemd enabled | Confirmed, and `Linger=yes` | `loginctl show-user` |
+
+The devcontainer CLI row is the one that matters most, because it is a trap rather than a fact:
+
+```
+$ command -v devcontainer   → /home/tng/.local/share/mise/shims/devcontainer   (exit 0)
+$ devcontainer --version    → mise ERROR No version is set for shim: devcontainer
+$ mise exec node@25.9.0 -- devcontainer --version → 0.86.1
+```
+
+The CLI was installed under `node@25.9.0`; the active global is `node@26.5.0`, which has no such
+package, so the shim resolves, is executable, and fails on every invocation. **Presence detection by
+`command -v` is therefore worthless here** — it returns success for a binary that cannot run. Every
+detection in this design validates by *executing* the tool, never by finding it, and this is the case
+that proves why. See ADR-5 for how the CLI is pinned and invoked.
 
 Additional confirmed facts that shape the design:
 
@@ -58,10 +72,11 @@ structural.
 
 Seven libraries under `tools/dev/lib/`, each with a single responsibility:
 
-**Resolver** — turns a name or a `cwd` into `(slug, worktree_path)`. `slug` identifies the primary
-repository and governs *configuration*; `worktree_path` is the actual working tree and governs
-*sessions*. The slug function moves into `bin/common.sh` and `claude-link-project` is changed to
-call it, so the two tools cannot develop divergent notions of identity.
+**Resolver** — turns a name or a `cwd` into `(slug, worktree_path, workspace_id, session_name)`.
+`slug` identifies the primary repository and governs *configuration*; `worktree_path` is the actual
+working tree; `workspace_id` is the globally unique state key and `session_name` the display name
+(ADR-7 defines both). The slug function moves into `bin/common.sh` and `claude-link-project` is
+changed to call it, so the two tools cannot develop divergent notions of identity.
 
 **Config** — emits exactly one artifact: a normalized JSON document merging, in order,
 `tools/dev/default-workspace.yaml`, `$DEV_OVERLAY_ROOT/<slug>/workspace.yaml`, and
@@ -70,8 +85,10 @@ component reads YAML. `dev config <name>` prints it, which is both the answer to
 actually getting" and the seam that makes the merge unit-testable without tmux or Docker.
 
 **Runtime** — detection, never hardcoding: docker socket reachability, compose vs single-container,
-and the devcontainer CLI resolved to an **absolute path** and recorded. The absolute path matters
-because the CLI is a mise shim and mise shims are not on a systemd unit's `PATH`.
+and the devcontainer CLI resolved to an **invocation** and recorded. Not a path: on this machine the
+CLI's shim resolves and then fails (§0), so Runtime records an absolute `mise` binary plus a pinned
+tool spec, and validates it by executing `devcontainer --version` and requiring exit 0 with a
+parseable version. A tool that is found but cannot run is recorded as absent (ADR-5).
 
 **Container** — owns all devcontainer concerns: `devcontainer up`, parsing the JSON tail line into
 `containerId` / `remoteUser` / `remoteWorkspaceFolder`, liveness checks, and constructing an *exec
@@ -87,30 +104,39 @@ leaking upward: every layer above Container is written once and works for both r
 output, which is what makes acceptance scenario 5 true by construction.
 
 **State** and **Events** — own `~/.local/state/dev/`. One record per working tree under
-`workspaces/`, one append-only `events/events.jsonl`, and `locks/`. Every record mutation holds a
-`flock` on that workspace's lock file.
+`workspaces/<workspace_id>.json`, one append-only `events/events.jsonl`, and `locks/`. Three locks
+with distinct jobs, detailed in ADR-1 and §4.4: a per-workspace **state lock** held only across a
+record read-modify-write, a per-workspace **operation lock** held across repair, and a global
+**events lock** serializing rotation against appends.
 
 **Reconcile** — the only component permitted to read both State and Backend and to notice that they
-disagree.
+disagree. It is read-only with respect to the workspace: it writes records and events, and never
+starts, creates, or respawns anything (ADR-1). Repair belongs to `open`'s ensure phase alone.
 
-**`tools/dev/dev-event`** — a deliberately tiny emitter invoked by tmux hooks. It takes no lock (see
-§4.4) and does the minimum work required to append one line.
+**`tools/dev/dev-event`** — a deliberately tiny emitter invoked by tmux hooks. It appends one line
+under a *shared* lock on the global event file and touches no record (see §4.4). It never writes to
+`workspaces/`; that is reconcile's job alone.
 
 ### 1.2 Data flow: `dev slabledger`
 
-1. **Resolve** → `(slabledger, ~/workspace/slabledger)`.
+1. **Resolve** → slug `slabledger`, tree `~/workspace/slabledger`, `workspace_id` from the path
+   digest, session name `slabledger`.
 2. **Config** → merged JSON, plus a `config_digest` (sha256 of the normalized document).
-3. **Reconcile** → take the lock; ask Backend what is actually live; write any deltas to the record
-   and the event log **before anything acts**. Every command therefore begins from observed truth
-   rather than from a record that may be stale.
-4. **Runtime** → detect compose.
-5. **Container** → `devcontainer up`, which is idempotent and returns the existing container when
+3. **Reconcile** (read-only) → take the state lock; ask Backend what is actually live; fold any
+   hook-appended events; write deltas to the record and the event log **before anything acts**;
+   release the lock. Every command begins from observed truth rather than from a stale record, and
+   this step is identical for `open`, `list`, and `status` precisely because it changes nothing.
+4. **Ensure** (repair; `open` only) → take the operation lock `flock -n`, or report that another
+   `dev` holds it and exit.
+5. **Runtime** → detect compose; resolve the devcontainer CLI by *executing* it (ADR-5).
+6. **Container** → `devcontainer up`, which is idempotent and returns the existing container when
    one is healthy. This is why acceptance scenario 2 is safe: warm container plus live session means
    `open` degenerates to `attach` and touches nothing.
-6. **Backend** → find session `slabledger` and attach, or create it and apply the layout, executing
-   each window's command through the builder Container supplied.
-7. **Events** → `workspace.opened` or `workspace.attached`.
-8. **`bin/dev`** execs the attach and gets out of the way.
+7. **Backend** → find session `slabledger`, verify its recorded worktree matches the resolved path
+   (ADR-7), and attach; or create it and apply the layout, executing each window's command through
+   the builder Container supplied.
+8. **Events** → `workspace.opened` or `workspace.attached`. Release the operation lock.
+9. **`bin/dev`** execs the attach and gets out of the way.
 
 The load-bearing invariant: **`open` never destroys.** It is `reconcile → ensure → attach`, where
 `ensure` is a set of idempotent existence checks. There is no code path from `open` to
@@ -173,9 +199,15 @@ suspend or gone. **No design decision in this platform can change that**; it is 
 virtualization layer. The platform's obligation is to detect the discontinuity and report it
 truthfully, which ADR-1 case B specifies via boot-id comparison.
 
-**Scenario 5 — future dashboard, no tmux parsing.** A consumer reads `workspaces/*.json` for current
-state and tails `events/events.jsonl` for transitions. Both are stable, versioned, documented
-formats. The dashboard never learns that tmux exists.
+**Scenario 5 — future dashboard, no tmux parsing.** A consumer calls `dev list --json` for current
+state and tails `events/events.jsonl` for transitions. Both are stable, versioned, backend-neutral
+formats, and the dashboard never learns that tmux exists.
+
+Specifically **not** `workspaces/*.json`. Records are last-observed, not current (ADR-2), so a
+dashboard reading them directly would show `running` for sessions killed an hour ago — and it would
+look correct in testing, because in testing the record was just written. `dev list --json` reconciles
+before printing, which is the whole difference. The record format is documented in §4.3 for
+comprehension, not as a consumer interface.
 
 ---
 
@@ -207,12 +239,58 @@ would change every ordinary pane in daily tmux use to stop closing on shell exit
 correctness dependency, not just a courtesy: `pane-died` fires only when `remain-on-exit` keeps the
 pane, so scenario 3's event fidelity is downstream of getting this scoping right.
 
+**Two phases, and the boundary between them is the most important line in this ADR.**
+
+*Reconcile* is **read-only with respect to the workspace.** It observes the backend, folds any events
+the hooks appended, updates records, and emits discovery events. It never starts a container, never
+respawns a pane, never creates a window. It mutates *state*; it does not mutate the *workspace*. Every
+command runs it — `dev list` and `dev status` included — which is exactly why it must be this narrow.
+A `dev list` that starts seven containers because it noticed they were down is not a listing, and the
+one command a user reaches for when they suspect something is wrong must be the one command that
+cannot make it worse.
+
+*Ensure* is the repair phase, and **only `open` runs it.** Starting containers, creating windows, and
+respawning dead panes all live here. It is still non-destructive — that invariant is unchanged — but
+it acts, and acting is a privilege the read-only commands do not get.
+
+Everything below is written as "reconcile observes X, ensure repairs it," and where an earlier draft
+said repair happened on "the next `dev` command," it now happens on the next `dev open`.
+
+**Locking, which the phase split makes tractable.** Two locks per workspace, with different lifetimes:
+
+*The state lock* (`locks/<workspace_id>.lock`) is held only across a read-modify-write of the record —
+microseconds, no blocking subprocess inside it, ever. This is what ADR-3's boundary requires: holding
+a lock across `devcontainer up` would mean holding it for minutes across a process that can hang, in
+a language with no way to release it on an unexpected signal path.
+
+*The operation lock* (`locks/<workspace_id>.op`) is taken `flock -n` for the whole of ensure. It is
+not a state lock and is never held while writing records; it exists solely so two `dev` invocations
+cannot repair the same workspace concurrently — two simultaneous `devcontainer up` calls on one
+compose project is a genuine race with a genuinely confusing outcome. Failure to acquire is not an
+error condition to retry: it means another `dev` is already working on this workspace, and the right
+response is to say so and exit non-zero.
+
+Releasing the state lock before ensure does mean the observation ensure acts on may be a few hundred
+milliseconds stale. That is acceptable because every operation ensure performs is idempotent and
+re-checks its own precondition immediately before acting — `devcontainer up` on a running container
+returns it, `respawn_pane` on a live pane is a no-op. The operation lock covers the case idempotency
+does not.
+
 **Reconciliation rules, by drift case:**
 
-*Case A — session killed by hand.* `session-closed` fires; the emitter writes `workspace.stopped`
-with an accurate timestamp and the record transitions to `stopped`. If the hook was missed, the next
-command's reconcile finds record `running` / backend absent and emits `workspace.vanished` with
-`discovered_at`.
+*Case A — session killed by hand.* `session-closed` fires and the hook appends `workspace.stopped`
+with an accurate timestamp. **The hook does not touch the record** — it cannot, because it holds no
+state lock (§4.4 and §1.1), and a lock-free read-modify-write of a JSON file is precisely the corruption this
+design is otherwise careful to avoid. The record transitions on the next reconcile, which folds that
+event and observes the session gone. If the hook was missed entirely, the same reconcile finds record
+`running` / backend absent and emits `workspace.vanished` with `discovered_at` instead.
+
+This is the general rule, and it is worth stating plainly because an earlier draft got it wrong:
+**hooks append events; only reconcile writes records.** Records are therefore *eventual* projections
+of the event stream — they lag it by exactly one `dev` invocation. ADR-2's claim that records are
+"authoritative for what happened" is a claim about the pair (record + event log) reaching the same
+answer, not about the record being instantaneously current. The fold-equivalence test in §4.4 tests
+precisely this: replay the log, fold it, and the result must equal what reconcile computed.
 
 *Case B — WSL restarts.* The tmux server is gone and no hooks fired. Records claim `running`. Each
 record stores the host **boot id** (`/proc/sys/kernel/random/boot_id`) captured at open. Reconcile
@@ -221,9 +299,15 @@ with `reason: host_restart` rather than the ambiguous `vanished`. This distincti
 future consumer tell "the machine rebooted" from "the user killed it" without guessing, and it is
 what makes autostart (ADR-5) able to act only on the former.
 
-*Case C — container dies or is rebuilt.* tmux is unaffected; panes die. Reconcile finds the recorded
-container id absent, emits `container.lost`, calls `devcontainer up`, emits `container.replaced`,
-and respawns dead panes against the new id.
+*Case C — container dies or is rebuilt.* tmux is unaffected; panes die. **Reconcile** observes that
+the recorded container id no longer exists, emits `container.lost`, and marks the record. That is all
+it does — `dev list` shows the workspace with a dead container and `dev status` says so, and neither
+starts anything. **Ensure**, on the next `dev open`, takes the operation lock, calls `devcontainer up`,
+emits `container.replaced`, and respawns dead panes against the new id.
+
+This split is what makes scenario 3 recover *when the user asks it to* rather than as a side effect
+of a query, and it is why `dev list` on a machine with seven dead containers is fast and inert instead
+of a seven-minute rebuild storm.
 
 *Case D — workspace YAML edited while running.* The stored `config_digest` no longer matches the
 computed one. Reconcile emits `config.changed` and **does not mutate the running session**.
@@ -277,6 +361,15 @@ config digest, or anything tmux does not model, so every future capability would
 answer "what is running," which is expensive and makes truncation of old events lossy in a way that
 changes answers rather than just detail.
 
+**The public contract that follows: `dev list --json`, not the record files.** Because records are
+historical, a consumer that reads `workspaces/*.json` directly gets last-observed state and will
+render stale `running` badges — the exact failure §5.1 names as the early warning that this ADR has
+leaked. Reading records is therefore not the supported way to consume state. **`dev list --json` is
+the snapshot contract**: it reconciles first, so what it prints is observed rather than remembered,
+and it is versioned and backend-neutral. The pairing for any consumer is `dev list --json` for
+current state and `events.jsonl` for transitions; the record files are an implementation detail of
+the platform, documented in §4.3 so the format is understood, not so it is depended upon.
+
 **Consequences.** `dev list` always costs one backend query — it cannot be answered from disk alone.
 That is a deliberate price for never lying. The migration path to canonical state is concrete rather
 than aspirational: when a backend gains the ability to be *restored from* a record instead of merely
@@ -302,6 +395,14 @@ Four concrete triggers, any one of which warrants a compiled binary:
 4. Any requirement to hold a lock across an operation that can block indefinitely (a container pull,
    a network call), where bash's inability to select on multiple fds forces either a busy-wait or a
    correctness compromise.
+
+Trigger 4 came within one draft of firing before implementation started. An earlier version of ADR-1
+had reconcile call `devcontainer up` while holding the state lock — a lock held for minutes across a
+process that can hang, which is exactly the condition described. The fix was structural rather than a
+language change: the state lock is now held only across a record read-modify-write, and repair runs
+under a separate non-blocking operation lock (ADR-1). Phase 1 therefore stays under trigger 4 by
+design, not by luck, and if a future change reintroduces a blocking operation inside the state lock,
+that is the trigger firing rather than a bug to patch.
 
 **Language when triggered: Go.** The repository already has Go tooling in play, a single static
 binary drops into `bin/` with no runtime to install or pin, and it cross-compiles for the Azure VM
@@ -376,10 +477,31 @@ each. It does **not** create tmux sessions, apply layouts, or run startup comman
 
 The unit must copy the pattern `ai/vekil/vekil.service` established: a user unit cannot order itself
 `After=` Docker, because Docker is a system service. It therefore polls for daemon readiness with a
-bounded loop before proceeding. It must also invoke the devcontainer CLI by the **absolute path**
-recorded by Runtime, because the CLI is a mise shim and mise shims are absent from a systemd unit's
-`PATH`. Both of these are failure modes that are silent and confusing when discovered late, which is
-the argument for building this in Phase 1 rather than deferring it.
+bounded loop before proceeding.
+
+**Invoking the devcontainer CLI is the sharp edge here, and the obvious approach is broken.**
+Recording the absolute shim path would be worse than useless: on this machine
+`~/.local/share/mise/shims/devcontainer` exists, is executable, and fails on every call because the
+CLI lives under `node@25.9.0` while the active global is `node@26.5.0` (§0). A systemd unit invoking
+that path gets a non-zero exit and a mise error on stderr, and the failure would be attributed to
+Docker or to the devcontainer config rather than to tool resolution.
+
+Three requirements follow, and they apply to interactive `dev` equally, not just to the unit:
+
+1. **The CLI is a pinned managed artifact**, pinned to a specific mise tool version in
+   `tools/dev/versions.toml` and installed by `install.sh`, following the precedent `install_pinned_yq`
+   and `bin/versions check_artifact_release` already set for yq. An unpinned CLI whose availability
+   depends on whichever node version happens to be global is not a dependency, it is a coin flip.
+2. **Invocation is always `mise exec <pinned> -- devcontainer ...`**, resolved through an absolute
+   `mise` binary path. Runtime records the mise path and the pinned tool spec, never a shim path.
+3. **Detection is by execution, not by presence.** Runtime probes with `devcontainer --version`,
+   requires exit 0 *and* a parseable version on stdout, and treats a resolvable-but-failing shim as
+   absent. `dev doctor` reports this specific condition by name, because "installed but unrunnable"
+   is the state a user is least likely to diagnose unaided.
+
+The unit additionally needs `PATH` set explicitly, since mise shims and mise itself are absent from a
+systemd unit's default environment. All of these are failure modes that are silent and confusing when
+discovered late, which is the argument for building this in Phase 1 rather than deferring it.
 
 Default is **opt-in, off**. Seven devcontainer repositories building on every boot is a slow boot and
 substantial disk churn for workspaces that may not be touched that day.
@@ -439,8 +561,46 @@ commands precisely when reviewing that project's code.
 **Consequences.** No second identity concept is invented; the linker's existing rule is reused and
 made explicit about governing configuration rather than sessions. A deleted worktree leaves a record
 pointing at a nonexistent path — handled as the same case as "repository path no longer exists,"
-which reconciliation must handle regardless. Session names must disambiguate working trees, so the
-session name is the working-tree basename, not the slug.
+which reconciliation must handle regardless.
+
+**Naming, which the basename alone cannot carry.** An earlier draft used the working-tree basename as
+the session, record, and lock name. That is not globally unique: `.claude/worktrees/<branch>` is a
+convention used across this whole repository set, and branch names like `ui-pass`, `todo-cleanup`, and
+`readme-branding` are generic enough that two projects will eventually collide. The failure is not a
+harmless name clash — it is one workspace attaching to another project's session, or two workspaces
+writing the same record and lock. Identity is therefore split in two:
+
+*`workspace_id`* — `sha256(realpath(worktree))`, first 12 hex characters. This is the **only** thing
+used to name files: the record is `workspaces/<workspace_id>.json` and the lock is
+`locks/<workspace_id>.lock`. It is unconditionally unique, requires no collision check, and is stable
+across renames of anything except the path itself. State can therefore never collide, including
+before any collision check has had a chance to run.
+
+*`session_name`* — the human-facing name, `<slug>` for a primary working tree and `<slug>--<basename>`
+for a worktree. Readable, and the slug prefix already removes cross-project collisions. The residual
+case is two worktrees of the *same* project with the same basename in different parents
+(`.worktrees/review` and `.claude/worktrees/review`), so **attach is guarded rather than trusted**:
+before attaching to an existing session, `open` compares that session's recorded `worktree` against
+the resolved path and, on mismatch, uses `<slug>--<basename>--<hash6>` instead. The guard is what
+makes the failure impossible rather than merely unlikely, and it is cheap because the record is
+already keyed by path.
+
+The record stores both fields; `session_name` is display and backend addressing, `workspace_id` is
+identity. No component may derive one from the other.
+
+**The `repo:` key is removed from the schema, because inheritance makes it actively wrong.** A
+worktree reads the primary repository's `workspace.yaml`. If that file carries
+`repo: ~/workspace/slabledger`, then opening `slabledger-pr5` would redirect it to the primary
+checkout — the config layer would silently override the path the resolver just determined, and every
+worktree of a project with a `repo:` key would land in the same directory. Since the resolver already
+knows the working tree (that is its entire job) and the config layer inherits across trees, a path key
+in an inherited file cannot be correct for more than one of its inheritors.
+
+Repositories outside `DEV_REPO_ROOT` are handled where the ambiguity does not exist: `dev` run from
+inside such a tree resolves by `cwd`, and `DEV_REPO_ROOT` itself is configurable for a wholesale move.
+If a per-project path override is genuinely needed later, it belongs in the un-inherited
+`workspace.local.yaml` layer, where it describes one machine's one checkout rather than every
+inheritor of a shared file.
 
 This is also what delivers **multiple concurrent window-groups on one project**. Two worktrees of
 slabledger — `~/workspace/slabledger` and `~/workspace/slabledger-pr5` — are two workspaces, two tmux
@@ -476,7 +636,7 @@ tools/dev/
   lib/
     resolve.sh                         # name|cwd -> (slug, worktree_path)
     config.sh                          # YAML merge -> normalized JSON + config_digest
-    runtime.sh                         # Docker/compose/devcontainer-CLI detection; absolute paths
+    runtime.sh                         # Docker/compose/devcontainer-CLI detection; validated by execution
     container.sh                       # devcontainer up, id parsing, liveness, exec-command builder
     backend-tmux.sh                    # create/apply_layout/query/respawn_pane/kill; only tmux consumer
     state.sh                           # Record read/write under flock
@@ -505,11 +665,13 @@ $DEV_OVERLAY_ROOT/<slug>/
   workspace.yaml                       # Per-repo overrides; version-controlled
   workspace.local.yaml                 # Machine-local, gitignored; secrets and host-specific env
 ~/.local/state/dev/                    # Runtime state; not in the repository
-  workspaces/<session>.json            # One record per working tree
+  workspaces/<workspace_id>.json       # One record per working tree, keyed by path digest
   events/events.jsonl                  # Append-only event stream
   events/events-<ts>.jsonl             # Rotated segments, newest-first retention
-  locks/<session>.lock                 # flock targets
-  runtime.json                         # Cached detection: absolute CLI paths, docker flavor
+  locks/<workspace_id>.lock            # State lock: record read-modify-write only
+  locks/<workspace_id>.op              # Operation lock: held across ensure/repair
+  locks/events.lock                    # Global: exclusive for rotation, shared for appends
+  runtime.json                         # Cached detection: mise path + pinned CLI spec, docker flavor
 ```
 
 ---
@@ -526,7 +688,6 @@ without restating the layout.
 ```yaml
 version: 1                      # int, required. Schema version
 
-repo: ~/workspace/slabledger    # str, optional. Default: $DEV_REPO_ROOT/<slug>
 autostart: false                # bool, optional. Default false. Container-only boot start
 
 devcontainer:                   # optional. Omit entirely for auto-detection
@@ -627,12 +788,15 @@ container, as slabledger does above, trades that guarantee away knowingly.
 ### 4.3 Workspace record
 
 Referenced throughout §2 but defined here. One file per working tree at
-`~/.local/state/dev/workspaces/<session>.json`, mutated only under `flock`.
+`~/.local/state/dev/workspaces/<workspace_id>.json` — keyed by the path digest, never by a name, so
+two projects with same-named worktrees cannot collide (ADR-7). Mutated only by reconcile, only under
+the state lock.
 
 ```json
 {
   "v": 1,
-  "session": "slabledger",
+  "workspace_id": "9f2c4a7b1e05",
+  "session_name": "slabledger",
   "slug": "slabledger",
   "worktree": "/home/tng/workspace/slabledger",
   "status": "running",
@@ -685,12 +849,43 @@ resolved.
 **Transport.** A single append-only file, `~/.local/state/dev/events/events.jsonl`, one JSON object
 per line, opened `O_APPEND`.
 
-A write of less than `PIPE_BUF` (4096 bytes) to an `O_APPEND` file descriptor is atomic on Linux.
-Emitters therefore write each event with a single `printf` and take **no lock**, which is what keeps
-`dev-event` cheap enough to run from a tmux hook. Two consequences are load-bearing rather than
-incidental: event records must be *capped* so they cannot exceed 4096 bytes (free-form `data` is
-truncated with a `truncated: true` marker), and **rotation must hold the lock**, because rotation is
-not atomic and a concurrent hook append during a rename would be lost.
+**The concurrency protocol, stated correctly.** An earlier draft justified lock-free appends by citing
+`PIPE_BUF`. That was wrong: `PIPE_BUF` is a guarantee about pipes and FIFOs and says nothing about
+regular files. What `O_APPEND` actually guarantees is that the seek-to-end and the write are performed
+as one indivisible step with respect to other writers, so two appenders cannot land at the same
+offset. On Linux a single `write(2)` to a regular file additionally holds the inode lock for its
+duration, so one syscall's bytes are not interleaved with another's — but that is an implementation
+property of the filesystem, not a POSIX guarantee, and it only holds if the emitter really does issue
+**one** syscall.
+
+Three rules follow, and they are requirements on the emitter rather than folklore:
+
+1. **One `write` per event.** `dev-event` composes the entire line in memory and emits it with a
+   single `printf`. Not a `printf` of the object followed by a newline; not an incremental build with
+   `>>` inside a loop. Anything that produces two syscalls can interleave.
+2. **Events are size-capped** at 4 KiB, with free-form `data` truncated and marked `truncated: true`.
+   The cap no longer has a `PIPE_BUF` justification — it is there because short writes are the case
+   where the single-syscall property is easiest to rely on, and because an event large enough to need
+   splitting is an event carrying something that belongs elsewhere.
+3. **Rotation is globally serialized, and appends participate in that.** This is the part the earlier
+   draft got structurally wrong: it protected rotation with the *per-workspace* lock, which cannot
+   work, because the event file is global and workspaces hold different locks. Two workspaces would
+   happily rotate the same file simultaneously, and an append during another workspace's rename would
+   be written to an unlinked inode and silently lost.
+
+   The protocol is one dedicated lock, `locks/events.lock`. **Rotation takes it exclusively**
+   (`flock -x`); **every append takes it shared** (`flock -s`). Shared holders do not contend with one
+   another, so the common path stays effectively uncontended, and the rename cannot begin while any
+   append is in flight. This does mean `dev-event` takes a lock, contradicting the earlier claim that
+   it takes none — a shared `flock` on an uncontended file costs microseconds, which is affordable in
+   a tmux hook, and "cheap" was never worth buying with silent event loss.
+
+Rotation is checked during reconcile, which is also the only place with a reason to look.
+
+**Testing this is not optional.** The verification is a bats test that spawns N concurrent emitters
+against one file while a rotation runs, then asserts every emitted event appears exactly once across
+`events.jsonl` and its rotated segments, and that every line parses as JSON. Concurrency arguments
+that are only reasoned about are how the `PIPE_BUF` error survived a draft.
 
 **Schema.**
 
@@ -699,8 +894,9 @@ not atomic and a concurrent hook append during a rename would be lost.
   "v": 1,
   "ts": "2026-08-03T14:02:11.412Z",
   "event": "container.replaced",
-  "workspace": "slabledger",
-  "session": "slabledger",
+  "workspace_id": "9f2c4a7b1e05",
+  "slug": "slabledger",
+  "session_name": "slabledger",
   "worktree": "/home/tng/workspace/slabledger",
   "data": { "old_id": "3f9c...", "new_id": "a710...", "reason": "rebuild" }
 }
@@ -727,14 +923,17 @@ thing to subscribe to.
 The namespacing is deliberate: a future consumer subscribes to `agent.*` or `container.*` without
 enumerating types, so adding types later does not break it.
 
-**Retention.** Rotate when `events.jsonl` exceeds 8 MiB, checked during reconcile while the lock is
-already held. Rotated segments are named `events-<RFC3339-basic>.jsonl`; the five most recent are
+**Retention.** Rotate when `events.jsonl` exceeds 8 MiB, checked during reconcile under an exclusive
+`locks/events.lock`. Rotated segments are named `events-<RFC3339-basic>.jsonl`; the five most recent are
 retained and older ones deleted. No compression — these are small, and keeping them greppable with
 plain `jq` matters more than the disk.
 
-Phase 1 ships **zero consumers**. The verification that this is genuinely consumable is a bats test
-that replays a full workspace lifecycle and asserts the log can be folded into the same state the
-records report — which is the test that would have caught a design where the two disagree.
+Phase 1 ships **zero consumers**. Two bats tests establish that the stream is nonetheless real. The
+first replays a full workspace lifecycle and asserts the log folds to the same state the records
+report — this is the test that keeps records honest as *eventual projections* (ADR-1), since a hook
+appends the event and only a later reconcile writes the record, and any divergence between the two
+paths shows up here. The second is the concurrency test described above. Between them they cover the
+two ways this design could be quietly wrong: disagreeing with itself, and losing writes.
 
 ---
 
@@ -755,10 +954,11 @@ has fired.
 **2. ADR-2's split authority.** Splitting "declared and happened" from "running" is a real position,
 not a compromise, but it means every consumer must understand that records are not self-sufficient.
 
-*Early signal:* the first consumer that reads `workspaces/*.json` and skips the backend query because
-it is faster. If a future dashboard displays stale `running` badges, the split has leaked into
-consumer code and the answer is a `dev list --json` contract that consumers must use instead of
-reading records directly.
+*Early signal:* the first consumer that reads `workspaces/*.json` instead of calling `dev list --json`,
+because reading a file is faster than shelling out. ADR-2 now names `dev list --json` as the public
+snapshot contract explicitly, so the signal is narrower than it was: it is a consumer *ignoring* a
+stated contract rather than one filling a gap. If a future dashboard displays stale `running` badges,
+that is what happened.
 
 **3. ADR-6's host-side tmux.** Ranked third only because it is clearly right for scenario 3, but its
 cost is diffuse and accumulates: every place where "the pane's environment" matters, the host/container
@@ -826,7 +1026,18 @@ additive, and `container.verified` is already the field that would flip to `true
 I am also moderately unconfident about **concurrent `dev` invocations from inside panes of the
 workspace being reconciled** — `dev stop` run from within the session it stops kills its own
 pane mid-command. This needs an explicit guard (detect `$TMUX` and the target session, refuse or
-re-exec detached), and the guard is specified but not proven sufficient.
+re-exec detached), and the guard is specified but not proven sufficient. The operation lock (ADR-1)
+covers two `dev` processes repairing one workspace, which is the adjacent race, but it does not cover
+this one: a single process killing its own pane holds the lock legitimately the whole time.
+
+A third, and the one I would now rank alongside the first: **the event-append protocol is the part of
+this design most likely to be subtly wrong in a way that reasoning does not catch.** The `PIPE_BUF`
+justification in the previous draft was confidently argued, cited a real constant, reached a
+conclusion that happens to hold on Linux ext4, and was wrong about why — and being wrong about why is
+what let the rotation bug hide behind it, since a per-workspace lock cannot serialize a global file.
+That error is fixed (§4.4), but the general lesson is that this is the one area where the spec's
+prose is not evidence. The concurrent-emitters-plus-rotation test is therefore not a nice-to-have; it
+is the only thing that will actually establish the protocol works.
 
 ### 5.4 Pushback on the specification
 
@@ -875,7 +1086,9 @@ a consumer exists. Eight megabytes of JSONL and `jq` will serve for a long time.
    already established at `.gitignore:18,21,41` (`gitconfig.local.symlink`, `projects.local.toml`,
    `projects/*/.claude/settings.local.json`).
 2. Autostart defaults to off, per workspace.
-3. Session names are working-tree basenames; slugs are configuration keys. These differ for worktrees.
+3. Identity is split: `workspace_id` (path digest) names all state files; `session_name`
+   (`<slug>` or `<slug>--<basename>`) is display-only and attach is guarded by a path check. Slugs
+   remain configuration keys (ADR-7).
 4. `bin/claude-devcontainer-up` is superseded and its tmux-installation block is removed as part of
    this work rather than left to rot. Its compose-bug workaround moves into `container.sh`.
 5. Phase 1 is verified against local WSL only. The SSH/Azure path is designed for but not tested.
@@ -888,6 +1101,14 @@ a consumer exists. Eight megabytes of JSONL and `jq` will serve for a long time.
    Refusing is simple and safe; delegating needs a host channel that does not currently exist.
 9. Concurrent worktree groups are addressed by directory basename. `dev slabledger@pr5` addressing
    and platform-created worktrees are Phase 2 (ADR-7).
+10. The schema has **no `repo:` key**. The resolver owns the working tree; a path in a file inherited
+    by every worktree of a project cannot be correct for more than one of them (ADR-7).
+11. Reconcile is read-only with respect to the workspace; only `dev open`'s ensure phase repairs.
+    `dev list` and `dev status` cannot start a container or respawn a pane (ADR-1).
+12. Hooks append events and never write records. Records are eventual projections of the event
+    stream, lagging it by one `dev` invocation (ADR-1).
+13. The devcontainer CLI is pinned as a mise tool, invoked via `mise exec`, and detected by
+    execution rather than by `command -v` (§0, ADR-5).
 
 **Genuinely open, needing your input:**
 
