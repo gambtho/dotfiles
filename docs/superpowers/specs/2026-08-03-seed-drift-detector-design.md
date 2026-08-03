@@ -151,9 +151,41 @@ hard error (exit 2), not a per-block verdict.
 
 **An anchor locates a block; it does not define its membership.**
 
-A block is the **union of every blank-line-delimited paragraph whose non-comment
-text contains the anchor**, matched as a **fixed string**. Paragraph detection is
-**heredoc-aware**: a blank line inside a heredoc body does not end a paragraph.
+A block is the **union of every parse-complete window containing the anchor**,
+matched as a **fixed string**.
+
+A window starts as one blank-line-delimited paragraph — heredoc-aware, so a blank
+line inside a heredoc body does not end a paragraph — and is then **grown until
+the extracted text parses on its own**:
+
+1. Take the paragraph whose non-comment text contains the anchor.
+2. While `bash -n` on the extracted fragment fails, append the next paragraph;
+   if that reaches end of file, prepend the preceding paragraph instead.
+3. If both directions are exhausted without parsing, the block is an
+   **extraction error** (exit 2), never `ok`.
+
+### Blank lines are formatting; the parse check is what makes extraction sound
+
+An earlier draft claimed paragraph extraction was formatting-independent. That
+was wrong: blank lines *are* formatting. Valid Bash permits a blank line between
+a condition and its body, and `bash -n` accepts it:
+
+```sh
+if [ -n "$x" ]; then
+
+  echo hi        # <- a separate paragraph
+fi
+```
+
+An anchor in the condition would have extracted the condition alone. Verified:
+`bash -n` exits 2 on `if [ -n "$x" ]; then` by itself and 0 on the full form
+above. So the split is legal input, the truncation was real, and the assertion
+that a paragraph always carries the full statement group did not hold.
+
+The same asymmetry supplies the remedy. A truncated window is *detectable* —
+that is exactly what `bash -n` reports — so the window is grown until it parses.
+Extraction is now **formatting-tolerant and verified**, rather than
+formatting-independent by assertion.
 
 ### Why not "the enclosing top-level statement"
 
@@ -186,7 +218,25 @@ Verified: blank line at 203, contiguous content 204-236, blank line at 237.
 
 Heredoc awareness is required, not optional: lines 223 and 229 are blank lines
 *inside* the `GITEOF` heredoc, and a naive splitter would cut the block in three.
-The scanner tracks `<<TAG`, `<<'TAG'`, and `<<-TAG` to its closing delimiter.
+
+### Heredoc recognition must be complete and must fail closed
+
+The scanner recognizes every Bash heredoc delimiter form — `<<TAG`, `<<'TAG'`,
+`<<"TAG"`, `<<\TAG`, and each with the `<<-` tab-stripping variant — and tracks
+it to its closing delimiter. Two constructs must be excluded rather than
+misread:
+
+- **Herestrings.** `<<<` is not a heredoc.
+- **`<<` inside quotes.** Template line 255 is
+  `GI_MARK_END="# <<< overlay symlinks (auto) <<<"` — and it sits inside the
+  overlay-gitignore anchored block. A scanner keying on a bare `<<` would look
+  for a heredoc delimiter here and swallow the rest of the file. Quote tracking
+  is required, and is shared with the trailing-comment rule in Decision 4.
+
+Any `<<` that is neither excluded nor matched by a recognized form is an
+**extraction error** (exit 2). Unrecognized heredoc syntax must never degrade to
+"probably not a heredoc" — that failure mode is silent, and silence is the class
+of bug this tool exists to remove.
 
 ### Why fixed-string matching, and why comments are excluded from matching
 
@@ -203,27 +253,31 @@ Because the rule is applied identically to both sides, overlapping blocks are
 symmetric. Overlap means a drifted region may be reported under more than one
 block name: noise, not silence, which is the correct direction.
 
-### Formatting independence
+### Formatting tolerance
 
-Paragraph boundaries depend on blank lines and heredoc structure, not on
-indentation, so extraction does **not** assume `shfmt`-clean input. This is a
-deliberate change from the first draft, which assumed column-0 boundaries and
-then proposed to validate that assumption with `bash -n` — a check that passes
-on syntactically valid but unformatted shell, so it would not have validated the
-assumption at all.
+Extraction does not assume `shfmt`-clean input: window growth is driven by
+`bash -n`, not by indentation or blank-line placement. All five live seeds and
+the template are in fact `shfmt -i 2 -ci` clean today (verified), so an shfmt
+precondition would also have been viable — but a parse-verified extractor is
+strictly better than a formatting dependency plus a gate enforcing it, because
+it stays correct on input the gate never sees.
 
-All five live seeds and the template are in fact `shfmt -i 2 -ci` clean today
-(verified), so an shfmt precondition would have been viable. It is not adopted,
-because a formatting-independent extractor is strictly better than a formatting
-dependency plus a gate enforcing it.
+The first draft proposed to validate its column-0 boundary assumption with
+`bash -n` on the *whole file*, which passes on syntactically valid but
+unformatted shell and therefore validated nothing. The check is only meaningful
+applied to the extracted fragment, which is what the rule above does.
 
 ### Residual limitation
 
-A semantic block that spans two paragraphs where only one contains the anchor is
-compared only in part. This is far narrower than the enclosing-statement failure
-above — the paragraph always carries the anchor's full statement group and its
-comment preamble — but it is not zero, and it is not detectable from inside the
-tool.
+A window that already parses is not grown further, so a syntactically complete
+command sitting inside a larger conditional is extracted without that
+conditional. If the anchor is in the body and the guarding condition lives in a
+separate paragraph, a change to the condition alone is missed.
+
+This is narrower than it sounds — several anchors (`TREE_SITTER_VERSION`,
+`NVIM_VERSION`, `core.hooksPath`) appear in the conditions themselves, so those
+paragraphs are covered from the other side — but it is real, and it is not
+detectable from inside the tool.
 
 ### Alternative considered and deferred: whole-file paragraph matching
 
@@ -238,7 +292,7 @@ narrow in practice.
 
 ## Decision 4 — normalization
 
-Applied to both sides, narrowest first:
+Applied to **shell code only**, narrowest first:
 
 | Step | Rationale |
 |---|---|
@@ -247,24 +301,56 @@ Applied to both sides, narrowest first:
 | Collapse whitespace runs, trim | reindentation is noise |
 | Drop `as_user`, `$SUDO`, `sudo [-n]`, `runuser -u X --` prefixes | privilege vocabulary |
 | `$SEED_HOME` / `$HOME` -> `«HOME»`; `$DOTFILES_HOME` -> `«HOME»/.dotfiles`; `$WORKSPACE` -> `«WS»` | path vocabulary; substitute the token only, preserving surrounding quotes |
-| Drop the two **exact** ownership-verification lines listed below | that idiom exists only in the non-root flavor |
+| Drop the two **fully literal** ownership-verification lines listed below | that idiom exists only in the non-root flavor |
 
-The ownership rule is deliberately **not** "drop every `chown`/`chgrp` line".
-An earlier draft said that, and it was too broad in exactly the direction this
-design calls dangerous: it would hide a genuine change to the target path, the
-recursion flag, the identity, or the failure handling of any ownership repair
-anywhere in a block.
+### Heredoc bodies are payload and are compared verbatim
 
-Instead the rule matches two literal normalized forms, and nothing else:
+None of the above applies inside a heredoc body. A heredoc body is output data,
+not shell code, and every rule in the table corrupts data:
+
+- The `GITEOF` body (template 219-233) contains **two `#` lines that are
+  gitignore payload**, not shell comments — `# Personal Claude Code overlay
+  shims...` and `# Personal docker-compose overrides.`. Comment stripping would
+  delete real content from the seeded file, in the very block the
+  non-anchor-line regression test targets.
+- That body also contains blank lines and leading-whitespace-sensitive patterns.
+- A trailing `\` in a payload line is literal text, not a continuation.
+
+So heredoc bodies are carried through **verbatim**, with one exception, which
+follows shell semantics rather than adding a rule: path-token neutralization is
+applied only when the delimiter is **unquoted** (`<<TAG`), because that is
+exactly when the shell itself expands the variable. A quoted delimiter
+(`<<'GITEOF'`, `<<"TAG"`, `<<\TAG`) means the body is literal, so neutralizing
+`$HOME` there would rewrite text the container will see. Both template heredocs
+are quoted, so both are compared byte-for-byte after extraction.
+
+### The ownership rule takes exact arguments, with nothing free
+
+The rule is deliberately **not** "drop every `chown`/`chgrp` line". An earlier
+draft said that, and a later one narrowed it to two forms with the target path
+left free — which still hid the thing the surrounding paragraph says must stay
+visible: template and seed could name different targets and both lines would
+vanish.
+
+The idiom occurs exactly twice in the template, and the two instances differ in
+both flag and target:
 
 ```
-{ chown "$SEED_UID:$SEED_GID" <arg> 2>/dev/null ||
-[ -z "$(find <arg> \( ! -uid "$SEED_UID" -o ! -gid "$SEED_GID" \) -print -quit 2>/dev/null)" ]; } &&
+{ chown -R "$SEED_UID:$SEED_GID" "$NVIM_DIST.new" 2>/dev/null ||
+  [ -z "$(find "$NVIM_DIST.new" \( ! -uid "$SEED_UID" -o ! -gid "$SEED_GID" \) -print -quit 2>/dev/null)" ]; } &&
+
+{ chown "$SEED_UID:$SEED_GID" "$TS_BIN.new" 2>/dev/null ||
+  [ -z "$(find "$TS_BIN.new" \( ! -uid "$SEED_UID" -o ! -gid "$SEED_GID" \) -print -quit 2>/dev/null)" ]; } &&
 ```
 
-`<arg>` is the only free element. Any other `chown` or `chgrp` line is compared
-normally. Each form gets its own test, and a test asserts that an *unrelated*
-`chown` line is **not** dropped.
+Both are matched **fully literally, post-normalization** — the `-R` on the first
+and its absence on the second are part of the match, as are the two target
+paths. Nothing is free. (The previous draft wrote both without `-R`, so it would
+not have matched the neovim instance at all.)
+
+Any other `chown` or `chgrp` line is compared normally. Tests assert that a
+changed target, a changed `-R`, a changed identity, and an unrelated `chown`
+each produce drift.
 
 Known residual false-positive source, accepted and documented rather than
 normalized: **literal** workspace paths (`/app` vs `/workspace`). Only the
@@ -309,9 +395,24 @@ candidate with no `.devcontainer/local-seed.sh` is a **skip**; a candidate with
 one is **checked**.
 
 - No arguments: candidates are `${SEED_DRIFT_ROOT:-$HOME/workspace}/*/`.
-- With arguments: each argument is a candidate. A project directory and a direct
-  path to a `local-seed.sh` are both accepted; the tool distinguishes them by
-  testing whether the argument is a directory.
+- With arguments: each argument is a candidate, classified by what it is on
+  disk:
+  - a **directory** -> a project directory;
+  - an **existing file** -> a direct path to a `local-seed.sh`;
+  - **nonexistent** -> a **skip**, noted as "not present on this machine".
+
+The nonexistent case was undefined in an earlier draft, which distinguished
+arguments solely by `test -d`. That silently conflated "this project is not
+checked out here" with "this seed path does not exist", and contradicted the
+skip requirement, which is not qualified to auto-discovery: the intended use is
+a gate that names the same project list on every machine.
+
+The cost is that a typo'd path skips instead of failing. That is mitigated, not
+ignored: a skip prints the path it skipped and is counted in the summary line,
+so `5 checked` silently becoming `4 checked, 1 skipped` is visible in the output
+a gate captures. The alternative — erroring on a missing project — would make
+the tool unusable on any machine that does not have all five checked out, which
+is the case the requirement exists to cover.
 
 An earlier draft globbed `*/.devcontainer/local-seed.sh` directly. That is
 inconsistent with the skip requirement: globbing seed files enumerates only
@@ -326,24 +427,27 @@ entries under `~/workspace` are silent rather than reported as skips.
 A glob is self-maintaining as projects are added; a hand-maintained list goes
 stale silently, which is the same failure class as the bug being fixed.
 
-**Skips.** A candidate without a seed is reported with a note and does not affect
-the exit code.
+**Skips.** A candidate without a seed, and an argument naming a path that does
+not exist, are both reported with a note and do not affect the exit code.
 
 **Exit codes.** `0` clean (skips included); `1` any drift, in any direction; `2`
-usage error, unreadable template, doc/template disagreement, or a seed whose
-block boundaries cannot be resolved.
+usage error, unreadable template, doc/template disagreement, or a block that
+cannot be extracted — a window that never parses, or unrecognized heredoc
+syntax.
 
 A run does not abort on the first bad seed. It reports every candidate, then
 exits with the highest severity encountered (`2` outranks `1` outranks `0`), so
 one malformed seed cannot hide drift in the other four.
 
-**Extraction failure must never read as clean.** Paragraph extraction is
-formatting-independent (Decision 3), so there is no `shfmt` precondition. Both
-files are still checked with `bash -n` — the template as well as each seed, since
-a broken template would otherwise silently produce empty blocks that compare
-equal to everything. An anchor that the template does not contain, or a block
-that extracts to nothing on the template side, is an error rather than an `ok`:
-a silent pass here would reproduce the exact false-clean bug being fixed.
+**Extraction failure must never read as clean.** Extraction is verified by
+parsing the extracted fragment (Decision 3), so there is no `shfmt`
+precondition. Both files are additionally checked with `bash -n` as a whole —
+the template as well as each seed, since a broken template would otherwise
+silently produce empty blocks that compare equal to everything. An anchor the
+template does not contain, a block that extracts to nothing on the template
+side, a window that never parses, and unrecognized heredoc syntax are all errors
+rather than `ok`: a silent pass in any of them reproduces the exact false-clean
+bug being fixed.
 
 **Read-only.** The detector never writes to a seed. These are gitignored,
 hand-owned files with no revert path. Asserted by test.
@@ -388,18 +492,38 @@ Required cases:
   seeded gitignore heredoc, leave the `git config` line untouched, expect drift.
 - **a blank line inside a heredoc does not split the block.** Guards heredoc
   awareness directly.
+- **a blank line between an `if` condition and its body does not truncate the
+  block.** Guards the window-growth rule in Decision 3; a change in the body
+  must still be reported when the anchor is in the condition.
+- **a window that never parses -> exit 2**, and a block requiring *upward*
+  growth (anchor in the body, `if` header in the preceding paragraph) is
+  extracted whole.
+- **heredoc payload is compared verbatim**, three cases: a changed `#` line
+  inside the `GITEOF` body is drift (not stripped as a comment); a changed blank
+  line or leading whitespace inside a body is drift; a trailing `\` in a body is
+  not treated as a continuation.
+- **an unquoted-delimiter heredoc gets path neutralization, a quoted one does
+  not.** Pins the shell-semantics rule in Decision 4.
+- **`<<` inside a double-quoted string is not a heredoc opener.** Modelled on
+  template line 255 (`GI_MARK_END="# <<< overlay symlinks (auto) <<<"`); a
+  regression here swallows the rest of the file.
+- **`<<<` herestrings are not heredoc openers**, and each of `<<TAG`,
+  `<<'TAG'`, `<<"TAG"`, `<<\TAG`, `<<-TAG` is recognized.
+- **unrecognized heredoc syntax -> exit 2**, never a silent fallback.
 - anchor absent -> `MISSING`
 - extra seed lines -> `AHEAD`, wording is promotion, not overwrite
 - differences both directions -> `DIVERGED`
 - false-positive guards, one test each: `as_user` vs direct invocation,
   `$SEED_HOME` vs `$HOME`, `$DOTFILES_HOME` vs `$HOME/.dotfiles`, restyled line
   continuations, reworded comments, the two exact ownership-idiom forms
-- **an unrelated `chown` line is NOT dropped.** Guards against the over-broad
-  ownership rule rejected in Decision 4.
+- **the ownership rule is exact**, four cases: a changed target, a changed `-R`,
+  a changed `$SEED_UID:$SEED_GID` identity, and an unrelated `chown` line each
+  produce drift rather than being dropped.
 - `sed 's#...#g'` survives comment stripping
 - an anchor appearing only in a comment does not anchor a block
 - candidate with `.devcontainer/` but no seed -> skipped, exit 0, counted as
   skipped; a directory with no `.devcontainer/` is not reported at all
+- **a nonexistent argument -> skipped, exit 0**, and the skip names the path
 - argument accepted both as a project directory and as a direct seed path
 - unparseable seed (`bash -n` fails) -> exit 2, never `ok`
 - a malformed seed does not suppress drift reporting for the others
