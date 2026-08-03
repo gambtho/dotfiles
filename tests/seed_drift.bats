@@ -748,3 +748,42 @@ sd_drift() { run "$SEED_DRIFT" --template "$FIXTURE_TEMPLATE" --doc "$FIXTURE_DO
   [ "$status" -eq 0 ]
   [[ "$output" == *"1 checked, 0 skipped"* ]]
 }
+
+@test "a malformed seed exits 2 without suppressing drift in the others" {
+  setup_drift_fixtures
+  seed_from_template aaa-broken
+  printf 'if true; then\nTREE_SITTER_VERSION=1\n' >"$(seed_path aaa-broken)"
+  seed_from_template zzz-behind
+  sed -i '/tree-sitter ready/d' "$(seed_path zzz-behind)"
+
+  sd_drift
+
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"does not parse (bash -n)"* ]]
+  [[ "$output" == *"BEHIND   tree-sitter CLI"* ]]
+  [[ "$output" == *"2 checked, 0 skipped, 1 blocks drifted (1 behind)"* ]]
+}
+
+@test "an unparseable template is exit 2 before any verdict" {
+  setup_drift_fixtures
+  seed_from_template clean
+  printf 'if true; then\n' >"$FIXTURE_TEMPLATE"
+
+  sd_drift
+
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"template does not parse"* ]]
+  [[ "$output" != *"ok       tree-sitter CLI"* ]]
+}
+
+@test "the detector never writes to a seed" {
+  setup_drift_fixtures
+  seed_from_template clean
+  local before after
+  before=$(cksum <"$(seed_path clean)")
+
+  sd_drift
+
+  after=$(cksum <"$(seed_path clean)")
+  [ "$before" = "$after" ]
+}

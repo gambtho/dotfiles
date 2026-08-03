@@ -474,6 +474,10 @@ sd_check_seed() {
   local behind ahead nb na est tst
   name=$(basename -- "$(dirname -- "$(dirname -- "$seed")")")
   printf '%s  %s\n' "$name" "$seed"
+  if ! bash -n "$seed" 2>/dev/null; then
+    sd_report_block ERROR "$name" 'does not parse (bash -n)'
+    return 2
+  fi
   # Each file is scanned exactly once. The template scan is built by sd_main
   # and reused across every seed; the seed scan is built here, once, and
   # reused across every block. sd_extract needs a scan path — passing "" would
@@ -677,6 +681,11 @@ sd_main() {
   fi
   if [ ! -r "$doc" ]; then
     printf 'seed-drift: cannot read doc %s\n' "$doc" >&2
+    return 2
+  fi
+
+  if ! bash -n "$template" 2>/dev/null; then
+    printf 'seed-drift: template does not parse: %s\n' "$template" >&2
     return 2
   fi
 
