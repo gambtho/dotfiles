@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+SD_SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+SD_REPO_ROOT="${SD_SELF_DIR%/bin}"
+SD_SKILL_DIR="$SD_REPO_ROOT/ai/marketplace/plugins/my/skills/project-claude-setup"
+SD_TEMPLATE_DEFAULT="$SD_SKILL_DIR/templates/local-seed.sh"
+SD_DOC_DEFAULT="$SD_SKILL_DIR/catch-up-local-seed.md"
+
+sd_usage() {
+  cat <<'SDUSAGE'
+Usage: bin/seed-drift [--template PATH] [--doc PATH] [--help] [CANDIDATE...]
+
+Reports, per project and per documented block, whether a project's
+.devcontainer/local-seed.sh is behind, ahead of, or diverged from the
+project-claude-setup template.
+
+  --template PATH  template to compare against
+  --doc PATH       catch-up doc holding the block table
+  --help           show this message
+
+With no CANDIDATE, candidates are ${SEED_DRIFT_ROOT:-$HOME/workspace}/*/.
+Exit: 0 clean, 1 drift, 2 usage/template/doc/extraction error.
+SDUSAGE
+}
+
+sd_main() {
+  local template="$SD_TEMPLATE_DEFAULT" doc="$SD_DOC_DEFAULT"
+  SD_CANDIDATES=()
+  # Counted alongside the array because Task 6 must ask "were any candidates
+  # given?" without expanding an empty array under `set -u` — the bash 3.2
+  # pitfall bin/common.sh:392 calls out. macOS ships bash 3.2.
+  SD_CANDIDATE_COUNT=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --template | --doc)
+        if [ $# -lt 2 ]; then
+          printf 'seed-drift: %s needs a PATH\n' "$1" >&2
+          sd_usage >&2
+          return 2
+        fi
+        if [ "$1" = --template ]; then template="$2"; else doc="$2"; fi
+        shift 2
+        ;;
+      --help | -h)
+        sd_usage
+        return 0
+        ;;
+      --)
+        shift
+        SD_CANDIDATES+=("$@")
+        SD_CANDIDATE_COUNT=$((SD_CANDIDATE_COUNT + $#))
+        break
+        ;;
+      -*)
+        printf 'seed-drift: unknown option %s\n' "$1" >&2
+        sd_usage >&2
+        return 2
+        ;;
+      *)
+        SD_CANDIDATES+=("$1")
+        SD_CANDIDATE_COUNT=$((SD_CANDIDATE_COUNT + 1))
+        shift
+        ;;
+    esac
+  done
+
+  if [ ! -r "$template" ]; then
+    printf 'seed-drift: cannot read template %s\n' "$template" >&2
+    return 2
+  fi
+  if [ ! -r "$doc" ]; then
+    printf 'seed-drift: cannot read doc %s\n' "$doc" >&2
+    return 2
+  fi
+
+  return 0
+}
+
+if [ "${SEED_DRIFT_SOURCE_ONLY:-0}" != 1 ]; then
+  sd_main "$@"
+fi
