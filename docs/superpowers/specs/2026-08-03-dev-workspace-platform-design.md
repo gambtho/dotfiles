@@ -258,12 +258,28 @@ a backstop for anything hooks cannot report. No daemon.
 Hooks are registered in `tools/dev/dev.tmux.conf`, sourced from `tools/tmux/tmux.conf.symlink`
 between idempotency markers, following the existing `agent-teams-extras.conf` pattern.
 
-**Hooks identify their workspace by id, never by session name.** At session creation `open` sets a
-tmux session user option, `@dev_workspace_id`, to the `workspace_id`. Hooks call
-`tools/dev/dev-event` with `#{@dev_workspace_id}` expanded by tmux at fire time, and `dev-event`
-exits silently when it expands empty — which is precisely how ad-hoc sessions are filtered out, since
-global hooks fire for every session and the log must not fill with noise about sessions that were
-never workspaces.
+**Hooks identify their workspace by id, never by session name.** At session creation `open` sets
+three tmux session user options — `@dev_workspace_id`, `@dev_slug`, and `@dev_worktree` — and hooks
+pass all three, plus tmux's native `#{session_name}`, to `tools/dev/dev-event`. Those four values are
+exactly the envelope §4.4 requires, so **`dev-event` never reads a record**, which is what keeps it
+honest about the ADR-1 rule that hooks append events and only reconcile writes state. `dev-event`
+exits silently when `@dev_workspace_id` expands empty — which is precisely how ad-hoc sessions are
+filtered out, since global hooks fire for every session and the log must not fill with noise about
+sessions that were never workspaces.
+
+Carrying all three rather than just the id is not redundancy. An earlier draft carried only
+`workspace_id` and left `dev-event` to recover `slug`, `session_name`, and `worktree` from the record
+— which reintroduces the exact staleness hole the id was introduced to close, because during the
+window where ADR-7's collision guard has chosen a hashed session name, the record still holds the
+previous one. The event would carry a name that was never used. Since the whole envelope must come
+from somewhere, it comes from the same place the id does.
+
+`session_name` is deliberately the one field taken from tmux's own `#{session_name}` rather than from
+a user option: tmux knows the live name authoritatively and a stored copy could drift after a
+`rename-session`, which is a thing a user may do by hand. This was verified on tmux 3.4 along with
+the rest — three user options and `#{session_name}` expand correctly in a `pane-died` hook, and a
+`worktree` path containing a space arrives as a single argument rather than two, which is the
+quoting detail most likely to be got wrong in a `run-shell` string.
 
 The earlier draft filtered by mapping the session *name* back to a record, and that has a real hole:
 ADR-7's collision guard can choose a hashed session name during `open`, and the record does not carry
@@ -332,6 +348,44 @@ Retry is safe and cheap because observation is idempotent and the losing side's 
 rather than merged. The bound exists because an unbounded compare-and-swap loop in bash against a
 workspace something else is actively repairing is a spin, not a wait.
 
+**Discovery events must commit with the record, and this is the part that does not fall out of CAS.**
+Reconcile does not only write a record — it emits `workspace.vanished`, `container.lost`, and
+`config.changed`. Those go to a different file, under a different lock, and there is no way to make
+two files change atomically. Both naive orderings are wrong in a way that matters:
+
+*Emit, then commit.* A CAS failure discards the record but not the event, so a three-attempt retry can
+append `container.lost` three times for one loss. A consumer counting container failures is then
+simply wrong, and — worse for debugging — the log disagrees with the record about how many times
+something happened.
+
+*Commit, then emit.* A crash in the gap leaves a record whose status changed with no event explaining
+why. That breaks the fold-equivalence property the whole design rests on: replaying the log would no
+longer reproduce the record.
+
+The resolution is **deterministic event ids for discovery events**, which makes the append idempotent
+and lets the ordering be chosen for crash-safety rather than for duplicate-safety. A discovery event's
+`id` is not random: it is `sha256(workspace_id || event_type || discriminator)` truncated to 16 hex,
+where the discriminator is the thing being discovered — the lost container's id for `container.lost`,
+the new `config_digest` for `config.changed`, the recorded `boot_id` for `workspace.vanished`. The
+same discovery therefore computes the same id on every retry.
+
+Ordering is then **emit, then commit**, and the emit step first scans the events it is about to write
+against the segment it already holds under the shared lock, skipping any whose id is already present.
+Retries append nothing. A crash between emit and commit leaves an event with no record change, which
+the *next* reconcile folds — the safe direction, since folding is idempotent and observation would
+have reached the same conclusion anyway.
+
+This is the one place in Phase 1 where correctness rests on a deterministic id rather than on
+observation, so it is also the one place that gets a dedicated test: a bats case that forces CAS
+failure by mutating the record mid-pass and asserts each discovery event appears exactly once, and a
+second that kills the process between emit and commit and asserts the following reconcile converges
+to the same record.
+
+The honest limit: this is idempotence, not atomicity. Two files cannot be committed together without
+a real transaction, and adding one to bash is the wrong trade. What the protocol guarantees is that
+every interleaving converges to the same state on the next pass, which is the strongest thing
+available here and is sufficient because reconcile runs on every command.
+
 *The operation lock* (`locks/<workspace_id>.op`) is taken `flock -n` for the whole of any
 **workspace-mutating** operation. It is not a state lock and is never held while writing records; it
 exists solely so two `dev` invocations cannot act on the same workspace concurrently — two
@@ -377,9 +431,10 @@ implementation would have no way to know which events it had already applied, so
 replay transitions or miss events that rotated away. Four rules close it, and they are cheap because
 each was already half-present.
 
-1. **Every event carries `id`** — 16 hex characters, from `openssl rand -hex 8`, generated by the
-   emitter. Not a sequence number (§4.4 explains why there is none) and not a hash of the content,
-   since two identical events can legitimately occur. It exists to be compared, not ordered.
+1. **Every event carries `id`** — 16 hex characters, random (`openssl rand -hex 8`) for observed
+   events and deterministic for reconcile's discovery events, per the CAS protocol above. Not a
+   sequence number (§4.4 explains why there is none) and not a hash of the whole content, since two
+   identical observed events can legitimately occur. It exists to be compared, not ordered.
 2. **Every record carries `scanned_through`** — `{ "id": ..., "ts": ... }` for the last event the
    record's reconcile *scanned*, whether or not that event concerned this workspace. Reconcile skips
    forward to the matching `id` and folds every later event addressed to this `workspace_id`.
@@ -998,11 +1053,14 @@ its commit phase under the state lock — observation and folding happen before 
   "config_digest": "sha256:9a3f...",
   "applied_digest": "sha256:9a3f...",
   "container": {
+    "status": "ready",
     "kind": "compose",
     "id": "a710...",
     "user": "vscode",
     "workdir": "/workspace",
     "verified": false,
+    "up_exit_status": 0,
+    "up_result": { "containerId": "a710...", "remoteUser": "vscode", "remoteWorkspaceFolder": "/workspace" },
     "observed_at": "2026-08-03T14:02:11.412Z"
   },
   "agents": [
@@ -1019,7 +1077,13 @@ its commit phase under the state lock — observation and folding happen before 
 
 `status` is one of `running`, `stopped`, `unknown`. It records the **last observation**, never a
 claim about the present — ADR-2 requires liveness to be re-observed on every command, and a consumer
-that reads this field without a backend query is reading history.
+that reads this field without a backend query is reading history. It is written **only** from backend
+observation and `workspace.*` events; no `container.*` event may touch it (§4.4), because a workspace
+whose container failed is still a live tmux session with working host-side panes.
+
+`container.status` is the separate axis that follows from that — `none`, `starting`, `ready`,
+`failed`, or `lost` — and is the field a consumer reads to ask "can I exec into this," as distinct
+from `status`, which answers "does this workspace exist right now."
 
 `config_digest` is the digest of the current merged configuration; `applied_digest` is the digest of
 the configuration the live session was actually built from. They differ exactly when drift case D has
@@ -1035,10 +1099,14 @@ window (§4.1) and the default layout carries two. Each entry's `state` is `star
 
 `container.verified` is `false` whenever the container was reported up but no readiness probe
 confirmed it usable. In Phase 1 it is always `false`; see §5.3 for why this is recorded rather than
-resolved.
+resolved. `up_exit_status` and `up_result` are the rest of that mitigation: the exit status of the
+last `devcontainer up` and its parsed JSON tail line, stored verbatim so that the "reported ready but
+not actually usable" case has evidence attached to it rather than only a `false` flag. They are
+replaced wholesale on every `container.ready`, never merged.
 
-`stopped_reason` is `null` while running, and otherwise one of `user`, `host_restart`, `vanished`,
-`container_failed`.
+`stopped_reason` is `null` while running, and otherwise one of `user`, `host_restart`, or
+`vanished`. It has no `container_failed` member: that was the one value crossing the workspace/
+container axis, and container failure is now reported by `container.status` instead.
 
 `scanned_through` is the event-fold cursor defined in ADR-1: the `id` and `ts` of the last event this
 record's reconcile scanned, advanced across events belonging to other workspaces as well as its own,
@@ -1116,9 +1184,14 @@ that are only reasoned about are how the `PIPE_BUF` error survived a draft.
 }
 ```
 
-`v` versions the envelope. `id` is 16 random hex characters, unique per event and used solely as the
-fold cursor ADR-1 defines — consumers may use it to deduplicate, and must not read ordering into
-it. There is deliberately **no sequence number**: it could only ever be a
+`v` versions the envelope. `id` is 16 hex characters, unique per event and used as the fold cursor
+ADR-1 defines — consumers may use it to deduplicate, and must not read ordering into it. It is random
+(`openssl rand -hex 8`) for events reporting something that *happened*, and **deterministic** for the
+discovery events reconcile emits (`workspace.vanished`, `container.lost`, `config.changed`), where it
+is `sha256(workspace_id || event_type || discriminator)` truncated to the same width. The distinction
+is what makes a discovery append idempotent across CAS retries (ADR-1); two genuinely separate
+occurrences of the same discovery differ in their discriminator, so determinism does not collapse
+them. There is deliberately **no sequence number**: it could only ever be a
 partial order, since hook-emitted events cannot take the lock required to assign one, and a
 partially-ordered counter invites exactly the total-ordering assumption it cannot support. Ordering
 is by `ts` and by position in the file, both of which are honest about their limits. `ts` is RFC 3339
@@ -1155,16 +1228,16 @@ is what makes replay idempotent (ADR-1).
 | `workspace.opened` | `boot_id`, `config_digest`, `session_name_actual` | — | `status=running`; `opened_at=ts` (new incarnation boundary); `boot_id`, `applied_digest=config_digest`, `session_name=session_name_actual`; `stopped_reason=null`; clear `fold_gap` |
 | `workspace.attached` | `client` | — | `last_seen=ts` only |
 | `workspace.detached` | `client` | — | `last_seen=ts` only |
-| `workspace.stopped` | `reason` (`user`\|`container_failed`) | — | `status=stopped`; `stopped_reason=reason` |
+| `workspace.stopped` | `reason` (`user`) | — | `status=stopped`; `stopped_reason=reason` |
 | `workspace.vanished` | `discovered_at`, `reason` (`vanished`\|`host_restart`) | `last_boot_id` | `status=stopped`; `stopped_reason=reason` |
 | `window.created` | `window`, `location` (`container`\|`host`) | `command` | none — layout is observed, not folded |
 | `pane.died` | `window` | `exit_status` | if the window carries an agent: `agents[window].state=exited` |
 | `pane.respawned` | `window` | `container_id` | if the window carries an agent: `agents[window].state=started` |
-| `container.starting` | — | `config_path` | `container.verified=false` |
-| `container.ready` | `id`, `kind` (`compose`\|`single`), `user`, `workdir` | — | `container={id,kind,user,workdir}`; `container.observed_at=ts`; `container.verified=false` (§5.3) |
-| `container.failed` | `reason` | `stderr_tail` | `status=stopped`; `stopped_reason=container_failed` |
-| `container.lost` | `old_id` | `discovered_at` | `container.id=null`; `container.observed_at=ts` |
-| `container.replaced` | `old_id`, `new_id`, `reason` | — | `container.id=new_id`; `container.observed_at=ts` |
+| `container.starting` | — | `config_path` | `container.status=starting`; `container.verified=false` |
+| `container.ready` | `id`, `kind` (`compose`\|`single`), `user`, `workdir`, `up_exit_status`, `up_result` | — | replaces the whole `container` object: `{id,kind,user,workdir,up_exit_status,up_result}`; `container.status=ready`; `container.observed_at=ts`; `container.verified=false` (§5.3) |
+| `container.failed` | `reason`, `up_exit_status` | `stderr_tail` | `container.status=failed`; `container.observed_at=ts`; `container.up_exit_status` — **never** `status` (see below) |
+| `container.lost` | `old_id` | `discovered_at` | `container.id=null`; `container.status=lost`; `container.observed_at=ts` — **never** `status` |
+| `container.replaced` | `old_id`, `new_id`, `reason` | — | none — narrative only; the binding is written by the `container.ready` that must accompany it (see below) |
 | `agent.started` | `window`, `command` | — | `agents[window]={command, state:"started"}` |
 | `agent.exited` | `window` | `exit_status` | `agents[window].state=exited` |
 | `agent.failed` | `window`, `reason` | `exit_status` | `agents[window].state=failed` |
@@ -1172,6 +1245,51 @@ is what makes replay idempotent (ADR-1).
 
 Four of these were genuinely underspecified rather than merely undocumented, and each is a decision
 rather than a transcription:
+
+**No `container.*` event may write `status`, and an earlier draft's `container.failed` did.** It set
+the whole workspace to `stopped`, which contradicts ADR-2's central division: tmux is authoritative
+for liveness, records are authoritative for what was declared and what happened. A container that
+fails to start under a live host tmux session leaves that session very much alive — its host-side
+panes still work, its scrollback is intact, and `scratch` is on the host by default precisely so
+something survives this (§4.2). Reporting the workspace as stopped would be a lie the user can
+immediately disprove by looking at it, and it would take `dev list` with it.
+
+Container health is therefore a separate axis: `container.status` is one of `none`, `starting`,
+`ready`, `failed`, `lost`, written only by `container.*` events, and workspace `status` is written
+only by `workspace.*` events, which in turn derive from backend observation. `dev status` reports
+both. `stopped_reason` loses its `container_failed` member as a consequence — it was the only value
+that crossed the axis, and nothing else produced it.
+
+The one case that looks like an exception is not: if `devcontainer up` fails during `open`, no
+session was created, so there is no liveness to report and workspace `status` is untouched by
+definition. `open` exits non-zero having emitted `container.failed`, and the record shows a workspace
+that is not running because it never started, not because a container died.
+
+**Every successful `devcontainer up` emits `container.ready` carrying the complete binding.** An
+earlier draft had `container.replaced` update the id alone, which quietly assumes a rebuild changes
+nothing else. It can: a `devcontainer.json` edit can change `remoteUser`, `workspaceFolder`, or move
+a project between a single container and compose, and `slabledger` is compose-based, where the
+service a rebuild lands on is not guaranteed to match the previous one's user. Retaining the old
+`user` and `workdir` alongside a new id produces `docker exec -u vscode -w /workspace` against a
+container where neither is right — and the failure surfaces as panes that will not start, several
+steps from its cause.
+
+So `container.ready` replaces the entire `container` object rather than patching it, and
+`container.replaced` becomes purely narrative: it records that a rebuild happened and links old id to
+new for a consumer that wants to show it, but it binds nothing. A rebuild emits both, in that order.
+The rule is easy to hold: **one event type writes the binding, and it is the one that observes it.**
+
+**`up_exit_status` and `up_result` are the §5.3 mitigation, made real.** §5.3 promises to record the
+`devcontainer up` exit status and its full parsed JSON so that a future readiness probe has something
+to work from, and an earlier draft made that promise in prose while adding neither to the record nor
+to any event. A mitigation that exists only in the self-critique is not a mitigation. `up_result` is
+the parsed JSON tail line (`containerId`, `remoteUser`, `remoteWorkspaceFolder`, and whatever else the
+CLI emits) stored verbatim, which is also the raw material for diagnosing the "ready but not really"
+case that section is about. It is capped by the 4 KiB event limit like any other payload; if the CLI
+ever returns more, it is truncated and marked, because an event that cannot be written atomically is
+worse than one that is visibly incomplete.
+
+The remaining two are smaller:
 
 *`workspace.opened` carries `session_name_actual`.* ADR-7's collision guard can choose
 `<slug>--<basename>--<hash6>` at open time, so the name the platform intended and the name it got can
@@ -1202,7 +1320,7 @@ Phase 2 must not make Phase 1's fold refuse to run.
 retained and older ones deleted. No compression — these are small, and keeping them greppable with
 plain `jq` matters more than the disk.
 
-Phase 1 ships **zero consumers**. Three bats tests establish that the stream is nonetheless real. The
+Phase 1 ships **zero consumers**. Five bats tests establish that the stream is nonetheless real. The
 first replays a full workspace lifecycle and asserts the log folds to the same state the records
 report — this is the test that keeps records honest as *eventual projections* (ADR-1), since a hook
 appends the event and only a later reconcile writes the record, and any divergence between the two
@@ -1213,8 +1331,14 @@ the reader's shared lock is exercised rather than assumed. The third asserts ide
 folding the same segment twice must produce a byte-identical record, which is the property ADR-1
 relies on in place of exactly-once delivery.
 
-Between them they cover the three ways this design could be quietly wrong: disagreeing with itself,
-losing writes, and double-applying what it did not lose.
+The fourth and fifth cover the CAS boundary, which is the one place correctness rests on a
+deterministic id rather than on observation. One forces CAS failure by mutating the record mid-pass
+and asserts each discovery event appears exactly once across all retries; the other kills the process
+between emit and commit and asserts the next reconcile converges to the same record. Both were added
+because a reviewer found that the emit-then-commit ordering had never been stated, let alone checked.
+
+Between them they cover the four ways this design could be quietly wrong: disagreeing with itself,
+losing writes, double-applying what it did not lose, and diverging at a crash boundary.
 
 ---
 
@@ -1298,7 +1422,9 @@ the code.
 
 The honest mitigation is a per-workspace readiness probe in the schema — a command that must exit 0
 before windows are considered ready — but that is real complexity and it is deliberately **not** in
-Phase 1. Instead: record the `devcontainer up` exit status and the full parsed JSON in the record,
+Phase 1. Instead: record the `devcontainer up` exit status and the full parsed JSON in the record as
+`container.up_exit_status` and `container.up_result` (§4.3), carried there by `container.ready`
+(§4.4),
 emit `container.ready` with an explicit `verified: false`, and let the first honest consumer of that
 field decide it needs a probe. Naming the uncertainty in the data is cheaper than guessing at the
 mechanism now. This is a reversible call — adding a `readiness:` key to the schema later is purely
