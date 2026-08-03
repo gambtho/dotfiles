@@ -106,8 +106,8 @@ output, which is what makes acceptance scenario 5 true by construction.
 **State** and **Events** — own `~/.local/state/dev/`. One record per working tree under
 `workspaces/<workspace_id>.json`, one append-only `events/events.jsonl`, and `locks/`. Three locks
 with distinct jobs, detailed in ADR-1 and §4.4: a per-workspace **state lock** held only across a
-record read-modify-write, a per-workspace **operation lock** held across repair, and a global
-**events lock** serializing rotation against appends.
+record read-modify-write, a per-workspace **operation lock** held across any workspace-mutating
+operation, and a global **events lock** serializing rotation against both appends and reads.
 
 **Reconcile** — the only component permitted to read both State and Backend and to notice that they
 disagree. It is read-only with respect to the workspace: it writes records and events, and never
@@ -122,10 +122,12 @@ under a *shared* lock on the global event file and touches no record (see §4.4)
 1. **Resolve** → slug `slabledger`, tree `~/workspace/slabledger`, `workspace_id` from the path
    digest, session name `slabledger`.
 2. **Config** → merged JSON, plus a `config_digest` (sha256 of the normalized document).
-3. **Reconcile** (read-only) → take the state lock; ask Backend what is actually live; fold any
-   hook-appended events; write deltas to the record and the event log **before anything acts**;
-   release the lock. Every command begins from observed truth rather than from a stale record, and
-   this step is identical for `open`, `list`, and `status` precisely because it changes nothing.
+3. **Reconcile** (read-only) → observe and fold **outside** any state lock: ask Backend what is
+   actually live, read the event segments under a *shared* events lock, compute the intended record.
+   Then take the state lock only to re-read, check the record is unchanged, and commit — retrying the
+   computation if it moved. Deltas are written to the record and the event log **before anything
+   acts**. Every command begins from observed truth rather than from a stale record, and this step is
+   identical for `open`, `list`, and `status` precisely because it changes nothing.
 4. **Ensure** (repair; `open` only) → take the operation lock `flock -n`, or report that another
    `dev` holds it and exit.
 5. **Runtime** → detect compose; resolve the devcontainer CLI by *executing* it (ADR-5).
@@ -135,8 +137,25 @@ under a *shared* lock on the global event file and touches no record (see §4.4)
 7. **Backend** → find session `slabledger`, verify its recorded worktree matches the resolved path
    (ADR-7), and attach; or create it and apply the layout, executing each window's command through
    the builder Container supplied.
-8. **Events** → `workspace.opened` or `workspace.attached`. Release the operation lock.
+8. **Events** → `workspace.opened` if the session was created. Release the operation lock.
 9. **`bin/dev`** execs the attach and gets out of the way.
+
+**`workspace.attached` is not emitted here, and an earlier draft's emitting it at step 8 was a bug.**
+That writes the event *before* `exec tmux attach`, so an attach that fails — no TTY, a server that
+died in the gap, a terminal too small — leaves a recorded attachment that never happened, with a
+timestamp that is wrong in the one direction the event stream exists to get right. `exec` also means
+`bin/dev` is gone and has no opportunity to retract it.
+
+Attachment and detachment are reported by tmux itself, through the `client-attached` and
+`client-detached` hooks registered alongside the others in `dev.tmux.conf`. tmux fires them when a
+client is actually attached or actually gone, which is both the correct fact and the correct
+timestamp, and it also captures attachments this platform did not initiate — a user running
+`tmux attach -t slabledger` by hand is a real attachment and a dashboard should see it. That the
+hook-based path observes more than the CLI-based path could is the argument for it, not an
+accident of it.
+
+`workspace.opened` stays where it is: session creation is something `dev` does and can confirm
+synchronously, so there is nothing to gain by routing it through a hook.
 
 The load-bearing invariant: **`open` never destroys.** It is `reconcile → ensure → attach`, where
 `ensure` is a set of idempotent existence checks. There is no code path from `open` to
@@ -292,6 +311,27 @@ microseconds, no blocking subprocess inside it, ever. This is what ADR-3's bound
 a lock across `devcontainer up` would mean holding it for minutes across a process that can hang, in
 a language with no way to release it on an unexpected signal path.
 
+**Reconcile therefore cannot hold it while observing**, and an earlier draft's data flow said it did —
+"take the state lock, ask Backend what is live, fold events, release" — which is a `tmux list-panes`,
+a `docker inspect`, and a scan of several megabytes of JSONL inside a lock advertised as microsecond
+-scale. That is the same defect as holding it across `devcontainer up`, only less obvious. Reconcile
+runs **observe → compute → commit**:
+
+*Observe and compute*, holding no state lock. Query the backend, read the event segments (under the
+shared events lock, per the fold protocol below), and compute the record the observations imply.
+Nothing is written. This is the slow part and it is now unlocked, so a `dev list` across seven
+workspaces does not serialize against a `dev status` on one of them.
+
+*Commit*, holding the state lock for one read-modify-write. Re-read the record and compare it against
+the copy the computation started from. If unchanged, write the computed record and release. If it
+changed — another `dev` committed while this one was observing — **discard and retry the whole
+observe-compute-commit cycle**, bounded at three attempts, after which the command reports that the
+workspace is changing under it and exits non-zero rather than overwriting.
+
+Retry is safe and cheap because observation is idempotent and the losing side's work is thrown away
+rather than merged. The bound exists because an unbounded compare-and-swap loop in bash against a
+workspace something else is actively repairing is a spin, not a wait.
+
 *The operation lock* (`locks/<workspace_id>.op`) is taken `flock -n` for the whole of any
 **workspace-mutating** operation. It is not a state lock and is never held while writing records; it
 exists solely so two `dev` invocations cannot act on the same workspace concurrently — two
@@ -308,8 +348,8 @@ with respect to the workspace, and making a listing block on a running rebuild w
 reason the phases were split. The rule is therefore exactly: **anything that may mutate the workspace
 takes the operation lock; anything that only observes does not.**
 
-Releasing the state lock before ensure does mean the observation ensure acts on may be a few hundred
-milliseconds stale. That is acceptable because every operation ensure performs is idempotent and
+Committing the record before ensure runs does mean the observation ensure acts on may be a few
+hundred milliseconds stale. That is acceptable because every operation ensure performs is idempotent and
 re-checks its own precondition immediately before acting — `devcontainer up` on a running container
 returns it, `respawn_pane` on a live pane is a no-op. The operation lock covers the case idempotency
 does not.
@@ -340,15 +380,22 @@ each was already half-present.
 1. **Every event carries `id`** — 16 hex characters, from `openssl rand -hex 8`, generated by the
    emitter. Not a sequence number (§4.4 explains why there is none) and not a hash of the content,
    since two identical events can legitimately occur. It exists to be compared, not ordered.
-2. **Every record carries `folded_through`** — `{ "id": ..., "ts": ... }` for the last event applied,
-   written under the state lock in the same read-modify-write that applies the fold. Reconcile scans
-   forward from that position: it reads `events.jsonl` (and, if the watermark is older than the file's
-   first line, the rotated segments back to the one containing it), skips lines up to and including
-   the matching `id`, and applies the rest.
+2. **Every record carries `scanned_through`** — `{ "id": ..., "ts": ... }` for the last event the
+   record's reconcile *scanned*, whether or not that event concerned this workspace. Reconcile skips
+   forward to the matching `id` and folds every later event addressed to this `workspace_id`.
+
+   The cursor deliberately tracks global scan position rather than last-applied event, and an earlier
+   draft got this exactly backwards by storing the last event *applied*. The consequence there is
+   ugly: a workspace that is reconciled daily but rarely changes keeps a cursor pointing at its own
+   last transition, which ages while the global file churns. It rescans the whole stream every time,
+   and eventually reports `fold_gap` because *its* old event rotated away — even though it was
+   present for every rotation in between and missed nothing at all. A false gap is worse than no gap
+   flag, because it trains a consumer to ignore the flag. Advancing across unrelated events makes the
+   cursor track what it is actually for: how far this record has read.
 3. **Folding is idempotent regardless**, and this is the actual safety net. Every fold step is an
    absolute assignment — `workspace.stopped` sets `status: stopped`, it does not decrement a counter —
-   so replaying an event the record already reflects produces the same record. The watermark is an
-   efficiency and clarity mechanism; correctness does not rest on it. A protocol whose correctness
+   so replaying an event the record already reflects produces the same record. The cursor is an
+   efficiency and honesty mechanism; correctness does not rest on it. A protocol whose correctness
    depended on exactly-once delivery of a line in a rotating file is one this design should not sign
    up for.
 4. **Events older than the current incarnation are ignored.** An event whose `ts` precedes the
@@ -356,7 +403,18 @@ each was already half-present.
    mark a freshly opened workspace as stopped. This is a real ordering hazard, not a theoretical one:
    `workspace.stopped` from yesterday's session sits in the same file as today's `workspace.opened`.
 
-**When the watermark is unreachable.** If `folded_through.id` is not found in any retained segment —
+**Readers take the shared events lock, exactly as appenders do.** §4.4 gives rotation an exclusive
+`locks/events.lock` and appends a shared one; folding is a third participant and an earlier draft
+omitted it, which leaves reconcile enumerating segments that rotation is concurrently renaming and
+deleting. The failure is not hypothetical — the fold would read a partial segment set and conclude
+its cursor was unreachable, producing a `fold_gap` caused entirely by the reader's own race.
+
+Folding therefore holds `flock -s` on `locks/events.lock` across **both** establishing its segment
+list and reading those segments, releasing only once the lines are in hand. Shared holders do not
+contend with each other, so a fold does not block appends from hooks; it blocks only rotation, and
+only for the duration of a read. Rotation is checked after the fold releases, never inside it.
+
+**When the cursor is unreachable.** If `scanned_through.id` is not found in any retained segment —
 the workspace was untouched for long enough that its position rotated away — reconcile does not
 guess. It sets `fold_gap: true` on the record, emits nothing for the missing span, and falls back to
 pure observation: whatever the backend currently reports becomes the record's status. `dev status`
@@ -672,11 +730,24 @@ convention used across this whole repository set, and branch names like `ui-pass
 harmless name clash — it is one workspace attaching to another project's session, or two workspaces
 writing the same record and lock. Identity is therefore split in two:
 
-*`workspace_id`* — `sha256(realpath(worktree))`, first 12 hex characters. This is the **only** thing
-used to name files: the record is `workspaces/<workspace_id>.json` and the lock is
-`locks/<workspace_id>.lock`. It is unconditionally unique, requires no collision check, and is stable
-across renames of anything except the path itself. State can therefore never collide, including
-before any collision check has had a chance to run.
+*`workspace_id`* — the **full** `sha256(realpath(worktree))`, 64 hex characters. This is the only
+thing used to name files: the record is `workspaces/<workspace_id>.json` and the locks are
+`locks/<workspace_id>.lock` and `.op`. It requires no collision check and is stable across renames of
+anything except the path itself. State can therefore never collide, including before any collision
+check has had a chance to run.
+
+An earlier draft truncated to 12 hex characters and called the result "unconditionally unique," which
+is not true and mattered because of how strongly this design leans on it. 48 bits is a birthday
+collision around 2^24 paths — vanishingly unlikely here, but "unlikely" is a different guarantee from
+"impossible," and the whole argument for keying state by digest is that it removes the collision
+check rather than making it improbable enough to skip. A design that says *never* should either mean
+it or say *almost never*. The full digest costs 52 characters in a filename nobody types and restores
+the stronger claim, so there is nothing to trade.
+
+Unwieldy filenames are not a usability problem because nothing user-facing displays a
+`workspace_id`: `session_name` is the human-facing identifier by construction (below), and `dev list`,
+`dev status`, and error messages all use it. The digest appears in paths and in event payloads, both
+of which are read by programs.
 
 *`session_name`* — the human-facing name, `<slug>` for a primary working tree and `<slug>--<basename>`
 for a worktree. Readable, and the slug prefix already removes cross-project collisions. The residual
@@ -785,12 +856,12 @@ $DEV_OVERLAY_ROOT/<slug>/
   workspace.yaml                       # Per-repo overrides; version-controlled
   workspace.local.yaml                 # Machine-local, gitignored; secrets and host-specific env
 ~/.local/state/dev/                    # Runtime state; not in the repository
-  workspaces/<workspace_id>.json       # One record per working tree, keyed by path digest
+  workspaces/<workspace_id>.json       # One record per working tree; name is the full sha256 of its path
   events/events.jsonl                  # Append-only event stream
   events/events-<ts>.jsonl             # Rotated segments, newest-first retention
   locks/<workspace_id>.lock            # State lock: record read-modify-write only
-  locks/<workspace_id>.op              # Operation lock: held across ensure/repair
-  locks/events.lock                    # Global: exclusive for rotation, shared for appends
+  locks/<workspace_id>.op              # Operation lock: every workspace-mutating operation
+  locks/events.lock                    # Global: exclusive for rotation, shared for appends and folds
   runtime.json                         # Cached detection: mise path + pinned CLI spec, docker flavor
 ```
 
@@ -911,13 +982,14 @@ container, as slabledger does above, trades that guarantee away knowingly.
 
 Referenced throughout §2 but defined here. One file per working tree at
 `~/.local/state/dev/workspaces/<workspace_id>.json` — keyed by the path digest, never by a name, so
-two projects with same-named worktrees cannot collide (ADR-7). Mutated only by reconcile, only under
-the state lock.
+two projects with same-named worktrees cannot collide (ADR-7). Mutated only by reconcile, and only in
+its commit phase under the state lock — observation and folding happen before the lock is taken
+(ADR-1).
 
 ```json
 {
   "v": 1,
-  "workspace_id": "9f2c4a7b1e05",
+  "workspace_id": "9f2c4a7b1e05de3c8a41f07b2e6d95c3a8b17f42e0d6c95183ba7e4f2c0d68a9",
   "session_name": "slabledger",
   "slug": "slabledger",
   "worktree": "/home/tng/workspace/slabledger",
@@ -939,7 +1011,7 @@ the state lock.
   ],
   "opened_at": "2026-08-03T13:58:02.001Z",
   "last_seen": "2026-08-03T14:02:11.412Z",
-  "folded_through": { "id": "4b1e05a7c39f2d18", "ts": "2026-08-03T14:02:11.412Z" },
+  "scanned_through": { "id": "4b1e05a7c39f2d18", "ts": "2026-08-03T14:02:11.412Z" },
   "fold_gap": false,
   "stopped_reason": null
 }
@@ -968,10 +1040,11 @@ resolved.
 `stopped_reason` is `null` while running, and otherwise one of `user`, `host_restart`, `vanished`,
 `container_failed`.
 
-`folded_through` is the event-fold watermark defined in ADR-1: the `id` and `ts` of the last event
-applied to this record. `opened_at` does double duty as the incarnation boundary — events older than
+`scanned_through` is the event-fold cursor defined in ADR-1: the `id` and `ts` of the last event this
+record's reconcile scanned, advanced across events belonging to other workspaces as well as its own,
+so an idle workspace's cursor tracks the file tail rather than its own last transition. `opened_at` does double duty as the incarnation boundary — events older than
 it belong to a previous life of the same working tree and are never folded. `fold_gap` is set when
-the watermark rotated out of retention before reconcile could reach it, meaning the record was rebuilt
+the cursor rotated out of retention before reconcile could reach it, meaning the record was rebuilt
 from observation alone and some transitions are unrecorded. It is surfaced by `dev status` rather than
 silently cleared, because a consumer must be able to tell an uneventful history from a lost one.
 
@@ -1011,7 +1084,16 @@ Three rules follow, and they are requirements on the emitter rather than folklor
    it takes none — a shared `flock` on an uncontended file costs microseconds, which is affordable in
    a tmux hook, and "cheap" was never worth buying with silent event loss.
 
-Rotation is checked during reconcile, which is also the only place with a reason to look.
+Rotation is checked during reconcile, which is also the only place with a reason to look — after the
+fold has released its shared lock, never while it is held, since a rotation that waited on its own
+reader would deadlock the pass that triggered it.
+
+**Reads take the shared lock too.** Three roles touch this file, not two: appenders (`flock -s`),
+rotation (`flock -x`), and the fold pass in reconcile (`flock -s`, held across both listing the
+segments and reading them). Omitting the third lets reconcile enumerate a segment that rotation then
+deletes before it is read, and the resulting short read is indistinguishable from a genuinely
+unreachable cursor — a `fold_gap` manufactured by the reader itself. ADR-1 states the reader-side
+obligation; it is repeated here because this is the section someone implementing rotation will read.
 
 **Testing this is not optional.** The verification is a bats test that spawns N concurrent emitters
 against one file while a rotation runs, then asserts every emitted event appears exactly once across
@@ -1026,7 +1108,7 @@ that are only reasoned about are how the `PIPE_BUF` error survived a draft.
   "id": "4b1e05a7c39f2d18",
   "ts": "2026-08-03T14:02:11.412Z",
   "event": "container.replaced",
-  "workspace_id": "9f2c4a7b1e05",
+  "workspace_id": "9f2c4a7b1e05de3c8a41f07b2e6d95c3a8b17f42e0d6c95183ba7e4f2c0d68a9",
   "slug": "slabledger",
   "session_name": "slabledger",
   "worktree": "/home/tng/workspace/slabledger",
@@ -1035,7 +1117,7 @@ that are only reasoned about are how the `PIPE_BUF` error survived a draft.
 ```
 
 `v` versions the envelope. `id` is 16 random hex characters, unique per event and used solely as the
-fold watermark ADR-1 defines — consumers may use it to deduplicate, and must not read ordering into
+fold cursor ADR-1 defines — consumers may use it to deduplicate, and must not read ordering into
 it. There is deliberately **no sequence number**: it could only ever be a
 partial order, since hook-emitted events cannot take the lock required to assign one, and a
 partially-ordered counter invites exactly the total-ordering assumption it cannot support. Ordering
@@ -1057,17 +1139,82 @@ thing to subscribe to.
 The namespacing is deliberate: a future consumer subscribes to `agent.*` or `container.*` without
 enumerating types, so adding types later does not break it.
 
+**Payloads and fold transitions.** A list of names is not an API. §4.4 previously gave one, and it
+left every question a consumer or an implementer actually has unanswered: which fields `data` carries
+for each type, and what folding that event does to a record. Both the promised stability of the
+consumer contract and the fold-equivalence test below are unimplementable without it, since the test
+asserts that folding the log reproduces the record and there was no statement of what folding *is*.
+
+Envelope fields (`v`, `id`, `ts`, `event`, `workspace_id`, `slug`, `session_name`, `worktree`) are
+present on every event and omitted from the table. `data` carries only what is listed; an absent
+optional field means "not known," never a default. Every transition is an absolute assignment, which
+is what makes replay idempotent (ADR-1).
+
+| Event | Required `data` | Optional `data` | Fold transition on the record |
+|---|---|---|---|
+| `workspace.opened` | `boot_id`, `config_digest`, `session_name_actual` | — | `status=running`; `opened_at=ts` (new incarnation boundary); `boot_id`, `applied_digest=config_digest`, `session_name=session_name_actual`; `stopped_reason=null`; clear `fold_gap` |
+| `workspace.attached` | `client` | — | `last_seen=ts` only |
+| `workspace.detached` | `client` | — | `last_seen=ts` only |
+| `workspace.stopped` | `reason` (`user`\|`container_failed`) | — | `status=stopped`; `stopped_reason=reason` |
+| `workspace.vanished` | `discovered_at`, `reason` (`vanished`\|`host_restart`) | `last_boot_id` | `status=stopped`; `stopped_reason=reason` |
+| `window.created` | `window`, `location` (`container`\|`host`) | `command` | none — layout is observed, not folded |
+| `pane.died` | `window` | `exit_status` | if the window carries an agent: `agents[window].state=exited` |
+| `pane.respawned` | `window` | `container_id` | if the window carries an agent: `agents[window].state=started` |
+| `container.starting` | — | `config_path` | `container.verified=false` |
+| `container.ready` | `id`, `kind` (`compose`\|`single`), `user`, `workdir` | — | `container={id,kind,user,workdir}`; `container.observed_at=ts`; `container.verified=false` (§5.3) |
+| `container.failed` | `reason` | `stderr_tail` | `status=stopped`; `stopped_reason=container_failed` |
+| `container.lost` | `old_id` | `discovered_at` | `container.id=null`; `container.observed_at=ts` |
+| `container.replaced` | `old_id`, `new_id`, `reason` | — | `container.id=new_id`; `container.observed_at=ts` |
+| `agent.started` | `window`, `command` | — | `agents[window]={command, state:"started"}` |
+| `agent.exited` | `window` | `exit_status` | `agents[window].state=exited` |
+| `agent.failed` | `window`, `reason` | `exit_status` | `agents[window].state=failed` |
+| `config.changed` | `config_digest` | `applied_digest` | `config_digest` only — **never** `applied_digest`, which changes solely when a session is built (drift case D) |
+
+Four of these were genuinely underspecified rather than merely undocumented, and each is a decision
+rather than a transcription:
+
+*`workspace.opened` carries `session_name_actual`.* ADR-7's collision guard can choose
+`<slug>--<basename>--<hash6>` at open time, so the name the platform intended and the name it got can
+differ. The envelope's `session_name` is what was used; carrying it in `data` as well is what lets the
+fold *write* it to the record, which is the step that closes the same gap ADR-1's
+`@dev_workspace_id` closes on the hook side.
+
+*Container binding is `container.ready`, not `container.starting`.* Only the former knows the id,
+user, and workdir, and a fold that bound a container on `starting` would record a container that may
+never exist.
+
+*`workspace.opened` sets `opened_at`, and that is what creates an incarnation.* ADR-1's rule that
+events older than `opened_at` are ignored needs some event to *move* `opened_at`; this is it. It is
+also why `opened_at` is assigned from `ts` rather than from wall-clock at fold time.
+
+*`attached`/`detached` fold to `last_seen` and nothing else.* Attachment is not a workspace state — a
+detached workspace is still running, which is the entire point of the platform — so these events must
+not touch `status`. They are emitted by tmux's own client hooks (§1.2), so `client` identifies which
+client, and a workspace with two attached clients that loses one is unchanged apart from `last_seen`.
+
+**Unknown event types are ignored by the fold, not rejected.** A consumer or a future reconcile
+reading a log written by a newer `dev` skips types it does not recognize and advances its cursor past
+them. This is what makes the namespacing claim above true rather than aspirational: adding a type in
+Phase 2 must not make Phase 1's fold refuse to run.
+
 **Retention.** Rotate when `events.jsonl` exceeds 8 MiB, checked during reconcile under an exclusive
 `locks/events.lock`. Rotated segments are named `events-<RFC3339-basic>.jsonl`; the five most recent are
 retained and older ones deleted. No compression — these are small, and keeping them greppable with
 plain `jq` matters more than the disk.
 
-Phase 1 ships **zero consumers**. Two bats tests establish that the stream is nonetheless real. The
+Phase 1 ships **zero consumers**. Three bats tests establish that the stream is nonetheless real. The
 first replays a full workspace lifecycle and asserts the log folds to the same state the records
 report — this is the test that keeps records honest as *eventual projections* (ADR-1), since a hook
 appends the event and only a later reconcile writes the record, and any divergence between the two
-paths shows up here. The second is the concurrency test described above. Between them they cover the
-two ways this design could be quietly wrong: disagreeing with itself, and losing writes.
+paths shows up here. It is testable at all only because the transition table above defines what
+folding does; against a bare list of event names it could assert nothing. The second is the
+concurrency test described above, extended to run a fold concurrently with rotation and appends so
+the reader's shared lock is exercised rather than assumed. The third asserts idempotence directly:
+folding the same segment twice must produce a byte-identical record, which is the property ADR-1
+relies on in place of exactly-once delivery.
+
+Between them they cover the three ways this design could be quietly wrong: disagreeing with itself,
+losing writes, and double-applying what it did not lose.
 
 ---
 
