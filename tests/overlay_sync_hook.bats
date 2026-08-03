@@ -176,6 +176,34 @@ run_hook() {
     /home/ghost/.dotfiles/projects/gone/.claude/skills ]
 }
 
+@test "does not adopt a path-navigation slug from a link target" {
+  # The -d test cannot reject "." or ".." — both name directories that exist.
+  # ".." is the one that bites: $DOTFILES/projects/.. is $DOTFILES itself, so
+  # an unvalidated candidate hands the linker --slug .. and links the global
+  # $DOTFILES/.claude into the project as if it were this project's overlay.
+  # Give that escape something real to land on, so dropping the guard fails
+  # this test loudly instead of passing because there was nothing to link.
+  mkdir -p "$DOTFILES/.claude/skills/global"
+  echo global >"$DOTFILES/.claude/skills/global/SKILL.md"
+
+  n=0
+  for nav in .. .; do
+    n=$((n + 1))
+    mounted="$TEST_ROOT/app$n"
+    git clone --quiet "$PROJECT" "$mounted"
+    mkdir -p "$mounted/.claude"
+    target="/home/ghost/.dotfiles/projects/$nav/.claude/skills"
+    ln -s "$target" "$mounted/.claude/skills"
+
+    run bash "$HOOK" <<<"$(printf '{"cwd":"%s"}' "$mounted")"
+
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+    [ "$(readlink "$mounted/.claude/skills")" = "$target" ]
+    [ ! -e "$mounted/.claude/skills/global/SKILL.md" ]
+  done
+}
+
 @test "does nothing outside a git repository" {
   mkdir -p "$TEST_ROOT/plain"
   run bash "$HOOK" <<<"$(printf '{"hook_event_name":"SessionStart","cwd":"%s"}' "$TEST_ROOT/plain")"

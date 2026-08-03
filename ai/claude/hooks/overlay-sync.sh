@@ -63,7 +63,15 @@ if [ ! -d "$DOTFILES/projects/$slug" ]; then
     esac
     candidate=${target#*/projects/}
     candidate=${candidate%%/*}
-    if [ -n "$candidate" ] && [ -d "$DOTFILES/projects/$candidate" ]; then
+    # A slug is one path component, so "." and ".." are never valid ones — and
+    # the -d test below cannot reject them, since both resolve to directories
+    # that exist. ".." is the one that bites: it escapes projects/ entirely, so
+    # the linker would be handed --slug .. and would link $DOTFILES/.claude,
+    # the global agent config, into the project as if it were an overlay.
+    case "$candidate" in
+      "" | "." | "..") continue ;;
+    esac
+    if [ -d "$DOTFILES/projects/$candidate" ]; then
       slug="$candidate"
       break
     fi
