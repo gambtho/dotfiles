@@ -648,11 +648,22 @@ Report to the user:
   ```bash
   docker ps --format '{{.ID}}\t{{.Names}}\t{{.Label "devcontainer.local_folder"}}'
   ```
+- For case (a): **check this one first — it decides whether any later check means anything.** Confirm the running container actually has the seed mounts, rather than assuming the config on disk is what it was built from:
+  ```bash
+  docker exec "$CID" sh -c 'test -d /host-seed && echo "/host-seed mounted"'
+  docker inspect "$CID" --format '{{index .Config.Labels "com.docker.compose.project.config_files"}}'
+  ```
+  A missing `/host-seed`, or a `config_files` list without `docker-compose.override.yml`, means the container predates the `dockerComposeFile` edit. **Editing `devcontainer.json` does not touch an existing container, and neither does restarting it** — Compose keeps the file list, mounts, and `command:` recorded at creation, so the seed has simply never run and every check below will fail with a misleading symptom (no `nvim`, no `claude`, no dotfiles). The fix is a **rebuild**, not a restart: *Dev Containers: Rebuild Container* in VS Code. Do not `docker compose up` it by hand — the devcontainer CLI injects generated compose files for features and the build, and recreating without them silently drops those layers.
 - For case (a): verify the `claude` CLI binary is installed AND on PATH — this is the check that catches the "claude isn't installed in the devcontainer" failure:
   ```bash
   docker exec -u "$REMOTE_USER" "$CID" zsh -lic 'whence -v claude; claude --version'
   ```
   If `claude` doesn't resolve, either the seed's CLI-install step didn't run (override not loaded — re-check `dockerComposeFile`, Section 6c) or `~/.local/bin` isn't on PATH (the always-run PATH hook didn't fire — check the seed log for `added ~/.local/bin to PATH`).
+- For case (a): verify the `tree-sitter` CLI resolves — without it every nvim-treesitter parser fails to build at first launch, since `config/nvim` pins the `main` branch and its installer shells out to `tree-sitter build` with no bare-`cc` fallback:
+  ```bash
+  docker exec -u "$REMOTE_USER" "$CID" zsh -lic 'whence -v tree-sitter; tree-sitter --version'
+  ```
+  If it doesn't resolve, the seed's tree-sitter step didn't run (check the seed log for `tree-sitter ready`); on a container predating that step, catch the seed up per `catch-up-local-seed.md`. The symptom is a wall of `Error during "tree-sitter build": ... ENOENT ... (cmd): 'tree-sitter'` on opening any file.
 - For case (a): confirm zsh is the **default** shell and the proxy env reaches it — this catches "claude isn't picking up the vekil proxy" when everything else looks fine but the terminal opens bash:
   ```bash
   docker exec -u "$REMOTE_USER" "$CID" sh -c 'test "$(getent passwd $(id -un) | cut -d: -f7)" = "$(command -v zsh)" && echo "default shell = zsh"'

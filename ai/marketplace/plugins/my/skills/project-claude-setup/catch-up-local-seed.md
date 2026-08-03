@@ -79,6 +79,7 @@ one below the gate means a container that is already stamped will never run it.
 | `core.hooksPath` | `core.hooksPath` | Same reason, for the dotfiles git hooks. |
 | neovim install | `NVIM_VERSION` | The dotfiles set `EDITOR=nvim` but nothing in them installs the binary — on a host it arrives via the package lists, which no devcontainer image runs. An `EDITOR` naming a missing command breaks `git commit` with an error that blames git. Pinned and sha256-verified from `config/versions.env`; non-fatal. |
 | `~/.config/nvim` link | `config/nvim` | Without it the binary starts bare and none of `config/nvim` applies. Must not clobber a real directory. |
+| tree-sitter CLI | `TREE_SITTER_VERSION` | `config/nvim` pins nvim-treesitter to `main`, whose installer shells out to `tree-sitter build` per parser with no fallback to a bare `cc`. A container with gcc but no CLI still fails every parser at first launch (`ENOENT ... (cmd): 'tree-sitter'`). On a host it comes from mise, which the seed never runs. Pinned and sha256-verified from `config/versions.env`; non-fatal. |
 | `load-custom.zsh` loader | `DOTFILES_LOAD_HOOK` | The supported entry point for the shell tree. Append it **before** the Vekil hook — `ai/vekil/env.zsh` exports `ANTHROPIC_MODEL`, which outranks `settings.json`, so it has to get the last word. |
 | codex guard | `local/bin/codex` | Guard the reinstall on the **binary**, not `~/.codex/config.toml`. The installer writes config even when it fails to produce a binary, so a config-based guard latches shut and codex never reinstalls. |
 
@@ -146,6 +147,9 @@ find .claude -xtype l                       # must print nothing
 git status --porcelain | grep -i claude     # must print nothing
 nvim --version | head -1
 zsh -lic 'whence -v nvim; print $EDITOR'
+tree-sitter --version                       # must print a version, not "not found"
+# Compiles the bootstrap parser set — must end with no "tree-sitter build" errors
+nvim --headless -c 'lua require("nvim-treesitter").install({"lua"}):wait(120000)' -c q
 git config --global core.hooksPath
 git config --global core.excludesFile
 ```
