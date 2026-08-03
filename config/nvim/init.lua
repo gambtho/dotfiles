@@ -882,7 +882,27 @@ require('lazy').setup({
     config = function()
       -- ensure basic parser are installed
       local parsers = { 'bash', 'c', 'diff', 'html', 'lua', 'luadoc', 'markdown', 'markdown_inline', 'query', 'vim', 'vimdoc' }
-      require('nvim-treesitter').install(parsers)
+
+      -- This branch shells out to the `tree-sitter` CLI for every parser build,
+      -- with no fallback to a bare `cc`. Calling install() without a working CLI
+      -- does not fail quietly — it emits one `Error during "tree-sitter build":
+      -- ... ENOENT ... (cmd): 'tree-sitter'` per parser, on every single
+      -- startup, so opening any file buries the buffer under a wall of errors.
+      --
+      -- Running it is the check, not `executable()`. The CLI's official Linux
+      -- builds are dynamically linked against a recent glibc, so on an older
+      -- base image (Debian bookworm ships 2.36; the binaries want 2.39) the file
+      -- is present and executable and still dies at exec time.
+      --
+      -- Without one, degrade to regex syntax highlighting rather than erroring.
+      -- `:checkhealth nvim-treesitter` reports the missing CLI and the version
+      -- it wants, so this stays diagnosable without spamming startup.
+      local function tree_sitter_cli_works()
+        return vim.fn.executable('tree-sitter') == 1
+          and vim.system({ 'tree-sitter', '--version' }):wait().code == 0
+      end
+
+      if tree_sitter_cli_works() then require('nvim-treesitter').install(parsers) end
 
       ---@param buf integer
       ---@param language string

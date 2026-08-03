@@ -596,6 +596,17 @@ elif [ -r "$DOTFILES_HOME/config/versions.env" ]; then
       as_user "$TS_BIN.new" --version >/dev/null 2>&1 &&
       as_user mv "$TS_BIN.new" "$TS_BIN"; then
       echo "🌱 seed: tree-sitter ready"
+    elif [ -f "$TS_BIN.new" ] && ! as_user "$TS_BIN.new" --version >/dev/null 2>&1; then
+      # Distinguished from a generic failure because it is not fixable here and
+      # reads as a seed bug otherwise. Upstream's Linux binaries are dynamically
+      # linked against a recent glibc — every 0.26.x needs 2.39, while Debian
+      # bookworm ships 2.36 — and nvim-treesitter's `main` branch refuses a CLI
+      # older than 0.26.1, so on such an image no published build can work. The
+      # nvim config skips parser installs when the CLI cannot run, so this costs
+      # treesitter highlighting and nothing else. Fixing it means a newer base
+      # image (trixie and up are fine); naming the local glibc makes that call
+      # possible from the log alone.
+      echo "⚠️  seed: tree-sitter $TREE_SITTER_VERSION needs a newer glibc than this image has ($(ldd --version 2>&1 | head -1)) — skipping (nvim falls back to regex highlighting)"
     else
       echo "⚠️  seed: tree-sitter install failed (non-fatal; treesitter parsers will not compile)"
     fi

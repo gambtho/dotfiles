@@ -905,16 +905,20 @@ cp "$TS_FIXTURE" "$out"
 }
 
 @test "a tree-sitter that cannot execute is not installed" {
-  # The release binaries are dynamically linked against glibc, so on a musl base
-  # image the file is executable and still dies at exec time. `test -x` would
-  # accept it and leave a binary that looks installed while nvim-treesitter keeps
-  # failing — so the seed validates by actually running --version.
+  # The release binaries are dynamically linked against glibc, so on an older
+  # base image the file is executable and still dies at exec time. `test -x`
+  # would accept it and leave a binary that looks installed while
+  # nvim-treesitter keeps failing — so the seed validates by running --version.
   stage_tree_sitter_download 'exit 127'
 
   run bash "$SEED_SCRIPT"
 
   [ "$status" -eq 0 ]
-  [[ "$output" == *"tree-sitter install failed"* ]]
+  # Reported as the environment limit it is, not as a generic failure: no
+  # published 0.26.x build runs on a glibc this old, so the operator needs to
+  # know a retry cannot help and a newer base image is the only fix.
+  [[ "$output" == *"needs a newer glibc"* ]]
+  [[ "$output" == *"regex highlighting"* ]]
   [ ! -e "$HOME/.local/bin/tree-sitter" ]
   [ ! -e "$HOME/.local/bin/tree-sitter.new" ]
 }
