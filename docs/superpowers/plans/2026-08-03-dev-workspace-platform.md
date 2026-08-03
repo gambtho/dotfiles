@@ -20,7 +20,7 @@
 - **Every workspace-mutating operation takes the operation lock (`locks/<workspace_id>.op`) with `flock -n`.** Phase 1's full list: `open` (ensure), `stop`, `dev-autostart`. Failure to acquire exits 7; it is never retried. `list` and `status` do not take it.
 - **`locks/events.lock` is exclusive (`flock -x`) for rotation and shared (`flock -s`) for appends AND for folds.** A fold holds the shared lock across both establishing its segment list and reading those segments. Rotation is checked after the fold releases, never inside it.
 - **One `printf` per event, 4 KiB cap.** The line is composed entirely in memory and written with a single syscall; free-form `data` is truncated and marked `truncated: true`.
-- **Discovery events use deterministic ids, and the ordering is emit-then-commit.** `id = sha256(workspace_id || event_type || discriminator)` truncated to 16 hex, for `workspace.vanished` (discriminator: recorded `boot_id`), `container.lost` (lost container id), and `config.changed` (new `config_digest`). Emit skips ids already present in the retained segments, so CAS retries append nothing.
+- **Discovery events use deterministic ids, and the ordering is emit-then-commit.** `id = sha256(workspace_id || event_type || discriminator)` truncated to 16 hex, for `workspace.vanished` (discriminator: recorded `boot_id` + `opened_at`), `container.lost` (lost container id + the `container.observed_at` that bound it), and `config.changed` (new `config_digest` + current `applied_digest`). Emit skips ids already present in the retained segments, so CAS retries append nothing. Each discriminator names the *occasion* as well as the subject: without the second component a workspace that vanished, was reopened and vanished again — or a config edited A → B → A — would re-derive an id already on disk, and the second, genuinely new event would be dropped as a duplicate.
 - **Every fold transition is an absolute assignment** (`workspace.stopped` sets `status=stopped`; nothing increments or decrements), which is what makes replay idempotent.
 - **Unknown event types are ignored by the fold, not rejected.** Forward compatibility is a contract: a consumer or an older binary meeting a newer type must fold past it.
 - **`dev list --json` is the public snapshot contract; `workspaces/*.json` is not.** Records are historical projections documented in §4.3 so the format is understood, not so it is depended upon.
@@ -832,7 +832,7 @@ YAML
   [ "$(window_field "$output" agent-1 focus)" = "true" ]
   [ "$(window_field "$output" agent-2 agent)" = "claude" ]
   [ "$(window_field "$output" shell command)" = "null" ]
-  [ "$(window_field "$output" shell location)" = "container" ]
+  [ "$(window_field "$output" shell location)" = "null" ]
   [ "$(jq -r .environment.CGO_ENABLED <<<"$output")" = "1" ]
   [ "$(jq -r .environment.DATABASE_URL <<<"$output")" = "postgres://localhost:5432/slabledger_dev" ]
 }
@@ -865,7 +865,33 @@ YAML
   run dev_config_merged slabledger "$WORKTREE"
   [ "$status" -eq 0 ]
   [ "$(jq -r '.windows | map(.name) | join(",")' <<<"$output")" = "agent-1,agent-2,shell,scratch,docs,logs" ]
-  [ "$(window_field "$output" docs location)" = "container" ]
+  [ "$(window_field "$output" docs location)" = "null" ]
+}
+
+@test "an unset location stays null so the record can resolve it per workspace" {
+  # Spec §4.1: "Default container when one exists". Normalization cannot know
+  # whether one exists, so it must not decide. Only `scratch` pins host.
+  run dev_config_merged slabledger "$WORKTREE"
+  [ "$status" -eq 0 ]
+  [ "$(window_field "$output" agent-1 location)" = "null" ]
+  [ "$(window_field "$output" agent-2 location)" = "null" ]
+  [ "$(window_field "$output" shell location)" = "null" ]
+  [ "$(window_field "$output" scratch location)" = "host" ]
+}
+
+@test "a window name outside [A-Za-z0-9._-] exits 5" {
+  # The charset is load-bearing beyond tidiness: window names are interpolated
+  # into tmux hook commands (Task 16), where a quote or backslash would break
+  # out of the shell word the hook builds.
+  write_tracked <<'YAML'
+version: 1
+windows:
+  - name: "my agent's window"
+    command: true
+YAML
+  run dev_config_validate "$(dev_config_merged slabledger "$WORKTREE")"
+  [ "$status" -eq 5 ]
+  [[ "$output" == *"invalid name"* ]]
 }
 
 @test "a new window whose name is a substring of an existing one is appended" {
@@ -1089,9 +1115,18 @@ DEV_CONFIG_NORMALIZE_JQ='
       agent: (.agent // null),
       command: (.command // null),
       cwd: (.cwd // null),
-      location: (.location // "container"),
+      location: (.location // null),
       focus: (.focus // false) })) }
 '
+# `location` normalizes to null, NOT to "container". Spec §4.1 reads "Default
+# container when one exists" — the default is conditional on the workspace
+# having a container, so it cannot be resolved here, where no record is in
+# scope. Collapsing unset to "container" at normalize time is what made a plain
+# repository unopenable: agent-1, agent-2 and shell would demand a container
+# binding that `devcontainer.enabled: auto` correctly never creates.
+# `dev_window_location` (Task 10) resolves null against the record instead, and
+# an EXPLICIT `location: container` still fails loudly on a repo with no
+# container, because that one the user actually asked for.
 
 dev_config_layer_json() {
   local file="$1"
@@ -1132,9 +1167,12 @@ dev_config_validate() {
       (if (.version != 1) then ["version must be 1, got \(.version | tostring)"] else [] end)
       + ((.windows // []) | map(select(.agent != null and .command != null)
           | "window \(.name) sets both agent and command") )
-      + ((.windows // []) | map(select((.location // "container")
-          | IN("container","host") | not)
+      + ((.windows // []) | map(select(.location != null and (.location
+          | IN("container","host") | not))
           | "window \(.name) has invalid location \(.location | tostring)") )
+      + ((.windows // []) | map(select(.name == null or ((.name | tostring)
+          | test("^[A-Za-z0-9._-]+$") | not))
+          | "window \(.name | tostring) has an invalid name; use [A-Za-z0-9._-]") )
       + ([(.windows // []) | group_by(.name)[] | select(length > 1)
           | "window \(.[0].name) is defined more than once"])
       + (if (((.windows // []) | map(select(.focus == true)) | length) > 1)
@@ -1151,7 +1189,11 @@ dev_config_validate() {
 - [ ] **Step 5: Run the test to verify it passes**
 
 Run: `bats tests/dev_config_merge.bats`
-Expected: PASS (16 tests, 0 failures)
+Expected: PASS (18 tests, 0 failures)
+
+`dev_config_merged` must leave `location` as JSON `null` for `agent-1`, `agent-2` and `shell`, and
+as `"host"` for `scratch`. Any later commit that reintroduces `// "container"` here breaks plain
+(non-devcontainer) repositories, which is the failure this normalization shape exists to prevent.
 
 - [ ] **Step 6: Check formatting and lint**
 
@@ -1193,7 +1235,10 @@ second descriptor in the same process contends with the first.
 Discovery event ids are deterministic (`sha256(workspace_id || event_type || discriminator)`
 truncated to 16 hex) so that reconcile's emit-then-commit ordering stays idempotent: a CAS retry
 recomputes the same id, `dev_events_has_id` finds it, and the append is skipped instead of
-duplicated (ADR-1).
+duplicated (ADR-1). The discriminator is opaque to this function — it is the caller's job to make it
+name the occasion and not just the subject, and Task 8 documents the composite each event type uses.
+Getting that wrong does not corrupt anything; it silently *drops* a later real event, which is why
+the composition is argued at each call site rather than left to the reader.
 
 - [ ] **Step 1: Write the failing unit tests**
 
@@ -1346,6 +1391,27 @@ fill_events() {
   segs=$(find "$DEV_STATE_ROOT/events" -name 'events-*.jsonl' | wc -l)
   [ "$segs" -eq 1 ]
   [ "$(cat "$DEV_STATE_ROOT"/events/events-*.jsonl | wc -l)" -eq 50000 ]
+}
+
+@test "events: two rotations in the same second keep both segments" {
+  # The regression: a second-resolution stamp plus a bare `mv` overwrote the
+  # first segment, losing 50k events with no error. Nothing here sleeps, so the
+  # two rotations land in the same second on any machine.
+  fill_events 50000
+  dev_events_rotate_if_needed
+  fill_events 50000
+  dev_events_rotate_if_needed
+
+  local d="$DEV_STATE_ROOT/events"
+  [ "$(find "$d" -name 'events-*.jsonl' | wc -l)" -eq 2 ]
+  [ "$(cat "$d"/events-*.jsonl | wc -l)" -eq 100000 ]
+
+  # And they are ordered oldest-first, which is what read_all depends on.
+  run dev_events_segments
+  [ "$status" -eq 0 ]
+  [ "${#lines[@]}" -eq 3 ]
+  [ "${lines[2]}" = "$d/events.jsonl" ]
+  [[ "${lines[0]}" < "${lines[1]}" ]]
 }
 
 @test "events: retention keeps exactly five rotated segments" {
@@ -1513,9 +1579,28 @@ dev_events_rotate_if_needed() {
     local size
     size=$(wc -c <"$live")
     ((size > DEV_EVENTS_ROTATE_BYTES)) || return 0
-    local stamp
-    stamp=$(date -u +%Y%m%dT%H%M%SZ)
-    mv "$live" "$dir/events-$stamp.jsonl"
+
+    # Sub-second precision plus a collision counter. A bare second-resolution
+    # stamp and a bare `mv` silently destroyed a segment when two rotations
+    # landed in the same second -- possible here because the threshold is a size,
+    # so a burst of appends can cross it twice in quick succession.
+    #
+    # The counter is present in EVERY name, not only on collision, and both parts
+    # are fixed-width. Segment order is lexical (the glob below and
+    # `dev_events_segments` both rely on it), and `-00` sorting against a bare
+    # `.jsonl` would put the newer file first: `-` is 0x2D, `.` is 0x2E. Uniform
+    # names remove that trap. Zero-padded %N sorts correctly for the same reason.
+    local stamp target n=0
+    stamp=$(date -u +%Y%m%dT%H%M%S.%NZ)
+    printf -v target '%s/events-%s-%02d.jsonl' "$dir" "$stamp" "$n"
+    while [[ -e "$target" ]]; do
+      n=$((n + 1))
+      # Bounded: something is badly wrong if this many segments share a
+      # nanosecond, and rotating is never worth spinning forever over.
+      ((n < 100)) || return 0
+      printf -v target '%s/events-%s-%02d.jsonl' "$dir" "$stamp" "$n"
+    done
+    mv "$live" "$target"
     : >"$live"
     local -a rotated=()
     local seg
@@ -1541,7 +1626,7 @@ U+FFFD; the line stays valid JSON, which is the property that matters.
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `bats tests/dev_state_events.bats`
-Expected: PASS (12 tests, 0 failures)
+Expected: PASS (13 tests, 0 failures)
 
 - [ ] **Step 5: Write the concurrency test**
 
@@ -1599,7 +1684,7 @@ appenders emitting 25 events each, with a rotation and a full read running again
 - [ ] **Step 6: Run the concurrency test**
 
 Run: `bats tests/dev_state_events.bats`
-Expected: PASS (13 tests, 0 failures). If `diff` reports missing ids, an append was lost to a
+Expected: PASS (14 tests, 0 failures). If `diff` reports missing ids, an append was lost to a
 rename; if `jq -c .` reports a parse error, an event was emitted in more than one `write`.
 
 - [ ] **Step 7: Commit**
@@ -1625,6 +1710,7 @@ git commit -m "feat(dev): append-only event stream with shared-lock appends and 
   - `dev_state_read <workspace_id>` → record JSON, or empty output + exit 1 when absent
   - `dev_state_commit <workspace_id> <expected_json> <new_json>` → 0 on success, 9 on mismatch
   - `dev_state_list` → every record path, newline-separated
+  - `dev_state_session_name <workspace_id> <fallback>` → the recorded session name, else the fallback
 
 `dev_state_commit` holds `locks/<workspace_id>.lock` across **nothing but** the read-compare-write:
 re-read the record, compare it canonically against `expected_json`, write via a temp file in the
@@ -1778,6 +1864,28 @@ Then append:
   [ "$status" -eq 0 ]
   [ -z "$output" ]
 }
+
+@test "state: the recorded session name beats the resolver's proposal" {
+  # ADR-7's collision guard may have renamed this workspace to
+  # `<slug>--<basename>--<hash6>`. That rename is durable, so every command
+  # after the first `open` must read it back rather than re-derive the plain
+  # name -- re-deriving is what left a collided workspace unreachable.
+  local rec
+  rec=$(dev_state_new "$WS_ID" demo demo /w)
+  rec=$(jq -c '.session_name = "demo--feat--a1b2c3"' <<<"$rec")
+  dev_state_commit "$WS_ID" "" "$rec"
+
+  run dev_state_session_name "$WS_ID" demo
+  [ "$status" -eq 0 ]
+  [ "$output" = "demo--feat--a1b2c3" ]
+}
+
+@test "state: the fallback is used only when no record exists yet" {
+  # The first `dev open`, which is exactly when the resolver's proposal is right.
+  run dev_state_session_name "$(printf 'f%.0s' {1..64})" demo
+  [ "$status" -eq 0 ]
+  [ "$output" = "demo" ]
+}
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
@@ -1883,6 +1991,36 @@ dev_state_list() {
   done
   return 0
 }
+
+# dev_state_session_name <workspace_id> <fallback>
+#
+# The recorded session name wins over the resolver's proposal, always.
+#
+# `dev_resolve` derives a name from the slug and worktree basename, which is a
+# GUESS: ADR-7's collision guard may have renamed this workspace to
+# `<slug>--<basename>--<hash6>` when another working tree already held the
+# plain name. That rename is durable — `workspace.opened` carries
+# `session_name_actual` and the fold writes it into the record — so every later
+# command must start from the record, not re-derive the guess.
+#
+# Re-deriving is what made a collided workspace unreachable: once the
+# CONFLICTING session went away, `dev attach` looked up the plain name, found
+# nothing, and reported no live session while the hashed one was still running;
+# `dev open` then created a second session for the same working tree.
+#
+# The fallback is used only for a workspace with no record yet, i.e. the first
+# `dev open`, which is exactly when the resolver's proposal is correct.
+dev_state_session_name() {
+  local workspace_id="$1" fallback="$2" record name
+  if record=$(dev_state_read "$workspace_id" 2>/dev/null); then
+    name=$(printf '%s' "$record" | jq -r '.session_name // ""')
+    if [[ -n "$name" && "$name" != null ]]; then
+      printf '%s\n' "$name"
+      return 0
+    fi
+  fi
+  printf '%s\n' "$fallback"
+}
 ```
 
 `mktemp` creates the temp file in the record's own directory, so the `mv` is a same-filesystem
@@ -1891,7 +2029,7 @@ rename and a reader either sees the old record or the new one, never a partial w
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `bats tests/dev_state_events.bats`
-Expected: PASS (23 tests, 0 failures)
+Expected: PASS (26 tests, 0 failures)
 
 - [ ] **Step 5: Commit**
 
@@ -2400,7 +2538,7 @@ Expected: PASS (17 tests, 0 failures)
 - [ ] **Step 5: Run the full suite for the three libraries**
 
 Run: `bats tests/dev_state_events.bats tests/dev_fold.bats`
-Expected: PASS (40 tests, 0 failures)
+Expected: PASS (43 tests, 0 failures)
 
 - [ ] **Step 6: Commit**
 
@@ -2455,6 +2593,23 @@ available estimate of *when the thing happened* and `data.discovered_at` is *whe
 `container.observed_at` (falling back to `last_seen`), and both carry `discovered_at` = now.
 `config.changed` carries no `discovered_at` in the §4.4 table — a digest change is noticed, not
 timed — so its `ts` is now.
+
+**Discovery-event discriminators.** The deterministic id exists so a CAS retry re-appends nothing
+(ADR-1), and its whole risk is on the other side: an id that repeats across two *different*
+occasions suppresses the second one, permanently and silently. So each discriminator pairs the
+subject with the occasion it belongs to:
+
+- `workspace.vanished` — recorded `boot_id` **and** `opened_at`. The boot id is constant until the
+  host reboots, so on its own it makes every loss after the first invisible to the event stream.
+  `opened_at` changes on every `workspace.opened`, which is exactly the boundary between one
+  vanishing and the next.
+- `container.lost` — the lost container id **and** `container.observed_at`, which the fold writes
+  from the `container.ready` that bound that id. `docker start` preserves the id across a stop, so
+  the id alone names a container, not a binding.
+- `config.changed` — the new `config_digest` **and** the current `applied_digest`. Editing a config
+  A → B → A produces two genuinely different facts about the (wanted, applied) pair; keyed on the
+  wanted digest alone the return to A collides with the state before B and is dropped, leaving
+  `dev status` reporting drift that no event explains.
 
 - [ ] **Step 1: Write the failing drift-case tests**
 
@@ -2711,7 +2866,10 @@ copy_fn() { eval "$2 () $(declare -f "$1" | tail -n +2)"; }
   rm -rf "$DEV_STATE_ROOT"
   mkdir -p "$DEV_STATE_ROOT/workspaces" "$DEV_STATE_ROOT/events" "$DEV_STATE_ROOT/locks"
   seed_record "$(mk_record)"
-  crash_id=$(dev_event_id_deterministic "$WS_ID" workspace.vanished "$BOOT_ID")
+  # The discriminator is boot_id + the record's opened_at (mk_record's value),
+  # so this reproduces exactly the id reconcile will recompute on the next pass.
+  crash_id=$(dev_event_id_deterministic "$WS_ID" workspace.vanished \
+    "$BOOT_ID:2026-08-03T09:00:00.000Z")
   dev_event_append "$(dev_event_build "$crash_id" "2026-08-03T12:30:00.000Z" \
     workspace.vanished "$WS_ID" demo demo "$WT" \
     "$(jq -nc --arg d "$FAKE_NOW" --arg b "$BOOT_ID" \
@@ -2723,6 +2881,59 @@ copy_fn() { eval "$2 () $(declare -f "$1" | tail -n +2)"; }
 
   [ "$converged" = "$uninterrupted" ]
   [ "$(all_events | jq -r 'select(.event == "workspace.vanished") | .id' | wc -l)" -eq 1 ]
+}
+
+@test "a second vanish in a new incarnation is a second event, not a dropped duplicate" {
+  # Deduplication by deterministic id must suppress only re-derivations of the
+  # SAME occasion. Keyed on boot_id alone, the boot id is identical until the
+  # host reboots, so every later loss of the same workspace collapsed into the
+  # first one's id and was silently discarded by the has-id check.
+  seed_record "$(mk_record)"
+  BACKEND_EXISTS=false
+  dev_reconcile "$RESOLVED" "sha256:aaa" >/dev/null
+  [ "$(all_events | jq -r 'select(.event == "workspace.vanished") | .id' | wc -l)" -eq 1 ]
+
+  # Reopened: a new incarnation, same boot id.
+  emit workspace.opened "2026-08-03T13:00:00.000Z" \
+    "$(jq -nc --arg b "$BOOT_ID" \
+      '{session_name_actual: "demo", boot_id: $b, config_digest: "sha256:aaa"}')"
+  BACKEND_EXISTS=true
+  dev_reconcile "$RESOLVED" "sha256:aaa" >/dev/null
+  [ "$(jq -r '.status' "$(dev_state_path "$WS_ID")")" = running ]
+
+  # And killed again.
+  BACKEND_EXISTS=false
+  dev_reconcile "$RESOLVED" "sha256:aaa" >/dev/null
+  [ "$(all_events | jq -r 'select(.event == "workspace.vanished") | .id' | wc -l)" -eq 2 ]
+  [ "$(all_events | jq -r 'select(.event == "workspace.vanished") | .id' | sort -u | wc -l)" -eq 2 ]
+}
+
+@test "losing the same container id twice across two bindings emits two events" {
+  # `docker start` preserves the id, so the id alone does not identify the
+  # binding; the container.ready that bound it does.
+  seed_record "$(mk_record)"
+  BACKEND_EXISTS=true
+  CONTAINER_ALIVE=false
+  emit container.ready "2026-08-03T12:00:00.000Z" \
+    '{"kind":"devcontainer","id":"cid1","user":"vscode","workdir":"/w","up_exit_status":0,"up_result":"success"}'
+  dev_reconcile "$RESOLVED" "sha256:aaa" >/dev/null
+  [ "$(all_events | jq -r 'select(.event == "container.lost") | .id' | wc -l)" -eq 1 ]
+
+  # The same container comes back, then goes away again.
+  emit container.ready "2026-08-03T12:40:00.000Z" \
+    '{"kind":"devcontainer","id":"cid1","user":"vscode","workdir":"/w","up_exit_status":0,"up_result":"success"}'
+  dev_reconcile "$RESOLVED" "sha256:aaa" >/dev/null
+  [ "$(all_events | jq -r 'select(.event == "container.lost") | .id' | sort -u | wc -l)" -eq 2 ]
+}
+
+@test "a config edited A to B and back to A emits an event each way" {
+  seed_record "$(mk_record)"
+  BACKEND_EXISTS=true
+  dev_reconcile "$RESOLVED" "sha256:bbb" >/dev/null
+  dev_reconcile "$RESOLVED" "sha256:aaa" >/dev/null
+  [ "$(all_events | jq -r 'select(.event == "config.changed") | .id' | sort -u | wc -l)" -eq 2 ]
+  [ "$(all_events | jq -r 'select(.event == "config.changed") | .data.config_digest' |
+    tr '\n' ' ')" = "sha256:bbb sha256:aaa " ]
 }
 
 @test "a rotated-away cursor re-anchors: fold_gap stays set but the rescan stops" {
@@ -2782,11 +2993,11 @@ dev_reconcile_boot_id() {
 
 dev_reconcile() {
   local resolved_json="$1" config_digest="$2"
-  local workspace_id slug worktree session_name
+  local workspace_id slug worktree proposed_name session_name
   workspace_id=$(jq -r '.workspace_id' <<<"$resolved_json")
   slug=$(jq -r '.slug' <<<"$resolved_json")
   worktree=$(jq -r '.worktree' <<<"$resolved_json")
-  session_name=$(jq -r '.session_name' <<<"$resolved_json")
+  proposed_name=$(jq -r '.session_name' <<<"$resolved_json")
 
   local attempt=1
   while ((attempt <= DEV_RECONCILE_MAX_ATTEMPTS)); do
@@ -2794,7 +3005,16 @@ dev_reconcile() {
     local base expected
     if base=$(dev_state_read "$workspace_id"); then
       expected="$base"
+      # The record's own name, never the resolver's proposal. On a workspace the
+      # ADR-7 collision guard renamed, the proposal names a DIFFERENT working
+      # tree's session (or nothing at all), so querying it would report this
+      # workspace as vanished while it is running, and emit a false
+      # workspace.vanished on every pass. Re-read inside the retry loop so a
+      # concurrent open's rename is picked up on the second attempt.
+      session_name=$(jq -r '.session_name // ""' <<<"$base")
+      [[ -n "$session_name" && "$session_name" != null ]] || session_name="$proposed_name"
     else
+      session_name="$proposed_name"
       base=$(dev_state_new "$workspace_id" "$slug" "$session_name" "$worktree")
       expected=""
     fi
@@ -2824,9 +3044,17 @@ dev_reconcile() {
     local now; now=$(dev_now)
     local -a discoveries=()
     local folded_status rec_boot_id cur_boot_id data id ts
+    local rec_opened_at bound_at
     folded_status=$(jq -r '.status' <<<"$folded")
     rec_boot_id=$(jq -r '.boot_id // empty' <<<"$folded")
     cur_boot_id=$(dev_reconcile_boot_id)
+    # The incarnation this record is in. `workspace.opened` sets it on every open,
+    # so it is what distinguishes "this workspace vanished" from "this workspace
+    # vanished, was reopened, and vanished again" -- two real events that a
+    # discriminator of boot_id alone collapses into one, because the boot id is
+    # identical until the host reboots. The second loss would then be silently
+    # dropped by the has-id check and no consumer would ever hear about it.
+    rec_opened_at=$(jq -r '.opened_at // empty' <<<"$folded")
 
     if [[ "$folded_status" == running && "$exists" != true ]]; then
       local reason=vanished
@@ -2839,7 +3067,8 @@ dev_reconcile() {
       data=$(jq -nc --arg d "$now" --arg r "$reason" --arg b "$rec_boot_id" \
         '{discovered_at: $d, reason: $r}
          + (if $b == "" then {} else {last_boot_id: $b} end)')
-      id=$(dev_event_id_deterministic "$workspace_id" workspace.vanished "$rec_boot_id")
+      id=$(dev_event_id_deterministic "$workspace_id" workspace.vanished \
+        "${rec_boot_id}:${rec_opened_at}")
       discoveries+=("$(dev_event_build "$id" "$ts" workspace.vanished \
         "$workspace_id" "$slug" "$session_name" "$worktree" "$data")")
     fi
@@ -2849,7 +3078,14 @@ dev_reconcile() {
       [[ -n "$ts" ]] || ts="$now"
       data=$(jq -nc --arg o "$container_id" --arg d "$now" \
         '{old_id: $o, discovered_at: $d}')
-      id=$(dev_event_id_deterministic "$workspace_id" container.lost "$container_id")
+      # `container.observed_at` is written by the fold from the `container.ready`
+      # that bound this id, so it names the binding rather than the moment of
+      # this observation. Without it, a container stopped, started again under
+      # the same id (which `docker start` preserves), and lost a second time
+      # would produce a duplicate id and the second loss would never be emitted.
+      bound_at=$(jq -r '.container.observed_at // empty' <<<"$folded")
+      id=$(dev_event_id_deterministic "$workspace_id" container.lost \
+        "${container_id}:${bound_at}")
       discoveries+=("$(dev_event_build "$id" "$ts" container.lost \
         "$workspace_id" "$slug" "$session_name" "$worktree" "$data")")
     fi
@@ -2861,7 +3097,17 @@ dev_reconcile() {
       data=$(jq -nc --arg c "$config_digest" --arg a "$folded_applied" \
         '{config_digest: $c}
          + (if $a == "" then {} else {applied_digest: $a} end)')
-      id=$(dev_event_id_deterministic "$workspace_id" config.changed "$config_digest")
+      # Both digests, because the event is a statement about the pair. Editing a
+      # config from A to B and back to A used to produce one event and then
+      # silence: the return to A carried the same discriminator as the state
+      # before B, so it was dropped, and `dev status` reported drift no event
+      # explained. With the applied digest folded in, each distinct (wanted,
+      # applied) pair is its own event. One case survives by design: A -> B -> A
+      # -> B with no intervening `dev open` re-emits the first B event's id, and
+      # the repeat is dropped -- correctly, since nothing was applied in between
+      # and the second B is the same undelivered fact as the first.
+      id=$(dev_event_id_deterministic "$workspace_id" config.changed \
+        "${config_digest}:${folded_applied}")
       discoveries+=("$(dev_event_build "$id" "$now" config.changed \
         "$workspace_id" "$slug" "$session_name" "$worktree" "$data")")
     fi
@@ -2926,7 +3172,7 @@ SH
 - [ ] **Step 6: Run the tests to verify they pass**
 
 Run: `bats tests/dev_reconcile.bats`
-Expected: PASS (10 tests, 0 failures)
+Expected: PASS (15 tests, 0 failures)
 
 - [ ] **Step 7: Commit**
 
@@ -3270,7 +3516,10 @@ git commit -m "feat(dev): runtime detection by execution and a pinned devcontain
 - Consumes: `dev_runtime_devcontainer_cli` (Task 9).
 - Produces: `dev_container_enabled <config_json> <worktree>`,
   `dev_container_up <worktree> <config_json>`, `dev_container_alive <container_id>`,
-  `dev_container_exec_prefix <record_json> <window_json>`.
+  `dev_window_location <record_json> <window_json>` → `host`|`container`,
+  `dev_window_workdir <record_json> <window_json>` → absolute path,
+  `dev_container_exec_prefix <record_json> <window_json>`,
+  `dev_window_inner_command <record_json> <window_json> <env_json>` → one shell-command string.
 
 **Three shape notes.**
 
@@ -3396,7 +3645,7 @@ exit 18'
   rec='{"worktree":"/w","container":{"status":"ready","kind":"compose","id":"a710dead","user":"node","workdir":"/srv/app"}}'
   run dev_container_exec_prefix "$rec" '{"name":"shell","location":"container"}'
   [ "$status" -eq 0 ]
-  [ "${#lines[@]}" -eq 9 ]
+  [ "${#lines[@]}" -eq 11 ]
   [ "${lines[0]}" = docker ]
   [ "${lines[1]}" = exec ]
   [ "${lines[2]}" = -i ]
@@ -3406,6 +3655,11 @@ exit 18'
   [ "${lines[6]}" = -w ]
   [ "${lines[7]}" = /srv/app ]
   [ "${lines[8]}" = a710dead ]
+  # Every prefix ends in a shell with -c so the caller can append the window's
+  # command as one argv element. Without this, `docker exec ... <id> 'make test'`
+  # looks for a binary named "make test".
+  [ "${lines[9]}" = sh ]
+  [ "${lines[10]}" = -c ]
 }
 
 @test "the exec prefix for a single-container window uses devcontainer exec" {
@@ -3422,6 +3676,91 @@ exit 18'
   [ "${lines[5]}" = exec ]
   [ "${lines[6]}" = --workspace-folder ]
   [ "${lines[7]}" = /w ]
+  [ "${lines[8]}" = sh ]
+  [ "${lines[9]}" = -c ]
+}
+
+@test "an unset location resolves to host when the record has no container" {
+  # This is the plain-repository path. `devcontainer.enabled: auto` starts
+  # nothing, so agent-1, agent-2 and shell — none of which pin a location —
+  # must land on the host rather than demand a binding that will never exist.
+  load_container
+  rec='{"worktree":"/w","container":{"status":"none","id":null}}'
+  run dev_window_location "$rec" '{"name":"agent-1","location":null}'
+  [ "$status" -eq 0 ]
+  [ "$output" = host ]
+  run dev_container_exec_prefix "$rec" '{"name":"agent-1","location":null}'
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = bash ]
+  [ "${lines[1]}" = -lc ]
+}
+
+@test "an unset location resolves to container when the record has one" {
+  load_container
+  rec='{"worktree":"/w","container":{"status":"ready","kind":"compose","id":"a710dead","user":"node","workdir":"/srv/app"}}'
+  run dev_window_location "$rec" '{"name":"shell","location":null}'
+  [ "$status" -eq 0 ]
+  [ "$output" = container ]
+}
+
+@test "an EXPLICIT container location still fails on a workspace with no container" {
+  # The silent-downgrade case. A config that asked for a container and got the
+  # host would put an agent in the wrong filesystem, so this one stays loud.
+  load_container
+  rec='{"worktree":"/w","container":{"status":"none","id":null}}'
+  run dev_container_exec_prefix "$rec" '{"name":"shell","location":"container"}'
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"no live container binding"* ]]
+}
+
+@test "cwd resolves against the worktree on the host and remoteWorkspaceFolder inside" {
+  load_container
+  rec='{"worktree":"/w","container":{"status":"ready","kind":"compose","id":"a710dead","user":"node","workdir":"/srv/app"}}'
+  run dev_window_workdir "$rec" '{"name":"scratch","location":"host","cwd":"sub/dir"}'
+  [ "$output" = "/w/sub/dir" ]
+  run dev_window_workdir "$rec" '{"name":"shell","location":"container","cwd":"sub/dir"}'
+  [ "$output" = "/srv/app/sub/dir" ]
+  run dev_window_workdir "$rec" '{"name":"shell","location":"container","cwd":null}'
+  [ "$output" = "/srv/app" ]
+}
+
+@test "the inner command applies cwd, environment and the agent" {
+  load_container
+  rec='{"worktree":"/w","container":{"status":"none","id":null}}'
+  run dev_window_inner_command "$rec" \
+    '{"name":"agent-1","agent":"claude --resume","cwd":"api","location":null}' \
+    '{"CGO_ENABLED":"1","MSG":"a b"}'
+  [ "$status" -eq 0 ]
+  # `export`, not `env`: exec is a builtin, so `env FOO=1 exec claude` would ask
+  # env(1) for a binary named `exec` and the pane would die immediately.
+  [[ "$output" == "cd /w/api || exit 1; export "* ]]
+  [[ "$output" == *"CGO_ENABLED=1"* ]]
+  # @sh quoting: a value with a space survives as one argument.
+  [[ "$output" == *"MSG='a b'"* ]]
+  [[ "$output" == *"; exec claude --resume"* ]]
+}
+
+@test "the inner command's environment reaches the process it execs" {
+  load_container
+  rec="$(jq -nc --arg w "$BATS_TEST_TMPDIR" '{worktree:$w,container:{status:"none",id:null}}')"
+  local cmd
+  cmd=$(dev_window_inner_command "$rec" \
+    '{"name":"shell","command":"printenv MSG","location":null}' '{"MSG":"a b"}')
+  run sh -c "$cmd"
+  [ "$status" -eq 0 ]
+  [ "$output" = "a b" ]
+}
+
+@test "the inner command falls back to a login shell and never emits a bare export" {
+  load_container
+  rec='{"worktree":"/w","container":{"status":"none","id":null}}'
+  run dev_window_inner_command "$rec" '{"name":"shell","location":null}' '{}'
+  [ "$status" -eq 0 ]
+  [ "$output" = 'cd /w || exit 1; exec "${SHELL:-/bin/bash}" -l' ]
+  # A container window cannot use the host's $SHELL, and bash may not exist.
+  rec='{"worktree":"/w","container":{"status":"ready","kind":"compose","id":"a710dead","user":"node","workdir":"/srv/app"}}'
+  run dev_window_inner_command "$rec" '{"name":"shell","location":null}' '{}'
+  [[ "$output" == *"exec bash -l 2>/dev/null || exec sh -l" ]]
 }
 
 @test "the exec prefix refuses to guess a missing user or workdir" {
@@ -3437,7 +3776,7 @@ BATS
 - [ ] **Step 2: Run the tests to verify the new ones fail**
 
 Run: `bats tests/dev_runtime_container.bats`
-Expected: FAIL (19 tests, 10 failures) — the Task 9 tests still pass; each new one errors with
+Expected: FAIL (25 tests, 16 failures) — the Task 9 tests still pass; each new one errors with
 `source: tools/dev/lib/container.sh: No such file or directory`.
 
 - [ ] **Step 3: Write the implementation**
@@ -3520,24 +3859,82 @@ dev_container_alive() {
   [[ "$out" == true ]]
 }
 
+# Resolves a window's effective location against the workspace record.
+#
+# Spec §4.1 defines the default as "container when one exists", so an UNSET
+# location (JSON null, per Task 4's normalization) is a question that only the
+# record can answer. Three cases:
+#
+#   "host"      -> host, always.
+#   "container" -> container, always. On a workspace with no binding this is an
+#                  error rather than a silent downgrade: the config asked for a
+#                  container explicitly, and quietly running the command on the
+#                  host would put an agent in the wrong filesystem.
+#   null        -> container iff the record carries a container id, else host.
+#                  This is what makes a plain (non-devcontainer) repository
+#                  openable at all: `devcontainer.enabled: auto` correctly
+#                  starts nothing, so agent-1, agent-2 and shell land on the
+#                  host instead of demanding a binding that will never exist.
+dev_window_location() {
+  local record_json="$1" window_json="$2" location id
+  location=$(jq -r '.location // "auto"' <<<"$window_json")
+  case "$location" in
+    host | container)
+      printf '%s\n' "$location"
+      return 0
+      ;;
+  esac
+  id=$(jq -r '.container.id // empty' <<<"$record_json")
+  if [[ -n "$id" && "$id" != null ]]; then
+    printf 'container\n'
+  else
+    printf 'host\n'
+  fi
+}
+
+# The directory a window's command starts in. `cwd` is relative to the repo root
+# (spec §4.1), which means a different absolute base on each side of the
+# container boundary: the worktree on the host, remoteWorkspaceFolder inside.
+dev_window_workdir() {
+  local record_json="$1" window_json="$2" location base cwd
+  location=$(dev_window_location "$record_json" "$window_json") || return 1
+  if [[ "$location" == host ]]; then
+    base=$(jq -r '.worktree' <<<"$record_json")
+  else
+    base=$(jq -r '.container.workdir // empty' <<<"$record_json")
+    [[ -n "$base" && "$base" != null ]] || return 1
+  fi
+  cwd=$(jq -r '.cwd // ""' <<<"$window_json")
+  if [[ -z "$cwd" ]]; then
+    printf '%s\n' "$base"
+  else
+    printf '%s\n' "${base%/}/${cwd#/}"
+  fi
+}
+
 # Prints the argv prefix for a pane's command, one element per line.
 #
 # `devcontainer exec` is broken on compose-based setups; bin/claude-devcontainer-up
 # documents the workaround and uses `docker exec -it -u <user> -w <wd> <cid>`
 # with the id from `devcontainer up`. So compose takes the docker path, and so
 # does anything else once the CLI turns out to be unrunnable.
+#
+# Every prefix ends in a shell with `-c`, so the caller may always append the
+# window's command as ONE further argv element. Without that, `docker exec ...
+# <id> 'make test'` would look for a binary literally named "make test". The
+# container side uses `sh` rather than `bash`, because a devcontainer image is
+# frequently alpine-based and bash is not guaranteed to be installed.
 dev_container_exec_prefix() {
-  local record_json="$1" window_json="$2" location
-  location=$(jq -r '.location // "container"' <<<"$window_json")
+  local record_json="$1" window_json="$2" location workdir
+  location=$(dev_window_location "$record_json" "$window_json") || return 1
   if [[ "$location" == host ]]; then
     printf '%s\n' bash -lc
     return 0
   fi
 
-  local id user workdir kind worktree
+  local id user kind worktree
   id=$(jq -r '.container.id // empty' <<<"$record_json")
   user=$(jq -r '.container.user // empty' <<<"$record_json")
-  workdir=$(jq -r '.container.workdir // empty' <<<"$record_json")
   kind=$(jq -r '.container.kind // "single"' <<<"$record_json")
   worktree=$(jq -r '.worktree' <<<"$record_json")
 
@@ -3551,7 +3948,10 @@ dev_container_exec_prefix() {
     if cli=$(dev_runtime_devcontainer_cli 2>/dev/null); then
       local -a cliv
       read -r -a cliv <<<"$cli"
-      printf '%s\n' "${cliv[@]}" exec --workspace-folder "$worktree"
+      # `devcontainer exec` has no -w. The working directory is applied by the
+      # inner command instead (dev_window_inner_command), which is also how the
+      # host and docker paths honor `cwd`, so all three agree.
+      printf '%s\n' "${cliv[@]}" exec --workspace-folder "$worktree" sh -c
       return 0
     fi
   fi
@@ -3559,11 +3959,64 @@ dev_container_exec_prefix() {
   # No defaults here on purpose: user and workdir are written by the same
   # container.ready event that wrote the id (ADR-1), so a missing one means the
   # binding is stale, not that root and /workspace are a safe guess.
-  if [[ -z "$user" || "$user" == null || -z "$workdir" || "$workdir" == null ]]; then
-    echo "dev: no live container binding (user or workdir missing) for this window" >&2
+  workdir=$(dev_window_workdir "$record_json" "$window_json") || {
+    echo "dev: no live container binding (workdir missing) for this window" >&2
+    return 1
+  }
+  if [[ -z "$user" || "$user" == null ]]; then
+    echo "dev: no live container binding (user missing) for this window" >&2
     return 1
   fi
-  printf '%s\n' docker exec -i -t -u "$user" -w "$workdir" "$id"
+  printf '%s\n' docker exec -i -t -u "$user" -w "$workdir" "$id" sh -c
+}
+
+# The single shell-command argv element that follows the prefix.
+#
+# This is where `environment`, `cwd`, and the agent-vs-command choice are all
+# actually applied. They were validated in Task 4 and then, until this function
+# existed, dropped on the floor: every window ran $SHELL in the worktree with no
+# environment injected. Doing it here rather than through per-transport flags
+# (`docker exec -e`, `--remote-env`, `new-window -c`) means one implementation
+# covers the host path, the docker path and the devcontainer-CLI path
+# identically, and the CLI path has no working-directory flag at all.
+#
+# `exec` replaces the wrapper shell so that the pane's process IS the agent or
+# command; otherwise `pane-died` would report the wrapper's exit, not the
+# agent's, and every agent would sit behind a stray shell.
+dev_window_inner_command() {
+  local record_json="$1" window_json="$2" env_json="${3:-{\}}"
+  local location workdir agent command assignments inner
+
+  location=$(dev_window_location "$record_json" "$window_json") || return 1
+  workdir=$(dev_window_workdir "$record_json" "$window_json") || return 1
+  agent=$(jq -r '.agent // ""' <<<"$window_json")
+  command=$(jq -r '.command // ""' <<<"$window_json")
+
+  # jq's @sh quotes each value for POSIX sh, so a value containing a space,
+  # quote or newline survives intact.
+  assignments=$(jq -r 'to_entries | map("\(.key)=" + (.value | tostring | @sh))
+    | join(" ")' <<<"$env_json")
+
+  if [[ -n "$agent" ]]; then
+    inner="exec $agent"
+  elif [[ -n "$command" ]]; then
+    inner="exec $command"
+  elif [[ "$location" == host ]]; then
+    inner='exec "${SHELL:-/bin/bash}" -l'
+  else
+    # The host's $SHELL says nothing about what exists in the container.
+    inner='exec bash -l 2>/dev/null || exec sh -l'
+  fi
+
+  # `export ...; exec ...` rather than `env ... exec ...`. `exec` is a shell
+  # builtin, so `env FOO=1 exec cmd` asks env(1) to run a binary called `exec`,
+  # which does not exist -- every window with an `environment` entry would have
+  # died instantly. export also composes with the two-branch container fallback
+  # above, which a single env(1) invocation cannot.
+  if [[ -n "$assignments" ]]; then
+    inner="export $assignments; $inner"
+  fi
+  printf 'cd %q || exit 1; %s\n' "$workdir" "$inner"
 }
 SH
 ```
@@ -3571,7 +4024,7 @@ SH
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `bats tests/dev_runtime_container.bats`
-Expected: PASS (19 tests, 0 failures)
+Expected: PASS (26 tests, 0 failures)
 
 - [ ] **Step 5: Lint the two new libraries**
 
@@ -3592,8 +4045,8 @@ git commit -m "feat(dev): devcontainer up, liveness, and the pane exec-prefix bu
 - Test: `tests/dev_backend_tmux.bats`
 
 **Interfaces:**
-- Consumes: `dev_now`, `dev_event_id_random`, `dev_event_build <id> <ts> <event> <workspace_id> <slug> <session_name> <worktree> <data_json>`, `dev_event_append <line>` (Task 5); `dev_container_exec_prefix <record_json> <window_json>` (Task 10)
-- Produces: `dev_tmux <args...>`, `dev_backend_create <session_name> <workspace_id> <slug> <worktree>`, `dev_backend_apply_layout <session_name> <config_json> <record_json>`, `dev_backend_query <session_name>`, `dev_backend_respawn_pane <session_name> <window> <command>`, `dev_backend_kill <session_name>`
+- Consumes: `dev_now`, `dev_event_id_random`, `dev_event_build <id> <ts> <event> <workspace_id> <slug> <session_name> <worktree> <data_json>`, `dev_event_append <line>` (Task 5); `dev_container_exec_prefix <record_json> <window_json>`, `dev_window_inner_command <record_json> <window_json> <env_json>` (Task 10)
+- Produces: `dev_tmux <args...>`, `dev_backend_create <session_name> <workspace_id> <slug> <worktree>`, `dev_backend_apply_layout <session_name> <config_json> <record_json>`, `dev_backend_query <session_name>`, `dev_backend_respawn_pane <session_name> <window> <command> [<container_id>]`, `dev_backend_kill <session_name>`
 
 **This is the only file in the platform permitted to reference tmux.** Every consumer above it
 reads the backend-neutral JSON that `dev_backend_query` emits — `{exists, worktree, clients,
@@ -3663,15 +4116,22 @@ fixture_record() {
 # The agent windows carry a long-lived placeholder command rather than "claude":
 # these assertions are about window creation and event emission, not about which
 # binary an agent window runs, and a command that exits would race remain-on-exit.
+#
+# Locations are null (unset) rather than "container", matching what Task 4's
+# normalization actually produces for the default layer. fixture_record carries
+# no container binding, so dev_window_location resolves them to host and the
+# panes really run — which is the plain-repository path, and the only one these
+# tests can exercise without docker. An earlier draft pinned "container" here
+# and would have aborted apply_layout on the first window.
 fixture_config() {
   jq -nc '{
     version: 1, autostart: false,
     devcontainer: {enabled: "auto", start_timeout: 300},
     environment: {},
     windows: [
-      {name: "agent-1", agent: "sleep 30", command: null, cwd: null, location: "container", focus: true},
-      {name: "agent-2", agent: "sleep 30", command: null, cwd: null, location: "container", focus: false},
-      {name: "shell",   agent: null, command: null, cwd: null, location: "container", focus: false},
+      {name: "agent-1", agent: "sleep 30", command: null, cwd: null, location: null, focus: true},
+      {name: "agent-2", agent: "sleep 30", command: null, cwd: null, location: null, focus: false},
+      {name: "shell",   agent: null, command: null, cwd: null, location: null, focus: false},
       {name: "scratch", agent: null, command: null, cwd: null, location: "host", focus: false}
     ]}'
 }
@@ -3740,6 +4200,38 @@ fixture_config() {
   [[ "$output" == *"agent-2"* ]]
   run jq -r 'select(.event == "window.created" and .data.window == "scratch") | .data.location' "$log"
   [ "$output" = "host" ]
+  # An unset location on a container-less record resolves to host, not to a
+  # container that does not exist.
+  run jq -r 'select(.event == "window.created" and .data.window == "agent-1") | .data.location' "$log"
+  [ "$output" = "host" ]
+}
+
+@test "the focused window is selected after the layout is applied" {
+  dev_backend_create "proj" "aa11" "proj" "$TEST_WT"
+  dev_backend_apply_layout "proj" "$(fixture_config)" "$(fixture_record)"
+  run dev_tmux display-message -p -t "=proj" '#{window_name}'
+  [ "$output" = "agent-1" ]
+}
+
+@test "per-window cwd and environment reach the running pane" {
+  # The regression this pins: `environment` and `cwd` were normalized and
+  # validated, then never applied — every window ran in the worktree with no
+  # environment injected.
+  mkdir -p "$TEST_WT/sub"
+  dev_backend_create "proj" "aa11" "proj" "$TEST_WT"
+  local cfg
+  cfg=$(jq -nc '{version: 1, autostart: false, environment: {DEV_PROBE: "hello world"},
+    windows: [{name: "probe", agent: null, command: "sh -c 'printf \"%s|%s\\n\" \"$PWD\" \"$DEV_PROBE\" >probe.out; sleep 5'",
+               cwd: "sub", location: "host", focus: false}]}')
+  dev_backend_apply_layout "proj" "$cfg" "$(fixture_record)"
+  local i
+  for i in $(seq 1 50); do
+    [[ -f "$TEST_WT/sub/probe.out" ]] && break
+    sleep 0.1
+  done
+  [ -f "$TEST_WT/sub/probe.out" ]
+  run cat "$TEST_WT/sub/probe.out"
+  [ "$output" = "$TEST_WT/sub|hello world" ]
 }
 
 @test "remain-on-exit is set per window and never globally" {
@@ -3859,14 +4351,15 @@ dev_backend_create() {
 # (§1.2) is enforced here, at the only layer that could violate it.
 dev_backend_apply_layout() {
   local session_name="$1" config_json="$2" record_json="$3"
-  local workspace_id slug worktree existing created=0
-  local window_json name agent win_command location inner pane_cmd
+  local workspace_id slug worktree existing created=0 env_json focus_window
+  local window_json name agent location workdir inner pane_cmd
   local -a prefix
   local ev_id ev_ts data line
 
   workspace_id=$(printf '%s' "$record_json" | jq -r '.workspace_id')
   slug=$(printf '%s' "$record_json" | jq -r '.slug')
   worktree=$(printf '%s' "$record_json" | jq -r '.worktree')
+  env_json=$(printf '%s' "$config_json" | jq -c '.environment // {}')
   existing=$(dev_tmux list-windows -t "=$session_name" -F '#{window_name}' 2>/dev/null || true)
 
   while IFS= read -r window_json; do
@@ -3876,26 +4369,32 @@ dev_backend_apply_layout() {
       continue
     fi
     agent=$(printf '%s' "$window_json" | jq -r '.agent // ""')
-    win_command=$(printf '%s' "$window_json" | jq -r '.command // ""')
-    location=$(printf '%s' "$window_json" | jq -r '.location // "container"')
 
-    # Container owns how a pane reaches its execution environment. The prefix
-    # arrives one argv element per line (Task 10) so a user or workdir
-    # containing a space cannot be resplit; read it into an array and quote
-    # each element exactly once.
+    # Container owns how a pane reaches its execution environment, resolves the
+    # window's effective location against the record, and builds the single
+    # command string that applies cwd and environment. Nothing about
+    # containers, working directories or environment injection is decided here:
+    # this layer only knows tmux. The prefix arrives one argv element per line
+    # (Task 10) so a user or workdir containing a space cannot be resplit; read
+    # it into an array and quote each element exactly once.
+    location=$(dev_window_location "$record_json" "$window_json") || return 1
     mapfile -t prefix < <(dev_container_exec_prefix "$record_json" "$window_json") || return 1
     [[ ${#prefix[@]} -gt 0 ]] || return 1
-    if [[ -n "$agent" ]]; then
-      inner="$agent"
-    elif [[ -n "$win_command" ]]; then
-      inner="$win_command"
-    else
-      inner='exec "${SHELL:-bash}" -l'
-    fi
+    inner=$(dev_window_inner_command "$record_json" "$window_json" "$env_json") || return 1
     printf -v pane_cmd '%q ' "${prefix[@]}"
     printf -v pane_cmd '%s%q' "$pane_cmd" "$inner"
 
-    dev_tmux new-window -d -t "=$session_name:" -n "$name" -c "$worktree" "$pane_cmd" || return 1
+    # -c sets the directory tmux starts the pane process in. For a host window
+    # dev_window_workdir already resolved `cwd` against the worktree; for a
+    # container window the host has no such path, so the pane starts in the
+    # worktree and the inner command cd's inside the container.
+    if [[ "$location" == host ]]; then
+      workdir=$(dev_window_workdir "$record_json" "$window_json") || return 1
+    else
+      workdir="$worktree"
+    fi
+
+    dev_tmux new-window -d -t "=$session_name:" -n "$name" -c "$workdir" "$pane_cmd" || return 1
 
     # Per window, never -g. pane-died fires only when remain-on-exit holds the
     # dead pane, so scenario 3's event fidelity depends on this; setting it
@@ -3923,6 +4422,16 @@ dev_backend_apply_layout() {
 
   if [[ "$created" -gt 0 ]] && printf '%s\n' "$existing" | grep -Fxq -- 'dev-holder'; then
     dev_tmux kill-window -t "=$session_name:=dev-holder" 2>/dev/null || true
+  fi
+
+  # `focus: true` selects the window the user lands on. Applied after the holder
+  # is gone and unconditionally rather than only on creation, so that attaching
+  # to a workspace whose selection drifted still puts the cursor where the
+  # config says. Validation (Task 4) already guarantees at most one.
+  focus_window=$(printf '%s' "$config_json" |
+    jq -r 'first((.windows // [])[] | select(.focus == true) | .name) // ""')
+  if [[ -n "$focus_window" ]]; then
+    dev_tmux select-window -t "=$session_name:=$focus_window" 2>/dev/null || true
   fi
 }
 
@@ -3957,12 +4466,16 @@ dev_backend_query() {
   '
 }
 
-# dev_backend_respawn_pane <session_name> <window> <command>
+# dev_backend_respawn_pane <session_name> <window> <command> [container_id]
 #
 # The envelope identity is read back from the session's user options rather
 # than passed in, which is the same path the tmux hooks take.
+#
+# This function is the SOLE emitter of pane.respawned. Callers must not emit it
+# again: a respawn that produced two events would fold twice, and the fold's
+# `restarts` counter would report double every recovery.
 dev_backend_respawn_pane() {
-  local session_name="$1" window="$2" pane_command="$3"
+  local session_name="$1" window="$2" pane_command="$3" container_id="${4:-}"
   local workspace_id slug worktree ev_id ev_ts data line
   dev_tmux respawn-pane -k -t "=$session_name:=$window" "$pane_command" || return 1
   workspace_id=$(dev_tmux show-options -qv -t "=$session_name" @dev_workspace_id 2>/dev/null || true)
@@ -3970,7 +4483,8 @@ dev_backend_respawn_pane() {
   worktree=$(dev_tmux show-options -qv -t "=$session_name" @dev_worktree 2>/dev/null || true)
   ev_id=$(dev_event_id_random)
   ev_ts=$(dev_now)
-  data=$(jq -nc --arg w "$window" '{window: $w}')
+  data=$(jq -nc --arg w "$window" --arg c "$container_id" \
+    '{window: $w} + (if $c == "" then {} else {container_id: $c} end)')
   line=$(dev_event_build "$ev_id" "$ev_ts" "pane.respawned" \
     "$workspace_id" "$slug" "$session_name" "$worktree" "$data")
   dev_event_append "$line"
@@ -3996,7 +4510,7 @@ SH
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `bats tests/dev_backend_tmux.bats`
-Expected: PASS (9 tests, 0 failures)
+Expected: PASS (11 tests, 0 failures)
 
 - [ ] **Step 5: Lint the new file**
 
@@ -4365,13 +4879,19 @@ Because reconcile re-observes, **`dev list` always costs one backend query.** It
 from disk. That is ADR-2's deliberate price for never lying.
 
 **`dev list --json` is the public snapshot contract** — `{"v":1,"workspaces":[...]}`, versioned and
-backend-neutral, each entry carrying `session_name`, `slug`, `worktree`, `status`,
-`container.status`, `agents`, `last_seen`, `fold_gap`, and `stopped_reason`. **`workspaces/*.json`
+backend-neutral, each entry carrying `session_name`, `slug`, `worktree`, `status`, `container.status`,
+`container.id`, `agents`, `last_seen`, `fold_gap`, `stopped_reason`, and `stale`. **`workspaces/*.json`
 is explicitly not the consumer interface.** Records are *last observed*, so a consumer reading them
 directly renders stale `running` badges for sessions that died thirty seconds ago — the exact
 failure §5.1 names as the early warning that ADR-2 has leaked. The pairing for any consumer is
 `dev list --json` for current state and `events.jsonl` for transitions; §4.3 documents the record
 format so it is understood, not so it is depended upon.
+
+`stale` is how that contract stays honest when reconcile itself fails — a lost CAS race, a backend
+query that errored. The entry is still listed, from the last record, because dropping a workspace
+from the listing is a worse lie than describing it imprecisely; but `stale: true` marks it as
+last-known rather than observed, and human output appends `(stale: could not re-observe)`. Every
+other entry is `stale: false`, so a consumer can treat the field as a plain trust bit.
 
 Human output **groups by slug**, so the several working trees of one project read as a set rather
 than as unrelated entries, and **marks basenames that appear more than once**, so the condition that
@@ -4461,6 +4981,42 @@ write_record() {
   [[ "$output" == *"proj--proj-pr5"* ]]
 }
 
+@test "a workspace whose reconcile fails is listed, but marked stale" {
+  # The listing must neither drop the workspace nor present a remembered record
+  # as if it had just been observed. `dev list --json` promises observed state
+  # (ADR-2); `stale` is how it stays honest when it could not deliver that.
+  stub_no_start_runtime
+  make_fixture_repo "alpha"
+  local id
+  id=$(printf 'a%.0s' {1..64})
+  write_record "$id" alpha alpha "$DEV_REPO_ROOT/alpha" running none "sha256:x" false
+
+  # The session is gone, so reconcile must write (status running -> stopped);
+  # a read-only records directory makes every commit attempt fail, and reconcile
+  # gives up with 8 after its bounded retries.
+  chmod 500 "$DEV_STATE_ROOT/workspaces"
+
+  run "$TEST_ROOT/root/bin/dev" list --json
+  local rc="$status" out="$output"
+  chmod 700 "$DEV_STATE_ROOT/workspaces"
+  [ "$rc" -eq 0 ]
+  [ "$(printf '%s' "$out" | jq -r '.workspaces | length')" -eq 1 ]
+  [ "$(printf '%s' "$out" | jq -r '.workspaces[0].stale')" = "true" ]
+  # Reported as the record last said, not as reconcile would have corrected it.
+  [ "$(printf '%s' "$out" | jq -r '.workspaces[0].status')" = "running" ]
+}
+
+@test "a successfully reconciled entry is marked not stale" {
+  stub_no_start_runtime
+  make_fixture_repo "alpha"
+  write_record "$(printf 'a%.0s' {1..64})" alpha alpha "$DEV_REPO_ROOT/alpha" running none "sha256:x" false
+
+  run "$TEST_ROOT/root/bin/dev" list --json
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | jq -r '.workspaces[0].stale')" = "false" ]
+  [ "$(printf '%s' "$output" | jq -r '.workspaces[0].status')" = "stopped" ]
+}
+
 @test "dev status reports a container-failed workspace as running with container failed" {
   make_fixture_repo "alpha"
   source "$REPO_ROOT/tools/dev/lib/events.sh"
@@ -4543,7 +5099,7 @@ dev_cmd_list() {
 
   local tmp
   tmp=$(mktemp)
-  local path record slug worktree is_primary resolved config digest updated entry
+  local path record slug worktree is_primary resolved config digest updated entry stale
 
   while IFS= read -r path; do
     [[ -n "$path" ]] || continue
@@ -4568,14 +5124,24 @@ dev_cmd_list() {
       digest=$(printf '%s' "$record" | jq -r '.config_digest // ""')
     fi
 
-    # A workspace whose reconcile lost the CAS race is listed from its last
-    # record rather than aborting the whole listing.
-    updated=$(dev_reconcile "$resolved" "$digest") || updated="$record"
+    # A workspace whose reconcile fails is listed from its last record rather
+    # than aborting the whole listing -- but it is listed as explicitly stale.
+    # ADR-2 makes `dev list --json` the snapshot contract precisely because it
+    # reports observed rather than remembered state; substituting the prior
+    # record silently would print remembered state under that contract, which is
+    # the "stale running badge" failure §5.1 names as the signal the ADR leaked.
+    # `stale: true` says the entry is last-known, not current, and a consumer
+    # that ignores the field is no worse off than before.
+    stale=false
+    updated=$(dev_reconcile "$resolved" "$digest") || {
+      updated="$record"
+      stale=true
+    }
 
-    entry=$(printf '%s' "$updated" | jq -c '{
+    entry=$(printf '%s' "$updated" | jq -c --argjson stale "$stale" '{
       session_name, slug, worktree, status,
-      container: {status: .container.status},
-      agents, last_seen, fold_gap, stopped_reason
+      container: {status: .container.status, id: .container.id},
+      agents, last_seen, fold_gap, stopped_reason, stale: $stale
     }')
     printf '%s\n' "$entry" >> "$tmp"
   done < <(dev_state_list)
@@ -4606,6 +5172,7 @@ dev_list_render_human() {
         + "\t" + (.status // "unknown")
         + "\tcontainer:" + (.container.status // "none")
         + "\t" + .worktree
+        + (if .stale then "\t(stale: could not re-observe)" else "" end)
         + (if ($dupes | index(base)) then "\t(ambiguous basename)" else "" end))
   '
 }
@@ -4692,7 +5259,7 @@ SH
 - [ ] **Step 5: Run the tests to verify they pass**
 
 Run: `bats tests/dev_commands.bats`
-Expected: PASS (16 tests, 0 failures)
+Expected: PASS (18 tests, 0 failures)
 
 - [ ] **Step 6: Lint**
 
@@ -4719,13 +5286,15 @@ git commit -m "feat(dev): dev list snapshot contract and dev status drift report
   `dev_runtime_kind <worktree>`, `dev_container_enabled <config_json> <worktree>`,
   `dev_container_up <worktree> <config_json>`,
   `dev_container_exec_prefix <record_json> <window_json>`,
+  `dev_window_inner_command <record_json> <window_json> <env_json>`,
   `dev_backend_create <session_name> <workspace_id> <slug> <worktree>`,
   `dev_backend_apply_layout <session_name> <config_json> <record_json>`,
-  `dev_backend_query <session_name>`, `dev_backend_respawn_pane <session_name> <window> <command>`,
+  `dev_backend_query <session_name>`, `dev_backend_respawn_pane <session_name> <window> <command> [<container_id>]`,
   `dev_now`, `dev_event_id_random`, `dev_event_build`, `dev_event_append`
 - Produces: `dev_cmd_open [<name>] [--no-attach]`, `dev_cmd_attach [<name>]`,
   `dev_open_attach <session_name>`,
-  `dev_open_boot_id`, `dev_open_window_command <record_json> <window_json>`,
+  `dev_open_boot_id`,
+  `dev_open_window_command <record_json> <window_json> [<env_json>]`,
   `dev_open_session_index_write <workspace_id> <slug> <session_name> <worktree>`,
   `dev_open_session_index_path <session_name>` (Tasks 15 and 16 use the last two)
 
@@ -4983,8 +5552,39 @@ esac
   [ "$(dev_open_events 'select(.event == "container.replaced") | .data.old_id')" = "oldcid" ]
   [ "$(dev_open_events 'select(.event == "container.replaced") | .data.new_id')" = "newcid" ]
   [ "$(dev_open_events 'select(.event == "pane.respawned") | .data.window')" = "shell" ]
+  # Exactly one event for one respawn: `dev_backend_respawn_pane` is the sole
+  # emitter and `dev_open_respawn_dead` must not emit a second. A double event
+  # folds twice and reports every recovery as two restarts.
+  [ "$(dev_open_events 'select(.event == "pane.respawned") | .id' | wc -l)" = "1" ]
+  [ "$(dev_open_events 'select(.event == "pane.respawned") | .data.container_id')" = "newcid" ]
   [ "$(dev_tmux list-panes -t '=demo:=shell' -F '#{pane_dead}')" = "0" ]
   dev_tmux kill-server || true
+}
+
+@test "a respawned window comes back as the window it was, not as a bare shell" {
+  # The respawn path used to re-derive `.command` itself, which meant an agent
+  # window came back running $SHELL in the worktree with no environment -- the
+  # pane was alive and silently not what the config declared. It now goes through
+  # dev_window_inner_command, the same function creation uses. Asserted by
+  # running the produced string rather than by matching its text: the string is
+  # `sh -c <quoted inner>`, so a substring match would be testing the quoting
+  # rather than the behaviour.
+  setup_dev_test
+  dev_open_load_libs
+  local dir ws_id record wjson env_json cmd
+  dir=$(dev_open_fixture demo)
+  mkdir -p "$dir/sub dir"
+  ws_id=$(dev_resolve_workspace_id "$dir")
+  record=$(dev_state_new "$ws_id" demo demo "$dir")
+
+  stub_command my-agent "printf '%s|%s|%s\n' \"\$PWD\" \"\$FOO\" \"\$1\" >'$TEST_ROOT/agent-ran'"
+
+  wjson='{"name":"agent-1","agent":"my-agent --flag","cwd":"sub dir","location":"host"}'
+  env_json='{"FOO":"a b"}'
+  cmd=$(dev_open_window_command "$record" "$wjson" "$env_json")
+
+  bash -c "$cmd"
+  [ "$(cat "$TEST_ROOT/agent-ran")" = "$dir/sub dir|a b|--flag" ]
 }
 
 @test "attach on an absent session exits 4 and creates nothing" {
@@ -5024,6 +5624,53 @@ esac
   [ "$(cat "$TEST_ROOT/attached")" = "ATTACH $expected" ]
   [ "$(dev_open_events 'select(.event == "workspace.opened") | .data.session_name_actual')" = "$expected" ]
   [ "$(dev_tmux show-options -t "=$expected:" -qv @dev_worktree)" = "$dir" ]
+  dev_tmux kill-server || true
+}
+
+@test "a collision-hashed name survives the conflicting session going away" {
+  # The durability half of ADR-7's guard, and the regression this pins: every
+  # later command used to re-derive the resolver's PROPOSAL rather than read the
+  # record. Once the squatter left, `dev attach demo` looked up the plain name,
+  # found nothing, and reported no live session — while the hashed session was
+  # still running with the user's work in it. `dev demo` would then have built a
+  # second session for the same working tree.
+  setup_dev_test
+  dev_open_load_libs
+  dev_open_stub_attach
+  local dir other ws_id expected
+  dir=$(dev_open_fixture demo)
+  other=$(dev_open_fixture impostor)
+
+  dev_backend_create demo "$(dev_resolve_workspace_id "$other")" demo "$other"
+  run dev_cmd_open demo --no-attach
+  [ "$status" -eq 0 ]
+
+  ws_id=$(dev_resolve_workspace_id "$dir")
+  expected="demo--$(basename "$dir")--${ws_id:0:6}"
+  [ "$(jq -r '.session_name' "$(dev_state_path "$ws_id")")" = "$expected" ]
+
+  # The squatter leaves. The plain name is now free.
+  dev_tmux kill-session -t '=demo'
+  run dev_tmux has-session -t '=demo'
+  [ "$status" -ne 0 ]
+
+  # attach must still find the hashed session.
+  rm -f "$TEST_ROOT/attached"
+  run dev_cmd_attach demo
+  [ "$status" -eq 0 ]
+  [ "$(cat "$TEST_ROOT/attached")" = "ATTACH $expected" ]
+
+  # open must reuse it rather than create a second session on the free name.
+  run dev_cmd_open demo --no-attach
+  [ "$status" -eq 0 ]
+  [ "$output" = "$expected" ]
+  run dev_tmux has-session -t '=demo'
+  [ "$status" -ne 0 ]
+  [ "$(dev_tmux list-sessions -F '#{session_name}' | wc -l)" = "1" ]
+
+  # And reconcile never called it vanished: it queried the recorded name.
+  [ "$(jq -r '.status' "$(dev_state_path "$ws_id")")" = "running" ]
+  [ -z "$(dev_open_events 'select(.event == "workspace.vanished") | .id')" ]
   dev_tmux kill-server || true
 }
 ```
@@ -5074,23 +5721,22 @@ dev_open_emit() {
   dev_event_append "$line"
 }
 
-# The shell command for one window: the container exec prefix (one argv element per
-# line, per Task 10) quoted back into a single string, then the window's command.
+# The shell command for one window, built exactly the way Task 12's
+# `dev_backend_apply_layout` builds it: the container exec prefix (one argv
+# element per line, per Task 10) quoted back into a single string, then the
+# window's inner command. It must go through `dev_window_inner_command` for the
+# same reason creation does -- that function is where `agent`, `command`, `cwd`
+# and `environment` are applied. An earlier draft re-derived `.command` here and
+# so respawned an agent window as a bare $SHELL in the worktree with no
+# environment: the pane came back, silently not being what it was.
 dev_open_window_command() {
-  local record_json="$1" window_json="$2"
-  local prefix=() part out="" cmd
-  mapfile -t prefix < <(dev_container_exec_prefix "$record_json" "$window_json")
-  for part in "${prefix[@]}"; do
-    [[ -n "$part" ]] || continue
-    out+=$(printf '%q ' "$part")
-  done
-  cmd=$(jq -r '.command // ""' <<<"$window_json")
-  if [[ -n "$cmd" ]]; then
-    out+="$cmd"
-  else
-    out+="${SHELL:-/bin/bash}"
-  fi
-  printf '%s\n' "$out"
+  local record_json="$1" window_json="$2" env_json="${3:-{\}}"
+  local prefix=() inner out
+  mapfile -t prefix < <(dev_container_exec_prefix "$record_json" "$window_json") || return 1
+  [[ ${#prefix[@]} -gt 0 ]] || return 1
+  inner=$(dev_window_inner_command "$record_json" "$window_json" "$env_json") || return 1
+  printf -v out '%q ' "${prefix[@]}"
+  printf '%s%q\n' "$out" "$inner"
 }
 
 dev_open_attach() {
@@ -5149,19 +5795,21 @@ dev_open_container_up() {
 # Only panes the backend reports dead are touched. A live pane is never respawned.
 dev_open_respawn_dead() {
   local config="$1" record="$2"
-  local query dead cid win wjson cmd
+  local query dead cid win wjson cmd env_json
   query=$(dev_backend_query "$DEV_OPEN_SESSION")
   dead=$(jq -r '.windows[] | select([.panes[].alive] | index(false)) | .name' <<<"$query")
   [[ -n "$dead" ]] || return 0
   cid=$(jq -r '.container.id // ""' <<<"$record")
+  env_json=$(jq -c '.environment // {}' <<<"$config")
   while IFS= read -r win; do
     [[ -n "$win" ]] || continue
     wjson=$(jq -c --arg w "$win" '.windows[] | select(.name == $w)' <<<"$config")
     [[ -n "$wjson" ]] || continue
-    cmd=$(dev_open_window_command "$record" "$wjson")
-    dev_backend_respawn_pane "$DEV_OPEN_SESSION" "$win" "$cmd" || continue
-    dev_open_emit pane.respawned \
-      "$(jq -n --arg w "$win" --arg c "$cid" '{window: $w, container_id: $c}')"
+    cmd=$(dev_open_window_command "$record" "$wjson" "$env_json") || continue
+    # `dev_backend_respawn_pane` is the sole emitter of pane.respawned (Task 12),
+    # so the container id is handed to it rather than emitted again here. Two
+    # events for one respawn would fold twice and double the `restarts` counter.
+    dev_backend_respawn_pane "$DEV_OPEN_SESSION" "$win" "$cmd" "$cid" || continue
   done <<<"$dead"
 }
 
@@ -5272,7 +5920,13 @@ dev_cmd_open() {
   DEV_OPEN_WS_ID=$(jq -r '.workspace_id' <<<"$resolved")
   DEV_OPEN_SLUG=$(jq -r '.slug' <<<"$resolved")
   DEV_OPEN_WORKTREE=$(jq -r '.worktree' <<<"$resolved")
-  DEV_OPEN_SESSION=$(jq -r '.session_name' <<<"$resolved")
+  # Start from the recorded name so a workspace the ADR-7 guard already renamed
+  # reuses its hashed session instead of re-testing the plain name and creating
+  # a second session for the same working tree. The guard in
+  # dev_open_ensure_locked still runs; on a renamed workspace it now finds its
+  # own session and does nothing.
+  DEV_OPEN_SESSION=$(dev_state_session_name "$DEV_OPEN_WS_ID" \
+    "$(jq -r '.session_name' <<<"$resolved")")
 
   config=$(dev_config_merged "$DEV_OPEN_SLUG" "$DEV_OPEN_WORKTREE") || return $?
   dev_config_validate "$config" || return $?
@@ -5308,12 +5962,18 @@ dev_cmd_attach() {
   ws_id=$(jq -r '.workspace_id' <<<"$resolved")
   slug=$(jq -r '.slug' <<<"$resolved")
   worktree=$(jq -r '.worktree' <<<"$resolved")
-  session=$(jq -r '.session_name' <<<"$resolved")
+  # The record's name wins. A workspace the ADR-7 guard renamed keeps that name
+  # for life; re-deriving the resolver's proposal here is what made such a
+  # workspace unattachable once the session it originally collided with went
+  # away — the plain name resolved to nothing while the hashed session ran on.
+  session=$(dev_state_session_name "$ws_id" "$(jq -r '.session_name' <<<"$resolved")")
 
   query=$(dev_backend_query "$session")
   if [[ "$(jq -r '.exists' <<<"$query")" == "true" ]]; then
     live=$(jq -r '.worktree // ""' <<<"$query")
     if [[ "$live" != "$worktree" ]]; then
+      # Still reachable with no record: a first-ever `dev attach` against a name
+      # another working tree already holds. Fall through to the hashed form.
       session="$slug--$(basename "$worktree")--${ws_id:0:6}"
       query=$(dev_backend_query "$session")
     fi
@@ -5365,19 +6025,31 @@ takers in Phase 1 — `open` (ensure), `stop`, and `dev-autostart.service` — a
 concurrent `open` (one tearing down the container the other is mid-way through starting) is one of the
 two races the lock exists for.
 
-Three ordering decisions, each with a reason:
-
-*Emit `workspace.stopped` before killing.* The reason is a fact about the user's intent that is known
-before the kill and would be lost if the kill hung or failed. Reconcile would then discover the death
-later and record it as `vanished` — a worse answer than the one we already had.
+Four ordering decisions, each with a reason:
 
 *Remove the session index before killing.* Task 16's `session-closed` hook resolves its envelope
 through `$DEV_STATE_ROOT/sessions/<session_name>.json`. Deleting it first means the hook that fires a
 moment later finds nothing and exits silently, so a deliberate `stop` produces exactly one
 `workspace.stopped` rather than the CLI's and the hook's. The CLI keeps the emit rather than delegating
 to the hook, because a session created before the tmux config was installed has no hooks at all and
-`stop` must still be correct there. Should both ever fire, the fold is absolute assignment
-(`status=stopped`; `stopped_reason=reason`), so the record converges either way.
+`stop` must still be correct there. This deletion is also what lets §4.4 keep two distinct reasons:
+because the index is gone before the kill, `session-closed` only ever fires for a close the platform
+did not perform, and can label itself accordingly (Task 16).
+
+*Emit `workspace.stopped` only after the kill succeeds.* An earlier draft emitted first, reasoning that
+the user's intent is known before the kill and would be lost if the kill failed. That trade is wrong:
+the fold assigns `status=stopped` absolutely, so a failed kill would leave the record claiming the
+workspace is stopped while the session is still running and still accepting input — and no later
+reconcile repairs it, because reconcile treats a `stopped` record as terminal. A lost `reason` is
+recoverable (the next reconcile sees the session gone and records `vanished`, which is at least true);
+a false `stopped` is not. If the kill fails, `stop` restores the session index it removed, so the hook
+is armed again for whenever the session does end, reports the failure, and exits non-zero.
+
+*Reconcile again after a successful kill.* Without it `stop` would return leaving the record still
+reading `running`, since the reconcile it ran up front happened before the kill. Anything that reads
+`workspaces/*.json` directly — Task 19's fold-equivalence test, a future dashboard between commands —
+would see a workspace the user has already stopped as live. The second reconcile takes no operation
+lock (ADR-1) and runs after the lock is released.
 
 *No container event.* Phase 1 has no `container.stopped` type (§4.4), and inventing one for a single
 call site is the wrong trade. The next reconcile observes the container gone and emits `container.lost`,
@@ -5396,7 +6068,9 @@ Append to `tests/dev_commands.bats`:
   setup_dev_test
   dev_open_load_libs
   dev_open_stub_attach
-  dev_open_fixture demo >/dev/null
+  local dir ws_id
+  dir=$(dev_open_fixture demo)
+  ws_id=$(dev_resolve_workspace_id "$dir")
 
   run dev_cmd_open demo
   [ "$status" -eq 0 ]
@@ -5409,10 +6083,47 @@ Append to `tests/dev_commands.bats`:
 
   [ "$(dev_open_events 'select(.event == "workspace.stopped") | .data.reason')" = "user" ]
 
+  # stop reconciles after the kill, so the record itself reads stopped without
+  # waiting for the next command to project it.
+  [ "$(jq -r '.status' "$(dev_state_path "$ws_id")")" = "stopped" ]
+
   run dev_cmd_list --json
   [ "$status" -eq 0 ]
   [ "$(jq -r '.workspaces[] | select(.session_name == "demo") | .status' <<<"$output")" = "stopped" ]
   [ "$(jq -r '.workspaces[] | select(.session_name == "demo") | .stopped_reason' <<<"$output")" = "user" ]
+  dev_tmux kill-server || true
+}
+
+@test "a kill that fails does not record the workspace as stopped" {
+  # The ordering regression: emitting workspace.stopped before the kill left a
+  # live session recorded as stopped, and reconcile treats stopped as terminal,
+  # so nothing ever corrected it.
+  setup_dev_test
+  dev_open_load_libs
+  dev_open_stub_attach
+  local dir ws_id
+  dir=$(dev_open_fixture demo)
+  ws_id=$(dev_resolve_workspace_id "$dir")
+
+  run dev_cmd_open demo
+  [ "$status" -eq 0 ]
+
+  dev_backend_kill() { return 1; }
+
+  run dev_cmd_stop demo
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"still running"* ]]
+
+  # No event, so nothing to fold into a false stopped.
+  [ -z "$(dev_open_events 'select(.event == "workspace.stopped") | .id')" ]
+
+  # The session index is back, so the hook is still armed for the eventual close.
+  [ -s "$(dev_open_session_index_path demo)" ]
+
+  unset -f dev_backend_kill
+  run dev_cmd_list --json
+  [ "$status" -eq 0 ]
+  [ "$(jq -r '.workspaces[] | select(.session_name == "demo") | .status' <<<"$output")" = "running" ]
   dev_tmux kill-server || true
 }
 
@@ -5522,15 +6233,30 @@ dev_stop_emit() {
 
 dev_stop_locked() {
   local record="$1" stop_container="$2"
-  local query cid
+  local query cid index saved
 
   query=$(dev_backend_query "$DEV_STOP_SESSION")
   if [[ "$(jq -r '.exists' <<<"$query")" == "true" ]]; then
     # Delete the hook's envelope lookup first, so the session-closed hook that
-    # fires a moment from now exits silently and does not double-emit.
-    rm -f "$(dev_open_session_index_path "$DEV_STOP_SESSION")"
+    # fires a moment from now exits silently and does not double-emit. Keep the
+    # contents: if the kill fails there is no stop to suppress, and leaving the
+    # index deleted would silently disarm the hook for the rest of the session's
+    # life -- the eventual close would then be observed only by a later reconcile.
+    index=$(dev_open_session_index_path "$DEV_STOP_SESSION")
+    saved=$(cat "$index" 2>/dev/null || true)
+    rm -f "$index"
+
+    if ! dev_backend_kill "$DEV_STOP_SESSION"; then
+      if [[ -n "$saved" ]]; then
+        printf '%s\n' "$saved" >"$index"
+      fi
+      printf 'dev: could not end session %s; it is still running\n' "$DEV_STOP_SESSION" >&2
+      return 1
+    fi
+    # Emitted only now. The fold assigns status=stopped absolutely and reconcile
+    # treats a stopped record as terminal, so emitting before a kill that failed
+    # would leave a live workspace permanently recorded as stopped.
     dev_stop_emit workspace.stopped '{"reason":"user"}'
-    dev_backend_kill "$DEV_STOP_SESSION" || return $?
   else
     printf 'dev: %s is already stopped\n' "$DEV_STOP_SESSION" >&2
   fi
@@ -5592,6 +6318,14 @@ dev_cmd_stop() {
   fi
   dev_stop_locked "$record" "$stop_container" || rc=$?
   exec 9>&-
+  # Project the record forward. The reconcile above ran before the kill, so
+  # without this `stop` returns with the record still reading `running` and
+  # anything reading state between commands sees a workspace the user has
+  # already stopped as live. Reconcile takes no operation lock (ADR-1), so this
+  # runs after the release.
+  if [[ "$rc" -eq 0 ]]; then
+    dev_reconcile "$resolved" "$digest" >/dev/null || true
+  fi
   return "$rc"
 }
 ```
@@ -5627,12 +6361,23 @@ git commit -m "feat(dev): add the stop command, the only destructive verb"
 - Produces: `tools/dev/dev-event` (executable), `tools/dev/dev.tmux.conf`
 
 **`dev-event` is deliberately tiny.** It takes the four envelope values (`workspace_id`, `slug`,
-`session_name`, `worktree`) plus the event type and a data JSON, and **exits silently when
-`workspace_id` is empty**. That is exactly how ad-hoc sessions are filtered out: the hooks are global,
-so they fire for every session on the server, and a log full of events about sessions that were never
-workspaces is worse than no log. It appends one line via `dev_event_append` and **touches no record**:
-it holds no state lock, and a lock-free read-modify-write of a JSON file is precisely the corruption
-the rest of this design exists to avoid. Records transition on the next reconcile.
+`session_name`, `worktree`) plus the event type and zero or more `key=value` pairs, and **exits
+silently when `workspace_id` is empty**. That is exactly how ad-hoc sessions are filtered out: the
+hooks are global, so they fire for every session on the server, and a log full of events about
+sessions that were never workspaces is worse than no log. It appends one line via `dev_event_append`
+and **touches no record**: it holds no state lock, and a lock-free read-modify-write of a JSON file
+is precisely the corruption the rest of this design exists to avoid. Records transition on the next
+reconcile.
+
+**Data arrives as `key=value` pairs, never as a JSON literal.** An earlier draft had the tmux config
+interpolate format expansions straight into a JSON string — `'{\"window\":\"#{window_name}\"}'`. tmux
+does not escape anything for JSON, so a window name or client tty containing `"` or `\` produced a
+malformed line, and `dev_events_read_all` skips lines that do not parse: the event would be lost with
+no error anywhere. `dev-event` builds the object with `jq --arg` instead, which escapes correctly by
+construction, and every value in §4.4's hook-emitted `data` is a string, so nothing is lost by the
+restriction. It also removes three levels of backslash escaping from `dev.tmux.conf`, which was its
+own hazard. Task 4's window-name charset rule (`[A-Za-z0-9._-]`) still stands as defence in depth —
+these values are also shell words inside `run-shell`.
 
 **Why there is a `--session` mode, and it is not optional.** Probed on tmux 3.4 rather than assumed:
 at `session-closed` time the closing session's user options are already destroyed, so
@@ -5646,6 +6391,24 @@ the session that owns the hook is gone before the hook would run. So `session-cl
 `stop` removes before killing (Task 15). Missing file means "not a workspace" and exits 0, which
 preserves the ad-hoc filter exactly. The other three hooks fire while the session is alive and pass
 the envelope directly, which was verified to work including a worktree path containing a space.
+
+**`--session` deletes the index after emitting.** The session it describes no longer exists, so the
+file is stale from that moment on. Leaving it is not inert: session names are reused (`demo` is
+`demo` again on the next `dev open`), so a stale index left by an old incarnation can answer for a
+new one — and worse, `dev open` writing a fresh index is what makes the deletion-before-kill in Task
+15 meaningful. The unlink happens after the append, so a crash in between leaves a stale index rather
+than a lost event, which is the right way round.
+
+**`session-closed` reports `reason: "session_closed"`, not `"user"`.** `dev stop` removes the session
+index *before* killing (Task 15), so this hook cannot fire for a stop the platform performed — by the
+time it runs there is no index to resolve and it exits 0. Every close it does see is therefore one the
+platform did not do: `tmux kill-session` by hand, the last pane exiting, `pkill tmux`. Labelling those
+`user` — the reason `dev stop` writes — collapses a deliberate teardown and an unexplained
+disappearance into one value, and a consumer asking "did I stop this or did it die?" cannot tell them
+apart. This widens §4.4's `stopped_reason` enum from `user | vanished | host_restart` to
+`user | session_closed | vanished | host_restart`; `session_closed` sits between the other two in
+certainty — the close was observed as it happened (unlike `vanished`, which is inferred later) but was
+not requested through the platform (unlike `user`).
 
 **Quoting.** `run-shell` hands its string to `sh -c`, so every format expansion is individually
 single-quoted inside the double-quoted tmux string. Without that, a worktree path containing a space
@@ -5673,7 +6436,7 @@ Append to `tests/dev_install.bats`:
 ```bash
 @test "dev-event with an empty workspace_id writes nothing and exits 0" {
   setup_dev_test
-  run "$REPO_ROOT/tools/dev/dev-event" "" slug sess /tmp/tree workspace.stopped '{"reason":"user"}'
+  run "$REPO_ROOT/tools/dev/dev-event" "" slug sess /tmp/tree workspace.stopped reason=user
   [ "$status" -eq 0 ]
   [ ! -s "$DEV_STATE_ROOT/events/events.jsonl" ]
 }
@@ -5681,7 +6444,7 @@ Append to `tests/dev_install.bats`:
 @test "dev-event appends exactly one line carrying the whole envelope" {
   setup_dev_test
   run "$REPO_ROOT/tools/dev/dev-event" wsid1 myslug mysess /home/t/tree \
-    workspace.attached '{"client":"/dev/pts/3"}'
+    workspace.attached client=/dev/pts/3
   [ "$status" -eq 0 ]
   [ "$(wc -l <"$DEV_STATE_ROOT/events/events.jsonl")" -eq 1 ]
 
@@ -5698,12 +6461,49 @@ Append to `tests/dev_install.bats`:
   [ "$(jq -r '.data.client' <<<"$line")" = "/dev/pts/3" ]
 }
 
+@test "dev-event emits {} when no key=value pairs are given" {
+  setup_dev_test
+  run "$REPO_ROOT/tools/dev/dev-event" wsid1 slug sess /tmp/tree workspace.detached
+  [ "$status" -eq 0 ]
+  [ "$(jq -c '.data' "$DEV_STATE_ROOT/events/events.jsonl")" = "{}" ]
+}
+
 @test "dev-event keeps a worktree path containing a space as one field" {
   setup_dev_test
-  run "$REPO_ROOT/tools/dev/dev-event" wsid2 slug sess "/home/t/my tree" pane.died '{"window":"shell"}'
+  run "$REPO_ROOT/tools/dev/dev-event" wsid2 slug sess "/home/t/my tree" pane.died window=shell
   [ "$status" -eq 0 ]
   [ "$(jq -r '.worktree' "$DEV_STATE_ROOT/events/events.jsonl")" = "/home/t/my tree" ]
   [ "$(jq -r '.data.window' "$DEV_STATE_ROOT/events/events.jsonl")" = "shell" ]
+}
+
+@test "dev-event escapes quotes and backslashes in a value instead of corrupting the line" {
+  # The regression this pins: the hooks used to interpolate tmux formats into a
+  # JSON literal, so a value containing " or \ produced a line that would not
+  # parse -- and dev_events_read_all silently skips unparseable lines, so the
+  # event vanished with no error anywhere. jq --arg escapes by construction.
+  setup_dev_test
+  run "$REPO_ROOT/tools/dev/dev-event" wsid4 slug sess /tmp/tree pane.died \
+    'window=od"d\name'
+  [ "$status" -eq 0 ]
+  [ "$(wc -l <"$DEV_STATE_ROOT/events/events.jsonl")" -eq 1 ]
+  run jq -e . "$DEV_STATE_ROOT/events/events.jsonl"
+  [ "$status" -eq 0 ]
+  [ "$(jq -r '.data.window' "$DEV_STATE_ROOT/events/events.jsonl")" = 'od"d\name' ]
+}
+
+@test "dev-event keeps the whole remainder of a pair, equals signs and all" {
+  setup_dev_test
+  run "$REPO_ROOT/tools/dev/dev-event" wsid5 slug sess /tmp/tree pane.died \
+    'window=a=b=c'
+  [ "$status" -eq 0 ]
+  [ "$(jq -r '.data.window' "$DEV_STATE_ROOT/events/events.jsonl")" = "a=b=c" ]
+}
+
+@test "dev-event rejects an argument that is not a key=value pair" {
+  setup_dev_test
+  run "$REPO_ROOT/tools/dev/dev-event" wsid6 slug sess /tmp/tree pane.died notapair
+  [ "$status" -eq 2 ]
+  [ ! -s "$DEV_STATE_ROOT/events/events.jsonl" ]
 }
 
 @test "dev-event --session resolves the envelope from the session index" {
@@ -5712,16 +6512,37 @@ Append to `tests/dev_install.bats`:
   jq -n '{workspace_id:"wsid3", slug:"demo", session_name:"demo", worktree:"/home/t/demo"}' \
     >"$DEV_STATE_ROOT/sessions/demo.json"
 
-  run "$REPO_ROOT/tools/dev/dev-event" --session demo workspace.stopped '{"reason":"user"}'
+  run "$REPO_ROOT/tools/dev/dev-event" --session demo workspace.stopped reason=session_closed
   [ "$status" -eq 0 ]
   [ "$(jq -r '.workspace_id' "$DEV_STATE_ROOT/events/events.jsonl")" = "wsid3" ]
   [ "$(jq -r '.slug' "$DEV_STATE_ROOT/events/events.jsonl")" = "demo" ]
   [ "$(jq -r '.worktree' "$DEV_STATE_ROOT/events/events.jsonl")" = "/home/t/demo" ]
+  [ "$(jq -r '.data.reason' "$DEV_STATE_ROOT/events/events.jsonl")" = "session_closed" ]
+}
+
+@test "dev-event --session removes the index it just consumed" {
+  # The session is gone, so the index is stale from this moment on -- and names
+  # are reused, so a leftover index would answer for the NEXT incarnation of
+  # `demo`. Deleting after the append keeps a crash in between on the safe side:
+  # a stale index rather than a lost event.
+  setup_dev_test
+  mkdir -p "$DEV_STATE_ROOT/sessions"
+  jq -n '{workspace_id:"wsid7", slug:"demo", session_name:"demo", worktree:"/home/t/demo"}' \
+    >"$DEV_STATE_ROOT/sessions/demo.json"
+
+  run "$REPO_ROOT/tools/dev/dev-event" --session demo workspace.stopped reason=session_closed
+  [ "$status" -eq 0 ]
+  [ ! -e "$DEV_STATE_ROOT/sessions/demo.json" ]
+
+  # A second close on the same name is now a no-op rather than a duplicate event.
+  run "$REPO_ROOT/tools/dev/dev-event" --session demo workspace.stopped reason=session_closed
+  [ "$status" -eq 0 ]
+  [ "$(wc -l <"$DEV_STATE_ROOT/events/events.jsonl")" -eq 1 ]
 }
 
 @test "dev-event --session on an unknown session writes nothing and exits 0" {
   setup_dev_test
-  run "$REPO_ROOT/tools/dev/dev-event" --session adhoc workspace.stopped '{"reason":"user"}'
+  run "$REPO_ROOT/tools/dev/dev-event" --session adhoc workspace.stopped reason=session_closed
   [ "$status" -eq 0 ]
   [ ! -s "$DEV_STATE_ROOT/events/events.jsonl" ]
 }
@@ -5746,9 +6567,29 @@ export DEV_DOTFILES_ROOT DEV_STATE_ROOT
 source "$DEV_DOTFILES_ROOT/tools/dev/lib/events.sh"
 
 usage() {
-  printf 'usage: dev-event <workspace_id> <slug> <session_name> <worktree> <event> [<data>]\n' >&2
-  printf '       dev-event --session <session_name> <event> [<data>]\n' >&2
+  printf 'usage: dev-event <workspace_id> <slug> <session_name> <worktree> <event> [<key>=<value> ...]\n' >&2
+  printf '       dev-event --session <session_name> <event> [<key>=<value> ...]\n' >&2
   exit 2
+}
+
+# Builds the event `data` object from key=value arguments. Every value is a
+# string, which covers every field §4.4 gives a hook-emitted event. jq --arg does
+# the escaping, so a window name or client tty containing " or \ produces valid
+# JSON instead of a line that dev_events_read_all would silently skip.
+dev_event_data_from_pairs() {
+  local pair key value out='{}'
+  for pair in "$@"; do
+    if [[ "$pair" != *=* ]]; then
+      printf 'dev-event: not a key=value pair: %s\n' "$pair" >&2
+      exit 2
+    fi
+    key="${pair%%=*}"
+    # Longest-prefix removal on the key, shortest on the value: `a=b=c` is the
+    # key `a` with the value `b=c`, not a truncated `b`.
+    value="${pair#*=}"
+    out=$(jq -c --arg k "$key" --arg v "$value" '. + {($k): $v}' <<<"$out")
+  done
+  printf '%s\n' "$out"
 }
 
 main() {
@@ -5758,10 +6599,11 @@ main() {
     [[ $# -ge 3 ]] || usage
     session_name="$2"
     event="$3"
-    data="${4:-{\}}"
+    shift 3
     index="$DEV_STATE_ROOT/sessions/$session_name.json"
-    # No index means this session was never a workspace. Ad-hoc sessions are
-    # filtered here exactly as an empty workspace_id filters them below.
+    # No index means this session was never a workspace, or its index was already
+    # consumed by an earlier close. Ad-hoc sessions are filtered here exactly as
+    # an empty workspace_id filters them below.
     [[ -f "$index" ]] || exit 0
     workspace_id=$(jq -r '.workspace_id // ""' "$index")
     slug=$(jq -r '.slug // ""' "$index")
@@ -5773,8 +6615,11 @@ main() {
     session_name="$3"
     worktree="$4"
     event="$5"
-    data="${6:-{\}}"
+    shift 5
+    index=""
   fi
+
+  data=$(dev_event_data_from_pairs "$@")
 
   # Global hooks fire for every session on the server. Anything without an id is
   # not a workspace, and the log must not fill with noise about it.
@@ -5788,6 +6633,11 @@ main() {
   line=$(dev_event_build "$id" "$ts" "$event" "$workspace_id" "$slug" "$session_name" \
     "$worktree" "$data")
   dev_event_append "$line"
+
+  # The session this index described is gone, and session names get reused, so a
+  # leftover index would answer for the next incarnation. Unlink after the
+  # append: a crash in between leaves a stale index, not a lost event.
+  [[ -z "$index" ]] || rm -f "$index"
 }
 
 main "$@"
@@ -5795,13 +6645,16 @@ main "$@"
 
 Make it executable: `chmod +x tools/dev/dev-event`.
 
-Note on `data="${6:-{\}}"`: the default is the literal two-character JSON object `{}`, escaped
-because an unescaped `}` would close the parameter expansion.
+Note on the `exit 2` inside `dev_event_data_from_pairs`: it runs inside a command substitution, so it
+ends that subshell rather than the script — but `set -e` then fails the `data=$(...)` assignment and
+the script exits 2 anyway, which is what the malformed-pair test asserts. Written as `exit` rather
+than `return` deliberately: a `return 2` would need an explicit check at every call site, and there
+would eventually be one that forgot.
 
 - [ ] **Step 4: Run the `dev-event` tests to verify they pass**
 
 Run: `bats tests/dev_install.bats`
-Expected: PASS for the five `dev-event` cases.
+Expected: PASS for the ten `dev-event` cases.
 
 - [ ] **Step 5: Write the failing tmux hook tests**
 
@@ -5832,8 +6685,39 @@ dev_hook_env() {
     "$DEV_STATE_ROOT/events/events.jsonl")" = "wsid9" ]
   [ "$(jq -r 'select(.event == "workspace.stopped") | .session_name' \
     "$DEV_STATE_ROOT/events/events.jsonl")" = "demo" ]
+  # Not "user": `dev stop` removes the index before killing, so a close this hook
+  # observes is by construction one the platform did not perform.
   [ "$(jq -r 'select(.event == "workspace.stopped") | .data.reason' \
-    "$DEV_STATE_ROOT/events/events.jsonl")" = "user" ]
+    "$DEV_STATE_ROOT/events/events.jsonl")" = "session_closed" ]
+  [ ! -e "$DEV_STATE_ROOT/sessions/demo.json" ]
+  dev_tmux kill-server || true
+}
+
+@test "a window name with a double quote still produces a parseable pane.died" {
+  # End-to-end for the escaping fix: tmux interpolates the raw name into the
+  # argument, and dev-event -- not the tmux config -- turns it into JSON.
+  setup_dev_test
+  dev_hook_env
+  source "$REPO_ROOT/tools/dev/lib/backend-tmux.sh"
+
+  dev_tmux new-session -d -s holder
+  dev_tmux source-file "$REPO_ROOT/tools/dev/dev.tmux.conf"
+
+  dev_tmux new-session -d -s quoted
+  dev_tmux set-option -t '=quoted:' @dev_workspace_id wsidq
+  dev_tmux set-option -t '=quoted:' @dev_slug quoted
+  dev_tmux set-option -t '=quoted:' @dev_worktree /home/t/quoted
+
+  # Task 4 constrains names the platform CREATES; tmux itself does not, and a
+  # hand-renamed window must not be able to corrupt the log.
+  dev_tmux new-window -t '=quoted' -n 'we"ird' 'sleep 0.4; exit 3'
+  dev_tmux set-window-option -t '=quoted:' remain-on-exit on
+  sleep 1.2
+
+  run jq -e . "$DEV_STATE_ROOT/events/events.jsonl"
+  [ "$status" -eq 0 ]
+  [ "$(jq -r 'select(.event == "pane.died") | .data.window' \
+    "$DEV_STATE_ROOT/events/events.jsonl")" = 'we"ird' ]
   dev_tmux kill-server || true
 }
 
@@ -5899,21 +6783,29 @@ test failing with `output = 0`.
 # Every format expansion is individually single-quoted so that a worktree path
 # containing a space arrives as ONE argument. run-shell hands the string to sh.
 #
+# Event data is passed as key=value ARGUMENTS, never as a JSON literal. tmux does
+# not escape for JSON, so interpolating #{window_name} or #{hook_client} into
+# '{"window":"..."}' produced an unparseable line for any value containing " or
+# \ -- and unparseable lines are skipped silently by the reader. dev-event builds
+# the object with jq --arg instead.
+#
 # session-closed cannot carry the envelope: on tmux 3.4 the closing session's
 # user options are already gone and #{session_name} names a different session.
 # #{hook_session_name} is the only usable identity, so it resolves through the
-# session index that `dev open` wrote.
+# session index that `dev open` wrote. `dev stop` deletes that index BEFORE
+# killing, so every close this hook actually sees is one the platform did not
+# perform -- hence reason=session_closed rather than `dev stop`'s reason=user.
 
-set-hook -g session-closed "run-shell -b \"~/.dotfiles/tools/dev/dev-event --session '#{hook_session_name}' workspace.stopped '{\\\"reason\\\":\\\"user\\\"}'\""
+set-hook -g session-closed "run-shell -b \"~/.dotfiles/tools/dev/dev-event --session '#{hook_session_name}' workspace.stopped reason=session_closed\""
 
-set-hook -g client-attached "run-shell -b \"~/.dotfiles/tools/dev/dev-event '#{@dev_workspace_id}' '#{@dev_slug}' '#{session_name}' '#{@dev_worktree}' workspace.attached '{\\\"client\\\":\\\"#{hook_client}\\\"}'\""
+set-hook -g client-attached "run-shell -b \"~/.dotfiles/tools/dev/dev-event '#{@dev_workspace_id}' '#{@dev_slug}' '#{session_name}' '#{@dev_worktree}' workspace.attached 'client=#{hook_client}'\""
 
-set-hook -g client-detached "run-shell -b \"~/.dotfiles/tools/dev/dev-event '#{@dev_workspace_id}' '#{@dev_slug}' '#{session_name}' '#{@dev_worktree}' workspace.detached '{\\\"client\\\":\\\"#{hook_client}\\\"}'\""
+set-hook -g client-detached "run-shell -b \"~/.dotfiles/tools/dev/dev-event '#{@dev_workspace_id}' '#{@dev_slug}' '#{session_name}' '#{@dev_worktree}' workspace.detached 'client=#{hook_client}'\""
 
 # pane-died is WINDOW-scoped: registered with -gw, absent from `show-hooks -g`,
 # visible only under `show-hooks -gw`. It fires on process exit under
 # remain-on-exit and does NOT fire for kill-pane.
-set-hook -gw pane-died "run-shell -b \"~/.dotfiles/tools/dev/dev-event '#{@dev_workspace_id}' '#{@dev_slug}' '#{session_name}' '#{@dev_worktree}' pane.died '{\\\"window\\\":\\\"#{window_name}\\\"}'\""
+set-hook -gw pane-died "run-shell -b \"~/.dotfiles/tools/dev/dev-event '#{@dev_workspace_id}' '#{@dev_slug}' '#{session_name}' '#{@dev_worktree}' pane.died 'window=#{window_name}'\""
 ```
 
 - [ ] **Step 8: Add the marker block to `tools/tmux/tmux.conf.symlink`**
@@ -5932,7 +6824,7 @@ if-shell '[ -x ~/.dotfiles/tools/dev/dev-event ]' \
 - [ ] **Step 9: Run the tests to verify they pass**
 
 Run: `bats tests/dev_install.bats`
-Expected: PASS (8 tests, 0 failures)
+Expected: PASS (14 tests, 0 failures)
 
 - [ ] **Step 10: Lint and commit**
 
@@ -6593,11 +7485,15 @@ incrementally across six reconciles and one folded in a single pass. Everything 
 full open path (reconcile, container up, session create, layout apply) and returns instead of
 exec'ing `tmux attach-session`. A bats test cannot attach a client.
 
+**Dependency note for Task 13:** the observation steps go through `dev list --json`, not `dev status`.
+`dev status` is prose written for a human and rejects `--json` with exit 2; `dev list --json` is the
+snapshot contract (ADR-2) and reconciles before printing, which is exactly what each step here needs.
+
 **Files:**
 - Create: `tests/dev_lifecycle.bats`
 
 **Interfaces:**
-- Consumes: `bin/dev` (`open`, `status`, `stop`), `dev_resolve_workspace_id <path>`,
+- Consumes: `bin/dev` (`open`, `list`, `stop`), `dev_resolve_workspace_id <path>`,
   `dev_state_read <workspace_id>`, `dev_state_new <workspace_id> <slug> <session_name> <worktree>`,
   `dev_events_read_all`, `dev_fold_stream <record_json>`, `dev_now`, `dev_event_id_random`,
   `dev_event_build <id> <ts> <event> <workspace_id> <slug> <session_name> <worktree> <data_json>`,
@@ -6670,13 +7566,22 @@ lifecycle_repo() {
   git -C "$worktree" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
 
   mkdir -p "$DEV_OVERLAY_ROOT/app"
+  # `agent:` is a command string, not a flag, and a window may set `agent` or
+  # `command` but never both -- Task 4's validation exits 5 on that pair. Windows
+  # merge by name (Task 4), so these four entries rewrite the shipped default's
+  # four windows rather than adding a fifth; without the rewrite `agent-1` and
+  # `agent-2` would run the default `claude`, which does not exist here, and
+  # their panes would die the moment they were created.
   cat >"$DEV_OVERLAY_ROOT/app/workspace.yaml" <<'YAML'
 windows:
+  - name: agent-1
+    agent: sleep 600
+  - name: agent-2
+    agent: sleep 600
   - name: shell
     command: sleep 600
-  - name: agent
+  - name: scratch
     command: sleep 600
-    agent: true
 YAML
   printf '%s\n' "$worktree"
 }
@@ -6690,6 +7595,16 @@ lifecycle_emit() {
   ts=$(dev_now)
   line=$(dev_event_build "$id" "$ts" "$event" "$LIFE_ID" app app "$LIFE_WORKTREE" "$data")
   dev_event_append "$line"
+}
+
+# Reconcile and return this workspace's entry from the public snapshot. `dev
+# status` is prose for a human and has no --json (Task 13); `dev list --json` is
+# the snapshot contract, so the observation steps below go through it. Selecting
+# by slug rather than session name keeps this working if ADR-7's collision guard
+# ever renames the session.
+lifecycle_snapshot() {
+  "$REPO_ROOT/bin/dev" list --json |
+    jq -e --arg slug app '.workspaces[] | select(.slug == $slug)'
 }
 
 teardown() {
@@ -6713,13 +7628,13 @@ teardown() {
   tmux -L "$DEV_TMUX_SOCKET" has-session -t "=app"
 
   # 2. Attach: emitted by tmux's client-attached hook, folds to last_seen only.
-  lifecycle_emit attached '{"client":"/dev/pts/9"}'
-  run "$REPO_ROOT/bin/dev" status app --json
+  lifecycle_emit workspace.attached '{"client":"/dev/pts/9"}'
+  run lifecycle_snapshot
   [ "$status" -eq 0 ]
 
   # 3. Container loss: the container disappears out from under the record.
   : >"$TEST_ROOT/container.id"
-  run "$REPO_ROOT/bin/dev" status app --json
+  run lifecycle_snapshot
   [ "$status" -eq 0 ]
   [ "$(jq -r '.container.status' <<<"$output")" = "lost" ]
 
@@ -6727,23 +7642,23 @@ teardown() {
   printf 'cid-two\n' >"$TEST_ROOT/container.id"
   run "$REPO_ROOT/bin/dev" open app --no-attach
   [ "$status" -eq 0 ]
-  run "$REPO_ROOT/bin/dev" status app --json
+  run lifecycle_snapshot
   [ "$status" -eq 0 ]
   [ "$(jq -r '.container.id' <<<"$output")" = "cid-two" ]
 
   # 5. Agent exit: kill the agent pane's process and let reconcile observe it.
   #    remain-on-exit keeps the pane, so the window survives as dead.
-  tmux -L "$DEV_TMUX_SOCKET" send-keys -t "=app:agent" C-c
-  tmux -L "$DEV_TMUX_SOCKET" respawn-pane -k -t "=app:agent" true
+  tmux -L "$DEV_TMUX_SOCKET" respawn-pane -k -t "=app:agent-1" true
   local i
   for i in $(seq 1 50); do
-    [[ "$(tmux -L "$DEV_TMUX_SOCKET" display-message -p -t "=app:agent" '#{pane_dead}')" == "1" ]] && break
+    [[ "$(tmux -L "$DEV_TMUX_SOCKET" display-message -p -t "=app:agent-1" '#{pane_dead}')" == "1" ]] && break
     sleep 0.1
   done
-  run "$REPO_ROOT/bin/dev" status app --json
+  run lifecycle_snapshot
   [ "$status" -eq 0 ]
 
-  # 6. Stop: the only destructive verb.
+  # 6. Stop: the only destructive verb. It reconciles after the kill, so the
+  #    record is already projected forward when this returns.
   run "$REPO_ROOT/bin/dev" stop app
   [ "$status" -eq 0 ]
 
@@ -6784,7 +7699,7 @@ teardown() {
   run "$REPO_ROOT/bin/dev" open app --no-attach
   [ "$status" -eq 0 ]
   : >"$TEST_ROOT/container.id"
-  run "$REPO_ROOT/bin/dev" status app --json
+  run lifecycle_snapshot
   [ "$status" -eq 0 ]
   run "$REPO_ROOT/bin/dev" stop app
   [ "$status" -eq 0 ]

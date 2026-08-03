@@ -281,6 +281,14 @@ the rest — three user options and `#{session_name}` expand correctly in a `pan
 `worktree` path containing a space arrives as a single argument rather than two, which is the
 quoting detail most likely to be got wrong in a `run-shell` string.
 
+**Per-event `data` is passed to `dev-event` as `key=value` arguments, not as a JSON literal.** tmux
+performs no JSON escaping, so a hook string of the form `'{"window":"#{window_name}"}'` emits an
+unparseable line for any window name or client tty containing `"` or `\` — and an unparseable line is
+skipped silently by the reader, so the event is lost with no error recorded anywhere. `dev-event`
+builds the object with `jq --arg`, which escapes by construction. Every `data` field §4.4 gives a
+hook-emitted event is a string, so nothing is given up, and the hook strings lose three levels of
+backslash escaping in the process.
+
 The earlier draft filtered by mapping the session *name* back to a record, and that has a real hole:
 ADR-7's collision guard can choose a hashed session name during `open`, and the record does not carry
 that name until a later reconcile writes it. Any pane or session event in that window is discarded —
@@ -411,11 +419,16 @@ does not.
 **Reconciliation rules, by drift case:**
 
 *Case A — session killed by hand.* `session-closed` fires and the hook appends `workspace.stopped`
-with an accurate timestamp. **The hook does not touch the record** — it cannot, because it holds no
-state lock (§4.4 and §1.1), and a lock-free read-modify-write of a JSON file is precisely the corruption this
-design is otherwise careful to avoid. The record transitions on the next reconcile, which folds that
-event and observes the session gone. If the hook was missed entirely, the same reconcile finds record
-`running` / backend absent and emits `workspace.vanished` with `discovered_at` instead.
+with `reason: session_closed` and an accurate timestamp. That reason is deliberately not `user`, which
+is what an intentional `dev stop` writes: `stop` removes the session-index sidecar before it kills, so
+the hook cannot resolve an envelope for a teardown the platform performed and exits silently. Every
+close the hook actually reports is therefore one the platform did not do, and a consumer can tell "I
+stopped this" from "this went away while I wasn't looking." **The hook does not touch the record** — it
+cannot, because it holds no state lock (§4.4 and §1.1), and a lock-free read-modify-write of a JSON
+file is precisely the corruption this design is otherwise careful to avoid. The record transitions on
+the next reconcile, which folds that event and observes the session gone. If the hook was missed
+entirely, the same reconcile finds record `running` / backend absent and emits `workspace.vanished`
+with `discovered_at` instead.
 
 This is the general rule, and it is worth stating plainly because an earlier draft got it wrong:
 **hooks append events; only reconcile writes records.** Records are therefore *eventual* projections
@@ -913,7 +926,7 @@ $DEV_OVERLAY_ROOT/<slug>/
 ~/.local/state/dev/                    # Runtime state; not in the repository
   workspaces/<workspace_id>.json       # One record per working tree; name is the full sha256 of its path
   events/events.jsonl                  # Append-only event stream
-  events/events-<ts>.jsonl             # Rotated segments, newest-first retention
+  events/events-<ts>-<nn>.jsonl        # Rotated segments, newest-first retention
   locks/<workspace_id>.lock            # State lock: record read-modify-write only
   locks/<workspace_id>.op              # Operation lock: every workspace-mutating operation
   locks/events.lock                    # Global: exclusive for rotation, shared for appends and folds
@@ -1104,9 +1117,13 @@ last `devcontainer up` and its parsed JSON tail line, stored verbatim so that th
 not actually usable" case has evidence attached to it rather than only a `false` flag. They are
 replaced wholesale on every `container.ready`, never merged.
 
-`stopped_reason` is `null` while running, and otherwise one of `user`, `host_restart`, or
-`vanished`. It has no `container_failed` member: that was the one value crossing the workspace/
-container axis, and container failure is now reported by `container.status` instead.
+`stopped_reason` is `null` while running, and otherwise one of `user`, `session_closed`,
+`host_restart`, or `vanished`, in decreasing order of how much is known about why the workspace
+stopped: `user` is a `dev stop`, `session_closed` is a close observed as it happened but not requested
+through the platform, `host_restart` is inferred from a changed boot id, and `vanished` is inferred
+from the session simply not being there. It has no `container_failed` member: that was the one value
+crossing the workspace/container axis, and container failure is now reported by `container.status`
+instead.
 
 `scanned_through` is the event-fold cursor defined in ADR-1: the `id` and `ts` of the last event this
 record's reconcile scanned, advanced across events belonging to other workspaces as well as its own,
@@ -1228,7 +1245,7 @@ is what makes replay idempotent (ADR-1).
 | `workspace.opened` | `boot_id`, `config_digest`, `session_name_actual` | — | `status=running`; `opened_at=ts` (new incarnation boundary); `boot_id`, `applied_digest=config_digest`, `session_name=session_name_actual`; `stopped_reason=null`; clear `fold_gap` |
 | `workspace.attached` | `client` | — | `last_seen=ts` only |
 | `workspace.detached` | `client` | — | `last_seen=ts` only |
-| `workspace.stopped` | `reason` (`user`) | — | `status=stopped`; `stopped_reason=reason` |
+| `workspace.stopped` | `reason` (`user`\|`session_closed`) | — | `status=stopped`; `stopped_reason=reason` |
 | `workspace.vanished` | `discovered_at`, `reason` (`vanished`\|`host_restart`) | `last_boot_id` | `status=stopped`; `stopped_reason=reason` |
 | `window.created` | `window`, `location` (`container`\|`host`) | `command` | none — layout is observed, not folded |
 | `pane.died` | `window` | `exit_status` | if the window carries an agent: `agents[window].state=exited` |
@@ -1316,8 +1333,11 @@ them. This is what makes the namespacing claim above true rather than aspiration
 Phase 2 must not make Phase 1's fold refuse to run.
 
 **Retention.** Rotate when `events.jsonl` exceeds 8 MiB, checked during reconcile under an exclusive
-`locks/events.lock`. Rotated segments are named `events-<RFC3339-basic>.jsonl`; the five most recent are
-retained and older ones deleted. No compression — these are small, and keeping them greppable with
+`locks/events.lock`. Rotated segments are named `events-<RFC3339-basic-with-nanoseconds>-<NN>.jsonl`
+— sub-second precision because the trigger is a size, so a burst of appends can cross the threshold
+twice in the same second, and a fixed-width collision counter present in every name so that lexical
+order stays chronological (segment order is read order). The five most recent are retained and older
+ones deleted. No compression — these are small, and keeping them greppable with
 plain `jq` matters more than the disk.
 
 Phase 1 ships **zero consumers**. Five bats tests establish that the stream is nonetheless real. The
