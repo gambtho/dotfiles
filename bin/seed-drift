@@ -56,6 +56,11 @@ sd_parse_doc() {
 
 SD_SCAN_AWK=$(
   cat <<'SDAWK'
+function fail(msg) {
+  printf("seed-drift: %s (line %d)\n", msg, NR) >"/dev/stderr"
+  failed = 1
+  exit 3
+}
 function emit(tag, text) {
   if (para == 0 || brk) {
     para++
@@ -63,7 +68,18 @@ function emit(tag, text) {
   }
   printf("%d\t%d\t%s\t%s\n", para, NR, tag, text)
 }
-function scan(line,   n, i, c) {
+function delimword(line, i, n,   w, c) {
+  w = ""
+  while (i <= n) {
+    c = substr(line, i, 1)
+    if (c !~ /[A-Za-z0-9_.-]/) break
+    w = w c
+    i++
+  }
+  wend = i
+  return w
+}
+function scan(line,   n, i, c, j, w) {
   n = length(line)
   i = 1
   while (i <= n) {
@@ -83,16 +99,45 @@ function scan(line,   n, i, c) {
     if (c == "'") { inq = "'"; i++; continue }
     if (c == "\"") { inq = "\""; i++; continue }
     if (c == "#" && (i == 1 || substr(line, i - 1, 1) ~ /[ \t]/)) return substr(line, 1, i - 1)
-    i++
+    if (c != "<") { i++; continue }
+    if (substr(line, i, 2) != "<<") { i++; continue }
+    i += 2
+    c = substr(line, i, 1)
+    if (c == "'" || c == "\"") {
+      j = index(substr(line, i + 1), c)
+      if (j == 0) fail("unterminated heredoc delimiter quote")
+      hdelim = substr(line, i + 1, j - 1)
+      hquot = 1
+      opened = 1
+      i = i + j + 1
+      continue
+    }
+    w = delimword(line, i, n)
+    if (w == "") fail("unrecognized heredoc delimiter after <<")
+    hdelim = w
+    hquot = 0
+    opened = 1
+    i = wend
   }
   return line
 }
 {
+  if (hd) {
+    if ($0 == hdelim) {
+      emit("C", $0)
+      hd = 0
+    } else {
+      emit(hquot ? "Hq" : "Hu", $0)
+    }
+    next
+  }
   if ($0 ~ /^[ \t]*$/ && inq == "") {
     brk = 1
     next
   }
+  opened = 0
   emit("C", scan($0))
+  if (opened) hd = 1
 }
 SDAWK
 )

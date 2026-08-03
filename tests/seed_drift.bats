@@ -132,3 +132,66 @@ FIX
   [ "${lines[1]}" = "$(printf '1\t2\tC\tlinks="$(find . | sed '"'"'s#^\\./##'"'"')" ')" ]
   [ "${lines[2]}" = "$(printf '1\t3\tC\techo "kept # inside quotes"')" ]
 }
+
+@test "sd_scan keeps a quoted heredoc body in one paragraph and tags it Hq" {
+  local f="$TEST_ROOT/hd.sh"
+  cat >"$f" <<'FIX'
+GITIGNORE="$HOME/.gitignore"
+tee "$GITIGNORE" <<'GITEOF'
+.DS_Store
+
+# Personal overlay shims.
+CLAUDE.local.md
+GITEOF
+git config --global core.excludesFile "$GITIGNORE"
+FIX
+
+  sd_source sd_scan "$f"
+
+  [ "$status" -eq 0 ]
+  [ "${lines[2]}" = "$(printf '1\t3\tHq\t.DS_Store')" ]
+  [ "${lines[3]}" = "$(printf '1\t4\tHq\t')" ]
+  [ "${lines[4]}" = "$(printf '1\t5\tHq\t# Personal overlay shims.')" ]
+  [ "${lines[6]}" = "$(printf '1\t7\tC\tGITEOF')" ]
+  [ "${lines[7]}" = "$(printf '1\t8\tC\tgit config --global core.excludesFile "$GITIGNORE"')" ]
+}
+
+@test "sd_scan does not treat << inside a double-quoted string as a heredoc" {
+  local f="$TEST_ROOT/quoted.sh"
+  cat >"$f" <<'FIX'
+GI_MARK_END="# <<< overlay symlinks (auto) <<<"
+echo done
+
+echo after
+FIX
+
+  sd_source sd_scan "$f"
+
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = "$(printf '1\t1\tC\tGI_MARK_END="# <<< overlay symlinks (auto) <<<"')" ]
+  [ "${lines[1]}" = "$(printf '1\t2\tC\techo done')" ]
+  [ "${lines[2]}" = "$(printf '2\t4\tC\techo after')" ]
+}
+
+@test "sd_scan fails closed on unrecognized heredoc syntax" {
+  local f="$TEST_ROOT/bad.sh"
+  printf 'cat << ;\n' >"$f"
+
+  sd_source sd_scan "$f"
+
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"unrecognized heredoc delimiter"* ]]
+}
+
+@test "sd_scan puts the real template core.excludesFile block in one paragraph" {
+  run env SEED_DRIFT_SOURCE_ONLY=1 bash -c '
+    source "$1"
+    scan=$(sd_scan "$2")
+    para=$(printf "%s\n" "$scan" | awk -F"\t" "\$3 == \"C\" && index(\$4, \"core.excludesFile\") { print \$1 }")
+    printf "%s\n" "$scan" | awk -F"\t" -v p="$para" "\$1 == p { print \$2 }" |
+      awk "NR == 1 { first = \$0 } { last = \$0 } END { print first, last }"
+  ' _ "$SEED_DRIFT" "$REAL_TEMPLATE"
+
+  [ "$status" -eq 0 ]
+  [ "$output" = "204 236" ]
+}
