@@ -68,6 +68,24 @@ function emit(tag, text) {
   }
   printf("%d\t%d\t%s\t%s\n", para, NR, tag, text)
 }
+function push(delim, quoted, dash) {
+  nq++
+  qd[nq] = delim
+  qq[nq] = quoted
+  qs[nq] = dash
+}
+function popq() {
+  hdelim = qd[1]
+  hquot = qq[1]
+  hdash = qs[1]
+  hd = 1
+  for (k = 1; k < nq; k++) {
+    qd[k] = qd[k + 1]
+    qq[k] = qq[k + 1]
+    qs[k] = qs[k + 1]
+  }
+  nq--
+}
 function delimword(line, i, n,   w, c) {
   w = ""
   while (i <= n) {
@@ -110,29 +128,20 @@ function scan(line,   n, i, c, j, d, w) {
     if (c == "'" || c == "\"") {
       j = index(substr(line, i + 1), c)
       if (j == 0) fail("unterminated heredoc delimiter quote")
-      hdelim = substr(line, i + 1, j - 1)
-      hquot = 1
-      hdash = d
-      opened = 1
+      push(substr(line, i + 1, j - 1), 1, d)
       i = i + j + 1
       continue
     }
     if (c == "\\") {
       w = delimword(line, i + 1, n)
       if (w == "") fail("unrecognized heredoc delimiter after <<")
-      hdelim = w
-      hquot = 1
-      hdash = d
-      opened = 1
+      push(w, 1, d)
       i = wend
       continue
     }
     w = delimword(line, i, n)
     if (w == "") fail("unrecognized heredoc delimiter after <<")
-    hdelim = w
-    hquot = 0
-    hdash = d
-    opened = 1
+    push(w, 0, d)
     i = wend
   }
   return line
@@ -144,6 +153,7 @@ function scan(line,   n, i, c, j, d, w) {
     if (closer == hdelim) {
       emit("C", $0)
       hd = 0
+      if (nq > 0) popq()
     } else {
       emit(hquot ? "Hq" : "Hu", $0)
     }
@@ -153,9 +163,9 @@ function scan(line,   n, i, c, j, d, w) {
     brk = 1
     next
   }
-  opened = 0
+  nq = 0
   emit("C", scan($0))
-  if (opened) hd = 1
+  if (nq > 0) popq()
 }
 SDAWK
 )

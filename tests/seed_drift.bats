@@ -227,3 +227,17 @@ FIX
   [ "${lines[14]}" = "$(printf '1\t15\tHu\t\tu2')" ]
   [ "${lines[15]}" = "$(printf '1\t16\tC\t\tE')" ]
 }
+
+@test "sd_scan queues two heredocs opened on the same line" {
+  local f="$TEST_ROOT/two.sh"
+  printf '%s\n' 'cat <<A; cat <<-"B"' 'x' 'A' $'\ty' $'\tB' 'echo tail' >"$f"
+
+  sd_source sd_scan "$f"
+
+  [ "$status" -eq 0 ]
+  [ "${lines[1]}" = "$(printf '1\t2\tHu\tx')" ]
+  [ "${lines[2]}" = "$(printf '1\t3\tC\tA')" ]
+  [ "${lines[3]}" = "$(printf '1\t4\tHq\t\ty')" ]
+  [ "${lines[4]}" = "$(printf '1\t5\tC\t\tB')" ]
+  [ "${lines[5]}" = "$(printf '1\t6\tC\techo tail')" ]
+}
