@@ -58,6 +58,17 @@ setup() {
   [ "$status" -eq 0 ]
 }
 
+@test "the public repository tracks nothing under projects/" {
+  # Per-project Claude overlays describe non-public codebases and live in a
+  # separate private repo cloned to ~/.dotfiles/projects. This repo is public,
+  # so anything tracked under projects/ is a leak -- whether it arrives via
+  # `git add -f`, a mistaken merge-conflict resolution, or a future .gitignore
+  # edit that reopens the path.
+  run git -C "$REPO_ROOT" ls-files projects/
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
 @test "tracked files do not contain editor or generated backups" {
   run git -C "$REPO_ROOT" ls-files '*backup*' '*.bak' '*.orig'
   [ "$status" -eq 0 ]
