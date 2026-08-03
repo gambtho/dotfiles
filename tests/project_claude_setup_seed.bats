@@ -313,6 +313,84 @@ extract_seed_script() {
   [ ! -e "$HOME/.dotfiles/ai/marketplace/doomed.sh" ]
 }
 
+@test "the overlay repo's git directory is not mirrored into the container" {
+  # ~/.dotfiles/projects is a nested PRIVATE repository, so the mirror would
+  # otherwise copy its .git -- full history plus a remote URL naming the repo --
+  # into a named volume that outlives the container and ships with any image
+  # built from it. The overlay FILES are the payload and must still arrive; only
+  # the git directory is dropped. Committing from inside the container was never
+  # useful anyway: this tree is a copy, and container writes never reach the host.
+  mkdir -p "$TEST_ROOT/host-seed/.dotfiles/projects/myrepo/.claude" \
+    "$TEST_ROOT/host-seed/.dotfiles/projects/.git/refs"
+  printf '# myrepo\n' >"$TEST_ROOT/host-seed/.dotfiles/projects/myrepo/CLAUDE.md"
+  printf '[remote "origin"]\n\turl = git@example.com:private/overlays.git\n' \
+    >"$TEST_ROOT/host-seed/.dotfiles/projects/.git/config"
+
+  run bash "$SEED_SCRIPT"
+
+  [ "$status" -eq 0 ]
+  [ "$(cat "$HOME/.dotfiles/projects/myrepo/CLAUDE.md")" = "# myrepo" ]
+  [ ! -e "$HOME/.dotfiles/projects/.git" ]
+}
+
+@test "an overlay git directory from an earlier seed is pruned" {
+  # Volumes seeded by a template predating the exclusion already hold the copy,
+  # and the named volume survives --remove-existing-container. The host keeps its
+  # own .git here, as in production: rsync PROTECTS an excluded path on the
+  # receiver from --delete, so excluding it from the transfer does not remove the
+  # copy already there. The prune therefore runs unconditionally.
+  mkdir -p "$TEST_ROOT/host-seed/.dotfiles/projects/myrepo" \
+    "$TEST_ROOT/host-seed/.dotfiles/projects/.git" \
+    "$HOME/.dotfiles/projects/.git"
+  printf '# myrepo\n' >"$TEST_ROOT/host-seed/.dotfiles/projects/myrepo/CLAUDE.md"
+  printf 'host\n' >"$TEST_ROOT/host-seed/.dotfiles/projects/.git/config"
+  printf 'stale-from-an-earlier-seed\n' >"$HOME/.dotfiles/projects/.git/config"
+
+  run bash "$SEED_SCRIPT"
+
+  [ "$status" -eq 0 ]
+  [ ! -e "$HOME/.dotfiles/projects/.git" ]
+  [ -f "$HOME/.dotfiles/projects/myrepo/CLAUDE.md" ]
+}
+
+@test "the overlay git directory never reaches the destination during the transfer" {
+  # The two final-state assertions above cannot tell exclusion from pruning: with
+  # the prune in place they pass even if --exclude is dropped, and rsync would
+  # then write the private repo's history into the volume first. Record the
+  # transfer's own arguments so the exclusion is verified where it happens.
+  local real_rsync
+  if ! real_rsync="$(command -v rsync)"; then
+    skip "rsync not installed; the seed takes the wipe+cp path"
+  fi
+  cat >"$STUB_BIN/rsync" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >>"$TEST_ROOT/rsync.args"
+exec "$real_rsync" "\$@"
+EOF
+  chmod +x "$STUB_BIN/rsync"
+  mkdir -p "$TEST_ROOT/host-seed/.dotfiles/projects/.git"
+  printf 'host\n' >"$TEST_ROOT/host-seed/.dotfiles/projects/.git/config"
+
+  run bash "$SEED_SCRIPT"
+
+  [ "$status" -eq 0 ]
+  grep -Fq -- "--exclude=/projects/.git" "$TEST_ROOT/rsync.args"
+}
+
+@test "a failed mirror still prunes the overlay git directory and reports the failure" {
+  # A partial transfer can already have written projects/.git into the named
+  # volume, which outlives the container, so the prune must not be skipped when
+  # the sync aborts -- and the seed must still fail rather than swallow it.
+  mkdir -p "$HOME/.dotfiles/projects/.git"
+  printf 'stale\n' >"$HOME/.dotfiles/projects/.git/config"
+  stub_command rsync 'exit 23'
+
+  run bash "$SEED_SCRIPT"
+
+  [ "$status" -eq 23 ]
+  [ ! -e "$HOME/.dotfiles/projects/.git" ]
+}
+
 @test "config removed from the host is pruned from the persisted volume" {
   # The destination lives in the persisted claude-local-home named volume, so a
   # source the host DELETED must be cleared on the next gated reseed. Pruning
