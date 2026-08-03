@@ -294,7 +294,15 @@ if [ -d "$SEED_DOTFILES" ]; then
     # within a second of the previous sync is skipped -- silently, and this
     # tree decides the model. 40M of unchanged files hashes fast enough that
     # correctness is the better trade here.
-    as_user rsync -ac --delete "$SEED_DOTFILES/" "$DOTFILES_HOME/"
+    #
+    # projects/ is a nested PRIVATE repository. Its overlay files are payload and
+    # must mirror; its .git is history plus a remote URL naming the repo, in a
+    # named volume that outlives the container and ships with any image built
+    # from it. The pattern is anchored (leading /) so it means the mirror root
+    # and not some other projects/.git deeper in the tree, and carries no
+    # trailing / so it matches whether .git is a directory or a gitfile.
+    as_user rsync -ac --delete --exclude='/projects/.git' \
+      "$SEED_DOTFILES/" "$DOTFILES_HOME/"
     echo "🌱 seed: mirrored ~/.dotfiles via rsync ($(du -sh "$DOTFILES_HOME" | cut -f1))"
   else
     # No non-pruning fallback. DOTFILES_HOME persists across rebuilds and the
@@ -304,6 +312,13 @@ if [ -d "$SEED_DOTFILES" ]; then
     as_user cp -a "$SEED_DOTFILES/." "$DOTFILES_HOME/"
     echo "🌱 seed: rebuilt ~/.dotfiles via wipe+cp (no rsync) ($(du -sh "$DOTFILES_HOME" | cut -f1))"
   fi
+  # Unconditional, and not folded into the rsync exclude alone, for two reasons:
+  # cp -a has no exclusion mechanism, and rsync PROTECTS an excluded path on the
+  # receiver from --delete, so a volume seeded by a template predating the
+  # exclusion would keep its copy forever. Losing it costs nothing -- this tree
+  # is a copy, and container writes never reach the host, so committing here was
+  # never a way to save overlay edits.
+  as_user rm -rf "$DOTFILES_HOME/projects/.git"
 fi
 
 # Stable link root: /opt/dotfiles -> this container's dotfiles checkout.

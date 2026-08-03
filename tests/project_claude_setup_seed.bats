@@ -313,6 +313,46 @@ extract_seed_script() {
   [ ! -e "$HOME/.dotfiles/ai/marketplace/doomed.sh" ]
 }
 
+@test "the overlay repo's git directory is not mirrored into the container" {
+  # ~/.dotfiles/projects is a nested PRIVATE repository, so the mirror would
+  # otherwise copy its .git -- full history plus a remote URL naming the repo --
+  # into a named volume that outlives the container and ships with any image
+  # built from it. The overlay FILES are the payload and must still arrive; only
+  # the git directory is dropped. Committing from inside the container was never
+  # useful anyway: this tree is a copy, and container writes never reach the host.
+  mkdir -p "$TEST_ROOT/host-seed/.dotfiles/projects/myrepo/.claude" \
+    "$TEST_ROOT/host-seed/.dotfiles/projects/.git/refs"
+  printf '# myrepo\n' >"$TEST_ROOT/host-seed/.dotfiles/projects/myrepo/CLAUDE.md"
+  printf '[remote "origin"]\n\turl = git@example.com:private/overlays.git\n' \
+    >"$TEST_ROOT/host-seed/.dotfiles/projects/.git/config"
+
+  run bash "$SEED_SCRIPT"
+
+  [ "$status" -eq 0 ]
+  [ "$(cat "$HOME/.dotfiles/projects/myrepo/CLAUDE.md")" = "# myrepo" ]
+  [ ! -e "$HOME/.dotfiles/projects/.git" ]
+}
+
+@test "an overlay git directory from an earlier seed is pruned" {
+  # Volumes seeded by a template predating the exclusion already hold the copy,
+  # and the named volume survives --remove-existing-container. The host keeps its
+  # own .git here, as in production: rsync PROTECTS an excluded path on the
+  # receiver from --delete, so excluding it from the transfer does not remove the
+  # copy already there. The prune therefore runs unconditionally.
+  mkdir -p "$TEST_ROOT/host-seed/.dotfiles/projects/myrepo" \
+    "$TEST_ROOT/host-seed/.dotfiles/projects/.git" \
+    "$HOME/.dotfiles/projects/.git"
+  printf '# myrepo\n' >"$TEST_ROOT/host-seed/.dotfiles/projects/myrepo/CLAUDE.md"
+  printf 'host\n' >"$TEST_ROOT/host-seed/.dotfiles/projects/.git/config"
+  printf 'stale-from-an-earlier-seed\n' >"$HOME/.dotfiles/projects/.git/config"
+
+  run bash "$SEED_SCRIPT"
+
+  [ "$status" -eq 0 ]
+  [ ! -e "$HOME/.dotfiles/projects/.git" ]
+  [ -f "$HOME/.dotfiles/projects/myrepo/CLAUDE.md" ]
+}
+
 @test "config removed from the host is pruned from the persisted volume" {
   # The destination lives in the persisted claude-local-home named volume, so a
   # source the host DELETED must be cleared on the next gated reseed. Pruning
