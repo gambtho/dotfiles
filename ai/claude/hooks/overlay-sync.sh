@@ -45,6 +45,31 @@ main_root=$(git -C "$repo_root" worktree list --porcelain 2>/dev/null |
 [ -n "$main_root" ] && [ -d "$main_root" ] || main_root="$repo_root"
 slug=$(basename "$main_root")
 
+# The directory name is not always the project name. A devcontainer bind-mounts
+# the repo at whatever path its compose file picked — /app, /workspace, /src —
+# so the same checkout that is `wanderer` on the host is `app` inside the
+# container, and this hook would look for a projects/app that does not exist and
+# fail open on every worktree. Recover the real slug from an overlay link the
+# main checkout already carries: those are created with an explicit slug, and
+# readlink reads the target text without resolving it, so a link left dangling
+# by the foreign-$HOME breakage above still names its project correctly.
+if [ ! -d "$DOTFILES/projects/$slug" ]; then
+  for link in "$main_root"/.claude/* "$main_root"/*; do
+    [ -L "$link" ] || continue
+    target=$(readlink "$link" 2>/dev/null) || continue
+    case "$target" in
+      */projects/*) ;;
+      *) continue ;;
+    esac
+    candidate=${target#*/projects/}
+    candidate=${candidate%%/*}
+    if [ -n "$candidate" ] && [ -d "$DOTFILES/projects/$candidate" ]; then
+      slug="$candidate"
+      break
+    fi
+  done
+fi
+
 overlay="$DOTFILES/projects/$slug"
 [ -d "$overlay" ] || exit_quiet
 
