@@ -121,6 +121,89 @@ run_hook() {
   [ ! -e "$PROJECT/.claude/skills" ]
 }
 
+@test "recovers the slug when the checkout directory is not the project name" {
+  # A devcontainer bind-mounts the repo wherever its compose file says — /app,
+  # /workspace — so the checkout that is 'demo' on the host is 'app' inside the
+  # container, and basename() looks for a projects/app that will never exist.
+  # The main checkout's own links name the real project; use them.
+  mounted="$TEST_ROOT/app"
+  git clone --quiet "$PROJECT" "$mounted"
+  mkdir -p "$mounted/.claude"
+  ln -s "$OVERLAY/.claude/skills" "$mounted/.claude/skills"
+  linked="$TEST_ROOT/wt-mounted"
+  git -C "$mounted" worktree add --quiet -b feature "$linked"
+  [ ! -e "$linked/.claude/skills" ]
+
+  run bash "$HOOK" <<<"$(printf '{"cwd":"%s"}' "$linked")"
+
+  [ "$status" -eq 0 ]
+  assert_symlink_target "$linked/.claude/skills" "$OVERLAY/.claude/skills"
+}
+
+@test "recovers the slug from a link that dangles in this environment" {
+  # Both breakages at once: the mount path hides the project name AND the
+  # links were made under a $HOME that does not exist here. readlink reads the
+  # target text without resolving it, so the slug is still recoverable — which
+  # is the only reason a container can repair host-made links at all.
+  mounted="$TEST_ROOT/app"
+  git clone --quiet "$PROJECT" "$mounted"
+  mkdir -p "$mounted/.claude"
+  ln -s /home/ghost/.dotfiles/projects/demo/.claude/skills \
+    "$mounted/.claude/skills"
+
+  run bash "$HOOK" <<<"$(printf '{"cwd":"%s"}' "$mounted")"
+
+  [ "$status" -eq 0 ]
+  assert_symlink_target "$mounted/.claude/skills" "$OVERLAY/.claude/skills"
+  [ -z "$(find "$mounted/.claude" -xtype l)" ]
+}
+
+@test "does not adopt a slug with no overlay behind it" {
+  # Recovery must confirm the projects/ directory exists. Trusting the link
+  # text alone would hand the linker a slug for an overlay that is not there,
+  # turning a silent no-op into a failing linker run on every session start.
+  mounted="$TEST_ROOT/app"
+  git clone --quiet "$PROJECT" "$mounted"
+  mkdir -p "$mounted/.claude"
+  ln -s /home/ghost/.dotfiles/projects/gone/.claude/skills \
+    "$mounted/.claude/skills"
+
+  run bash "$HOOK" <<<"$(printf '{"cwd":"%s"}' "$mounted")"
+
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  [ "$(readlink "$mounted/.claude/skills")" = \
+    /home/ghost/.dotfiles/projects/gone/.claude/skills ]
+}
+
+@test "does not adopt a path-navigation slug from a link target" {
+  # The -d test cannot reject "." or ".." — both name directories that exist.
+  # ".." is the one that bites: $DOTFILES/projects/.. is $DOTFILES itself, so
+  # an unvalidated candidate hands the linker --slug .. and links the global
+  # $DOTFILES/.claude into the project as if it were this project's overlay.
+  # Give that escape something real to land on, so dropping the guard fails
+  # this test loudly instead of passing because there was nothing to link.
+  mkdir -p "$DOTFILES/.claude/skills/global"
+  echo global >"$DOTFILES/.claude/skills/global/SKILL.md"
+
+  n=0
+  for nav in .. .; do
+    n=$((n + 1))
+    mounted="$TEST_ROOT/app$n"
+    git clone --quiet "$PROJECT" "$mounted"
+    mkdir -p "$mounted/.claude"
+    target="/home/ghost/.dotfiles/projects/$nav/.claude/skills"
+    ln -s "$target" "$mounted/.claude/skills"
+
+    run bash "$HOOK" <<<"$(printf '{"cwd":"%s"}' "$mounted")"
+
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+    [ "$(readlink "$mounted/.claude/skills")" = "$target" ]
+    [ ! -e "$mounted/.claude/skills/global/SKILL.md" ]
+  done
+}
+
 @test "does nothing outside a git repository" {
   mkdir -p "$TEST_ROOT/plain"
   run bash "$HOOK" <<<"$(printf '{"hook_event_name":"SessionStart","cwd":"%s"}' "$TEST_ROOT/plain")"
