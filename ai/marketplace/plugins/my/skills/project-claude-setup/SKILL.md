@@ -302,8 +302,18 @@ Generate or merge the gitignored `docker-compose.override.yml` and its sibling
 renders the repository-owned
 [`templates/compose-override.yml`](templates/compose-override.yml) and
 [`templates/local-seed.sh`](templates/local-seed.sh), validates every input,
-shows both diffs, and publishes both files transactionally. The generated
-override must:
+shows both diffs, and publishes both files with rollback. Publication is **not
+atomic across the pair**: POSIX cannot rename two files as one transaction, so
+the two outputs are replaced by two adjacent `mv` calls (see the "Publication
+limit" comment in
+[the helper](../../../../../../bin/claude-merge-compose-override)). Everything
+fallible — rendering, validation, backups — happens before the first rename, and
+a failure the helper detects rolls the other file back. A process killed between
+the two renames is not detectable and can leave a new seed beside an old
+override, or the reverse. Recovery is to re-run the helper with the same
+arguments; the collision-safe `.backup` files it wrote name the previous
+generation if you need to go back, and any restore it could not perform is
+reported by path on stderr. The generated override must:
 
 1. Target the actual devcontainer service and home directory found in Step 2.
 2. Leave host SSH keys and `gh` auth unmounted by default. Ask the user once: "Share host SSH keys and gh auth with this container? (default: no)" — mounting them forces every container onto the same host GitHub identity and key set and can switch accounts unexpectedly. Only if the user opts in, mount `~/.ssh` and `~/.config/gh` read-only at the container home. Otherwise the container authenticates itself (`gh auth login` inside the container, a project-scoped `GH_TOKEN`, or its own key). If the merged base compose already binds host `~/.ssh` or `~/.config/gh` and the user declined, shadow each inherited target with an empty project-scoped named volume — declining must not leave an inherited host bind in place.
