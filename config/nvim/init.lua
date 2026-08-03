@@ -927,7 +927,12 @@ require('lazy').setup({
         return true
       end
 
-      if tree_sitter_cli_works() then require('nvim-treesitter').install(parsers) end
+      -- Probe once. Every parser build shells out to the same CLI, so every
+      -- install call site has to answer to this one value — see the FileType
+      -- autocmd below, which is the other one.
+      local ts_cli_ok = tree_sitter_cli_works()
+
+      if ts_cli_ok then require('nvim-treesitter').install(parsers) end
 
       ---@param buf integer
       ---@param language string
@@ -959,11 +964,16 @@ require('lazy').setup({
           if vim.tbl_contains(installed_parsers, language) then
             -- enable the parser if it is installed
             treesitter_try_attach(buf, language)
-          elseif vim.tbl_contains(available_parsers, language) then
+          elseif ts_cli_ok and vim.tbl_contains(available_parsers, language) then
             -- if a parser is available in `nvim-treesitter` auto install it, and enable it after the installation is done
             require('nvim-treesitter').install(language):await(function() treesitter_try_attach(buf, language) end)
           else
-            -- try to enable treesitter features in case the parser exists but is not available from `nvim-treesitter`
+            -- No CLI, or a parser nvim-treesitter cannot supply: fall through to
+            -- the attach attempt, which is a no-op unless a parser is already
+            -- present from somewhere else. Auto-installing without the CLI does
+            -- not degrade quietly — it re-downloads the parser and fails the
+            -- build on every new filetype, moving the error wall from startup
+            -- to once-per-file rather than removing it.
             treesitter_try_attach(buf, language)
           end
         end,
