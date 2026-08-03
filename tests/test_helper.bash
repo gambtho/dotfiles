@@ -26,3 +26,16 @@ assert_symlink_target() {
   [ -L "$1" ]
   [ "$(readlink "$1")" = "$2" ]
 }
+
+setup_dev_test() {
+  setup_dotfiles_test
+  # yq lives in /usr/local/bin, which setup_dotfiles_test drops from PATH.
+  export PATH="$STUB_BIN:/usr/local/bin:/usr/bin:/bin"
+  export DEV_DOTFILES_ROOT="$REPO_ROOT"
+  export DEV_STATE_ROOT="$TEST_ROOT/state"
+  export DEV_REPO_ROOT="$TEST_ROOT/workspace"
+  export DEV_OVERLAY_ROOT="$TEST_ROOT/overlay"
+  export DEV_TMUX_SOCKET="devtest-$$-$BATS_TEST_NUMBER"
+  mkdir -p "$DEV_STATE_ROOT/workspaces" "$DEV_STATE_ROOT/events" \
+    "$DEV_STATE_ROOT/locks" "$DEV_REPO_ROOT" "$DEV_OVERLAY_ROOT"
+}
