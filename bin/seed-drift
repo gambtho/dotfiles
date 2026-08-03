@@ -405,6 +405,38 @@ sd_count_lines() {
   printf '%s' "${n//[[:space:]]/}"
 }
 
+# Pure classifier: given the two difference counts, name the direction. Split
+# out from sd_verdict so a caller that already holds the counts can name the
+# verdict without re-running diff — and, more importantly, without the
+# `verdict=$(sd_verdict ...)` form, whose non-zero status aborts the whole
+# program under `set -e` and skips every project after it.
+sd_verdict_from_counts() {
+  # BEHIND_COUNT AHEAD_COUNT
+  if [ "$1" -eq 0 ] && [ "$2" -eq 0 ]; then
+    printf 'ok\n'
+  elif [ "$2" -eq 0 ]; then
+    printf 'BEHIND\n'
+  elif [ "$1" -eq 0 ]; then
+    printf 'AHEAD\n'
+  else
+    return 1
+  fi
+}
+
+sd_verdict() {
+  # Files, not nested command substitutions: substitution both loses blank
+  # differing lines and swallows a non-zero status from sd_diff_lines, so a
+  # broken diff would silently read as `ok`.
+  local bf af behind ahead
+  sd_tmp bf || return 3
+  sd_tmp af || return 3
+  sd_diff_lines "$1" "$2" '<' >"$bf" || return 3
+  sd_diff_lines "$1" "$2" '>' >"$af" || return 3
+  behind=$(sd_count_lines "$bf")
+  ahead=$(sd_count_lines "$af")
+  sd_verdict_from_counts "$behind" "$ahead"
+}
+
 sd_main() {
   local template="$SD_TEMPLATE_DEFAULT" doc="$SD_DOC_DEFAULT"
   SD_CANDIDATES=()

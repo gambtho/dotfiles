@@ -520,3 +520,43 @@ write_lines() {
   [ "$status" -eq 0 ]
   [ "$output" = "run_new" ]
 }
+
+@test "sd_verdict reports ok for identical line sequences" {
+  write_lines "$TEST_ROOT/tpl" 'export A=1' 'run_thing' 'export B=2'
+  write_lines "$TEST_ROOT/seed" 'export A=1' 'run_thing' 'export B=2'
+
+  sd_source sd_verdict "$TEST_ROOT/tpl" "$TEST_ROOT/seed"
+
+  [ "$status" -eq 0 ]
+  [ "$output" = "ok" ]
+}
+
+@test "sd_verdict reports ok for two empty extractions" {
+  : >"$TEST_ROOT/tpl"
+  : >"$TEST_ROOT/seed"
+
+  sd_source sd_verdict "$TEST_ROOT/tpl" "$TEST_ROOT/seed"
+
+  [ "$status" -eq 0 ]
+  [ "$output" = "ok" ]
+}
+
+@test "sd_verdict reports BEHIND when only the template has extra lines" {
+  write_lines "$TEST_ROOT/tpl" 'export A=1' 'run_thing' 'export B=2'
+  write_lines "$TEST_ROOT/seed" 'export A=1' 'export B=2'
+
+  sd_source sd_verdict "$TEST_ROOT/tpl" "$TEST_ROOT/seed"
+
+  [ "$status" -eq 0 ]
+  [ "$output" = "BEHIND" ]
+}
+
+@test "sd_verdict reports AHEAD when only the seed has extra lines" {
+  write_lines "$TEST_ROOT/tpl" 'export A=1' 'export B=2'
+  write_lines "$TEST_ROOT/seed" 'export A=1' 'run_thing' 'export B=2'
+
+  sd_source sd_verdict "$TEST_ROOT/tpl" "$TEST_ROOT/seed"
+
+  [ "$status" -eq 0 ]
+  [ "$output" = "AHEAD" ]
+}
