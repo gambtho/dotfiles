@@ -232,7 +232,8 @@ sd_window() {
   printf '%s %s\n' "$start" "$end"
 }
 
-# The non-root ownership-verification idiom, matched fully literally after
+# The non-root ownership-verification idiom, matched fully literally at the
+# comparison stage (see sd_apply_ownership_rule), never during per-file
 # normalization: template lines 491-492 (chown -R, "$NVIM_DIST.new") and
 # 594-595 (plain chown, "$TS_BIN.new"). Two physical lines each, because the
 # first ends in `||` and the second in `; } &&`. Nothing in the match is free —
@@ -261,11 +262,12 @@ sd_drop_priv_prefix() {
   # wanderer writes `if [ ! -f "$GITIGNORE" ]; then` — so a line-start-only
   # rule would report every one of those shapes as drift.
   #
-  # No `\b`: that boundary is a GNU extension and this script must also run
-  # under the BSD sed macOS ships. Operators are self-delimiting, so they need
-  # no boundary; the keywords take an explicit `(^|[[:space:]])` left boundary
-  # instead, which is why they are a separate expression. `sd_normalize_code_line`
-  # has already collapsed runs of whitespace to single spaces before we get here.
+  # No word-boundary escape: that construct is a GNU sed extension and this
+  # script must also run under the BSD sed macOS ships. Operators are
+  # self-delimiting, so they need no boundary; the keywords take an explicit
+  # `(^|[[:space:]])` left boundary instead, which is why they are a separate
+  # expression. `sd_normalize_code_line` has already collapsed runs of
+  # whitespace to single spaces before we get here.
   local line="$1" prev=""
   while [ "$line" != "$prev" ]; do
     prev="$line"
@@ -281,7 +283,7 @@ sd_drop_priv_prefix() {
 }
 
 sd_normalize_code_line() {
-  local line="$1" drop
+  local line="$1"
   line="${line//$'\t'/ }"
   while [ "$line" != "${line//  / }" ]; do line="${line//  / }"; done
   line="${line#"${line%%[![:space:]]*}"}"
@@ -289,9 +291,6 @@ sd_normalize_code_line() {
   [ -n "$line" ] || return 0
   line=$(sd_drop_priv_prefix "$line")
   [ -n "$line" ] || return 0
-  for drop in "${SD_OWNERSHIP_DROP[@]}"; do
-    [ "$line" = "$drop" ] && return 0
-  done
   printf '%s\n' "$line" | sd_neutralize_paths
 }
 
@@ -405,6 +404,34 @@ sd_count_lines() {
   printf '%s' "${n//[[:space:]]/}"
 }
 
+# The ownership rule is inherently cross-file — "does the OTHER side still
+# show a chown/chgrp difference of its own?" — so it cannot be decided while
+# normalizing one file in isolation; that was the Task 6 design's mistake.
+# Applied here, at the comparison stage, after diffing: BEHIND_FILE and
+# AHEAD_FILE already hold the template-only and seed-only lines. If AHEAD_FILE
+# has no chown/chgrp line of its own, the seed is silent about ownership
+# (typically the non-root idiom omitted wholesale under a root-flavored seed),
+# so the exact idiom lines are dropped from BEHIND_FILE and the block reads
+# clean. If AHEAD_FILE does mention chown/chgrp, the seed changed something —
+# target, `-R`, identity, or an unrelated chown entirely — and nothing is
+# dropped, so the mismatch surfaces as DIVERGED. Called identically from
+# sd_verdict and sd_check_seed so both compute the same verdict from the same
+# counts; if they disagreed, a caller using sd_verdict directly (as the tests
+# do) could see a different answer than a full run.
+sd_apply_ownership_rule() {
+  local behind="$1" ahead="$2" patterns filtered rc=0
+  grep -qE 'chown|chgrp' "$ahead" && return 0
+  sd_tmp patterns || return 3
+  sd_tmp filtered || return 3
+  printf '%s\n' "${SD_OWNERSHIP_DROP[@]}" >"$patterns"
+  grep -Fvxf "$patterns" "$behind" >"$filtered" || rc=$?
+  if [ "$rc" -gt 1 ]; then
+    printf 'seed-drift: ownership filter failed on %s\n' "$behind" >&2
+    return 3
+  fi
+  cp -- "$filtered" "$behind"
+}
+
 # Pure classifier: given the two difference counts, name the direction. Split
 # out from sd_verdict so a caller that already holds the counts can name the
 # verdict without re-running diff — and, more importantly, without the
@@ -432,6 +459,7 @@ sd_verdict() {
   sd_tmp af || return 3
   sd_diff_lines "$1" "$2" '<' >"$bf" || return 3
   sd_diff_lines "$1" "$2" '>' >"$af" || return 3
+  sd_apply_ownership_rule "$bf" "$af" || return 3
   behind=$(sd_count_lines "$bf")
   ahead=$(sd_count_lines "$af")
   sd_verdict_from_counts "$behind" "$ahead"
@@ -535,6 +563,11 @@ sd_check_seed() {
     if ! sd_diff_lines "$tnorm" "$snorm" '<' >"$behind" ||
       ! sd_diff_lines "$tnorm" "$snorm" '>' >"$ahead"; then
       sd_report_block ERROR "$block" 'diff failed'
+      rc=2
+      continue
+    fi
+    if ! sd_apply_ownership_rule "$behind" "$ahead"; then
+      sd_report_block ERROR "$block" 'ownership filter failed'
       rc=2
       continue
     fi

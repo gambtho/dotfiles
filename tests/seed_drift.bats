@@ -87,7 +87,7 @@ DOC
 }
 
 @test "every anchor in the real doc table is present in the real template" {
-  # Discovery finding zero projects is now a hard error (fix round 2, I-2);
+  # Discovery finding zero projects is now a hard error (fix round 2, I-3);
   # give it one skip-only candidate so this test still exercises only what
   # it is meant to check: real-doc/real-template anchor agreement, exit 0.
   export SEED_DRIFT_ROOT="$TEST_ROOT/workspace"
@@ -108,6 +108,18 @@ DOC
   [ "$status" -eq 2 ]
   [[ "$output" == *"is absent from"* ]]
   [[ "$output" == *"core.excludesFile"* ]]
+  [[ "$output" == *"lname '*dotfiles/projects/*'"* ]]
+}
+
+@test "a doc with no parseable block table is a hard error" {
+  local doc="$TEST_ROOT/doc.md" template="$TEST_ROOT/tpl.sh"
+  printf 'Just some prose, no table here.\n' >"$doc"
+  printf '#!/usr/bin/env bash\ntrue\n' >"$template"
+
+  run "$SEED_DRIFT" --template "$template" --doc "$doc"
+
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"no block table found in $doc"* ]]
 }
 
 @test "sd_scan numbers every line and starts a new paragraph after a blank line" {
@@ -450,7 +462,14 @@ $HOME/literal' ]
   [ "$output" = '  «HOME»/x   # not a comment' ]
 }
 
-@test "sd_normalize drops the four exact ownership-verification lines" {
+# Fix round 3 (Task 7, group 2): the ownership drop moved out of per-file
+# normalization into sd_apply_ownership_rule at the comparison stage, because
+# the rule is inherently cross-file ("does the OTHER side still show a chown
+# difference?") and per-file dropping hid a changed target/flag/identity as
+# AHEAD instead of DIVERGED. sd_normalize on its own must now pass these
+# lines through unchanged; see the sd_apply_ownership_rule unit test below
+# for the actual dropping behavior.
+@test "sd_normalize no longer drops the ownership-verification lines itself" {
   scan_line 1 1 C '      { chown -R "$SEED_UID:$SEED_GID" "$NVIM_DIST.new" 2>/dev/null ||'
   scan_line 1 2 C '        [ -z "$(find "$NVIM_DIST.new" \( ! -uid "$SEED_UID" -o ! -gid "$SEED_GID" \) -print -quit 2>/dev/null)" ]; } &&'
   scan_line 1 3 C '      { chown "$SEED_UID:$SEED_GID" "$TS_BIN.new" 2>/dev/null ||'
@@ -458,7 +477,40 @@ $HOME/literal' ]
   scan_line 1 5 C 'echo after'
   norm
   [ "$status" -eq 0 ]
-  [ "$output" = "echo after" ]
+  [ "$output" = '{ chown -R "$SEED_UID:$SEED_GID" "$NVIM_DIST.new" 2>/dev/null ||
+[ -z "$(find "$NVIM_DIST.new" \( ! -uid "$SEED_UID" -o ! -gid "$SEED_GID" \) -print -quit 2>/dev/null)" ]; } &&
+{ chown "$SEED_UID:$SEED_GID" "$TS_BIN.new" 2>/dev/null ||
+[ -z "$(find "$TS_BIN.new" \( ! -uid "$SEED_UID" -o ! -gid "$SEED_GID" \) -print -quit 2>/dev/null)" ]; } &&
+echo after' ]
+}
+
+# sd_apply_ownership_rule BEHIND_FILE AHEAD_FILE: drops the exact idiom lines
+# from BEHIND_FILE only when AHEAD_FILE has no chown/chgrp line of its own —
+# the root-flavored-seed-omits-it-entirely case the rule exists for.
+@test "sd_apply_ownership_rule drops the idiom from behind when ahead is silent about ownership" {
+  local behind="$FIX/behind" ahead="$FIX/ahead"
+  printf '%s\n%s\n' \
+    '{ chown -R "$SEED_UID:$SEED_GID" "$NVIM_DIST.new" 2>/dev/null ||' \
+    '[ -z "$(find "$NVIM_DIST.new" \( ! -uid "$SEED_UID" -o ! -gid "$SEED_GID" \) -print -quit 2>/dev/null)" ]; } &&' \
+    >"$behind"
+  : >"$ahead"
+  sd_source sd_apply_ownership_rule "$behind" "$ahead"
+  [ "$status" -eq 0 ]
+  [ ! -s "$behind" ]
+}
+
+# The counterpart: any chown/chgrp line on the ahead side blocks the drop, so
+# a changed target/flag/identity keeps the idiom's original lines in behind
+# and the block reports DIVERGED rather than AHEAD.
+@test "sd_apply_ownership_rule keeps behind untouched when ahead mentions chown" {
+  local behind="$FIX/behind" ahead="$FIX/ahead"
+  printf '%s\n' \
+    '{ chown -R "$SEED_UID:$SEED_GID" "$NVIM_DIST.new" 2>/dev/null ||' \
+    >"$behind"
+  printf '%s\n' 'chown -R "0:0" "$NVIM_DIST.new"' >"$ahead"
+  sd_source sd_apply_ownership_rule "$behind" "$ahead"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$behind")" = '{ chown -R "$SEED_UID:$SEED_GID" "$NVIM_DIST.new" 2>/dev/null ||' ]
 }
 
 @test "the ownership rule is exact: target, -R, identity, and unrelated chown all survive" {
@@ -783,15 +835,40 @@ sd_drift() { run "$SEED_DRIFT" --template "$FIXTURE_TEMPLATE" --doc "$FIXTURE_DO
 }
 
 @test "the detector never writes to a seed" {
+  # A hypothetical auto-fixer has nothing to write against a zero-drift seed,
+  # so that fixture cannot tell a read-only tool from a broken one. Checksum a
+  # DRIFTED seed instead, across a run that exits 1 — plus the template and
+  # doc, since either could tempt a "helpfully" self-updating implementation —
+  # and require both content and mtime to be untouched. Seeds are gitignored
+  # and hand-owned with no revert path, so this is the guarantee that matters.
   setup_drift_fixtures
-  seed_from_template clean
-  local before after
-  before=$(cksum <"$(seed_path clean)")
+  seed_from_template behindp
+  sed -i '/tree-sitter ready/d' "$(seed_path behindp)"
+  local seed_before seed_after doc_before doc_after tpl_before tpl_after
+  local seed_mtime_before seed_mtime_after doc_mtime_before doc_mtime_after
+  local tpl_mtime_before tpl_mtime_after
+  seed_before=$(sha256sum <"$(seed_path behindp)")
+  tpl_before=$(sha256sum <"$FIXTURE_TEMPLATE")
+  doc_before=$(sha256sum <"$FIXTURE_DOC")
+  seed_mtime_before=$(stat -c %Y "$(seed_path behindp)")
+  tpl_mtime_before=$(stat -c %Y "$FIXTURE_TEMPLATE")
+  doc_mtime_before=$(stat -c %Y "$FIXTURE_DOC")
 
   sd_drift
 
-  after=$(cksum <"$(seed_path clean)")
-  [ "$before" = "$after" ]
+  [ "$status" -eq 1 ]
+  seed_after=$(sha256sum <"$(seed_path behindp)")
+  tpl_after=$(sha256sum <"$FIXTURE_TEMPLATE")
+  doc_after=$(sha256sum <"$FIXTURE_DOC")
+  seed_mtime_after=$(stat -c %Y "$(seed_path behindp)")
+  tpl_mtime_after=$(stat -c %Y "$FIXTURE_TEMPLATE")
+  doc_mtime_after=$(stat -c %Y "$FIXTURE_DOC")
+  [ "$seed_before" = "$seed_after" ]
+  [ "$tpl_before" = "$tpl_after" ]
+  [ "$doc_before" = "$doc_after" ]
+  [ "$seed_mtime_before" = "$seed_mtime_after" ]
+  [ "$tpl_mtime_before" = "$tpl_mtime_after" ]
+  [ "$doc_mtime_before" = "$doc_mtime_after" ]
 }
 
 @test "sd_check_seed can be called directly without sd_main having run" {
@@ -839,10 +916,859 @@ sd_drift() { run "$SEED_DRIFT" --template "$FIXTURE_TEMPLATE" --doc "$FIXTURE_DO
   [[ "$output" == *"0 checked, 0 skipped, 0 blocks drifted"* ]]
 }
 
-@test "an explicit-candidate run with an equally empty result still exits 0" {
-  setup_drift_fixtures
+# ── Task 7 fixture helpers ───────────────────────────────────────────────────
 
-  sd_drift "$SEED_DRIFT_ROOT/absent-project"
+t7_setup() {
+  TPL="$BATS_TEST_TMPDIR/template.sh"
+  DOC="$BATS_TEST_TMPDIR/catch-up.md"
+  WS="$TEST_ROOT/ws"
+  PROJ="$WS/demo"
+  SEED="$PROJ/.devcontainer/local-seed.sh"
+  mkdir -p "$PROJ/.devcontainer"
+  export SEED_DRIFT_ROOT="$WS"
+}
 
+# t7_doc "Block name" anchor [ "Block name" anchor ... ]
+t7_doc() {
+  {
+    printf '| Block | Anchor in template | Why it matters |\n'
+    printf '|---|---|---|\n'
+    while [ "$#" -gt 0 ]; do
+      printf '| %s | `%s` | fixture row |\n' "$1" "$2"
+      shift 2
+    done
+  } >"$DOC"
+}
+
+t7_run() {
+  run "$REPO_ROOT/bin/seed-drift" --template "$TPL" --doc "$DOC" "$@"
+}
+
+@test "a tab inside a heredoc payload survives extraction verbatim" {
+  t7_setup
+  t7_doc "core.excludesFile" core.excludesFile
+  # No blank line between the heredoc closer and the git-config line: that gap
+  # is load-bearing (team-lead ruling, fix round 3). With it present, the
+  # anchor's own paragraph (just the git-config line) already parses standalone
+  # via `bash -n`, so sd_window never grows to include the heredoc paragraph
+  # and the payload — the very thing this test is named for — is never
+  # extracted at all. This mirrors the real template, where the closing `fi`
+  # of the `if ! as_user test -f "$GITIGNORE"` guard and the trailing
+  # `as_user git config --global core.excludesFile "$GITIGNORE"` sit in one
+  # paragraph with no blank line, so don't "tidy" this back in.
+  printf '#!/usr/bin/env bash\n\ntee "$G" <<%s\n\tcol1\tcol2\nGITEOF\ngit config --global core.excludesFile "$G"\n' "'GITEOF'" >"$TPL"
+  # Seed differs ONLY by collapsing the payload tabs to spaces.
+  printf '#!/usr/bin/env bash\n\ntee "$G" <<%s\n  col1  col2\nGITEOF\ngit config --global core.excludesFile "$G"\n' "'GITEOF'" >"$SEED"
+
+  t7_run
+  # If the reader strips or truncates tabs, both sides normalize alike and this
+  # reports ok — the exact false-clean the tool exists to prevent.
+  [ "$status" -eq 1 ]
+  [[ "$output" == *DIVERGED* ]]
+}
+
+@test "sd_count_lines counts blank records" {
+  printf '\n\na\n' >"$BATS_TEST_TMPDIR/three"
+  sd_source sd_count_lines "$BATS_TEST_TMPDIR/three"
   [ "$status" -eq 0 ]
+  [ "$output" = 3 ]
+}
+
+@test "a temp file from sd_tmp is still writable after the call returns" {
+  # `raw="$(sd_tmp)"` ran the whole thing in a subshell: the directory and its
+  # EXIT trap were created there, so the trap fired the moment the substitution
+  # closed and deleted the directory before the caller could write to the path
+  # it had just been handed. Every diff in the tool wrote into thin air.
+  run env SEED_DRIFT_SOURCE_ONLY=1 bash -c '
+    source "$1"
+    sd_tmp f || exit 9
+    printf hello >"$f" || exit 8
+    cat "$f"
+  ' _ "$SEED_DRIFT"
+  [ "$status" -eq 0 ]
+  [ "$output" = hello ]
+}
+
+@test "a seed block that cannot be extracted is ERROR and exit 2, not MISSING" {
+  t7_setup
+  t7_doc "tree-sitter CLI" TREE_SITTER_VERSION
+  printf '#!/usr/bin/env bash\n\ninstall_ts "$TREE_SITTER_VERSION"\n' >"$TPL"
+  # Anchor present, but no window around it ever parses: the `do` is never
+  # closed anywhere in the file, so sd_window exhausts both directions.
+  printf '#!/usr/bin/env bash\n\nfor x in a b; do\n  install_ts "$TREE_SITTER_VERSION"\n' >"$SEED"
+
+  t7_run
+  [ "$status" -eq 2 ]
+  [[ "$output" == *ERROR* ]]
+  # The bug this pins: `if ! sd_extract` collapsed 3 and 4, reporting a seed
+  # that will not parse as merely behind the template.
+  [[ "$output" != *MISSING* ]]
+}
+
+@test "sd_extract returns 3, not 4, when no window around the anchor parses" {
+  # The integration test above stops at sd_check_seed's whole-file `bash -n`
+  # gate and never reaches sd_extract, so it cannot tell 3 from 4 at the
+  # helper level. This does, by calling sd_extract directly. Since sd_window
+  # grows to the whole file before giving up, only a file that itself fails to
+  # parse can produce status 3 — hence the same unclosed `do`.
+  printf '#!/usr/bin/env bash\n\nfor x in a b; do\n  install_ts "$TREE_SITTER_VERSION"\n' \
+    >"$FIX/bad.sh"
+  sd_source sd_scan "$FIX/bad.sh"
+  [ "$status" -eq 0 ]
+  printf '%s\n' "$output" >"$FIX/bad.scan"
+
+  sd_source sd_extract "$FIX/bad.sh" "$FIX/bad.scan" TREE_SITTER_VERSION
+  [ "$status" -eq 3 ]
+
+  # And 4 really is reserved for the absent anchor, on the same inputs.
+  sd_source sd_extract "$FIX/bad.sh" "$FIX/bad.scan" NVIM_VERSION
+  [ "$status" -eq 4 ]
+}
+
+@test "privilege normalization is portable and keyword-boundary correct" {
+  # `\b` is a GNU sed extension; BSD sed (macOS, which this script supports)
+  # silently fails to match it, so every `if as_user ...` line would keep its
+  # privilege word and report as drift on a Mac and clean on Linux.
+  run grep -n '\\b' "$SEED_DRIFT"
+  [ "$status" -ne 0 ]
+
+  scan_line 1 1 C 'if as_user test -x /x; then'
+  scan_line 1 2 C 'foo || $SUDO chmod 0755 /x'
+  scan_line 1 3 C 'do runuser -u me -- npm i'
+  # The boundary the `\b` used to provide: a word merely ENDING in a keyword
+  # must not license the drop.
+  scan_line 1 4 C 'notif as_user keepme'
+  norm
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = 'if test -x /x; then' ]
+  [ "${lines[1]}" = 'foo || chmod 0755 /x' ]
+  [ "${lines[2]}" = 'do npm i' ]
+  [ "${lines[3]}" = 'notif as_user keepme' ]
+}
+
+@test "an anchor present only in a template comment fails validation" {
+  t7_setup
+  t7_doc "codex guard" local/bin/codex
+  printf '#!/usr/bin/env bash\n\n# once guarded local/bin/codex, now removed\necho hi\n' >"$TPL"
+  printf '#!/usr/bin/env bash\n\necho hi\n' >"$SEED"
+
+  t7_run
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"is absent from"* ]]
+}
+
+@test "anchor present but surrounding block outdated reports BEHIND with exit 1" {
+  t7_setup
+  t7_doc "tree-sitter CLI" TREE_SITTER_VERSION
+  cat >"$TPL" <<'TPLEOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [ -n "${TREE_SITTER_VERSION:-}" ]; then
+  TS_BIN="$SEED_HOME/.local/bin/tree-sitter"
+  if curl -fsSL -o "$TS_TMP/tree-sitter.gz" "$TS_URL" &&
+    gunzip -c "$TS_TMP/tree-sitter.gz" >"$TS_TMP/tree-sitter" &&
+    chmod 0755 "$TS_BIN.new" &&
+    as_user "$TS_BIN.new" --version >/dev/null 2>&1 &&
+    as_user mv "$TS_BIN.new" "$TS_BIN"; then
+    echo "seed: tree-sitter ready"
+  elif [ -f "$TS_BIN.new" ] && ! TS_ERR="$(as_user "$TS_BIN.new" --version 2>&1 >/dev/null)"; then
+    echo "seed: tree-sitter binary unusable: $TS_ERR" >&2
+  elif sh -c 'command -v tree-sitter >/dev/null 2>&1'; then
+    echo "seed: tree-sitter already present (image-provided)"
+  else
+    echo "seed: tree-sitter install failed" >&2
+  fi
+fi
+TPLEOF
+  cat >"$SEED" <<'SEEDEOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [ -n "${TREE_SITTER_VERSION:-}" ]; then
+  TS_BIN="$SEED_HOME/.local/bin/tree-sitter"
+  if curl -fsSL -o "$TS_TMP/tree-sitter.gz" "$TS_URL" &&
+    gunzip -c "$TS_TMP/tree-sitter.gz" >"$TS_TMP/tree-sitter" &&
+    chmod 0755 "$TS_BIN.new" &&
+    as_user "$TS_BIN.new" --version >/dev/null 2>&1 &&
+    as_user mv "$TS_BIN.new" "$TS_BIN"; then
+    echo "seed: tree-sitter ready"
+  else
+    echo "seed: tree-sitter install failed" >&2
+  fi
+fi
+SEEDEOF
+  t7_run "$SEED"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *BEHIND* ]]
+  [[ "$output" == *"tree-sitter CLI"* ]]
+  [[ "$output" != *MISSING* ]]
+}
+
+@test "change confined to non-anchor lines of the block is reported" {
+  t7_setup
+  t7_doc "core.excludesFile" core.excludesFile
+  cat >"$TPL" <<'TPLEOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+GITIGNORE="$SEED_HOME/.gitignore"
+if ! as_user test -f "$GITIGNORE"; then
+  as_user tee "$GITIGNORE" >/dev/null <<'GITEOF'
+.DS_Store
+*~
+*.swp
+
+# Personal Claude Code overlay shims (symlinked in from ~/.dotfiles/projects/).
+CLAUDE.local.md
+AGENTS.local.md
+
+# Personal docker-compose overrides.
+docker-compose.override.yml
+GITEOF
+  echo "seed: wrote container-local ~/.gitignore"
+fi
+as_user git config --global core.excludesFile "$GITIGNORE"
+TPLEOF
+  cat >"$SEED" <<'SEEDEOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+GITIGNORE="$SEED_HOME/.gitignore"
+if ! as_user test -f "$GITIGNORE"; then
+  as_user tee "$GITIGNORE" >/dev/null <<'GITEOF'
+.DS_Store
+*~
+
+# Personal Claude Code overlay shims (symlinked in from ~/.dotfiles/projects/).
+CLAUDE.local.md
+AGENTS.local.md
+
+# Personal docker-compose overrides.
+docker-compose.override.yml
+GITEOF
+  echo "seed: wrote container-local ~/.gitignore"
+fi
+as_user git config --global core.excludesFile "$GITIGNORE"
+SEEDEOF
+  t7_run "$SEED"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *BEHIND* ]]
+  [[ "$output" == *core.excludesFile* ]]
+}
+
+@test "changed # line inside a quoted heredoc body is drift, not stripped as a comment" {
+  t7_setup
+  t7_doc "core.excludesFile" core.excludesFile
+  cat >"$TPL" <<'TPLEOF'
+#!/usr/bin/env bash
+
+as_user tee "$GITIGNORE" >/dev/null <<'GITEOF'
+# Personal Claude Code overlay shims (symlinked in from ~/.dotfiles/projects/).
+CLAUDE.local.md
+GITEOF
+as_user git config --global core.excludesFile "$GITIGNORE"
+TPLEOF
+  cat >"$SEED" <<'SEEDEOF'
+#!/usr/bin/env bash
+
+as_user tee "$GITIGNORE" >/dev/null <<'GITEOF'
+# Personal overlay shims.
+CLAUDE.local.md
+GITEOF
+as_user git config --global core.excludesFile "$GITIGNORE"
+SEEDEOF
+  t7_run "$SEED"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *DIVERGED* ]]
+}
+
+@test "changed leading whitespace inside a heredoc body is drift" {
+  t7_setup
+  t7_doc "core.excludesFile" core.excludesFile
+  cat >"$TPL" <<'TPLEOF'
+#!/usr/bin/env bash
+
+as_user tee "$GITIGNORE" >/dev/null <<'GITEOF'
+.DS_Store
+*.swp
+GITEOF
+as_user git config --global core.excludesFile "$GITIGNORE"
+TPLEOF
+  cat >"$SEED" <<'SEEDEOF'
+#!/usr/bin/env bash
+
+as_user tee "$GITIGNORE" >/dev/null <<'GITEOF'
+.DS_Store
+    *.swp
+GITEOF
+as_user git config --global core.excludesFile "$GITIGNORE"
+SEEDEOF
+  t7_run "$SEED"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *DIVERGED* ]]
+}
+
+@test "removed blank line inside a heredoc body is drift" {
+  t7_setup
+  t7_doc "core.excludesFile" core.excludesFile
+  cat >"$TPL" <<'TPLEOF'
+#!/usr/bin/env bash
+
+as_user tee "$GITIGNORE" >/dev/null <<'GITEOF'
+.DS_Store
+
+*.swp
+GITEOF
+as_user git config --global core.excludesFile "$GITIGNORE"
+TPLEOF
+  cat >"$SEED" <<'SEEDEOF'
+#!/usr/bin/env bash
+
+as_user tee "$GITIGNORE" >/dev/null <<'GITEOF'
+.DS_Store
+*.swp
+GITEOF
+as_user git config --global core.excludesFile "$GITIGNORE"
+SEEDEOF
+  t7_run "$SEED"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *BEHIND* ]]
+}
+
+@test "trailing backslash inside a heredoc body is not a line continuation" {
+  t7_setup
+  t7_doc "core.excludesFile" core.excludesFile
+  cat >"$TPL" <<'TPLEOF'
+#!/usr/bin/env bash
+
+as_user tee "$GITIGNORE" >/dev/null <<'GITEOF'
+literal-backslash \
+second-payload-line
+GITEOF
+as_user git config --global core.excludesFile "$GITIGNORE"
+TPLEOF
+  cat >"$SEED" <<'SEEDEOF'
+#!/usr/bin/env bash
+
+as_user tee "$GITIGNORE" >/dev/null <<'GITEOF'
+literal-backslash second-payload-line
+GITEOF
+as_user git config --global core.excludesFile "$GITIGNORE"
+SEEDEOF
+  t7_run "$SEED"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *DIVERGED* ]]
+}
+
+@test "unquoted heredoc delimiter gets path neutralization" {
+  t7_setup
+  t7_doc "unquoted body" HEREDOC_ANCHOR
+  cat >"$TPL" <<'TPLEOF'
+#!/usr/bin/env bash
+
+HEREDOC_ANCHOR=unquoted
+tee "$OUT" >/dev/null <<UNQ
+$SEED_HOME/.local/bin
+UNQ
+TPLEOF
+  cat >"$SEED" <<'SEEDEOF'
+#!/usr/bin/env bash
+
+HEREDOC_ANCHOR=unquoted
+tee "$OUT" >/dev/null <<UNQ
+$HOME/.local/bin
+UNQ
+SEEDEOF
+  t7_run "$SEED"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *ok* ]]
+}
+
+@test "quoted heredoc delimiter does not get path neutralization" {
+  t7_setup
+  t7_doc "quoted body" HEREDOC_ANCHOR
+  cat >"$TPL" <<'TPLEOF'
+#!/usr/bin/env bash
+
+HEREDOC_ANCHOR=quoted
+tee "$OUT" >/dev/null <<'QUO'
+$SEED_HOME/.local/bin
+QUO
+TPLEOF
+  cat >"$SEED" <<'SEEDEOF'
+#!/usr/bin/env bash
+
+HEREDOC_ANCHOR=quoted
+tee "$OUT" >/dev/null <<'QUO'
+$HOME/.local/bin
+QUO
+SEEDEOF
+  t7_run "$SEED"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *DIVERGED* ]]
+}
+
+@test "<< inside a double-quoted string is not a heredoc opener" {
+  t7_setup
+  t7_doc "Overlay-link gitignore" "lname '*dotfiles/projects/*'"
+  cat >"$TPL" <<'TPLEOF'
+#!/usr/bin/env bash
+
+GI_MARK_BEGIN="# >>> overlay symlinks (auto, do not edit) >>>"
+GI_MARK_END="# << overlay symlinks (auto) <<"
+overlay_links="$(cd "$WORKSPACE" && find . -type l -lname '*dotfiles/projects/*' -print)"
+echo "$overlay_links"
+TPLEOF
+  # The anchor is kept verbatim so this test exercises only the heredoc-opener
+  # question (does the literal `<<` inside GI_MARK_END's double-quoted string
+  # get mistaken for a heredoc start, corrupting the scan?). The drift lives
+  # in the unrelated echo line instead — a seed whose anchor genuinely drifted
+  # to the old-narrow glob is a different, documented case; see the dedicated
+  # "old-narrow overlay glob" test below.
+  cat >"$SEED" <<'SEEDEOF'
+#!/usr/bin/env bash
+
+GI_MARK_BEGIN="# >>> overlay symlinks (auto, do not edit) >>>"
+GI_MARK_END="# << overlay symlinks (auto) <<"
+overlay_links="$(cd "$WORKSPACE" && find . -type l -lname '*dotfiles/projects/*' -print)"
+echo "$overlay_links" >&2
+SEEDEOF
+  t7_run "$SEED"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"Overlay-link gitignore"* ]]
+  [[ "$output" != *MISSING* ]]
+}
+
+# The doc's own prose for this row (catch-up-local-seed.md:77) says: "If the
+# seed has the old narrow '*/.dotfiles/projects/*', it must be widened." The
+# anchor is deliberately the WIDENED (desired) glob, so a seed still on the
+# old-narrow form genuinely lacks that literal substring — MISSING is the
+# correct, honest, actionable verdict here (not a defect): exit 1, block
+# named, and the action points at the doc's own remedy step. Anchor text must
+# be chosen from the stable part of a block; if the anchor string itself is
+# what's drifting, the verdict is MISSING rather than DIVERGED.
+@test "a seed on the documented old-narrow overlay glob is reported MISSING, not ok" {
+  t7_setup
+  t7_doc "Overlay-link gitignore" "lname '*dotfiles/projects/*'"
+  cat >"$TPL" <<'TPLEOF'
+#!/usr/bin/env bash
+
+overlay_links="$(cd "$WORKSPACE" && find . -type l -lname '*dotfiles/projects/*' -print)"
+echo "$overlay_links"
+TPLEOF
+  cat >"$SEED" <<'SEEDEOF'
+#!/usr/bin/env bash
+
+overlay_links="$(cd "$WORKSPACE" && find . -type l -lname '*/.dotfiles/projects/*' -print)"
+echo "$overlay_links"
+SEEDEOF
+  t7_run "$SEED"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *MISSING* ]]
+  [[ "$output" == *"Overlay-link gitignore"* ]]
+  [[ "$output" == *"Step 2"* ]]
+}
+
+@test "<<< herestrings are not heredoc openers" {
+  t7_setup
+  t7_doc "herestring block" HERESTRING_ANCHOR
+  cat >"$TPL" <<'TPLEOF'
+#!/usr/bin/env bash
+
+HERESTRING_ANCHOR=1
+read -r first_word <<<"$SEED_HOME/.local/bin"
+echo "template says $first_word"
+TPLEOF
+  cat >"$SEED" <<'SEEDEOF'
+#!/usr/bin/env bash
+
+HERESTRING_ANCHOR=1
+read -r first_word <<<"$SEED_HOME/.local/bin"
+echo "seed says $first_word"
+SEEDEOF
+  t7_run "$SEED"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *DIVERGED* ]]
+  [[ "$output" != *MISSING* ]]
+}
+
+@test "each heredoc delimiter form is recognized and tracks its body" {
+  t7_setup
+  t7_doc "form block" FORM_ANCHOR
+  local open
+  for open in "<<TAG" "<<'TAG'" '<<"TAG"' '<<\TAG' "<<-TAG"; do
+    {
+      printf '#!/usr/bin/env bash\n\n'
+      printf 'FORM_ANCHOR=1\n'
+      printf 'tee "$OUT" >/dev/null %s\n' "$open"
+      printf 'payload-one\n\npayload-two\nTAG\n'
+    } >"$TPL"
+    {
+      printf '#!/usr/bin/env bash\n\n'
+      printf 'FORM_ANCHOR=1\n'
+      printf 'tee "$OUT" >/dev/null %s\n' "$open"
+      printf 'payload-one\n\npayload-CHANGED\nTAG\n'
+    } >"$SEED"
+    t7_run "$SEED"
+    [ "$status" -eq 1 ] || {
+      echo "form $open: expected drift, got status $status: $output" >&2
+      return 1
+    }
+    [[ "$output" == *DIVERGED* ]] || {
+      echo "form $open: expected DIVERGED, got: $output" >&2
+      return 1
+    }
+  done
+}
+
+@test "unrecognized heredoc syntax is an error, not a silent fallback" {
+  t7_setup
+  t7_doc "form block" FORM_ANCHOR
+  cat >"$TPL" <<'TPLEOF'
+#!/usr/bin/env bash
+
+FORM_ANCHOR=1
+TAG=EOFWORD
+cat <<$TAG
+payload
+EOFWORD
+TPLEOF
+  cp "$TPL" "$SEED"
+  t7_run "$SEED"
+  [ "$status" -eq 2 ]
+  [[ "$output" != *ok* ]]
+}
+
+t7_own_tpl() {
+  cat >"$TPL" <<'TPLEOF'
+#!/usr/bin/env bash
+
+NVIM_DIST="$SEED_HOME/.local/nvim"
+if [ -d "$NVIM_DIST.new" ]; then
+  { chown -R "$SEED_UID:$SEED_GID" "$NVIM_DIST.new" 2>/dev/null ||
+    [ -z "$(find "$NVIM_DIST.new" \( ! -uid "$SEED_UID" -o ! -gid "$SEED_GID" \) -print -quit 2>/dev/null)" ]; } &&
+    as_user mv "$NVIM_DIST.new" "$NVIM_DIST"
+fi
+TPLEOF
+}
+
+@test "ownership idiom with a changed target is drift, not dropped" {
+  t7_setup
+  t7_doc "neovim install" NVIM_DIST
+  t7_own_tpl
+  cat >"$SEED" <<'SEEDEOF'
+#!/usr/bin/env bash
+
+NVIM_DIST="$SEED_HOME/.local/nvim"
+if [ -d "$NVIM_DIST.new" ]; then
+  { chown -R "$SEED_UID:$SEED_GID" "$NVIM_CACHE.new" 2>/dev/null ||
+    [ -z "$(find "$NVIM_CACHE.new" \( ! -uid "$SEED_UID" -o ! -gid "$SEED_GID" \) -print -quit 2>/dev/null)" ]; } &&
+    as_user mv "$NVIM_DIST.new" "$NVIM_DIST"
+fi
+SEEDEOF
+  t7_run "$SEED"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *DIVERGED* ]]
+}
+
+@test "ownership idiom with -R removed is drift, not dropped" {
+  t7_setup
+  t7_doc "neovim install" NVIM_DIST
+  t7_own_tpl
+  cat >"$SEED" <<'SEEDEOF'
+#!/usr/bin/env bash
+
+NVIM_DIST="$SEED_HOME/.local/nvim"
+if [ -d "$NVIM_DIST.new" ]; then
+  { chown "$SEED_UID:$SEED_GID" "$NVIM_DIST.new" 2>/dev/null ||
+    [ -z "$(find "$NVIM_DIST.new" \( ! -uid "$SEED_UID" -o ! -gid "$SEED_GID" \) -print -quit 2>/dev/null)" ]; } &&
+    as_user mv "$NVIM_DIST.new" "$NVIM_DIST"
+fi
+SEEDEOF
+  t7_run "$SEED"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *DIVERGED* ]]
+}
+
+@test "ownership idiom with a changed identity is drift, not dropped" {
+  t7_setup
+  t7_doc "neovim install" NVIM_DIST
+  t7_own_tpl
+  cat >"$SEED" <<'SEEDEOF'
+#!/usr/bin/env bash
+
+NVIM_DIST="$SEED_HOME/.local/nvim"
+if [ -d "$NVIM_DIST.new" ]; then
+  { chown -R "0:0" "$NVIM_DIST.new" 2>/dev/null ||
+    [ -z "$(find "$NVIM_DIST.new" \( ! -uid "$SEED_UID" -o ! -gid "$SEED_GID" \) -print -quit 2>/dev/null)" ]; } &&
+    as_user mv "$NVIM_DIST.new" "$NVIM_DIST"
+fi
+SEEDEOF
+  t7_run "$SEED"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *DIVERGED* ]]
+}
+
+@test "an unrelated chown line is compared normally" {
+  t7_setup
+  t7_doc "neovim install" NVIM_DIST
+  t7_own_tpl
+  cat >"$SEED" <<'SEEDEOF'
+#!/usr/bin/env bash
+
+NVIM_DIST="$SEED_HOME/.local/nvim"
+if [ -d "$NVIM_DIST.new" ]; then
+  { chown -R "$SEED_UID:$SEED_GID" "$NVIM_DIST.new" 2>/dev/null ||
+    [ -z "$(find "$NVIM_DIST.new" \( ! -uid "$SEED_UID" -o ! -gid "$SEED_GID" \) -print -quit 2>/dev/null)" ]; } &&
+    as_user mv "$NVIM_DIST.new" "$NVIM_DIST"
+  chown -R "$SEED_UID:$SEED_GID" "$SEED_HOME/.cache"
+fi
+SEEDEOF
+  t7_run "$SEED"
+  [ "$status" -eq 1 ]
+  # This line has nothing to do with the ownership idiom (a different target
+  # entirely, no matching template counterpart), so per Decision 5 (design
+  # doc :521-522, "extra seed lines -> AHEAD") it is a promotion candidate,
+  # not a divergence — the ownership rule (group-2 fix) only changes the
+  # verdict for lines that DO match the idiom's shape on one side. The
+  # positive assertion below is the test's actual subject: the line must be
+  # compared (shown as extra), not silently absorbed by the ownership drop.
+  [[ "$output" == *AHEAD* ]]
+  [[ "$output" == *'chown -R "$SEED_UID:$SEED_GID" "«HOME»/.cache"'* ]]
+  [[ "$output" != *"overwrite the seed with"* ]]
+}
+
+@test "false-positive guard: as_user prefix vs direct invocation" {
+  t7_setup
+  t7_doc "core.hooksPath" core.hooksPath
+  cat >"$TPL" <<'TPLEOF'
+#!/usr/bin/env bash
+
+as_user git config --global core.hooksPath "$DOTFILES_HOME/git/hooks"
+TPLEOF
+  cat >"$SEED" <<'SEEDEOF'
+#!/usr/bin/env bash
+
+git config --global core.hooksPath "$DOTFILES_HOME/git/hooks"
+SEEDEOF
+  t7_run "$SEED"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *ok* ]]
+}
+
+@test "false-positive guard: SEED_HOME vs HOME" {
+  t7_setup
+  t7_doc "core.hooksPath" core.hooksPath
+  cat >"$TPL" <<'TPLEOF'
+#!/usr/bin/env bash
+
+git config --global core.hooksPath "$SEED_HOME/.dotfiles/git/hooks"
+TPLEOF
+  cat >"$SEED" <<'SEEDEOF'
+#!/usr/bin/env bash
+
+git config --global core.hooksPath "$HOME/.dotfiles/git/hooks"
+SEEDEOF
+  t7_run "$SEED"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *ok* ]]
+}
+
+@test "false-positive guard: DOTFILES_HOME vs HOME/.dotfiles" {
+  t7_setup
+  t7_doc "core.hooksPath" core.hooksPath
+  cat >"$TPL" <<'TPLEOF'
+#!/usr/bin/env bash
+
+git config --global core.hooksPath "$DOTFILES_HOME/git/hooks"
+TPLEOF
+  cat >"$SEED" <<'SEEDEOF'
+#!/usr/bin/env bash
+
+git config --global core.hooksPath "$HOME/.dotfiles/git/hooks"
+SEEDEOF
+  t7_run "$SEED"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *ok* ]]
+}
+
+@test "false-positive guard: restyled line continuations" {
+  t7_setup
+  t7_doc "codex guard" local/bin/codex
+  cat >"$TPL" <<'TPLEOF'
+#!/usr/bin/env bash
+
+if [ ! -x "$SEED_HOME/.local/bin/codex" ]; then
+  as_user npm install -g \
+    --prefix "$SEED_HOME/.local" \
+    @openai/codex
+fi
+TPLEOF
+  cat >"$SEED" <<'SEEDEOF'
+#!/usr/bin/env bash
+
+if [ ! -x "$SEED_HOME/.local/bin/codex" ]; then
+  as_user npm install -g --prefix "$SEED_HOME/.local" @openai/codex
+fi
+SEEDEOF
+  t7_run "$SEED"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *ok* ]]
+}
+
+@test "false-positive guard: reworded comments" {
+  t7_setup
+  t7_doc "codex guard" local/bin/codex
+  cat >"$TPL" <<'TPLEOF'
+#!/usr/bin/env bash
+
+# Guard the reinstall on the binary, not ~/.codex/config.toml: the installer
+# writes config even when it fails to produce a binary.
+if [ ! -x "$SEED_HOME/.local/bin/codex" ]; then # binary, not config
+  as_user npm install -g @openai/codex
+fi
+TPLEOF
+  cat >"$SEED" <<'SEEDEOF'
+#!/usr/bin/env bash
+
+# Check for the codex binary itself; a config-based guard latches shut.
+if [ ! -x "$SEED_HOME/.local/bin/codex" ]; then # check the binary
+  as_user npm install -g @openai/codex
+fi
+SEEDEOF
+  t7_run "$SEED"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *ok* ]]
+}
+
+@test "false-positive guard: both exact ownership idiom forms are dropped" {
+  t7_setup
+  t7_doc "neovim install" NVIM_DIST "tree-sitter CLI" TS_BIN
+  cat >"$TPL" <<'TPLEOF'
+#!/usr/bin/env bash
+
+NVIM_DIST="$SEED_HOME/.local/nvim"
+if [ -d "$NVIM_DIST.new" ]; then
+  { chown -R "$SEED_UID:$SEED_GID" "$NVIM_DIST.new" 2>/dev/null ||
+    [ -z "$(find "$NVIM_DIST.new" \( ! -uid "$SEED_UID" -o ! -gid "$SEED_GID" \) -print -quit 2>/dev/null)" ]; } &&
+    as_user mv "$NVIM_DIST.new" "$NVIM_DIST"
+fi
+
+TS_BIN="$SEED_HOME/.local/bin/tree-sitter"
+if [ -f "$TS_BIN.new" ]; then
+  { chown "$SEED_UID:$SEED_GID" "$TS_BIN.new" 2>/dev/null ||
+    [ -z "$(find "$TS_BIN.new" \( ! -uid "$SEED_UID" -o ! -gid "$SEED_GID" \) -print -quit 2>/dev/null)" ]; } &&
+    as_user mv "$TS_BIN.new" "$TS_BIN"
+fi
+TPLEOF
+  cat >"$SEED" <<'SEEDEOF'
+#!/usr/bin/env bash
+
+NVIM_DIST="$SEED_HOME/.local/nvim"
+if [ -d "$NVIM_DIST.new" ]; then
+  as_user mv "$NVIM_DIST.new" "$NVIM_DIST"
+fi
+
+TS_BIN="$SEED_HOME/.local/bin/tree-sitter"
+if [ -f "$TS_BIN.new" ]; then
+  as_user mv "$TS_BIN.new" "$TS_BIN"
+fi
+SEEDEOF
+  t7_run "$SEED"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *BEHIND* ]]
+  [[ "$output" != *DIVERGED* ]]
+}
+
+@test "sed substitution with # delimiters survives comment stripping" {
+  t7_setup
+  t7_doc "plugin repair" PLUGIN_REPAIR
+  cat >"$TPL" <<'TPLEOF'
+#!/usr/bin/env bash
+
+PLUGIN_REPAIR=1
+sed -i 's#/opt/dotfiles#/home/seed/.dotfiles#g' "$f" # rewrite the stable root
+TPLEOF
+  cat >"$SEED" <<'SEEDEOF'
+#!/usr/bin/env bash
+
+PLUGIN_REPAIR=1
+sed -i 's#/opt/dotfiles#/home/seed/.dotfiles#g' "$f" # fix up the link root
+SEEDEOF
+  t7_run "$SEED"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *ok* ]]
+
+  cat >"$SEED" <<'SEEDEOF'
+#!/usr/bin/env bash
+
+PLUGIN_REPAIR=1
+sed -i 's#/opt/dotfiles#/home/seed/OTHER#g' "$f" # rewrite the stable root
+SEEDEOF
+  t7_run "$SEED"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *DIVERGED* ]]
+}
+
+@test "seeds are byte-identical after a run (read-only)" {
+  t7_setup
+  t7_doc "tree-sitter CLI" TREE_SITTER_VERSION
+  cat >"$TPL" <<'TPLEOF'
+#!/usr/bin/env bash
+
+if [ -n "${TREE_SITTER_VERSION:-}" ]; then
+  echo "seed: installing tree-sitter $TREE_SITTER_VERSION"
+  as_user mv "$TS_BIN.new" "$TS_BIN"
+fi
+TPLEOF
+  cat >"$SEED" <<'SEEDEOF'
+#!/usr/bin/env bash
+
+if [ -n "${TREE_SITTER_VERSION:-}" ]; then
+  echo "seed: installing tree-sitter $TREE_SITTER_VERSION"
+fi
+SEEDEOF
+  # a drifted seed, a clean seed, and a candidate with no seed at all
+  mkdir -p "$WS/clean/.devcontainer" "$WS/noseed/.devcontainer"
+  cp "$TPL" "$WS/clean/.devcontainer/local-seed.sh"
+
+  local before after
+  before="$(find "$WS" -type f -exec sha256sum {} + | sort)"
+  run "$REPO_ROOT/bin/seed-drift" --template "$TPL" --doc "$DOC"
+  [ "$status" -eq 1 ]
+  after="$(find "$WS" -type f -exec sha256sum {} + | sort)"
+  [ "$before" = "$after" ]
+}
+
+@test "a malformed seed does not suppress drift reporting for the others" {
+  t7_setup
+  t7_doc "tree-sitter CLI" TREE_SITTER_VERSION
+  cat >"$TPL" <<'TPLEOF'
+#!/usr/bin/env bash
+
+if [ -n "${TREE_SITTER_VERSION:-}" ]; then
+  echo "seed: installing tree-sitter $TREE_SITTER_VERSION"
+  as_user mv "$TS_BIN.new" "$TS_BIN"
+fi
+TPLEOF
+  mkdir -p "$WS/broken/.devcontainer"
+  cat >"$WS/broken/.devcontainer/local-seed.sh" <<'BROKENEOF'
+#!/usr/bin/env bash
+
+if [ -n "${TREE_SITTER_VERSION:-}" ]; then
+  echo "unterminated"
+BROKENEOF
+  cat >"$SEED" <<'SEEDEOF'
+#!/usr/bin/env bash
+
+if [ -n "${TREE_SITTER_VERSION:-}" ]; then
+  echo "seed: installing tree-sitter $TREE_SITTER_VERSION"
+fi
+SEEDEOF
+  run "$REPO_ROOT/bin/seed-drift" --template "$TPL" --doc "$DOC"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *broken* ]]
+  [[ "$output" == *demo* ]]
+  [[ "$output" == *BEHIND* ]]
 }
