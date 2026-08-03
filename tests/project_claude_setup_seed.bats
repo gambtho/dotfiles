@@ -909,7 +909,11 @@ cp "$TS_FIXTURE" "$out"
   # base image the file is executable and still dies at exec time. `test -x`
   # would accept it and leave a binary that looks installed while
   # nvim-treesitter keeps failing — so the seed validates by running --version.
-  stage_tree_sitter_download 'exit 127'
+  #
+  # The fixture reproduces the loader's own wording, because that string is
+  # what the seed keys on. A bare `exit 127` would pass this test while the
+  # seed silently misfiled every glibc case as a generic failure.
+  stage_tree_sitter_download 'printf "%s\n" "tree-sitter: /lib/x86_64-linux-gnu/libc.so.6: version \`GLIBC_2.39'"'"' not found" >&2; exit 1'
 
   run bash "$SEED_SCRIPT"
 
@@ -919,6 +923,26 @@ cp "$TS_FIXTURE" "$out"
   # know a retry cannot help and a newer base image is the only fix.
   [[ "$output" == *"needs a newer glibc"* ]]
   [[ "$output" == *"regex highlighting"* ]]
+  [ ! -e "$HOME/.local/bin/tree-sitter" ]
+  [ ! -e "$HOME/.local/bin/tree-sitter.new" ]
+}
+
+@test "a tree-sitter that fails for a non-loader reason is not blamed on glibc" {
+  # Same observable symptom — the binary will not run — but a different cause
+  # and a different remedy. Sending the reader off to rebuild on a newer base
+  # image for a failure that was never about the base image wastes the one
+  # signal this block exists to give them, so the diagnostic must follow the
+  # actual stderr rather than the failure alone.
+  stage_tree_sitter_download 'printf "%s\n" "error: unexpected argument" >&2; exit 2'
+
+  run bash "$SEED_SCRIPT"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"tree-sitter install failed"* ]]
+  [[ "$output" != *"needs a newer glibc"* ]]
+  # The captured stderr is carried through: without it the message says only
+  # that something failed, which is where the original bug hunt started.
+  [[ "$output" == *"unexpected argument"* ]]
   [ ! -e "$HOME/.local/bin/tree-sitter" ]
   [ ! -e "$HOME/.local/bin/tree-sitter.new" ]
 }
