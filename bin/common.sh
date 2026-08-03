@@ -479,3 +479,25 @@ ensure_stable_link_root() {
   fi
   return 0
 }
+
+# Derive the slug a directory belongs to. Normally that is the directory's own
+# name, but a linked git worktree is named after its branch, so the primary
+# working tree's name is used instead (git lists it first in --porcelain
+# output). Shared with tools/dev so the overlay claude-link-project writes and
+# the overlay `dev` reads are always the same directory.
+dev_slug_for_path() {
+  local dir="$1" resolved slug main_root
+
+  if ! resolved="$(cd "$dir" 2>/dev/null && pwd -P)"; then
+    printf 'dev_slug_for_path: no such directory: %s\n' "$dir" >&2
+    return 1
+  fi
+
+  slug="$(basename "$resolved")"
+  if main_root="$(git -C "$resolved" worktree list --porcelain 2>/dev/null |
+    awk '/^worktree /{print substr($0, 10); exit}')" && [[ -d "$main_root" ]]; then
+    slug="$(basename "$main_root")"
+  fi
+
+  printf '%s\n' "$slug"
+}
