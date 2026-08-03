@@ -814,10 +814,18 @@ fi
 # missing and be re-downloaded (26MB) each launch. The path test is the
 # PATH-independent guard for what this block installed; the `command -v` probe
 # only catches a CLI the image itself supplies somewhere else on PATH.
+#
+# Both guards confirm by RUNNING --version, for the same reason the install path
+# below does: `test -x` and `command -v` are satisfied by a binary that dies at
+# exec time (glibc release binary on a musl base) and by a shim whose tool was
+# never installed. Either one would latch this block shut — the seed would report
+# "already present" on every start while nvim-treesitter kept failing every
+# parser. Confirming by execution instead makes the guard self-healing: an
+# unusable CLI is simply replaced on the next start.
 if as_user test -f "$SEED_HOME/.local/bin/tree-sitter" \
-  && as_user test -x "$SEED_HOME/.local/bin/tree-sitter"; then
+  && as_user "$SEED_HOME/.local/bin/tree-sitter" --version >/dev/null 2>&1; then
   echo "🌱 seed: tree-sitter already present"
-elif as_user sh -c 'command -v tree-sitter >/dev/null 2>&1'; then
+elif as_user sh -c 'command -v tree-sitter >/dev/null 2>&1 && tree-sitter --version >/dev/null 2>&1'; then
   echo "🌱 seed: tree-sitter already present (image-provided)"
 elif [ -r "$DOTFILES_HOME/config/versions.env" ]; then
   # shellcheck source=/dev/null

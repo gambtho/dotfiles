@@ -37,8 +37,8 @@ From the project directory:
 f=.devcontainer/local-seed.sh
 printf 'SEED_VERSION=%s\n' "$(sed -n 's/^SEED_VERSION=//p' "$f")"
 for k in 'STABLE_LINK_ROOT' 'ensure_stable_link_root' 'NVIM_VERSION' \
-         'load-custom.zsh' 'core.hooksPath' 'core.excludesFile' \
-         'local/bin/codex' 'config/nvim'; do
+         'TREE_SITTER_VERSION' 'load-custom.zsh' 'core.hooksPath' \
+         'core.excludesFile' 'local/bin/codex' 'config/nvim'; do
   grep -q "$k" "$f" && printf '  %-24s present\n' "$k" || printf '  %-24s MISSING\n' "$k"
 done
 grep -o "lname '[^']*'" "$f" || echo "  overlay-gitignore matcher MISSING"

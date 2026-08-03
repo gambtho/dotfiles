@@ -738,6 +738,34 @@ cp "$TS_FIXTURE" "$out"
   [ ! -e "$HOME/.local/bin/tree-sitter" ]
 }
 
+@test "a tree-sitter on PATH that cannot run is replaced, not trusted" {
+  # `command -v` is satisfied by a shim whose tool was never installed, and by a
+  # glibc binary on a musl base that dies at exec time. Trusting either latches
+  # the block shut: "already present" every start, parsers failing every start.
+  stage_tree_sitter_download 'exit 0'
+  stub_command tree-sitter 'exit 127'
+
+  run bash "$SEED_SCRIPT"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"tree-sitter ready"* ]]
+  [ -x "$HOME/.local/bin/tree-sitter" ]
+}
+
+@test "an installed tree-sitter that stops running is reinstalled" {
+  stage_tree_sitter_download 'exit 0'
+  # Executable, on the expected path, and broken — the shape a base-image change
+  # leaves behind. The guard must not accept it on the strength of `test -x`.
+  printf '#!/usr/bin/env bash\nexit 127\n' >"$HOME/.local/bin/tree-sitter"
+  chmod +x "$HOME/.local/bin/tree-sitter"
+
+  run bash "$SEED_SCRIPT"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"tree-sitter ready"* ]]
+  "$HOME/.local/bin/tree-sitter"
+}
+
 @test "a tree-sitter that cannot execute is not installed" {
   # The release binaries are dynamically linked against glibc, so on a musl base
   # image the file is executable and still dies at exec time. `test -x` would
