@@ -59,7 +59,9 @@ para <TAB> lineno <TAB> tag <TAB> text
 | `sd_window FILE SCAN PARA` | `start end`, grown until it parses; exit 3 if it never does |
 | `sd_normalize` | filter: scan format on stdin -> normalized text lines on stdout |
 | `sd_extract FILE SCAN ANCHOR` | normalized lines for the union of windows, file order, deduped; exit 4 if the anchor is absent |
-| `sd_verdict TPL_NORM SEED_NORM` | prints `ok` \| `BEHIND` \| `AHEAD` \| `DIVERGED` |
+| `sd_tmp VARNAME` | assigns a fresh temp-file path to VARNAME in the caller's scope; exit 3 if `mktemp` fails. **Never** call as `$(sd_tmp)` — see Task 5 |
+| `sd_verdict_from_counts NB NA` | prints `ok` \| `BEHIND` \| `AHEAD` \| `DIVERGED` from two difference counts; cannot fail |
+| `sd_verdict TPL_NORM SEED_NORM` | prints `ok` \| `BEHIND` \| `AHEAD` \| `DIVERGED`; exit 3 if `diff` fails |
 | `sd_check_seed SEED` | per-block report; returns 0 clean / 1 drift / 2 error |
 
 Exit codes 3 and 4 are internal to helpers so they never collide with the
@@ -135,7 +137,7 @@ it runs the full detector before the function under test is even called.
 - `bin/seed-drift [--template PATH] [--doc PATH] [--help] [CANDIDATE...]` — `--help` prints usage on **stdout**, exit 0. Unknown flag, a flag missing its value, an unreadable `--template`, an unreadable `--doc`, a doc with no block table, or a doc anchor absent from the template all print to **stderr** and exit **2**.
 - `sd_parse_doc DOCFILE` — stdout, one line per table row: `blockname<TAB>anchor`. Backticks are stripped from *both* fields; the anchor keeps its inner quotes and asterisks verbatim (row 2 is exactly `Overlay-link gitignore<TAB>lname '*dotfiles/projects/*'`). Returns 3 if `DOCFILE` is unreadable, 1 if the file holds no table rows.
 - `SD_TEMPLATE_DEFAULT`, `SD_DOC_DEFAULT` — absolute paths resolved from `${BASH_SOURCE[0]}`, so the script works from any cwd.
-- `SD_CANDIDATES` — global array holding the positional arguments after flag parsing. Task 6 (discovery) reads this.
+- `SD_CANDIDATES` — global array holding the positional arguments after flag parsing. Task 6 (discovery) reads this. `SD_CANDIDATE_COUNT` — scalar count of the same, incremented alongside every push. Task 6 branches on the scalar: `${#SD_CANDIDATES[@]}` on an empty array is exactly the `set -u` / bash 3.2 hazard `bin/common.sh:392` documents.
 - `SEED_DRIFT_SOURCE_ONLY=1` — sourcing guard (repo convention, mirrors `INSTALL_SOURCE_ONLY` in `bin/install`). When set, sourcing `bin/seed-drift` defines the functions without running `sd_main`. Every unit test in `tests/seed_drift.bats` uses the `sd_source` helper this task adds.
 
 All commands run from the repo root `/home/tng/.dotfiles/.claude/worktrees/seed-drift-detector`.
@@ -249,6 +251,10 @@ SDUSAGE
 sd_main() {
   local template="$SD_TEMPLATE_DEFAULT" doc="$SD_DOC_DEFAULT"
   SD_CANDIDATES=()
+  # Counted alongside the array because Task 6 must ask "were any candidates
+  # given?" without expanding an empty array under `set -u` — the bash 3.2
+  # pitfall bin/common.sh:392 calls out. macOS ships bash 3.2.
+  SD_CANDIDATE_COUNT=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --template | --doc)
@@ -267,6 +273,7 @@ sd_main() {
       --)
         shift
         SD_CANDIDATES+=("$@")
+        SD_CANDIDATE_COUNT=$((SD_CANDIDATE_COUNT + $#))
         break
         ;;
       -*)
@@ -276,6 +283,7 @@ sd_main() {
         ;;
       *)
         SD_CANDIDATES+=("$1")
+        SD_CANDIDATE_COUNT=$((SD_CANDIDATE_COUNT + 1))
         shift
         ;;
     esac
@@ -1658,13 +1666,21 @@ sd_drop_priv_prefix() {
   # wanderer-kills writes `if ! as_user test -f "$GITIGNORE"; then` where
   # wanderer writes `if [ ! -f "$GITIGNORE" ]; then` — so a line-start-only
   # rule would report every one of those shapes as drift.
+  #
+  # No `\b`: that boundary is a GNU extension and this script must also run
+  # under the BSD sed macOS ships. Operators are self-delimiting, so they need
+  # no boundary; the keywords take an explicit `(^|[[:space:]])` left boundary
+  # instead, which is why they are a separate expression. `sd_normalize_code_line`
+  # has already collapsed runs of whitespace to single spaces before we get here.
   local line="$1" prev=""
   while [ "$line" != "$prev" ]; do
     prev="$line"
     line=$(printf '%s\n' "$line" | sed -E \
-      -e 's/(^|[{(|;!]|&&|\|\||\bif|\bthen|\bwhile|\buntil|\bdo|\belif)([[:space:]]+)(as_user|\$SUDO|sudo -n|sudo)[[:space:]]+/\1\2/g' \
+      -e 's/(^|[{(|;!]|&&|\|\|)([[:space:]]+)(as_user|\$SUDO|sudo -n|sudo)[[:space:]]+/\1\2/g' \
+      -e 's/(^|[[:space:]])(if|then|while|until|do|elif)([[:space:]]+)(as_user|\$SUDO|sudo -n|sudo)[[:space:]]+/\1\2\3/g' \
       -e 's/^(as_user|\$SUDO|sudo -n|sudo)[[:space:]]+//' \
-      -e 's/(^|[{(|;!]|&&|\|\||\bif|\bthen|\bwhile|\buntil|\bdo|\belif)([[:space:]]+)runuser -u [^[:space:]]+ --[[:space:]]+/\1\2/g' \
+      -e 's/(^|[{(|;!]|&&|\|\|)([[:space:]]+)runuser -u [^[:space:]]+ --[[:space:]]+/\1\2/g' \
+      -e 's/(^|[[:space:]])(if|then|while|until|do|elif)([[:space:]]+)runuser -u [^[:space:]]+ --[[:space:]]+/\1\2\3/g' \
       -e 's/^runuser -u [^[:space:]]+ --[[:space:]]+//')
   done
   printf '%s' "$line"
@@ -2048,9 +2064,17 @@ produces differences in both directions and is reported `DIVERGED`.
 - `sd_diff_lines TPL_NORM SEED_NORM MARKER` → the differing lines, one per line,
   on stdout. `MARKER` is `<` for template-only lines and `>` for seed-only lines.
   Returns `3` if `diff` fails for a reason other than "files differ".
-- `sd_count_lines TEXT` → the number of non-empty lines in `TEXT`, on stdout.
-- `sd_verdict TPL_NORM SEED_NORM` → exactly one of `ok`, `BEHIND`, `AHEAD`,
-  `DIVERGED` on stdout, exit `0`.
+- `sd_tmp VARNAME` → assigns a fresh temp-file path to `VARNAME` in the caller's
+  scope (via `printf -v`, not stdout), exit `3` if `mktemp` fails. The whole run
+  shares one directory, removed by a single trap. Never call it inside a command
+  substitution — the subshell would take the directory and the trap with it.
+- `sd_count_lines FILE` → the number of records in `FILE`, on stdout, blank
+  records included.
+- `sd_verdict_from_counts NB NA` → exactly one of `ok`, `BEHIND`, `AHEAD`,
+  `DIVERGED` on stdout, exit `0`. Pure: it cannot fail, which is why callers
+  holding the counts use it instead of `sd_verdict`.
+- `sd_verdict TPL_NORM SEED_NORM` → the same four tokens on stdout, exit `0`;
+  exit `3` if `diff` fails.
 
 ---
 
@@ -2090,12 +2114,22 @@ produces differences in both directions and is reported `DIVERGED`.
   # One temp dir for the whole run, removed by a single trap. Callers never
   # clean up individually, so no early `return` can leak a file.
   SD_TMPDIR=""
+
+  # sd_tmp VARNAME — assigns a fresh temp file path to VARNAME in the CALLER's
+  # scope, and must never be called inside a command substitution. `$(sd_tmp)`
+  # runs in a subshell: the subshell creates the directory, installs the EXIT
+  # trap, prints the path, and then — on subshell exit — fires that trap and
+  # `rm -rf`s the directory before the caller can write a single byte. The
+  # directory and its trap have to be established in the shell that will
+  # actually use them, so the path comes back through `printf -v`, not stdout.
   sd_tmp() {
+    local __sd_new
     if [ -z "$SD_TMPDIR" ]; then
-      SD_TMPDIR="$(mktemp -d)"
+      SD_TMPDIR="$(mktemp -d)" || return 3
       trap 'rm -rf -- "$SD_TMPDIR"' EXIT HUP INT TERM
     fi
-    mktemp "$SD_TMPDIR/sd.XXXXXX"
+    __sd_new="$(mktemp "$SD_TMPDIR/sd.XXXXXX")" || return 3
+    printf -v "$1" '%s' "$__sd_new"
   }
 
   sd_diff_lines() {
@@ -2110,7 +2144,7 @@ produces differences in both directions and is reported `DIVERGED`.
     # line read as no difference at all. Via a file every record keeps its
     # newline and the blank one survives.
     local rc=0 raw
-    raw="$(sd_tmp)"
+    sd_tmp raw || return 3
     diff -- "$1" "$2" >"$raw" || rc=$?
     if [ "$rc" -gt 1 ]; then
       printf 'seed-drift: diff failed comparing %s and %s\n' "$1" "$2" >&2
@@ -2191,26 +2225,36 @@ produces differences in both directions and is reported `DIVERGED`.
   two-direction case, and an unclassified pair must never fall through to `ok`:
 
   ```bash
+  # Pure classifier: given the two difference counts, name the direction. Split
+  # out from sd_verdict so a caller that already holds the counts can name the
+  # verdict without re-running diff — and, more importantly, without the
+  # `verdict=$(sd_verdict ...)` form, whose non-zero status aborts the whole
+  # program under `set -e` and skips every project after it.
+  sd_verdict_from_counts() {
+    # BEHIND_COUNT AHEAD_COUNT
+    if [ "$1" -eq 0 ] && [ "$2" -eq 0 ]; then
+      printf 'ok\n'
+    elif [ "$2" -eq 0 ]; then
+      printf 'BEHIND\n'
+    elif [ "$1" -eq 0 ]; then
+      printf 'AHEAD\n'
+    else
+      return 1
+    fi
+  }
+
   sd_verdict() {
     # Files, not nested command substitutions: substitution both loses blank
     # differing lines and swallows a non-zero status from sd_diff_lines, so a
     # broken diff would silently read as `ok`.
     local bf af behind ahead
-    bf="$(sd_tmp)"
-    af="$(sd_tmp)"
+    sd_tmp bf || return 3
+    sd_tmp af || return 3
     sd_diff_lines "$1" "$2" '<' >"$bf" || return 3
     sd_diff_lines "$1" "$2" '>' >"$af" || return 3
     behind=$(sd_count_lines "$bf")
     ahead=$(sd_count_lines "$af")
-    if [ "$behind" -eq 0 ] && [ "$ahead" -eq 0 ]; then
-      printf 'ok\n'
-    elif [ "$ahead" -eq 0 ]; then
-      printf 'BEHIND\n'
-    elif [ "$behind" -eq 0 ]; then
-      printf 'AHEAD\n'
-    else
-      return 1
-    fi
+    sd_verdict_from_counts "$behind" "$ahead"
   }
   ```
 
@@ -2266,7 +2310,7 @@ produces differences in both directions and is reported `DIVERGED`.
   pure reordering.
 
 - [ ] **Step 13: implement the DIVERGED branch.**
-  In `bin/seed-drift`, replace the `else` branch of `sd_verdict`:
+  In `bin/seed-drift`, replace the `else` branch of `sd_verdict_from_counts`:
 
   ```bash
     else
@@ -2300,10 +2344,16 @@ replacing it.
 *Consumes*
 - `sd_parse_doc DOCFILE` (Task 1) → `blockname<TAB>anchor`, one row per line.
 - `sd_extract FILE SCAN ANCHOR` (Task 4) → normalized lines on stdout; exit `4`
-  when the anchor is absent.
-- `sd_verdict TPL_NORM SEED_NORM`, `sd_diff_lines`, `sd_count_lines` (Task 5).
-- `SD_CANDIDATES` (bash array, set by Task 1's option parser), `SEED_DRIFT_ROOT`
-  (default `$HOME/workspace`).
+  when the anchor is absent, `3` when no window around it parses. Branch on the
+  two separately: `4` is MISSING (exit 1), `3` is ERROR (exit 2).
+- `sd_verdict_from_counts NB NA`, `sd_diff_lines`, `sd_count_lines`, `sd_tmp`
+  (Task 5). Use `sd_verdict_from_counts` on counts you already hold rather than
+  `verdict=$(sd_verdict ...)`, whose failure status would abort the run under
+  `set -e`. Call `sd_tmp NAME`, never `$(sd_tmp)`.
+- `SD_CANDIDATES` (bash array) and `SD_CANDIDATE_COUNT` (scalar), both set by
+  Task 1's option parser; `SEED_DRIFT_ROOT` (default `$HOME/workspace`). Branch
+  on the scalar — `${#SD_CANDIDATES[@]}` on an empty array is the bash 3.2
+  `set -u` hazard documented at `bin/common.sh:392`.
 
 *Produces*
 - `sd_check_seed SEED` → per-block report on stdout; returns `0` clean, `1` any
@@ -2454,19 +2504,20 @@ replacing it.
     # Each file is scanned exactly once. The template scan is built by sd_main
     # and reused across every seed; the seed scan is built here, once, and
     # reused across every block. sd_extract needs a scan path — passing "" would
-    # make awk fail to open its input on every call.
-    sscan="$(sd_tmp)"
+    # make awk fail to open its input on every call. `sd_tmp NAME`, never
+    # `$(sd_tmp)`: the subshell form deletes the temp dir on subshell exit.
+    sd_tmp sscan || return 2
     if ! sd_scan "$seed" >"$sscan"; then
       sd_report_block ERROR '(whole file)' 'seed could not be scanned'
       sd_report_action 'check the seed parses; see catch-up-local-seed.md Step 3'
       return 2
     fi
-    tnorm="$(sd_tmp)"
-    snorm="$(sd_tmp)"
+    sd_tmp tnorm || return 2
+    sd_tmp snorm || return 2
     while IFS=$'\t' read -r block anchor; do
       sd_extract "$SD_TEMPLATE" "$SD_TEMPLATE_SCAN" "$anchor" >"$tnorm" || continue
       sd_extract "$seed" "$sscan" "$anchor" >"$snorm" || continue
-      verdict=$(sd_verdict "$tnorm" "$snorm")
+      verdict=$(sd_verdict "$tnorm" "$snorm") || continue
       case "$verdict" in
         ok) sd_report_block ok "$block" '' ;;
       esac
@@ -2520,7 +2571,11 @@ replacing it.
     local blocks name anchor absent=0
     SD_TEMPLATE="$template"
     SD_DOC="$doc"
-    SD_TEMPLATE_SCAN="$(sd_tmp)"
+    SD_TEMPLATE_SCAN=""
+    if ! sd_tmp SD_TEMPLATE_SCAN; then
+      printf 'seed-drift: cannot create a temporary file\n' >&2
+      return 2
+    fi
     if ! sd_scan "$template" >"$SD_TEMPLATE_SCAN"; then
       printf 'seed-drift: cannot scan template %s\n' "$template" >&2
       return 2
@@ -2670,8 +2725,8 @@ replacing it.
       esac
       # Same file-not-substitution rule as sd_verdict: a removed blank line must
       # survive into the count and the samples.
-      behind="$(sd_tmp)"
-      ahead="$(sd_tmp)"
+      sd_tmp behind || return 2
+      sd_tmp ahead || return 2
       if ! sd_diff_lines "$tnorm" "$snorm" '<' >"$behind" ||
         ! sd_diff_lines "$tnorm" "$snorm" '>' >"$ahead"; then
         sd_report_block ERROR "$block" 'diff failed'
@@ -2680,7 +2735,11 @@ replacing it.
       fi
       nb=$(sd_count_lines "$behind")
       na=$(sd_count_lines "$ahead")
-      verdict=$(sd_verdict "$tnorm" "$snorm")
+      # From the counts just computed, not `verdict=$(sd_verdict ...)`: that
+      # form re-runs the same two diffs, and its non-zero status on a diff
+      # failure would abort the program under `set -e` — exiting 3 outside the
+      # public 0/1/2 contract and skipping every remaining project.
+      verdict=$(sd_verdict_from_counts "$nb" "$na")
       case "$verdict" in
         ok)
           sd_report_block ok "$block" ''
@@ -2765,7 +2824,11 @@ replacing it.
   ```bash
   sd_visit_candidates() {
     local root="${SEED_DRIFT_ROOT:-$HOME/workspace}" cand rc=0
-    if [ "${#SD_CANDIDATES[@]}" -eq 0 ]; then
+    # The scalar, not `${#SD_CANDIDATES[@]}`: expanding an empty array under
+    # `set -u` errors on bash 3.2, still the system bash on macOS
+    # (bin/common.sh:392). The `"${SD_CANDIDATES[@]}"` below is reached only
+    # when the count is non-zero, so it is safe.
+    if [ "$SD_CANDIDATE_COUNT" -eq 0 ]; then
       shopt -s nullglob
       for cand in "$root"/*/; do
         cand="${cand%/}"
@@ -2943,8 +3006,8 @@ t7_run() {
 
 - [ ] **Step 1b: regression tests for the six integration defects.**
 
-These four pin bugs that a plan review caught before implementation. Each one
-fails *silently* if reintroduced — wrong verdict or false `ok`, never a crash —
+These pin bugs that plan reviews caught before implementation. Most of them
+fail *silently* if reintroduced — wrong verdict or false `ok`, never a crash —
 so they are the tests most worth having. Append to `tests/seed_drift.bats`:
 
 ```bash
@@ -2969,6 +3032,21 @@ so they are the tests most worth having. Append to `tests/seed_drift.bats`:
   [ "$output" = 3 ]
 }
 
+@test "a temp file from sd_tmp is still writable after the call returns" {
+  # `raw="$(sd_tmp)"` ran the whole thing in a subshell: the directory and its
+  # EXIT trap were created there, so the trap fired the moment the substitution
+  # closed and deleted the directory before the caller could write to the path
+  # it had just been handed. Every diff in the tool wrote into thin air.
+  run env SEED_DRIFT_SOURCE_ONLY=1 bash -c '
+    source "$1"
+    sd_tmp f || exit 9
+    printf hello >"$f" || exit 8
+    cat "$f"
+  ' _ "$SEED_DRIFT"
+  [ "$status" -eq 0 ]
+  [ "$output" = hello ]
+}
+
 @test "a seed block that cannot be extracted is ERROR and exit 2, not MISSING" {
   t7_setup
   t7_doc "tree-sitter CLI" TREE_SITTER_VERSION
@@ -2983,6 +3061,47 @@ so they are the tests most worth having. Append to `tests/seed_drift.bats`:
   # The bug this pins: `if ! sd_extract` collapsed 3 and 4, reporting a seed
   # that will not parse as merely behind the template.
   [[ "$output" != *MISSING* ]]
+}
+
+@test "sd_extract returns 3, not 4, when no window around the anchor parses" {
+  # The integration test above stops at sd_check_seed's whole-file `bash -n`
+  # gate and never reaches sd_extract, so it cannot tell 3 from 4 at the
+  # helper level. This does, by calling sd_extract directly. Since sd_window
+  # grows to the whole file before giving up, only a file that itself fails to
+  # parse can produce status 3 — hence the same unclosed `do`.
+  printf '#!/usr/bin/env bash\n\nfor x in a b; do\n  install_ts "$TREE_SITTER_VERSION"\n' \
+    >"$FIX/bad.sh"
+  sd_source sd_scan "$FIX/bad.sh"
+  [ "$status" -eq 0 ]
+  printf '%s\n' "$output" >"$FIX/bad.scan"
+
+  sd_source sd_extract "$FIX/bad.sh" "$FIX/bad.scan" TREE_SITTER_VERSION
+  [ "$status" -eq 3 ]
+
+  # And 4 really is reserved for the absent anchor, on the same inputs.
+  sd_source sd_extract "$FIX/bad.sh" "$FIX/bad.scan" NVIM_VERSION
+  [ "$status" -eq 4 ]
+}
+
+@test "privilege normalization is portable and keyword-boundary correct" {
+  # `\b` is a GNU sed extension; BSD sed (macOS, which this script supports)
+  # silently fails to match it, so every `if as_user ...` line would keep its
+  # privilege word and report as drift on a Mac and clean on Linux.
+  run grep -n '\\b' "$SEED_DRIFT"
+  [ "$status" -ne 0 ]
+
+  scan_line 1 1 C 'if as_user test -x /x; then'
+  scan_line 1 2 C 'foo || $SUDO chmod 0755 /x'
+  scan_line 1 3 C 'do runuser -u me -- npm i'
+  # The boundary the `\b` used to provide: a word merely ENDING in a keyword
+  # must not license the drop.
+  scan_line 1 4 C 'notif as_user keepme'
+  norm
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = 'if test -x /x; then' ]
+  [ "${lines[1]}" = 'foo || chmod 0755 /x' ]
+  [ "${lines[2]}" = 'do npm i' ]
+  [ "${lines[3]}" = 'notif as_user keepme' ]
 }
 
 @test "an anchor present only in a template comment fails validation" {
