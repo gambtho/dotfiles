@@ -882,7 +882,52 @@ require('lazy').setup({
     config = function()
       -- ensure basic parser are installed
       local parsers = { 'bash', 'c', 'diff', 'html', 'lua', 'luadoc', 'markdown', 'markdown_inline', 'query', 'vim', 'vimdoc' }
-      require('nvim-treesitter').install(parsers)
+
+      -- This branch shells out to the `tree-sitter` CLI for every parser build,
+      -- with no fallback to a bare `cc`. Calling install() without a working CLI
+      -- does not fail quietly — it emits one `Error during "tree-sitter build":
+      -- ... ENOENT ... (cmd): 'tree-sitter'` per parser, on every single
+      -- startup, so opening any file buries the buffer under a wall of errors.
+      --
+      -- Running it is the check, not `executable()`. The CLI's official Linux
+      -- builds are dynamically linked against a recent glibc, so on an older
+      -- base image (Debian bookworm ships 2.36; the binaries want 2.39) the file
+      -- is present and executable and still dies at exec time.
+      --
+      -- Without one, degrade to regex syntax highlighting rather than erroring.
+      -- `:checkhealth nvim-treesitter` reports the missing CLI and the version
+      -- it wants, so this stays diagnosable without spamming startup.
+      --
+      -- A working CLI is not enough — it must be new enough. This branch pins
+      -- TREE_SITTER_MIN_VER = 0.26.1 in its health check and fails every build
+      -- below it, and Debian still ships 0.20.x as `tree-sitter-cli`, so an
+      -- exit-code check alone would wave through a CLI that reproduces exactly
+      -- the error wall this guard exists to prevent.
+      local ts_min = { 0, 26, 1 }
+
+      local function tree_sitter_cli_works()
+        if vim.fn.executable('tree-sitter') ~= 1 then return false end
+
+        -- pcall and a bounded wait, because this runs on the startup path:
+        -- vim.system throws outright if the binary vanishes between the
+        -- executable() check above and the spawn, and an unbounded wait() would
+        -- hang nvim forever on a binary that never exits. Neither may cost a
+        -- usable editor when the fallback is merely worse highlighting.
+        local ok, res = pcall(function()
+          return vim.system({ 'tree-sitter', '--version' }, { text = true }):wait(2000)
+        end)
+        if not ok or type(res) ~= 'table' or res.code ~= 0 then return false end
+
+        local have = { tostring(res.stdout or ''):match('(%d+)%.(%d+)%.(%d+)') }
+        if #have < 3 then return false end
+        for i = 1, 3 do
+          local n = tonumber(have[i])
+          if n ~= ts_min[i] then return n > ts_min[i] end
+        end
+        return true
+      end
+
+      if tree_sitter_cli_works() then require('nvim-treesitter').install(parsers) end
 
       ---@param buf integer
       ---@param language string
