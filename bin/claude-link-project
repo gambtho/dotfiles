@@ -38,8 +38,11 @@ source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 DOTFILES="${DOTFILES:-$HOME/.dotfiles}"
 # A nested private repository, not a directory of this one: overlays describe
 # non-public codebases, so bin/bootstrap clones them here from a separate
-# private remote. The path is deliberately unchanged -- every symlink already
-# written points through /opt/dotfiles/projects/.
+# private remote. The path is deliberately unchanged -- where the stable root
+# /opt/dotfiles is published, existing symlinks point through
+# /opt/dotfiles/projects/; where it is not, they fall back to $HOME-absolute
+# targets under this path. Either way the overlay location they resolve to is
+# the same, so the split needs no relink.
 OVERLAY_ROOT="$DOTFILES/projects"
 
 MODE="link"

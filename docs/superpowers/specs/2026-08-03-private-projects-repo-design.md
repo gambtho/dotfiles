@@ -6,35 +6,27 @@
 ## Problem
 
 `gambtho/dotfiles` is a **public** repo. 51 files under `projects/` are tracked
-and published. None of the six overlaid projects — `authGD`, `double-holo-ui`,
-`slabledger`, `wanderer`, `wanderer-kills`, `wanderer-notifier` — resolve as
-public repos under `gambtho`.
+and published. Every project they overlay is non-public.
 
-The public dotfiles repo is therefore the most detailed public description of six
-non-public codebases. Nothing published is a credential, but the content is a
-precise internal map. For `authGD` it reads as a targeting aid:
+The public dotfiles repo is therefore the most detailed public description of
+those codebases. Nothing published is a credential, but a Claude overlay is a
+precise internal map *by design*: it exists to tell an agent where the module
+boundaries and security boundaries are, which invariants matter and what breaks
+when they are violated, which environment variables are load-bearing and which
+cannot be rotated, how deploys and migrations run, and where the operational
+secret inventory lives. That is useful to an agent working in the repo and
+useful in a different way to anyone else who reads it.
 
-- Module layout and the security boundary — `src/core/` purity, the
-  enqueue-don't-execute rule, `src/lib/crypto.ts`, `src/services/tokens.ts`
-- Named invariants and where breaking them bites — "derole, don't boot",
-  admin-guard coverage, audit-on-every-state-change
-- `TOKEN_ENCRYPTION_KEY` is "effectively unrotatable (rotating it invalidates
-  every stored refresh token)"
-- Migrations forward-only in prod, run as a Fly.io release command on deploy
-- A pointer that "the full secret list lives in `docs/ops.md`"
-
-Sources: `projects/authGD/CLAUDE.md:41-52`,
-`projects/authGD/.claude/agents/code-reviewer.md:29`,
-`projects/authGD/.claude/agents/sync-engine-dev.md:29`.
-
-Also published: `double-holo-ui` uses Supabase auth with an `X-Bot-Token` Discord
-header; `slabledger` has a `profit-analyst` agent covering margin logic.
+The specifics — which projects, which files, which invariants — are deliberately
+not reproduced here: this spec is itself tracked in the public repo, so quoting
+the evidence would reproduce the exposure it argues against. The unredacted
+audit is kept outside the repository; see Assumptions.
 
 ### Secondary problem: a live secret one gitignore line from publication
 
-`projects/wanderer/.claude/settings.local.json:45` contains a real API token,
-captured verbatim inside a `Bash(export …)` permission-allowlist entry. The value
-is deliberately not reproduced here — see Step 0, which rotates it.
+One overlay's `.claude/settings.local.json` contains a real API token, captured
+verbatim inside a `Bash(export …)` permission-allowlist entry. Neither the value
+nor the file is named here — see Step 0, which rotates it.
 
 `git log --all -- 'projects/*/.claude/settings.local.json'` confirms it was
 **never committed** — the ignore rule held. But it demonstrates the failure mode
@@ -60,7 +52,7 @@ half of the problem.
 |---|---|---|
 | Already-published history | **Stop the bleeding only.** No rewrite. | 15 commits, first 2026-05-11 (~3 months). Exposure is architecture description, not credentials. Repo has 1 fork a rewrite could not clean, and GitHub keeps unreachable objects addressable until support GCs them. Force-push cost exceeds the benefit. |
 | Does the public repo reference the private one? | **No. Local config only.** | The private repo's name is itself part of what should not be published. |
-| Track `settings.local.json` in the private repo? | **No, stay gitignored.** | Private-on-GitHub is not a safe place for secrets: still in history, readable by anyone granted access, and "private" can be flipped. The `wanderer` file proves Claude writes real tokens there unprompted. Accepted cost: permission allowlists do not sync across machines. |
+| Track `settings.local.json` in the private repo? | **No, stay gitignored.** | Private-on-GitHub is not a safe place for secrets: still in history, readable by anyone granted access, and "private" can be flipped. The file found in this audit proves Claude writes real tokens there unprompted. Accepted cost: permission allowlists do not sync across machines. |
 | Split mechanism | **Nested plain clone at `~/.dotfiles/projects/`.** | See below. |
 | Attach config location | **`$HOME/.dotfiles-projects-remote`**, outside the repo. | See below. |
 
@@ -118,8 +110,7 @@ deliberately not recorded here — cloned to `~/.dotfiles/projects/`:
 <private repo>/             → cloned at ~/.dotfiles/projects/
   README.md                 # short: what this is, how it attaches
   .gitignore                # */.claude/settings.local.json
-  authGD/ double-holo-ui/ slabledger/
-  wanderer/ wanderer-kills/ wanderer-notifier/
+  <slug>/                   # one directory per overlaid project
 ```
 
 Public repo `.gitignore` — one line replacing the three-deep negation stack:
@@ -203,10 +194,11 @@ Export it once per shell:
 PRIVATE_REMOTE="$(cat ~/.dotfiles-projects-remote)"   # after Step 1 creates it
 ```
 
-**Step 0 — rotate the `wanderer` token.** *(no repo; the credential itself.)*
-It was never committed but is about to be copied by the migration. Rotate it,
-then delete the allowlist entry from
-`projects/wanderer/.claude/settings.local.json`.
+**Step 0 — rotate the live token.** *(no repo; the credential itself.)*
+It was never committed but is about to be copied by the migration. Rotate it at
+its source, then delete the allowlist entry from the affected overlay's
+`.claude/settings.local.json`. The affected overlay is named in the untracked
+record, not here.
 
 **Step 1 — seed the private repo from history.** *(runs in: **public** repo,
 `~/.dotfiles`.)*
@@ -419,7 +411,7 @@ Baseline before any change: `bats tests` → **323 passing, 0 failures**.
    an empty `projects/`.
 8. `make check` (syntax, lint, test, python-test, validate) passes.
 9. Every `settings.local.json` present before the migration is present after,
-   byte-identical except the removed `wanderer` token entry.
+   byte-identical except the removed token entry from Step 0.
 10. `git check-ignore -v docs/guides/project-overlays.md` → **no match**, and
     `git ls-files docs/guides/` lists it. Asserting the file is tracked, not just
     present, is the whole point of this check — the original failure was silent.
@@ -435,9 +427,16 @@ Baseline before any change: `bats tests` → **323 passing, 0 failures**.
   `$HOME/.dotfiles-projects-remote`, and your shell history for Step 1.
   Reviewers should treat any literal remote URL appearing in this file as a
   defect.
-- **The six existing overlays all move.** No per-project opt-out is designed in;
-  all of `authGD`, `double-holo-ui`, `slabledger`, `wanderer`, `wanderer-kills`,
-  `wanderer-notifier` go to the private repo together.
+- **The unredacted audit lives outside the repository.** The evidence behind the
+  Problem section — which projects, which files and line numbers, which
+  invariants and environment variables, and which overlay held the live token —
+  is recorded in `$HOME/.dotfiles-migration-record/` (untracked, local only).
+  The same reasoning that moves `projects/` out of this repo applies to a spec
+  that quotes it, so the public copy carries the argument without the evidence.
+  Reviewers should treat a project name, internal path, or credential name
+  appearing in this file as a defect.
+- **Every existing overlay moves.** No per-project opt-out is designed in; they
+  go to the private repo together.
 
 ## Out of scope
 

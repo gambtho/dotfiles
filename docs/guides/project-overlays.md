@@ -145,10 +145,11 @@ This removes the symlinks but leaves the overlay files in place under
 ## Caveats
 
 - Private is not the same as safe. Don't put **secrets** in an overlay even
-  though the overlay repo is private — secrets belong in `.env` files or a
-  secrets manager, not in `CLAUDE.md`. `settings.local.json` is gitignored in
-  the private repo specifically because it accumulates machine-local permission
-  grants and has captured a live token before.
+  though the overlay repo is private — secrets belong in a secrets manager, or
+  in a `.env` file that the project's own `.gitignore` already excludes, never
+  in `CLAUDE.md` or any other overlay file. `settings.local.json` is gitignored
+  in the private repo specifically because it accumulates machine-local
+  permission grants and has captured a live token before.
 - If a project already has a checked-in `CLAUDE.md` or `.claude/`, the
   linker refuses to clobber it. Rename it first or remove it.
 - The overlay symlinks only exist inside the project working tree. Devcontainers

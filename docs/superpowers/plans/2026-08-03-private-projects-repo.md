@@ -41,7 +41,7 @@ Every task's requirements implicitly include these. Copied verbatim from the spe
 ## Task 1: Rotate the live token
 
 **Files:**
-- Modify: `projects/wanderer/.claude/settings.local.json:45` (untracked, on disk only)
+- Modify: `projects/<slug>/.claude/settings.local.json` (untracked, on disk only). **This plan is tracked in the public repo**, so the affected overlay is not named here — it is recorded in `$HOME/.dotfiles-migration-record/`. Substitute `<slug>` from there before running any command below.
 
 **Interfaces:**
 - Consumes: nothing
@@ -61,24 +61,24 @@ Expected: **323 passing, 0 failures.** If the baseline is already dirty, stop an
 - [ ] **Step 2: Confirm the entry is still present**
 
 ```bash
-grep -n 'API_TOKEN' ~/.dotfiles/projects/wanderer/.claude/settings.local.json
+grep -rn 'export [A-Z_]*TOKEN=' ~/.dotfiles/projects/*/.claude/settings.local.json
 ```
 
-Expected: one match on the `Bash(export API_TOKEN=…)` allowlist entry. If absent, it was already handled — skip to Step 5.
+Expected: one match, on a `Bash(export …TOKEN=…)` allowlist entry. If absent, it was already handled — skip to Step 5.
 
 - [ ] **Step 3: Rotate the credential at its source**
 
-Issue a new token in the Wanderer service and revoke the old one. This is external to the repo; there is no command here. **Do not proceed until the old value is revoked** — deleting the line below removes the copy, not the credential.
+Issue a new token in the service that owns it and revoke the old one. This is external to the repo; there is no command here. **Do not proceed until the old value is revoked** — deleting the line below removes the copy, not the credential.
 
 - [ ] **Step 4: Delete the allowlist entry**
 
-Edit `~/.dotfiles/projects/wanderer/.claude/settings.local.json` and remove the whole `"Bash(export API_TOKEN=\"…\")"` array element, leaving the surrounding JSON valid.
+Edit `~/.dotfiles/projects/<slug>/.claude/settings.local.json` and remove the whole `"Bash(export …TOKEN=\"…\")"` array element, leaving the surrounding JSON valid.
 
 - [ ] **Step 5: Verify the file is valid JSON and clean**
 
 ```bash
-jq -e . ~/.dotfiles/projects/wanderer/.claude/settings.local.json >/dev/null && echo "valid JSON"
-grep -c 'API_TOKEN' ~/.dotfiles/projects/wanderer/.claude/settings.local.json || echo "no matches — good"
+jq -e . ~/.dotfiles/projects/<slug>/.claude/settings.local.json >/dev/null && echo "valid JSON"
+grep -rc 'export [A-Z_]*TOKEN=' ~/.dotfiles/projects/*/.claude/settings.local.json | grep -v ':0$' || echo "no matches — good"
 ```
 
 Expected: `valid JSON`, then `no matches — good`.
@@ -208,7 +208,7 @@ Expected: **empty output.** A non-empty `git status` means the ignore rule did n
 
 ```bash
 cd ~/.dotfiles/projects
-git check-ignore -v wanderer/.claude/settings.local.json
+git check-ignore -v <slug>/.claude/settings.local.json
 ```
 
 Expected: a match on `.gitignore:1:*/.claude/settings.local.json`.
@@ -350,7 +350,9 @@ A test that passes trivially is worthless. Force-add a file the ignore rule woul
 
 ```bash
 cd ~/.dotfiles
-git add -f projects/wanderer/CLAUDE.md
+mkdir -p projects/negative-control
+echo leak > projects/negative-control/CLAUDE.md
+git add -f projects/negative-control/CLAUDE.md
 bats tests/repository_hygiene.bats
 ```
 
@@ -360,7 +362,8 @@ Expected: **FAIL** on `the public repository tracks nothing under projects/`, re
 
 ```bash
 cd ~/.dotfiles
-git rm --cached projects/wanderer/CLAUDE.md
+git rm --cached projects/negative-control/CLAUDE.md
+rm -rf projects/negative-control
 git ls-files projects/ | wc -l    # expect 0
 bats tests/repository_hygiene.bats
 ```
@@ -906,7 +909,7 @@ find . -name settings.local.json -exec sha256sum {} + | sort > /tmp/locals-after
 diff "$(dirname "$PRESWAP")/locals.sha256" /tmp/locals-after.sha256
 ```
 
-Expected: the only difference is the `wanderer` file's hash, which changed in Task 1 when the token entry was removed. **Any missing path is a data loss** — restore it from `$PRESWAP` before continuing.
+Expected: the only difference is the hash of the one `settings.local.json` that changed in Task 1 when the token entry was removed. **Any missing path is a data loss** — restore it from `$PRESWAP` before continuing.
 
 - [ ] **Step 9: Confirm nothing tracked names the private repo**
 

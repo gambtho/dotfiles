@@ -40,7 +40,7 @@ read-only, so item 7 still bails before Step 3 writes anything.
 
 1. **WSL host, not a devcontainer.** `uname -a` contains `microsoft` and `/.dockerenv` does NOT exist and `$REMOTE_CONTAINERS` is unset. If we're already in a container, the symlinks won't work — abort with: "Run this on the WSL host, not inside the container."
 2. **Project root.** `.git/` exists in the current dir. If not, ask the user to `cd` first.
-3. **Dotfiles repo present, overlays attached.** `~/.dotfiles/` exists with `core/git/gitignore.symlink`, and `~/.dotfiles/projects/` exists. Overlays live in a **separate private repo** cloned to that path by `bin/bootstrap` — they are not tracked in the public dotfiles repo. If `projects/` is missing, point at `~/.dotfiles/docs/guides/project-overlays.md`, which covers attaching the overlay repo via `~/.dotfiles-projects-remote`.
+3. **Dotfiles repo present, overlay repo attached.** `~/.dotfiles/` exists with `core/git/gitignore.symlink`, and `~/.dotfiles/projects/` is a git repo in its own right — check `[ "$(git -C ~/.dotfiles/projects rev-parse --show-toplevel 2>/dev/null)" = "$(cd -P ~/.dotfiles/projects 2>/dev/null && pwd -P)" ]`, which is what `bin/bootstrap` treats as attached. A missing, empty, or non-repo `projects/` all fail this check: overlays live in a **separate private repo** and are not tracked in the public dotfiles repo, so an ordinary directory there means the clone never happened and any overlay written into it would be unversioned. Don't scaffold into it — point at `~/.dotfiles/docs/guides/project-overlays.md`, which covers attaching the repo via `~/.dotfiles-projects-remote`.
 4. **Stable link root published.** `[ -d /opt/dotfiles ] && [ "$(cd -P /opt/dotfiles && pwd -P)" = "$(cd -P ~/.dotfiles && pwd -P)" ]`. Compare canonical paths rather than trusting `readlink` output: `readlink` prints the recorded target whether or not it exists, so a root left over from another machine or an earlier `$HOME` reads as published while every overlay link through it dangles. Overlay symlinks target this root so they resolve under both the host's `$HOME` and the container's. If it's missing or points elsewhere, run `~/.dotfiles/bin/relink` — it creates the root and needs `sudo` once per machine, since `/opt` is root-owned. Don't block on it either way, but what an absent root costs depends entirely on whether a container will ever read these links:
 
    - **A devcontainer is in play** (Step 1 case (a) or (b)): the two outcomes are different products, so say which one you delivered. **Root validated** → the overlay works on this host *and* in the devcontainer; **root absent** → host-only, the linker falls back to `$HOME`-absolute targets with a warning and the links dangle inside the container. Never describe the fallback as container-ready.
@@ -673,7 +673,10 @@ Report to the user:
 - Symlinks created in the project worktree
 - Commands to commit the overlay — note this commits in the **private overlay
   repo** at `~/.dotfiles/projects`, not in `~/.dotfiles` itself, where
-  `projects/` is ignored and force-adding it fails the hygiene test:
+  `projects/` is ignored and force-adding it fails the hygiene test. If
+  `git -C ~/.dotfiles/projects rev-parse --show-toplevel` does not print that
+  path, the overlay repo is not attached and these commands will not version
+  anything — send the user to `docs/guides/project-overlays.md` instead:
   ```bash
   cd ~/.dotfiles/projects && git add "$SLUG" && git commit -m "add project overlay for $SLUG" && git push
   ```
