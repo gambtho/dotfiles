@@ -291,18 +291,32 @@ sd_normalize() {
     rest="${rest#*$'\t'}"
     tag="${rest%%$'\t'*}"
     text="${rest#*$'\t'}"
-    if [ "$joining" = 1 ]; then
-      pending="$pending ${text#"${text%%[![:space:]]*}"}"
-    else
-      pending="$text"
-    fi
-    if [ "${pending%\\}" != "$pending" ]; then
-      pending="${pending%\\}"
-      joining=1
+    if [ "$tag" = C ]; then
+      if [ "$joining" = 1 ]; then
+        pending="$pending ${text#"${text%%[![:space:]]*}"}"
+      else
+        pending="$text"
+      fi
+      if [ "${pending%\\}" != "$pending" ]; then
+        pending="${pending%\\}"
+        joining=1
+        continue
+      fi
+      sd_normalize_code_line "$pending"
+      pending="" joining=0
       continue
     fi
-    sd_normalize_code_line "$pending"
-    pending="" joining=0
+    # A heredoc body ends any pending continuation: a payload line is data and
+    # must never be folded into the shell line above it.
+    if [ "$joining" = 1 ]; then
+      sd_normalize_code_line "$pending"
+      pending="" joining=0
+    fi
+    if [ "$tag" = Hu ]; then
+      printf '%s\n' "$text" | sd_neutralize_paths
+    else
+      printf '%s\n' "$text"
+    fi
   done
   [ "$joining" = 0 ] || sd_normalize_code_line "$pending"
 }

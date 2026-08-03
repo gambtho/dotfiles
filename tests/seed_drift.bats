@@ -421,3 +421,25 @@ Z="«WS»/p"' ]
   [ "$status" -eq 0 ]
   [ "$output" = "echo keep" ]
 }
+
+@test "sd_normalize passes Hq heredoc payload through verbatim" {
+  scan_line 1 1 Hq '# Personal docker-compose overrides.'
+  scan_line 1 2 Hq ''
+  scan_line 1 3 Hq '  keep   spacing'
+  scan_line 1 4 Hq 'trailing \'
+  scan_line 1 5 Hq '$HOME/literal'
+  norm
+  [ "$status" -eq 0 ]
+  [ "$output" = '# Personal docker-compose overrides.
+
+  keep   spacing
+trailing \
+$HOME/literal' ]
+}
+
+@test "sd_normalize neutralizes paths in an Hu body but nothing else" {
+  scan_line 1 1 Hu '  $HOME/x   # not a comment'
+  norm
+  [ "$status" -eq 0 ]
+  [ "$output" = '  «HOME»/x   # not a comment' ]
+}
