@@ -672,13 +672,19 @@ Report to the user:
 - Files created/updated in `~/.dotfiles/projects/<slug>/`
 - Symlinks created in the project worktree
 - Commands to commit the overlay — note this commits in the **private overlay
-  repo** at `~/.dotfiles/projects`, not in `~/.dotfiles` itself, where
-  `projects/` is ignored and force-adding it fails the hygiene test. If
-  `git -C ~/.dotfiles/projects rev-parse --show-toplevel` does not print that
-  path, the overlay repo is not attached and these commands will not version
-  anything — send the user to `docs/guides/project-overlays.md` instead:
+  repo** at `~/.dotfiles/projects`, not in `~/.dotfiles` itself. Every command
+  uses `git -C`, and the guard runs first: without it, a `projects/` that exists
+  but is not a repo lets `git add` walk up to `~/.dotfiles` and stage the
+  overlay into the **public** repo.
   ```bash
-  cd ~/.dotfiles/projects && git add "$SLUG" && git commit -m "add project overlay for $SLUG" && git push
+  OVERLAY=~/.dotfiles/projects
+  if [ "$(git -C "$OVERLAY" rev-parse --show-toplevel 2>/dev/null)" != "$(cd -P "$OVERLAY" 2>/dev/null && pwd -P)" ]; then
+    echo "overlay repo not attached at $OVERLAY -- see ~/.dotfiles/docs/guides/project-overlays.md" >&2
+  else
+    git -C "$OVERLAY" add "$SLUG"
+    git -C "$OVERLAY" commit -m "add project overlay for $SLUG"
+    git -C "$OVERLAY" push
+  fi
   ```
 - For case (a): rebuild the devcontainer to pick up new mounts —
   `devcontainer up --remove-existing-container --workspace-folder .` or VS Code "Dev Containers: Rebuild Container"

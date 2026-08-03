@@ -29,7 +29,7 @@ Every task's requirements implicitly include these. Copied verbatim from the spe
 |---|---|
 | `.gitignore` (public) | Ignore `projects/` outright; unignore `docs/guides/` |
 | `bin/bootstrap` | `setup_projects_overlay` — attach the private repo at the canonical path |
-| `tests/bootstrap_projects_overlay.bats` | **New.** Six cases for the attach behavior |
+| `tests/install_orchestration.bats` | **Modify.** Six new cases for the attach behavior, appended to the existing bootstrap suite |
 | `tests/repository_hygiene.bats` | **One added assertion.** The public/private boundary invariant |
 | `docs/guides/project-overlays.md` | **New.** The two-repo model, attach config, caveats |
 | `ai/marketplace/plugins/my/skills/project-claude-setup/SKILL.md` | Three edits: `:43`, `:206`, `:676` |
@@ -61,10 +61,12 @@ Expected: **323 passing, 0 failures.** If the baseline is already dirty, stop an
 - [ ] **Step 2: Confirm the entry is still present**
 
 ```bash
-grep -rn 'export [A-Z_]*TOKEN=' ~/.dotfiles/projects/*/.claude/settings.local.json
+grep -rl 'export [A-Z_]*TOKEN=' ~/.dotfiles/projects/*/.claude/settings.local.json
 ```
 
-Expected: one match, on a `Bash(export …TOKEN=…)` allowlist entry. If absent, it was already handled — skip to Step 5.
+`-l` prints filenames only: the point is to locate the entry, and echoing the
+matching line would put the token in your scrollback and this session's
+transcript. Expected: one filename. If absent, it was already handled — skip to Step 5.
 
 - [ ] **Step 3: Rotate the credential at its source**
 
@@ -78,7 +80,7 @@ Edit `~/.dotfiles/projects/<slug>/.claude/settings.local.json` and remove the wh
 
 ```bash
 jq -e . ~/.dotfiles/projects/<slug>/.claude/settings.local.json >/dev/null && echo "valid JSON"
-grep -rc 'export [A-Z_]*TOKEN=' ~/.dotfiles/projects/*/.claude/settings.local.json | grep -v ':0$' || echo "no matches — good"
+grep -rl 'export [A-Z_]*TOKEN=' ~/.dotfiles/projects/*/.claude/settings.local.json || echo "no matches — good"
 ```
 
 Expected: `valid JSON`, then `no matches — good`.
@@ -383,7 +385,7 @@ git commit -m "test: assert the public repo tracks nothing under projects/"
 
 **Files:**
 - Modify: `bin/bootstrap` — add `setup_projects_overlay` after `install_dotfiles` (`:176-203`), call it from `main` after `install_dotfiles` (`:282`)
-- Create: `tests/bootstrap_projects_overlay.bats`
+- Modify: `tests/install_orchestration.bats` (append; it already holds the `BOOTSTRAP_SOURCE_ONLY=1` sourcing pattern these cases reuse)
 
 **Interfaces:**
 - Consumes: `$HOME/.dotfiles-projects-remote` written in Task 2 Step 1; the `log_info` / `log_success` / `log_warning` helpers from `bin/log-helper` (already sourced via `bin/common.sh:3`)
@@ -393,7 +395,7 @@ This is the only real code in the plan. TDD applies cleanly.
 
 - [ ] **Step 1: Write the failing tests**
 
-Create `tests/bootstrap_projects_overlay.bats`:
+Append to `tests/install_orchestration.bats`:
 
 ```bash
 #!/usr/bin/env bats
@@ -508,7 +510,7 @@ run_setup_projects_overlay() {
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `bats tests/bootstrap_projects_overlay.bats`
+Run: `bats tests/install_orchestration.bats`
 Expected: all six FAIL with `command not found: setup_projects_overlay` (or bash's equivalent).
 
 - [ ] **Step 3: Write the implementation**
@@ -572,7 +574,7 @@ setup_projects_overlay() {
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: `bats tests/bootstrap_projects_overlay.bats`
+Run: `bats tests/install_orchestration.bats`
 Expected: 6 passing, 0 failures.
 
 - [ ] **Step 5: Wire it into `main`**
@@ -593,7 +595,7 @@ Expected: **330 passing, 0 failures** (323 baseline + 6 new + 1 from Task 4).
 - [ ] **Step 7: Commit**
 
 ```bash
-git add bin/bootstrap tests/bootstrap_projects_overlay.bats
+git add bin/bootstrap tests/install_orchestration.bats
 git commit -m "feat(bootstrap): attach the private project-overlay repo
 
 Clones \$HOME/.dotfiles-projects-remote into \$HOME/.dotfiles/projects. The

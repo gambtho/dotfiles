@@ -161,7 +161,7 @@ Branches, in order:
 and every overlay path degrades to "no overlay for this project" — which the
 linker already handles.
 
-Tests for `setup_projects_overlay` (`tests/bootstrap_projects_overlay.bats`,
+Tests for `setup_projects_overlay` (`tests/install_orchestration.bats`,
 using the existing `setup_dotfiles_test` fixture harness):
 
 - absent config → non-fatal, prints the configuration hint, `projects/` untouched
@@ -367,7 +367,7 @@ opportunistically; not a blocker.
 | `ai/.../project-claude-setup/SKILL.md:676` | `cd ~/.dotfiles/projects && git add "$SLUG" && git commit …`; surrounding "commit dotfiles changes" wording now covers two repos |
 | `bin/claude-link-project` | No code change. Add a comment at `:39` noting the path is a separate private repo |
 | `tests/repository_hygiene.bats` | Add one boundary assertion (`git ls-files projects/` empty); no new test file |
-| `tests/bootstrap_projects_overlay.bats` | New tests for `setup_projects_overlay` (six cases listed above) |
+| `tests/install_orchestration.bats` | Six new cases for `setup_projects_overlay` (listed above), appended to the existing bootstrap suite |
 | `README.md` | Check for `projects/` mention; document the two-repo split |
 
 `docs/guides/project-overlays.md` additionally gains: the two-repo model and why; the
