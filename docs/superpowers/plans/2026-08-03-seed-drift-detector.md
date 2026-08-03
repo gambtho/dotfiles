@@ -6,7 +6,8 @@
 
 **Architecture:** A single self-contained Bash executable, following the repository's `bin/` convention. It parses the block table in `catch-up-local-seed.md` for anchors, so the documented model and the executable one cannot disagree. For each anchor it extracts the surrounding block from both files using a heredoc-aware paragraph scanner whose windows are grown until the extracted fragment parses under `bash -n`, normalizes away the known vocabulary differences between seeds while leaving heredoc payloads verbatim, and reports an order-preserving diff (Decision 1) as `ok` / `MISSING` / `BEHIND` / `AHEAD` / `DIVERGED`.
 
-**Tech Stack:** Bash 5, awk (the scanner), `diff`, `bats` for tests. No new dependencies.
+**Tech Stack:** Bash 3.2-compatible shell, awk (the scanner), `diff`, `bats` for
+tests. No new dependencies.
 
 **Design spec:** `docs/superpowers/specs/2026-08-03-seed-drift-detector-design.md`. Read it before starting; every decision below traces to a numbered Decision in that document.
 
@@ -94,6 +95,16 @@ it runs the full detector before the function under test is even called.
 ---
 
 ## Global Constraints
+
+- **Bash 3.2 compatibility for `bin/seed-drift`.** macOS is a supported platform
+  (`README.md:3`) and its system bash is still 3.2 — `bin/common.sh:394` says so
+  in as many words. Do not introduce `declare -A`, `mapfile`/`readarray`,
+  `${var,,}`/`${var^^}`, or negative array indices. Everything this plan
+  specifies is already 3.2-clean; keep it that way.
+  This constraint covers `bin/seed-drift` only. The **test suite** may use GNU
+  `sed -i` and `stat -c`, matching `tests/project_claude_setup_seed.bats` and
+  `tests/ai_installers.bats`, because CI is `ubuntu-latest` only
+  (`.github/workflows/check.yml:13`).
 
 - `bin/seed-drift` is `shfmt -i 2 -ci` clean — verified by `bin/list-check-files shfmt | xargs -0 shfmt -d -i 2 -ci` (the `lint` target).
 - `bin/seed-drift` is `shellcheck -x -S warning -e SC1091` clean — verified by `bin/list-check-files shellcheck | xargs -0 shellcheck -x -S warning -e SC1091` (the `lint` target).
@@ -455,6 +466,9 @@ In `bin/seed-drift`, replace the trailing `return 0` of `sd_main` (the last stat
 
   local name anchor absent=0
   while IFS=$'\t' read -r name anchor; do
+    # Raw grep is deliberately the Task 1 form; Task 6 replaces it with a check
+    # against the template scan's C records once the scanner exists, so that an
+    # anchor appearing only in a comment fails validation.
     if ! grep -qF -- "$anchor" "$template"; then
       printf 'seed-drift: anchor %s (block: %s) is absent from %s\n' \
         "$anchor" "$name" "$template" >&2
@@ -516,7 +530,20 @@ git commit -m "feat: fail with exit 2 when a doc anchor is absent from the templ
 
 - `SD_SCAN_AWK` — the awk program, as a shell variable. Later tasks call `sd_scan`, not awk directly.
 
-Every consumer in Tasks 3-8 (`sd_paras_with_anchor`, `sd_para_range`, `sd_window`, `sd_normalize`, `sd_extract`) reads this exact 4-field format with `IFS=$'\t' read -r para lineno tag text` or `awk -F'\t'`. Because `text` is last, it may itself contain tabs without breaking field splitting.
+Every consumer in Tasks 3-8 (`sd_paras_with_anchor`, `sd_para_range`,
+`sd_window`, `sd_normalize`, `sd_extract`) reads this exact 4-field format.
+`text` is last so it may contain tabs — but **neither obvious reader preserves
+them**, and heredoc payloads are required to be verbatim:
+
+- `IFS=$'\t' read -r para lineno tag text` strips *leading* tabs from `text`,
+  because tab is IFS whitespace. That is exactly the `<<-` indented-body case.
+- `awk -F'\t'`'s `$4` stops at the next tab, silently truncating the rest.
+
+So consumers must split positionally instead: in shell, read the whole record
+with `IFS= read -r rec` and peel three fields with `${rec%%$'\t'*}` /
+`${rec#*$'\t'}`, leaving the remainder untouched; in awk, take the text as
+everything after the third tab via `sub(/^[^\t]*\t[^\t]*\t[^\t]*\t/, "", t)`.
+Both are specified below and pinned by a tab-payload test in Task 7.
 
 ---
 
@@ -1252,7 +1279,7 @@ git commit -m "feat: treat an unterminated heredoc as an sd_scan extraction erro
 
 *Produces*
 
-- `sd_paras_with_anchor SCAN ANCHOR` -> stdout, one paragraph index per line, ascending, deduped. Empty output (exit 0) when the anchor matches nothing. Match is `index($4, a)` — fixed string, against `$3 == "C"` rows only.
+- `sd_paras_with_anchor SCAN ANCHOR` -> stdout, one paragraph index per line, ascending, deduped. Empty output (exit 0) when the anchor matches nothing. Match is awk `index()` — fixed string — against the text after the third tab, on `$3 == "C"` rows only. Not `$4`: that stops at the next tab and would truncate a tab-bearing line.
 - `sd_para_range SCAN PARA` -> stdout, one line, `start end` (space-separated source line numbers). Empty output when `PARA` does not exist.
 - `sd_window FILE SCAN PARA` -> stdout, one line, `start end`. Exit 3 if no grown window ever parses.
 
@@ -1319,7 +1346,14 @@ Append to `bin/seed-drift` after `sd_scan`:
 
 ```bash
 sd_paras_with_anchor() {
-  awk -F'\t' -v a="$2" '$3 == "C" && index($4, a) { if (!seen[$1]++) print $1 }' "$1"
+  # $4 would stop at the next tab; take everything after the third tab so a
+  # tab-bearing line is matched in full.
+  awk -F'\t' -v a="$2" '
+    $3 == "C" {
+      t = $0
+      sub(/^[^\t]*\t[^\t]*\t[^\t]*\t/, "", t)
+      if (index(t, a) && !seen[$1]++) print $1
+    }' "$1"
 }
 
 sd_para_range() {
@@ -1649,8 +1683,16 @@ sd_normalize_code_line() {
 }
 
 sd_normalize() {
-  local para lineno tag text pending="" joining=0
-  while IFS=$'\t' read -r para lineno tag text; do
+  local rec tag text rest pending="" joining=0
+  # Positional split, not `IFS=$'\t' read`: that form strips leading tabs from
+  # `text`, which would corrupt every `<<-` heredoc body. `para` and `lineno`
+  # are skipped rather than bound — binding them trips SC2034 under
+  # `shellcheck -S warning`, which this repo gates on.
+  while IFS= read -r rec; do
+    rest="${rec#*$'\t'}"
+    rest="${rest#*$'\t'}"
+    tag="${rest%%$'\t'*}"
+    text="${rest#*$'\t'}"
     if [ "$joining" = 1 ]; then
       pending="$pending ${text#"${text%%[![:space:]]*}"}"
     else
@@ -1731,8 +1773,16 @@ Replace the whole function:
 
 ```bash
 sd_normalize() {
-  local para lineno tag text pending="" joining=0
-  while IFS=$'\t' read -r para lineno tag text; do
+  local rec tag text rest pending="" joining=0
+  # Positional split, not `IFS=$'\t' read`: that form strips leading tabs from
+  # `text`, which would corrupt every `<<-` heredoc body. `para` and `lineno`
+  # are skipped rather than bound — binding them trips SC2034 under
+  # `shellcheck -S warning`, which this repo gates on.
+  while IFS= read -r rec; do
+    rest="${rec#*$'\t'}"
+    rest="${rest#*$'\t'}"
+    tag="${rest%%$'\t'*}"
+    text="${rest#*$'\t'}"
     if [ "$tag" = C ]; then
       if [ "$joining" = 1 ]; then
         pending="$pending ${text#"${text%%[![:space:]]*}"}"
@@ -2037,21 +2087,44 @@ produces differences in both directions and is reported `DIVERGED`.
   Insert into `bin/seed-drift`, immediately above `sd_main()`:
 
   ```bash
+  # One temp dir for the whole run, removed by a single trap. Callers never
+  # clean up individually, so no early `return` can leak a file.
+  SD_TMPDIR=""
+  sd_tmp() {
+    if [ -z "$SD_TMPDIR" ]; then
+      SD_TMPDIR="$(mktemp -d)"
+      trap 'rm -rf -- "$SD_TMPDIR"' EXIT HUP INT TERM
+    fi
+    mktemp "$SD_TMPDIR/sd.XXXXXX"
+  }
+
   sd_diff_lines() {
     # TPL_NORM SEED_NORM MARKER; MARKER is '<' for template-only lines and '>'
     # for seed-only lines. The diff is ordered, so a pure reordering yields lines
     # under both markers rather than comparing equal.
-    local out rc=0
-    out=$(diff -- "$1" "$2") || rc=$?
+    #
+    # diff goes to a FILE, not a command substitution. A removed blank line is
+    # emitted by diff as the record `< ` (marker, space, empty text); command
+    # substitution would strip the trailing newline and sed, preserving the
+    # absent final newline, would then emit zero bytes — making a deleted blank
+    # line read as no difference at all. Via a file every record keeps its
+    # newline and the blank one survives.
+    local rc=0 raw
+    raw="$(sd_tmp)"
+    diff -- "$1" "$2" >"$raw" || rc=$?
     if [ "$rc" -gt 1 ]; then
       printf 'seed-drift: diff failed comparing %s and %s\n' "$1" "$2" >&2
       return 3
     fi
-    printf '%s' "$out" | sed -n "s/^$3 //p"
+    sed -n "s/^$3 //p" "$raw"
   }
 
+  # Takes a FILE, and counts every record including empty ones. `grep -c .`
+  # would skip exactly the blank lines this tool has to notice.
   sd_count_lines() {
-    printf '%s' "$1" | grep -c . || true
+    local n
+    n=$(wc -l <"$1")
+    printf '%s' "${n//[[:space:]]/}"
   }
   ```
 
@@ -2119,9 +2192,16 @@ produces differences in both directions and is reported `DIVERGED`.
 
   ```bash
   sd_verdict() {
-    local behind ahead
-    behind=$(sd_count_lines "$(sd_diff_lines "$1" "$2" '<')")
-    ahead=$(sd_count_lines "$(sd_diff_lines "$1" "$2" '>')")
+    # Files, not nested command substitutions: substitution both loses blank
+    # differing lines and swallows a non-zero status from sd_diff_lines, so a
+    # broken diff would silently read as `ok`.
+    local bf af behind ahead
+    bf="$(sd_tmp)"
+    af="$(sd_tmp)"
+    sd_diff_lines "$1" "$2" '<' >"$bf" || return 3
+    sd_diff_lines "$1" "$2" '>' >"$af" || return 3
+    behind=$(sd_count_lines "$bf")
+    ahead=$(sd_count_lines "$af")
     if [ "$behind" -eq 0 ] && [ "$ahead" -eq 0 ]; then
       printf 'ok\n'
     elif [ "$ahead" -eq 0 ]; then
@@ -2368,20 +2448,29 @@ replacing it.
   }
 
   sd_check_seed() {
-    local seed="$1" name rc=0 block anchor verdict tnorm snorm
+    local seed="$1" name rc=0 block anchor verdict tnorm snorm sscan
     name=$(basename -- "$(dirname -- "$(dirname -- "$seed")")")
     printf '%s  %s\n' "$name" "$seed"
-    tnorm="$(mktemp)"
-    snorm="$(mktemp)"
+    # Each file is scanned exactly once. The template scan is built by sd_main
+    # and reused across every seed; the seed scan is built here, once, and
+    # reused across every block. sd_extract needs a scan path — passing "" would
+    # make awk fail to open its input on every call.
+    sscan="$(sd_tmp)"
+    if ! sd_scan "$seed" >"$sscan"; then
+      sd_report_block ERROR '(whole file)' 'seed could not be scanned'
+      sd_report_action 'check the seed parses; see catch-up-local-seed.md Step 3'
+      return 2
+    fi
+    tnorm="$(sd_tmp)"
+    snorm="$(sd_tmp)"
     while IFS=$'\t' read -r block anchor; do
-      sd_extract "$SD_TEMPLATE" "" "$anchor" >"$tnorm"
-      sd_extract "$seed" "" "$anchor" >"$snorm"
+      sd_extract "$SD_TEMPLATE" "$SD_TEMPLATE_SCAN" "$anchor" >"$tnorm" || continue
+      sd_extract "$seed" "$sscan" "$anchor" >"$snorm" || continue
       verdict=$(sd_verdict "$tnorm" "$snorm")
       case "$verdict" in
         ok) sd_report_block ok "$block" '' ;;
       esac
     done < <(sd_parse_doc "$SD_DOC")
-    rm -f -- "$tnorm" "$snorm"
     return "$rc"
   }
 
@@ -2421,11 +2510,39 @@ replacing it.
   }
   ```
 
-  Then replace the trailing `return 0` of `sd_main` with:
+  Then replace the anchor-validation block Task 1 added to `sd_main` — from
+  `local blocks` through its closing `return 0` — with the version below. Two
+  changes: the template is scanned **once** here and reused by every seed, and
+  anchor validation now runs against the scan's `C` records instead of raw
+  `grep`.
 
   ```bash
+    local blocks name anchor absent=0
     SD_TEMPLATE="$template"
     SD_DOC="$doc"
+    SD_TEMPLATE_SCAN="$(sd_tmp)"
+    if ! sd_scan "$template" >"$SD_TEMPLATE_SCAN"; then
+      printf 'seed-drift: cannot scan template %s\n' "$template" >&2
+      return 2
+    fi
+    if ! blocks=$(sd_parse_doc "$doc"); then
+      printf 'seed-drift: no block table found in %s\n' "$doc" >&2
+      return 2
+    fi
+    while IFS=$'\t' read -r name anchor; do
+      # Against the scan, not `grep -qF "$anchor" "$template"`. Anchors name
+      # code, and the scan's C records are comment-stripped — so an anchor that
+      # survives only inside a comment now fails validation instead of passing
+      # and then extracting nothing.
+      if [ -z "$(sd_paras_with_anchor "$SD_TEMPLATE_SCAN" "$anchor")" ]; then
+        printf 'seed-drift: anchor %s (block: %s) is absent from %s\n' \
+          "$anchor" "$name" "$template" >&2
+        absent=1
+      fi
+    done <<<"$blocks"
+    if [ "$absent" -ne 0 ]; then
+      return 2
+    fi
     sd_visit_candidates
     sd_summary
     return "$SD_WORST"
@@ -2515,20 +2632,52 @@ replacing it.
 
   ```bash
     while IFS=$'\t' read -r block anchor; do
-      if ! sd_extract "$SD_TEMPLATE" "" "$anchor" >"$tnorm"; then
-        sd_report_block ERROR "$block" 'anchor absent from template'
+      # Branch on the ORIGINAL status. sd_extract returns 4 for "anchor absent"
+      # and 3 for "the block would not parse"; `if ! sd_extract` flattens both
+      # into one branch, so a seed whose block is unextractable would be
+      # reported as MISSING and exit 1 — a wrong verdict at the wrong severity.
+      tst=0
+      sd_extract "$SD_TEMPLATE" "$SD_TEMPLATE_SCAN" "$anchor" >"$tnorm" || tst=$?
+      case "$tst" in
+        0) ;;
+        4)
+          sd_report_block ERROR "$block" 'anchor absent from template'
+          rc=2
+          continue
+          ;;
+        *)
+          sd_report_block ERROR "$block" 'template block could not be extracted'
+          rc=2
+          continue
+          ;;
+      esac
+      est=0
+      sd_extract "$seed" "$sscan" "$anchor" >"$snorm" || est=$?
+      case "$est" in
+        0) ;;
+        4)
+          sd_report_block MISSING "$block" 'anchor absent from seed'
+          sd_report_action 'port the block; see catch-up-local-seed.md Step 2'
+          SD_MISSING=$((SD_MISSING + 1))
+          [ "$rc" -ge 1 ] || rc=1
+          continue
+          ;;
+        *)
+          sd_report_block ERROR "$block" 'seed block could not be extracted'
+          rc=2
+          continue
+          ;;
+      esac
+      # Same file-not-substitution rule as sd_verdict: a removed blank line must
+      # survive into the count and the samples.
+      behind="$(sd_tmp)"
+      ahead="$(sd_tmp)"
+      if ! sd_diff_lines "$tnorm" "$snorm" '<' >"$behind" ||
+        ! sd_diff_lines "$tnorm" "$snorm" '>' >"$ahead"; then
+        sd_report_block ERROR "$block" 'diff failed'
         rc=2
         continue
       fi
-      if ! sd_extract "$seed" "" "$anchor" >"$snorm"; then
-        sd_report_block MISSING "$block" 'anchor absent from seed'
-        sd_report_action 'port the block; see catch-up-local-seed.md Step 2'
-        SD_MISSING=$((SD_MISSING + 1))
-        [ "$rc" -ge 1 ] || rc=1
-        continue
-      fi
-      behind=$(sd_diff_lines "$tnorm" "$snorm" '<')
-      ahead=$(sd_diff_lines "$tnorm" "$snorm" '>')
       nb=$(sd_count_lines "$behind")
       na=$(sd_count_lines "$ahead")
       verdict=$(sd_verdict "$tnorm" "$snorm")
@@ -2538,14 +2687,14 @@ replacing it.
           ;;
         BEHIND)
           sd_report_block BEHIND "$block" "$nb template lines absent from seed"
-          printf '%s\n' "$behind" | sd_report_samples
+          sd_report_samples <"$behind"
           sd_report_action 'port from template; see catch-up-local-seed.md Step 2'
           SD_BEHIND=$((SD_BEHIND + 1))
           [ "$rc" -ge 1 ] || rc=1
           ;;
         AHEAD)
           sd_report_block AHEAD "$block" "$na seed lines absent from template"
-          printf '%s\n' "$ahead" | sd_report_samples
+          sd_report_samples <"$ahead"
           sd_report_action 'promotion candidate; do NOT overwrite the seed'
           SD_AHEAD=$((SD_AHEAD + 1))
           [ "$rc" -ge 1 ] || rc=1
@@ -2564,7 +2713,8 @@ replacing it.
   and widen the function's `local` line to declare the new variables:
 
   ```bash
-    local seed="$1" name rc=0 block anchor verdict tnorm snorm behind ahead nb na
+    local seed="$1" name rc=0 block anchor verdict tnorm snorm sscan
+    local behind ahead nb na est tst
   ```
 
 - [ ] **Step 9: run them and see them pass.**
@@ -2790,6 +2940,70 @@ t7_run() {
   run "$REPO_ROOT/bin/seed-drift" --template "$TPL" --doc "$DOC" "$@"
 }
 ```
+
+- [ ] **Step 1b: regression tests for the six integration defects.**
+
+These four pin bugs that a plan review caught before implementation. Each one
+fails *silently* if reintroduced — wrong verdict or false `ok`, never a crash —
+so they are the tests most worth having. Append to `tests/seed_drift.bats`:
+
+```bash
+@test "a tab inside a heredoc payload survives extraction verbatim" {
+  t7_setup
+  t7_doc "core.excludesFile" core.excludesFile
+  printf '#!/usr/bin/env bash\n\ntee "$G" <<%s\n\tcol1\tcol2\nGITEOF\n\ngit config --global core.excludesFile "$G"\n' "'GITEOF'" >"$TPL"
+  # Seed differs ONLY by collapsing the payload tabs to spaces.
+  printf '#!/usr/bin/env bash\n\ntee "$G" <<%s\n  col1  col2\nGITEOF\n\ngit config --global core.excludesFile "$G"\n' "'GITEOF'" >"$SEED"
+
+  t7_run
+  # If the reader strips or truncates tabs, both sides normalize alike and this
+  # reports ok — the exact false-clean the tool exists to prevent.
+  [ "$status" -eq 1 ]
+  [[ "$output" == *DIVERGED* ]]
+}
+
+@test "sd_count_lines counts blank records" {
+  printf '\n\na\n' >"$BATS_TEST_TMPDIR/three"
+  sd_source sd_count_lines "$BATS_TEST_TMPDIR/three"
+  [ "$status" -eq 0 ]
+  [ "$output" = 3 ]
+}
+
+@test "a seed block that cannot be extracted is ERROR and exit 2, not MISSING" {
+  t7_setup
+  t7_doc "tree-sitter CLI" TREE_SITTER_VERSION
+  printf '#!/usr/bin/env bash\n\ninstall_ts "$TREE_SITTER_VERSION"\n' >"$TPL"
+  # Anchor present, but no window around it ever parses: the `do` is never
+  # closed anywhere in the file, so sd_window exhausts both directions.
+  printf '#!/usr/bin/env bash\n\nfor x in a b; do\n  install_ts "$TREE_SITTER_VERSION"\n' >"$SEED"
+
+  t7_run
+  [ "$status" -eq 2 ]
+  [[ "$output" == *ERROR* ]]
+  # The bug this pins: `if ! sd_extract` collapsed 3 and 4, reporting a seed
+  # that will not parse as merely behind the template.
+  [[ "$output" != *MISSING* ]]
+}
+
+@test "an anchor present only in a template comment fails validation" {
+  t7_setup
+  t7_doc "codex guard" local/bin/codex
+  printf '#!/usr/bin/env bash\n\n# once guarded local/bin/codex, now removed\necho hi\n' >"$TPL"
+  printf '#!/usr/bin/env bash\n\necho hi\n' >"$SEED"
+
+  t7_run
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"is absent from"* ]]
+}
+```
+
+- [ ] **Step 1c: run them and watch them fail for the right reason.**
+
+`bats tests/seed_drift.bats -f 'tab inside|blank records|cannot be extracted|only in a template comment'`
+
+Expected: four `not ok`. Confirm each fails on its assertion rather than on a
+missing function — if `sd_count_lines` reports `command not found`, Task 5 was
+not completed.
 
 - [ ] **Step 2: the MOTIVATING test — anchor present, surrounding block outdated.**
 
