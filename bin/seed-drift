@@ -336,6 +336,25 @@ sd_normalize() {
   [ "$joining" = 0 ] || sd_normalize_code_line "$pending"
 }
 
+sd_extract() {
+  local file="$1" scan="$2" anchor="$3" paras para window ranges=""
+
+  paras=$(sd_paras_with_anchor "$scan" "$anchor")
+  [ -n "$paras" ] || return 4
+
+  for para in $paras; do
+    window=$(sd_window "$file" "$scan" "$para") || return 3
+    ranges+="$window"$'\n'
+  done
+
+  # Union the windows by source line number: `sort -n -u` puts them in file
+  # order and collapses lines two overlapping windows both claim.
+  printf '%s' "$ranges" |
+    awk '{ for (i = $1; i <= $2; i++) print i }' | sort -n -u |
+    awk -F'\t' 'NR == FNR { keep[$1] = 1; next } keep[$2]' - "$scan" |
+    sd_normalize
+}
+
 sd_main() {
   local template="$SD_TEMPLATE_DEFAULT" doc="$SD_DOC_DEFAULT"
   SD_CANDIDATES=()

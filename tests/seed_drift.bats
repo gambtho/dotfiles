@@ -467,3 +467,37 @@ $HOME/literal' ]
 { chown -R "$SEED_UID:0" "$NVIM_DIST.new" 2>/dev/null ||
 chown -R node:node /app' ]
 }
+
+@test "sd_extract unions windows in file order, deduped, and normalizes" {
+  printf 'echo ANCHOR one\n\necho middle\n\nas_user echo ANCHOR two\n' >"$FIX/f.sh"
+  make_scan "$FIX/f.sh"
+  sd_source sd_extract "$FIX/f.sh" "$FIX/f.sh.scan" ANCHOR
+  [ "$status" -eq 0 ]
+  [ "$output" = "echo ANCHOR one
+echo ANCHOR two" ]
+}
+
+@test "sd_extract deduplicates lines shared by two overlapping windows" {
+  printf 'if [ -n "$ANCHOR" ]; then\n\n  echo ANCHOR body\nfi\n' >"$FIX/f.sh"
+  make_scan "$FIX/f.sh"
+  sd_source sd_extract "$FIX/f.sh" "$FIX/f.sh.scan" ANCHOR
+  [ "$status" -eq 0 ]
+  [ "$output" = 'if [ -n "$ANCHOR" ]; then
+echo ANCHOR body
+fi' ]
+}
+
+@test "sd_extract drops comment-only lines and keeps the sed s#...#g idiom" {
+  printf '# reworded prose about ANCHOR\nsed '"'"'s#/app#/workspace#g'"'"' ANCHOR.txt # trailing\n' >"$FIX/f.sh"
+  make_scan "$FIX/f.sh"
+  sd_source sd_extract "$FIX/f.sh" "$FIX/f.sh.scan" ANCHOR
+  [ "$status" -eq 0 ]
+  [ "$output" = "sed 's#/app#/workspace#g' ANCHOR.txt" ]
+}
+
+@test "sd_extract exits 4 when the anchor is absent" {
+  printf 'echo hi\n' >"$FIX/f.sh"
+  make_scan "$FIX/f.sh"
+  sd_source sd_extract "$FIX/f.sh" "$FIX/f.sh.scan" NOPE
+  [ "$status" -eq 4 ]
+}
