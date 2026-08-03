@@ -64,19 +64,29 @@ dev_event_append() {
   local size
   mkdir -p "$DEV_STATE_ROOT/events" "$DEV_STATE_ROOT/locks"
   size=$(printf '%s' "$line" | wc -c)
-  if ((size > DEV_EVENT_MAX_BYTES)); then
+  # The trailing newline printf'd below makes the actual write size+1 bytes.
+  # The single-write invariant this cap exists to protect needs THAT to fit
+  # in DEV_EVENT_MAX_BYTES, so a line already at the cap is one write too many
+  # (measured: a 4096-byte line plus its newline is emitted as two write(2)
+  # calls, which two `flock -s` holders can interleave between).
+  if ((size + 1 > DEV_EVENT_MAX_BYTES)); then
     # Replace free-form data with a truncated rendering and mark it. The budget
-    # is an estimate (character vs byte width, JSON escaping), so the loop
-    # re-measures and halves until the composed line fits.
-    local raw budget candidate
+    # is an estimate (JSON escaping of the truncated prefix can still shift it
+    # slightly), so the loop re-measures and halves until the composed line
+    # fits. budget itself is measured in BYTES (not characters): `size` comes
+    # from `wc -c`, so mixing in a character count here would under-count
+    # multi-byte UTF-8 payloads and could overshoot the halving loop to zero,
+    # discarding the diagnostic content entirely instead of truncating it.
+    local raw raw_bytes budget candidate
     raw=$(printf '%s' "$line" | jq -c '.data')
-    budget=$((DEV_EVENT_MAX_BYTES - (size - ${#raw}) - 64))
+    raw_bytes=$(printf '%s' "$raw" | wc -c)
+    budget=$((DEV_EVENT_MAX_BYTES - (size - raw_bytes) - 64))
     ((budget > 0)) || budget=0
     while :; do
       candidate=$(printf '%s' "$line" |
         jq -c --arg raw "${raw:0:budget}" '.data = {truncated: true, raw: $raw}')
       size=$(printf '%s' "$candidate" | wc -c)
-      if ((size <= DEV_EVENT_MAX_BYTES)) || ((budget == 0)); then
+      if ((size + 1 <= DEV_EVENT_MAX_BYTES)) || ((budget == 0)); then
         line=$candidate
         break
       fi

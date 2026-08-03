@@ -1304,6 +1304,26 @@ fill_events() {
   [ -n "$(jq -r .data.raw <<<"$written")" ]
 }
 
+@test "events: an oversized non-ASCII payload preserves some raw content" {
+  # 2000 repetitions of a 3-byte UTF-8 character (~6000 bytes). Regression:
+  # the truncation budget mixed byte and character counts, so a multi-byte
+  # payload made the estimate undershoot, the halving loop overshot to zero,
+  # and every byte of `data.raw` was silently discarded for non-ASCII data.
+  local big data line written
+  big=$(printf '\xe4\xb8\xad%.0s' $(seq 1 2000))
+  data=$(jq -c -n --arg s "$big" '{stderr_tail: $s}')
+  line=$(dev_event_build fedcba9876543210 2026-08-03T14:02:11.412Z container.failed \
+    "$WS_ID" slabledger slabledger /home/tng/workspace/slabledger "$data")
+  [ "$(printf '%s' "$line" | wc -c)" -gt 4096 ]
+  dev_event_append "$line"
+  [ "$(wc -l <"$DEV_STATE_ROOT/events/events.jsonl")" -eq 1 ]
+  written=$(cat "$DEV_STATE_ROOT/events/events.jsonl")
+  # Still exactly one valid JSON value on the line.
+  [ "$(jq -c . <<<"$written" | wc -l)" -eq 1 ]
+  [ "$(jq -r .data.truncated <<<"$written")" = true ]
+  [ -n "$(jq -r .data.raw <<<"$written")" ]
+}
+
 @test "events: a payload under the cap is written verbatim" {
   local line
   line=$(dev_event_build 0123456789abcdef 2026-08-03T14:02:11.412Z agent.started \
@@ -1507,19 +1527,29 @@ dev_event_append() {
   local size
   mkdir -p "$DEV_STATE_ROOT/events" "$DEV_STATE_ROOT/locks"
   size=$(printf '%s' "$line" | wc -c)
-  if ((size > DEV_EVENT_MAX_BYTES)); then
+  # The trailing newline printf'd below makes the actual write size+1 bytes.
+  # The single-write invariant this cap exists to protect needs THAT to fit
+  # in DEV_EVENT_MAX_BYTES, so a line already at the cap is one write too many
+  # (measured: a 4096-byte line plus its newline is emitted as two write(2)
+  # calls, which two `flock -s` holders can interleave between).
+  if ((size + 1 > DEV_EVENT_MAX_BYTES)); then
     # Replace free-form data with a truncated rendering and mark it. The budget
-    # is an estimate (character vs byte width, JSON escaping), so the loop
-    # re-measures and halves until the composed line fits.
-    local raw budget candidate
+    # is an estimate (JSON escaping of the truncated prefix can still shift it
+    # slightly), so the loop re-measures and halves until the composed line
+    # fits. budget itself is measured in BYTES (not characters): `size` comes
+    # from `wc -c`, so mixing in a character count here would under-count
+    # multi-byte UTF-8 payloads and could overshoot the halving loop to zero,
+    # discarding the diagnostic content entirely instead of truncating it.
+    local raw raw_bytes budget candidate
     raw=$(printf '%s' "$line" | jq -c '.data')
-    budget=$((DEV_EVENT_MAX_BYTES - (size - ${#raw}) - 64))
+    raw_bytes=$(printf '%s' "$raw" | wc -c)
+    budget=$((DEV_EVENT_MAX_BYTES - (size - raw_bytes) - 64))
     ((budget > 0)) || budget=0
     while :; do
       candidate=$(printf '%s' "$line" |
         jq -c --arg raw "${raw:0:budget}" '.data = {truncated: true, raw: $raw}')
       size=$(printf '%s' "$candidate" | wc -c)
-      if ((size <= DEV_EVENT_MAX_BYTES)) || ((budget == 0)); then
+      if ((size + 1 <= DEV_EVENT_MAX_BYTES)) || ((budget == 0)); then
         line=$candidate
         break
       fi
@@ -1620,34 +1650,56 @@ dev_events_rotate_if_needed() {
 
 Two honest limits, both deliberate. If the *envelope* alone exceeded 4 KiB — a pathological
 worktree path — the line is written oversized rather than dropped; a visibly long event beats a lost
-one. And byte-slicing `raw` can cut a multi-byte UTF-8 sequence, which `jq --arg` replaces with
-U+FFFD; the line stays valid JSON, which is the property that matters.
+one, but note this also means such a line is guaranteed multi-write and can be torn by a concurrent
+appender — the escape hatch trades a lost event for a possibly-torn one. And byte-slicing `raw` can
+cut a multi-byte UTF-8 sequence, which `jq --arg` replaces with U+FFFD; the line stays valid JSON,
+which is the property that matters. (The truncation budget itself must be measured in bytes, not
+characters, or a multi-byte payload can make the estimate undershoot and the halving loop overshoot
+to zero, discarding `data.raw` entirely instead of truncating it.)
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `bats tests/dev_state_events.bats`
-Expected: PASS (13 tests, 0 failures)
+Expected: PASS (14 tests, 0 failures)
 
 - [ ] **Step 5: Write the concurrency test**
 
 Append to `tests/dev_state_events.bats`. This is the test §4.4 calls non-optional: 20 concurrent
 appenders emitting 25 events each, with a rotation and a full read running against the same file.
+Every event's line is built to land at exactly `DEV_EVENT_MAX_BYTES` — the boundary where the
+trailing newline `dev_event_append` adds would push a naively-capped line past bash's stdio buffer
+into a second `write(2)`; ordinary few-hundred-byte events never approach that boundary and cannot
+exercise it.
 
 ```bash
 @test "events: concurrent appends survive a rotation and a concurrent read" {
-  local i j
+  local i j pad_len probe probe_len pad
+  # Build every event's line to land at exactly DEV_EVENT_MAX_BYTES. That is
+  # the boundary where the trailing newline dev_event_append adds pushes the
+  # real write one byte past bash's stdio buffer, turning a single printf
+  # into two write(2) calls -- the exact regression this test exists to
+  # catch (DEV_EVENT_MAX_BYTES was one byte too generous). Ordinary ~200 B
+  # events never approach that boundary and could not have caught it.
+  probe=$(dev_event_build ev000000 2026-08-03T14:00:00.000Z agent.started \
+    "$WS_ID" slabledger slabledger /home/tng/workspace/slabledger \
+    '{"window":"agent-1","command":"claude","pad":""}')
+  probe_len=$(printf '%s' "$probe" | wc -c)
+  pad_len=$((DEV_EVENT_MAX_BYTES - probe_len))
+  pad=$(printf 'x%.0s' $(seq 1 "$pad_len"))
+
   # Pre-fill past the threshold so the concurrent rotation actually fires while
   # the appenders are running.
   fill_events 50000
 
   for i in $(seq 1 20); do
     (
-      local j line
+      local j line data
       for j in $(seq 1 25); do
+        data=$(jq -c -n --arg pad "$pad" \
+          '{window:"agent-1",command:"claude",pad:$pad}')
         line=$(dev_event_build "$(printf 'ev%03d%03d' "$i" "$j")" \
           2026-08-03T14:00:00.000Z agent.started \
-          "$WS_ID" slabledger slabledger /home/tng/workspace/slabledger \
-          '{"window":"agent-1","command":"claude"}')
+          "$WS_ID" slabledger slabledger /home/tng/workspace/slabledger "$data")
         dev_event_append "$line"
       done
     ) &
@@ -1659,10 +1711,20 @@ appenders emitting 25 events each, with a rotation and a full read running again
   dev_events_segments >"$TEST_ROOT/segments.txt"
   xargs -a "$TEST_ROOT/segments.txt" cat >"$TEST_ROOT/all.jsonl"
 
-  # Every line in every segment parses as JSON — no interleaved writes.
+  # jq reads a stream of values and is indifferent to newlines -- concatenated
+  # objects on one physical line parse fine, and blank lines are skipped -- so
+  # this proves the file is well-formed JSONL overall but NOT that no tearing
+  # occurred. It still catches values that are not valid JSON at all.
   jq -c . "$TEST_ROOT/all.jsonl" >/dev/null
-  # The concurrent reader saw whole lines too, never a half-written one.
   jq -c . "$TEST_ROOT/read-all.jsonl" >/dev/null
+
+  # Line-oriented tearing check: no blank lines and no two objects glued onto
+  # one physical line. This is what an interleaved multi-write append leaves
+  # behind, and jq alone cannot see it.
+  [ "$(grep -c '^$' "$TEST_ROOT/all.jsonl")" -eq 0 ]
+  [ "$(grep -c '}{' "$TEST_ROOT/all.jsonl")" -eq 0 ]
+  [ "$(grep -c '^$' "$TEST_ROOT/read-all.jsonl")" -eq 0 ]
+  [ "$(grep -c '}{' "$TEST_ROOT/read-all.jsonl")" -eq 0 ]
 
   # Every emitted id appears exactly once across the live file and all segments.
   jq -r 'select(.id | startswith("ev")) | .id' "$TEST_ROOT/all.jsonl" \
@@ -1684,8 +1746,11 @@ appenders emitting 25 events each, with a rotation and a full read running again
 - [ ] **Step 6: Run the concurrency test**
 
 Run: `bats tests/dev_state_events.bats`
-Expected: PASS (14 tests, 0 failures). If `diff` reports missing ids, an append was lost to a
-rename; if `jq -c .` reports a parse error, an event was emitted in more than one `write`.
+Expected: PASS (15 tests, 0 failures). If `diff` reports missing ids, an append was lost to a
+rename; if the `grep -c '}{'` or `grep -c '^$'` assertions are nonzero, an event was emitted in more
+than one `write` and got interleaved with another appender's. (`jq -c .` alone cannot detect tearing:
+it reads a stream of JSON values and is indifferent to newlines, so concatenated objects on one
+physical line parse without error.)
 
 - [ ] **Step 7: Commit**
 

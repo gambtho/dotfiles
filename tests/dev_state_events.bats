@@ -57,6 +57,26 @@ fill_events() {
   [ -n "$(jq -r .data.raw <<<"$written")" ]
 }
 
+@test "events: an oversized non-ASCII payload preserves some raw content" {
+  # 2000 repetitions of a 3-byte UTF-8 character (~6000 bytes). Regression:
+  # the truncation budget mixed byte and character counts, so a multi-byte
+  # payload made the estimate undershoot, the halving loop overshot to zero,
+  # and every byte of `data.raw` was silently discarded for non-ASCII data.
+  local big data line written
+  big=$(printf '\xe4\xb8\xad%.0s' $(seq 1 2000))
+  data=$(jq -c -n --arg s "$big" '{stderr_tail: $s}')
+  line=$(dev_event_build fedcba9876543210 2026-08-03T14:02:11.412Z container.failed \
+    "$WS_ID" slabledger slabledger /home/tng/workspace/slabledger "$data")
+  [ "$(printf '%s' "$line" | wc -c)" -gt 4096 ]
+  dev_event_append "$line"
+  [ "$(wc -l <"$DEV_STATE_ROOT/events/events.jsonl")" -eq 1 ]
+  written=$(cat "$DEV_STATE_ROOT/events/events.jsonl")
+  # Still exactly one valid JSON value on the line.
+  [ "$(jq -c . <<<"$written" | wc -l)" -eq 1 ]
+  [ "$(jq -r .data.truncated <<<"$written")" = true ]
+  [ -n "$(jq -r .data.raw <<<"$written")" ]
+}
+
 @test "events: a payload under the cap is written verbatim" {
   local line
   line=$(dev_event_build 0123456789abcdef 2026-08-03T14:02:11.412Z agent.started \
@@ -183,19 +203,33 @@ fill_events() {
 }
 
 @test "events: concurrent appends survive a rotation and a concurrent read" {
-  local i j
+  local i j pad_len probe probe_len pad
+  # Build every event's line to land at exactly DEV_EVENT_MAX_BYTES. That is
+  # the boundary where the trailing newline dev_event_append adds pushes the
+  # real write one byte past bash's stdio buffer, turning a single printf
+  # into two write(2) calls -- the exact regression this test exists to
+  # catch (DEV_EVENT_MAX_BYTES was one byte too generous). Ordinary ~200 B
+  # events never approach that boundary and could not have caught it.
+  probe=$(dev_event_build ev000000 2026-08-03T14:00:00.000Z agent.started \
+    "$WS_ID" slabledger slabledger /home/tng/workspace/slabledger \
+    '{"window":"agent-1","command":"claude","pad":""}')
+  probe_len=$(printf '%s' "$probe" | wc -c)
+  pad_len=$((DEV_EVENT_MAX_BYTES - probe_len))
+  pad=$(printf 'x%.0s' $(seq 1 "$pad_len"))
+
   # Pre-fill past the threshold so the concurrent rotation actually fires while
   # the appenders are running.
   fill_events 50000
 
   for i in $(seq 1 20); do
     (
-      local j line
+      local j line data
       for j in $(seq 1 25); do
+        data=$(jq -c -n --arg pad "$pad" \
+          '{window:"agent-1",command:"claude",pad:$pad}')
         line=$(dev_event_build "$(printf 'ev%03d%03d' "$i" "$j")" \
           2026-08-03T14:00:00.000Z agent.started \
-          "$WS_ID" slabledger slabledger /home/tng/workspace/slabledger \
-          '{"window":"agent-1","command":"claude"}')
+          "$WS_ID" slabledger slabledger /home/tng/workspace/slabledger "$data")
         dev_event_append "$line"
       done
     ) &
@@ -207,10 +241,20 @@ fill_events() {
   dev_events_segments >"$TEST_ROOT/segments.txt"
   xargs -a "$TEST_ROOT/segments.txt" cat >"$TEST_ROOT/all.jsonl"
 
-  # Every line in every segment parses as JSON — no interleaved writes.
+  # jq reads a stream of values and is indifferent to newlines -- concatenated
+  # objects on one physical line parse fine, and blank lines are skipped -- so
+  # this proves the file is well-formed JSONL overall but NOT that no tearing
+  # occurred. It still catches values that are not valid JSON at all.
   jq -c . "$TEST_ROOT/all.jsonl" >/dev/null
-  # The concurrent reader saw whole lines too, never a half-written one.
   jq -c . "$TEST_ROOT/read-all.jsonl" >/dev/null
+
+  # Line-oriented tearing check: no blank lines and no two objects glued onto
+  # one physical line. This is what an interleaved multi-write append leaves
+  # behind, and jq alone cannot see it.
+  [ "$(grep -c '^$' "$TEST_ROOT/all.jsonl")" -eq 0 ]
+  [ "$(grep -c '}{' "$TEST_ROOT/all.jsonl")" -eq 0 ]
+  [ "$(grep -c '^$' "$TEST_ROOT/read-all.jsonl")" -eq 0 ]
+  [ "$(grep -c '}{' "$TEST_ROOT/read-all.jsonl")" -eq 0 ]
 
   # Every emitted id appears exactly once across the live file and all segments.
   jq -r 'select(.id | startswith("ev")) | .id' "$TEST_ROOT/all.jsonl" \
