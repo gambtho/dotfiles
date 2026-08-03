@@ -36,6 +36,10 @@ set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
 DOTFILES="${DOTFILES:-$HOME/.dotfiles}"
+# A nested private repository, not a directory of this one: overlays describe
+# non-public codebases, so bin/bootstrap clones them here from a separate
+# private remote. The path is deliberately unchanged -- every symlink already
+# written points through /opt/dotfiles/projects/.
 OVERLAY_ROOT="$DOTFILES/projects"
 
 MODE="link"

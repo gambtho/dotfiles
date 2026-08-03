@@ -40,7 +40,7 @@ read-only, so item 7 still bails before Step 3 writes anything.
 
 1. **WSL host, not a devcontainer.** `uname -a` contains `microsoft` and `/.dockerenv` does NOT exist and `$REMOTE_CONTAINERS` is unset. If we're already in a container, the symlinks won't work — abort with: "Run this on the WSL host, not inside the container."
 2. **Project root.** `.git/` exists in the current dir. If not, ask the user to `cd` first.
-3. **Dotfiles repo present.** `~/.dotfiles/` exists with `core/git/gitignore.symlink` and `projects/` subdir. If not, point at `~/.dotfiles/projects/README.md` for the setup story.
+3. **Dotfiles repo present, overlays attached.** `~/.dotfiles/` exists with `core/git/gitignore.symlink`, and `~/.dotfiles/projects/` exists. Overlays live in a **separate private repo** cloned to that path by `bin/bootstrap` — they are not tracked in the public dotfiles repo. If `projects/` is missing, point at `~/.dotfiles/docs/guides/project-overlays.md`, which covers attaching the overlay repo via `~/.dotfiles-projects-remote`.
 4. **Stable link root published.** `[ -d /opt/dotfiles ] && [ "$(cd -P /opt/dotfiles && pwd -P)" = "$(cd -P ~/.dotfiles && pwd -P)" ]`. Compare canonical paths rather than trusting `readlink` output: `readlink` prints the recorded target whether or not it exists, so a root left over from another machine or an earlier `$HOME` reads as published while every overlay link through it dangles. Overlay symlinks target this root so they resolve under both the host's `$HOME` and the container's. If it's missing or points elsewhere, run `~/.dotfiles/bin/relink` — it creates the root and needs `sudo` once per machine, since `/opt` is root-owned. Don't block on it either way, but what an absent root costs depends entirely on whether a container will ever read these links:
 
    - **A devcontainer is in play** (Step 1 case (a) or (b)): the two outcomes are different products, so say which one you delivered. **Root validated** → the overlay works on this host *and* in the devcontainer; **root absent** → host-only, the linker falls back to `$HOME`-absolute targets with a warning and the links dangle inside the container. Never describe the fallback as container-ready.
@@ -203,7 +203,7 @@ find <project>/.claude -xtype l
 # (c) has nothing else to resolve them, making the fallback complete.
 # Set from Step 1; defaults to "a" so an unrecorded case never prints the
 # reassuring "done" line.
-# See ~/.dotfiles/projects/README.md.
+# See ~/.dotfiles/docs/guides/project-overlays.md.
 DEVCONTAINER_CASE="${DEVCONTAINER_CASE:-a}"   # a|b|c, recorded in Step 1
 if [ -d /opt/dotfiles ] && [ "$(cd -P /opt/dotfiles && pwd -P)" = "$(cd -P ~/.dotfiles && pwd -P)" ]; then
   echo "stable root OK (host + container)"
@@ -671,9 +671,11 @@ Compare the output byte-for-byte with the initial `git status --short` snapshot.
 Report to the user:
 - Files created/updated in `~/.dotfiles/projects/<slug>/`
 - Symlinks created in the project worktree
-- Commands to commit dotfiles changes:
+- Commands to commit the overlay — note this commits in the **private overlay
+  repo** at `~/.dotfiles/projects`, not in `~/.dotfiles` itself, where
+  `projects/` is ignored and force-adding it fails the hygiene test:
   ```bash
-  cd ~/.dotfiles && git add "projects/$SLUG" && git commit -m "add project overlay for $SLUG"
+  cd ~/.dotfiles/projects && git add "$SLUG" && git commit -m "add project overlay for $SLUG" && git push
   ```
 - For case (a): rebuild the devcontainer to pick up new mounts —
   `devcontainer up --remove-existing-container --workspace-folder .` or VS Code "Dev Containers: Rebuild Container"

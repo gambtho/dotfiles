@@ -44,7 +44,10 @@ After bootstrap, run `bin/install` (or `bin/dot-update`) to install packages and
   ai/             # AI tools: claude/, codex/, marketplace/, vekil/
   profiles/       # Machine profiles: personal.zsh, work.zsh
   config/         # XDG config files, symlinked to ~/.config/<name>
+  docs/guides/    # Long-form guides for the tooling in bin/
   archived/       # Dead code — never sourced, kept for reference
+  projects/       # NOT tracked here — a separate private repo, cloned by
+                  # bin/bootstrap. See docs/guides/project-overlays.md
 ```
 
 ## Profile System
@@ -178,6 +181,10 @@ compatible minor in `config/versions.env` by hand.
 - Machine-local files use a `.local` suffix and remain ignored.
 - Generated backups and binaries larger than 5 MiB are not tracked.
 - Historical artifacts belong in release storage or a dedicated archive repository.
+- `projects/` is never tracked here. Per-project Claude overlays describe
+  non-public codebases and live in a separate private repository that
+  `bin/bootstrap` clones to `~/.dotfiles/projects`; a test asserts the boundary.
+  See [docs/guides/project-overlays.md](docs/guides/project-overlays.md).
 
 ## AI Coding Assistants
 
