@@ -419,7 +419,7 @@ sd_verdict_from_counts() {
   elif [ "$1" -eq 0 ]; then
     printf 'AHEAD\n'
   else
-    return 1
+    printf 'DIVERGED\n'
   fi
 }
 

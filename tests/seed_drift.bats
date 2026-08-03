@@ -560,3 +560,31 @@ write_lines() {
   [ "$status" -eq 0 ]
   [ "$output" = "AHEAD" ]
 }
+
+@test "sd_verdict reports DIVERGED for a pure reordering, never ok" {
+  write_lines "$TEST_ROOT/tpl" \
+    'printf "source «HOME»/.dotfiles/load-custom.zsh" >>«HOME»/.zshrc' \
+    'printf "source «HOME»/ai/vekil/env.zsh" >>«HOME»/.zshrc'
+  write_lines "$TEST_ROOT/seed" \
+    'printf "source «HOME»/ai/vekil/env.zsh" >>«HOME»/.zshrc' \
+    'printf "source «HOME»/.dotfiles/load-custom.zsh" >>«HOME»/.zshrc'
+
+  # Same lines, different order: a sorted comparison would call this clean.
+  run diff <(sort "$TEST_ROOT/tpl") <(sort "$TEST_ROOT/seed")
+  [ "$status" -eq 0 ]
+
+  sd_source sd_verdict "$TEST_ROOT/tpl" "$TEST_ROOT/seed"
+
+  [ "$status" -eq 0 ]
+  [ "$output" = "DIVERGED" ]
+}
+
+@test "sd_verdict reports DIVERGED when lines differ in both directions" {
+  write_lines "$TEST_ROOT/tpl" 'export A=1' 'run_old'
+  write_lines "$TEST_ROOT/seed" 'export A=1' 'run_new'
+
+  sd_source sd_verdict "$TEST_ROOT/tpl" "$TEST_ROOT/seed"
+
+  [ "$status" -eq 0 ]
+  [ "$output" = "DIVERGED" ]
+}
