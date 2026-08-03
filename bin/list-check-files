@@ -37,6 +37,16 @@ is_repository_sh() {
   esac
 }
 
+is_dev_tool_shell() {
+  local path="$1" name
+  [[ "$path" == tools/dev/* ]] || return 1
+  name=${path##*/}
+  # Extensionless executables (dev-event, dev-autostart) and .sh sources are
+  # bash; everything else under tools/dev is data for another consumer
+  # (.yaml config, .tmux.conf, .service unit) or belongs to the zsh class.
+  [[ "$name" != *.* || "$name" == *.sh ]]
+}
+
 is_repository_zsh() {
   case "$1" in
     core/shell/*.symlink) return 0 ;;
@@ -51,16 +61,16 @@ is_repository_zsh() {
 } | while IFS= read -r -d '' path; do
   case "$class" in
     bash)
-      if is_direct_bin_shell "$path" || is_repository_sh "$path"; then printf '%s\0' "$path"; fi
+      if is_direct_bin_shell "$path" || is_repository_sh "$path" || is_dev_tool_shell "$path"; then printf '%s\0' "$path"; fi
       ;;
     zsh)
       if is_repository_zsh "$path"; then printf '%s\0' "$path"; fi
       ;;
     shellcheck)
-      if is_direct_bin_shell "$path" || is_repository_sh "$path"; then printf '%s\0' "$path"; fi
+      if is_direct_bin_shell "$path" || is_repository_sh "$path" || is_dev_tool_shell "$path"; then printf '%s\0' "$path"; fi
       ;;
     shfmt)
-      if is_direct_bin_shell "$path" || is_repository_sh "$path" || [[ "$path" == tests/test_helper.bash ]]; then printf '%s\0' "$path"; fi
+      if is_direct_bin_shell "$path" || is_repository_sh "$path" || is_dev_tool_shell "$path" || [[ "$path" == tests/test_helper.bash ]]; then printf '%s\0' "$path"; fi
       ;;
   esac
 done
