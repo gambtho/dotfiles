@@ -104,6 +104,27 @@ sd_main() {
     return 2
   fi
 
+  local blocks
+  if ! blocks=$(sd_parse_doc "$doc"); then
+    printf 'seed-drift: no block table found in %s\n' "$doc" >&2
+    return 2
+  fi
+
+  local name anchor absent=0
+  while IFS=$'\t' read -r name anchor; do
+    # Raw grep is deliberately the Task 1 form; Task 6 replaces it with a check
+    # against the template scan's C records once the scanner exists, so that an
+    # anchor appearing only in a comment fails validation.
+    if ! grep -qF -- "$anchor" "$template"; then
+      printf 'seed-drift: anchor %s (block: %s) is absent from %s\n' \
+        "$anchor" "$name" "$template" >&2
+      absent=1
+    fi
+  done <<<"$blocks"
+  if [ "$absent" -ne 0 ]; then
+    return 2
+  fi
+
   return 0
 }
 

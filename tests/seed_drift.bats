@@ -85,3 +85,21 @@ DOC
   [[ "$output" == *"TREE_SITTER_VERSION"* ]]
   [[ "$output" == *"lname '*dotfiles/projects/*'"* ]]
 }
+
+@test "every anchor in the real doc table is present in the real template" {
+  run "$SEED_DRIFT" --template "$REAL_TEMPLATE" --doc "$REAL_DOC"
+
+  [ "$status" -eq 0 ]
+}
+
+@test "a doc anchor the template lacks is a hard error" {
+  local doc="$TEST_ROOT/doc.md" template="$TEST_ROOT/tpl.sh"
+  write_fixture_doc "$doc"
+  printf '#!/usr/bin/env bash\ntrue\n' >"$template"
+
+  run "$SEED_DRIFT" --template "$template" --doc "$doc"
+
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"is absent from"* ]]
+  [[ "$output" == *"core.excludesFile"* ]]
+}
