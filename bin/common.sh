@@ -57,13 +57,46 @@ next_backup_path() {
     return
   fi
 
-  timestamp=$(date -u +%Y%m%dT%H%M%SZ)
+  # Callers may invoke this from a function used as an `if`/`!` condition, which
+  # suspends errexit for the whole call chain. Check explicitly so a date
+  # failure surfaces here instead of yielding a path with an empty timestamp.
+  timestamp=$(date -u +%Y%m%dT%H%M%SZ) || return 1
   candidate="${destination}.backup.${timestamp}"
   while [[ -e "$candidate" || -L "$candidate" ]]; do
     suffix=$((suffix + 1))
     candidate="${destination}.backup.${timestamp}.${suffix}"
   done
   printf '%s\n' "$candidate"
+}
+
+# Emit every dotfile that this repo manages, as NUL-delimited (source,
+# destination) pairs. Both fields are NUL-terminated rather than newline- or
+# space-separated so paths containing whitespace survive the round trip; read
+# them back with a paired `while IFS= read -r -d '' src && IFS= read -r -d '' dst`.
+# Covers *.symlink files (mapped to ~/.<name>, minus the suffix) and each
+# directory under config/ (mapped to ~/.config/<name>).
+managed_link_pairs() {
+  local dotfiles_root="$1"
+  local home_root="$2"
+  local src dst
+
+  while IFS= read -r -d '' src; do
+    dst="$home_root/.$(basename "${src%.*}")"
+    printf '%s\0%s\0' "$src" "$dst"
+  done < <(find -H "$dotfiles_root" \
+    -not -path '*/archived/*' \
+    -not -path '*/.git/*' \
+    -not -path "$dotfiles_root/.claude/worktrees/*" \
+    -name '*.symlink' -print0)
+
+  if [[ -d "$dotfiles_root/config" ]]; then
+    for src in "$dotfiles_root/config"/*/; do
+      [[ -d "$src" ]] || continue
+      src="${src%/}"
+      dst="$home_root/.config/$(basename "$src")"
+      printf '%s\0%s\0' "$src" "$dst"
+    done
+  fi
 }
 
 link_policy_for_action() {

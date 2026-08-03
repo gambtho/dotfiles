@@ -7,6 +7,14 @@ setup() {
   source "$REPO_ROOT/config/versions.env"
 }
 
+@test "README documents Kubernetes channel as operator-selected" {
+  run rg -n 'pins-update.*report.*[Kk]ubernetes|[Kk]ubernetes channel.*drift|reports.*[Kk]ubernetes.*drift' \
+    "$REPO_ROOT/README.md"
+  [ "$status" -eq 0 ]
+  run rg -n 'refresh.*Git refs and the Kubernetes channel|automatically.*[Kk]ubernetes channel' "$REPO_ROOT/README.md"
+  [ "$status" -eq 1 ]
+}
+
 @test "versions list shows mise and non-mise pins" {
   run bash "$REPO_ROOT/bin/versions" list
   [ "$status" -eq 0 ]
@@ -135,8 +143,181 @@ SCRIPT
   done
 }
 
+@test "versions check rejects a malformed Kubernetes channel instead of reporting it" {
+  stub_command mise 'exit 0'
+  cat >"$STUB_BIN/git" <<SCRIPT
+#!/usr/bin/env bash
+case "\$*" in
+  *prezto*) printf '%s\tHEAD\n' '$PREZTO_REF' ;;
+  *zsh-defer*) printf '%s\tHEAD\n' '$ZSH_DEFER_REF' ;;
+esac
+SCRIPT
+  chmod +x "$STUB_BIN/git"
+  # A successful transfer of the wrong body: an interstitial or error page from
+  # the CDN exits 0, so only the shape check can catch it. Reporting it verbatim
+  # would announce the pin as outdated against a value nothing upstream moved to.
+  cat >"$STUB_BIN/curl" <<'SCRIPT'
+#!/usr/bin/env bash
+url="${@: -1}"
+case "$url" in
+  *dl.k8s.io*) printf '<!doctype html>\n' ;;
+esac
+SCRIPT
+  chmod +x "$STUB_BIN/curl"
+
+  run env PATH="$PATH" bash "$REPO_ROOT/bin/versions" check
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"error channel kubernetes: unable to query upstream stable channel"* ]]
+  [[ "$output" != *"outdated channel kubernetes"* ]]
+}
+
+@test "versions check fails when the Kubernetes channel lookup fails" {
+  stub_command mise 'exit 0'
+  cat >"$STUB_BIN/git" <<SCRIPT
+#!/usr/bin/env bash
+case "\$*" in
+  *prezto*) printf '%s\tHEAD\n' '$PREZTO_REF' ;;
+  *zsh-defer*) printf '%s\tHEAD\n' '$ZSH_DEFER_REF' ;;
+esac
+SCRIPT
+  chmod +x "$STUB_BIN/git"
+  # Emit a plausible channel *and* exit non-zero, the shape a truncated or
+  # redirected transfer takes. Output alone must not be enough to pass.
+  cat >"$STUB_BIN/curl" <<'SCRIPT'
+#!/usr/bin/env bash
+url="${@: -1}"
+case "$url" in
+  *dl.k8s.io*)
+    printf 'v1.34.0\n'
+    exit 22
+    ;;
+esac
+SCRIPT
+  chmod +x "$STUB_BIN/curl"
+
+  run env PATH="$PATH" bash "$REPO_ROOT/bin/versions" check
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"error channel kubernetes: unable to query upstream stable channel"* ]]
+  [[ "$output" != *"outdated channel kubernetes"* ]]
+}
+
+@test "versions update writes no pins when the Kubernetes channel lookup fails" {
+  local fixture="$TEST_ROOT/fixture"
+  mkdir -p "$fixture"
+  cp -R "$REPO_ROOT/bin" "$fixture/bin"
+  cp -R "$REPO_ROOT/config" "$fixture/config"
+
+  stub_command mise 'exit 0'
+  stub_command make 'exit 0'
+  stub_command git 'printf "deadbeef\tHEAD\n"'
+  cat >"$STUB_BIN/curl" <<'SCRIPT'
+#!/usr/bin/env bash
+url="${@: -1}"
+case "$url" in
+  *dl.k8s.io*)
+    printf 'v9.99.0\n'
+    exit 22
+    ;;
+esac
+SCRIPT
+  chmod +x "$STUB_BIN/curl"
+
+  run bash "$fixture/bin/versions" update
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"no pins were updated"* ]]
+  # The Git pins are written after the lookup, so an unnoticed failure would
+  # show up here as a repo half-updated against an unverified channel.
+  [ "$(grep '^PREZTO_REF=' "$fixture/config/versions.env")" = "PREZTO_REF=$PREZTO_REF" ]
+  [ "$(grep '^ZSH_DEFER_REF=' "$fixture/config/versions.env")" = "ZSH_DEFER_REF=$ZSH_DEFER_REF" ]
+}
+
 @test "versions update keeps artifact bumps behind checksum review" {
   run rg -n 'checksum-reviewed manual update required' "$REPO_ROOT/bin/versions"
 
   [ "$status" -eq 0 ]
+}
+
+@test "versions update leaves the Kubernetes channel operator-owned" {
+  local fixture="$TEST_ROOT/fixture"
+  # Copy whole directories rather than a hand-maintained file list: bin/versions
+  # sources siblings, and naming them individually makes an unrelated new
+  # dependency fail this test for a reason that has nothing to do with the
+  # Kubernetes channel.
+  mkdir -p "$fixture"
+  cp -R "$REPO_ROOT/bin" "$fixture/bin"
+  cp -R "$REPO_ROOT/config" "$fixture/config"
+
+  stub_command mise 'exit 0'
+  stub_command make 'exit 0'
+  cat >"$STUB_BIN/git" <<SCRIPT
+#!/usr/bin/env bash
+case "\$*" in
+  *ls-remote*prezto*) printf '%s\tHEAD\n' '$PREZTO_REF' ;;
+  *ls-remote*zsh-defer*) printf '%s\tHEAD\n' '$ZSH_DEFER_REF' ;;
+  *diff*) exit 0 ;;
+esac
+SCRIPT
+  chmod +x "$STUB_BIN/git"
+  cat >"$STUB_BIN/curl" <<'SCRIPT'
+#!/usr/bin/env bash
+url="${@: -1}"
+case "$url" in
+  *dl.k8s.io*) printf 'v9.99.0\n' ;;
+esac
+SCRIPT
+  chmod +x "$STUB_BIN/curl"
+
+  run bash "$fixture/bin/versions" update
+
+  [ "$status" -eq 0 ]
+  [ "$(grep '^KUBERNETES_CHANNEL=' "$fixture/config/versions.env")" = \
+    "KUBERNETES_CHANNEL=$KUBERNETES_CHANNEL" ]
+  [[ "$output" == *"operator-managed Kubernetes channel"* ]]
+  [[ "$output" == *"current: $KUBERNETES_CHANNEL"* ]]
+  [[ "$output" == *"upstream: v9.99"* ]]
+}
+
+@test "versions update writes no pins when a remote HEAD cannot be resolved" {
+  local fixture="$TEST_ROOT/fixture"
+  mkdir -p "$fixture"
+  cp -R "$REPO_ROOT/bin" "$fixture/bin"
+  cp -R "$REPO_ROOT/config" "$fixture/config"
+
+  stub_command mise 'exit 0'
+  stub_command make 'exit 0'
+  # prezto resolves; zsh-defer answers with a ref-less error line, the shape a
+  # renamed or unreachable remote takes. `git ls-remote | awk` reports awk's
+  # status, so nothing about this is visible from the pipeline's exit code.
+  cat >"$STUB_BIN/git" <<SCRIPT
+#!/usr/bin/env bash
+case "\$*" in
+  *ls-remote*prezto*) printf '%s\tHEAD\n' '$PREZTO_REF' ;;
+  *ls-remote*zsh-defer*)
+    printf 'fatal: repository not found\n' >&2
+    exit 128
+    ;;
+  *diff*) exit 0 ;;
+esac
+SCRIPT
+  chmod +x "$STUB_BIN/git"
+  cat >"$STUB_BIN/curl" <<'SCRIPT'
+#!/usr/bin/env bash
+url="${@: -1}"
+case "$url" in
+  *dl.k8s.io*) printf 'v9.99.0\n' ;;
+esac
+SCRIPT
+  chmod +x "$STUB_BIN/curl"
+
+  run bash "$fixture/bin/versions" update
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"no pins were updated"* ]]
+  # Neither pin may move: PREZTO_REF resolved fine, but writing it alone leaves
+  # versions.env half-advanced with ZSH_DEFER_REF blank.
+  [ "$(grep '^PREZTO_REF=' "$fixture/config/versions.env")" = "PREZTO_REF=$PREZTO_REF" ]
+  [ "$(grep '^ZSH_DEFER_REF=' "$fixture/config/versions.env")" = "ZSH_DEFER_REF=$ZSH_DEFER_REF" ]
 }

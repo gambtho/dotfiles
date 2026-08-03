@@ -7,9 +7,10 @@ setup() {
 
   REFERENCE="$REPO_ROOT/ai/marketplace/plugins/my/skills/project-claude-setup/devcontainer-host-mounts.md"
   SKILL_DOC="$REPO_ROOT/ai/marketplace/plugins/my/skills/project-claude-setup/SKILL.md"
+  SEED_TEMPLATE="$REPO_ROOT/ai/marketplace/plugins/my/skills/project-claude-setup/templates/local-seed.sh"
   SEED_SCRIPT="$TEST_ROOT/local-seed.sh"
   SUDO_LOG="$TEST_ROOT/sudo.log"
-  export REFERENCE SKILL_DOC SEED_SCRIPT SUDO_LOG
+  export REFERENCE SKILL_DOC SEED_TEMPLATE SEED_SCRIPT SUDO_LOG
 
   # The seed publishes a stable root that overlay symlinks target, so they
   # resolve under both the host's $HOME and the container's. In production that
@@ -98,25 +99,19 @@ teardown() {
 }
 
 extract_seed_script() {
-  awk '
-    /^Write the seed script at `\{SEED_SCRIPT\}`/ { found = 1; next }
-    found && /^```bash$/ { in_block = 1; next }
-    in_block && /^```$/ { exit }
-    in_block { print }
-  ' "$REFERENCE" >"$SEED_SCRIPT"
-  [ -s "$SEED_SCRIPT" ] || {
-    echo "extract_seed_script: no bash block found — the anchor sentence in" \
-      "$REFERENCE changed; update this awk pattern" >&2
-    return 1
-  }
+  cp "$SEED_TEMPLATE" "$SEED_SCRIPT"
 
   # This PR moved the seed script off $HOME onto an explicit SEED_USER/SEED_HOME
   # pair. SEED_USER is templated as {USER}; left unsubstituted, `id -u "{USER}"`
   # aborts the whole script under `set -euo pipefail` before any assertion runs.
   # SEED_HOME is resolved from passwd at runtime, which would resolve to the
   # real home rather than the sandbox, so it is pinned to $HOME for the test.
+  # WORKSPACE is templated as {WORKSPACE} and rendered by the helper from the
+  # workspace the setup skill inspected; the sandbox stands in for it here.
+  mkdir -p "$TEST_ROOT/workspace"
   sed -i \
     -e "s|^SEED_USER=\"{USER}\"|SEED_USER=\"$(id -un)\"|" \
+    -e "s|^WORKSPACE=\"{WORKSPACE}\"|WORKSPACE=\"$TEST_ROOT/workspace\"|" \
     -e "s|^SEED_HOME=\"\$(getent passwd .*|SEED_HOME=\"$HOME\"|" \
     -e "s|SEED_CLAUDE=\"/host-seed/.claude\"|SEED_CLAUDE=\"$TEST_ROOT/host-seed/.claude\"|" \
     -e "s|SEED_DOTFILES=\"/host-seed/.dotfiles\"|SEED_DOTFILES=\"$TEST_ROOT/host-seed/.dotfiles\"|" \
@@ -167,6 +162,36 @@ extract_seed_script() {
 
   [ "$status" -eq 0 ]
   [ "$(grep -Fxc "$vekil_hook" "$HOME/.zshrc")" -eq 1 ]
+}
+
+@test "argv command dispatch runs after a current sentinel skips gated work" {
+  local seed_version
+  seed_version="$(sed -n 's/^SEED_VERSION=//p' "$SEED_SCRIPT")"
+  printf '%s\n' "$seed_version" >"$HOME/.claude/.seeded"
+
+  run bash "$SEED_SCRIPT" --argv bash -c \
+    'printf "%s\n" "$1" >"$2"' _ 'argument with spaces' "$TEST_ROOT/argv-result"
+
+  [ "$status" -eq 0 ]
+  [ "$(cat "$TEST_ROOT/argv-result")" = "argument with spaces" ]
+}
+
+@test "shell command dispatch receives exactly one command string" {
+  run bash "$SEED_SCRIPT" --shell \
+    "printf '%s\\n' shell-ran >'$TEST_ROOT/shell-result'"
+
+  [ "$status" -eq 0 ]
+  [ "$(cat "$TEST_ROOT/shell-result")" = shell-ran ]
+
+  run bash "$SEED_SCRIPT" --shell 'printf first' 'printf second'
+  [ "$status" -eq 2 ]
+}
+
+@test "seed rejects an unknown command mode" {
+  run bash "$SEED_SCRIPT" --unknown
+
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"unknown command mode: --unknown"* ]]
 }
 
 @test "an empty legacy sentinel migrates once and is then stamped" {
@@ -369,6 +394,53 @@ extract_seed_script() {
   [[ "$output" == *"codex: function"* ]]
 }
 
+@test "seed refreshes the gitignore list from the workspace it was rendered with" {
+  local workspace="$TEST_ROOT/workspace"
+  mkdir -p "$workspace/.devcontainer" "$workspace/.claude"
+  # The seed sits below the workspace, the shape that used to be discovered by
+  # rev-parse; the rendered WORKSPACE is what decides now, not this location.
+  mv "$SEED_SCRIPT" "$workspace/.devcontainer/local-seed.sh"
+  SEED_SCRIPT="$workspace/.devcontainer/local-seed.sh"
+  ln -s /foreign/.dotfiles/projects/demo/agent.md \
+    "$workspace/.claude/personal-agent.md"
+
+  run bash "$SEED_SCRIPT"
+
+  [ "$status" -eq 0 ]
+  grep -Fqx '.claude/personal-agent.md' "$HOME/.gitignore"
+}
+
+@test "an unusable workspace warns instead of reporting an empty refresh" {
+  # A workspace that is not a directory is a rendering or mount mistake. The old
+  # rev-parse fallback made it indistinguishable from a real checkout with no
+  # overlay links: both printed "refreshed ... (0 entries)".
+  rmdir "$TEST_ROOT/workspace"
+
+  run bash "$SEED_SCRIPT"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"is not a directory"* ]]
+  [[ "$output" != *"refreshed ~/.gitignore overlay-symlink list"* ]]
+}
+
+@test "a failed marketplace install still starts the container's base command" {
+  # This script IS the compose `command:` — it exec's the base command from its
+  # own dispatch — so exiting on a failed installer means the container never
+  # boots at all. A degraded container the user can debug beats one that will
+  # not start, and the unstamped sentinel already forces a retry next launch.
+  mkdir -p "$TEST_ROOT/host-seed/.dotfiles/ai/marketplace"
+  printf '#!/usr/bin/env bash\nexit 1\n' \
+    >"$TEST_ROOT/host-seed/.dotfiles/ai/marketplace/install.sh"
+  chmod +x "$TEST_ROOT/host-seed/.dotfiles/ai/marketplace/install.sh"
+
+  run bash "$SEED_SCRIPT" --argv echo container-started
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"NOT stamping sentinel"* ]]
+  [[ "$output" == *"container-started"* ]]
+  [ ! -e "$HOME/.claude/.seeded" ]
+}
+
 @test "a failed marketplace install leaves the sentinel unstamped" {
   local seed_version
   seed_version="$(sed -n 's/^SEED_VERSION=//p' "$SEED_SCRIPT")"
@@ -419,6 +491,53 @@ extract_seed_script() {
   # asserted per-document rather than through one shared exact-match string.
   grep -Fqx 'Never edit a project Dockerfile or a base Compose file. Never edit `.devcontainer/devcontainer.json` **except** for the single user-approved change of adding `docker-compose.override.yml` to the `dockerComposeFile` array (Section 6c) — and even then, touch no other key. That edit only happens after the user explicitly approves it, knowing it is a tracked change.' "$SKILL_DOC"
   grep -Fqx 'Never edit a project Dockerfile or a base Compose file. Never edit `devcontainer.json` except for the user-approved `dockerComposeFile` entry above — and never touch any other key in it.' "$REFERENCE"
+}
+
+@test "project setup routes generation through the safe helper and executable templates" {
+  local document
+  for document in "$SKILL_DOC" "$REFERENCE"; do
+    run grep -Fi 'do not use `claude-merge-compose-override`' "$document"
+    [ "$status" -eq 1 ]
+    run grep -Fi 'do **not** use `claude-merge-compose-override`' "$document"
+    [ "$status" -eq 1 ]
+  done
+
+  local flag
+  for flag in --service --remote-user --remote-home --seed-file \
+    --seed-container-path --base-command-json; do
+    grep -Fq -- "$flag" "$SKILL_DOC"
+  done
+  grep -Fq -- '--share-host-auth' "$SKILL_DOC"
+  grep -Fq 'default remains no host SSH or gh credentials' "$SKILL_DOC"
+
+  grep -Fq '[Compose skeleton](templates/compose-override.yml)' "$REFERENCE"
+  grep -Fq '[seed script](templates/local-seed.sh)' "$REFERENCE"
+  grep -Fq '[safe renderer](../../../../../../bin/claude-merge-compose-override)' "$REFERENCE"
+  # Exact link text alone only proves the prose was not rewritten. Resolve each
+  # target relative to the reference document so moving or renaming a linked
+  # file fails here instead of shipping a dead link in the skill.
+  local reference_dir target
+  reference_dir="$(dirname "$REFERENCE")"
+  for target in templates/compose-override.yml templates/local-seed.sh \
+    ../../../../../../bin/claude-merge-compose-override; do
+    [ -f "$reference_dir/$target" ]
+  done
+  run grep -F 'Write the seed script at `{SEED_SCRIPT}`' "$REFERENCE"
+  [ "$status" -eq 1 ]
+  run grep -F 'Use this template, filling in' "$REFERENCE"
+  [ "$status" -eq 1 ]
+}
+
+@test "legacy remediation and tracked-file guidance have one canonical statement" {
+  [ "$(grep -Fc -- '- Inspect the fully merged Compose config' "$SKILL_DOC")" -eq 1 ]
+  [ "$(grep -Fc -- '- Optional host cleanup:' "$SKILL_DOC")" -eq 1 ]
+  [ "$(grep -Fc -- '- Tell the user to rebuild the container' "$SKILL_DOC")" -eq 1 ]
+
+  local avoid_section
+  avoid_section="$(sed -n '/^## Things to avoid$/,$p' "$REFERENCE")"
+  [[ "$avoid_section" == *'Never edit a project Dockerfile or a base Compose file.'* ]]
+  [[ "$avoid_section" == *'The sole tracked-file exception is the user-approved `dockerComposeFile` entry in `devcontainer.json`.'* ]]
+  [[ "$avoid_section" != *'`devcontainer.json`, or base Compose file; they are evidence only'* ]]
 }
 
 @test "a bash login shell is switched to zsh" {
@@ -486,7 +605,7 @@ extract_seed_script() {
   # would notice — the seed-script tests only extract one specific block.
   # Fill-in values are written as shell variables assigned to a <placeholder>
   # string, so the block still parses while remaining obviously templated.
-  local document block_file total=0
+  local document block_file
   block_file="$TEST_ROOT/block.sh"
 
   for document in "$SKILL_DOC" "$REFERENCE"; do
@@ -507,11 +626,11 @@ extract_seed_script() {
         echo "$output" >&2
         return 1
       fi
-      total=$((total + 1))
     done
   done
 
-  [ "$total" -ge 10 ]
+  run bash -n "$SEED_TEMPLATE"
+  [ "$status" -eq 0 ]
 }
 
 @test "login-shell troubleshooting excludes tracked rc and retry-loop changes" {
@@ -622,6 +741,21 @@ extract_seed_script() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"nvim already present"* ]]
   [ "$(readlink "$HOME/.config/nvim")" = "$HOME/.dotfiles/config/nvim" ]
+}
+
+@test "a neovim pin without a checksum skips the install instead of downloading" {
+  # The checksum is checked before the download, not left to the verify step: an
+  # unpinned SHA can only ever fail `sha256sum -c` after the whole tarball is on
+  # disk, once per container start.
+  mkdir -p "$TEST_ROOT/host-seed/.dotfiles/config"
+  printf 'NVIM_VERSION=0.11.0\n' \
+    >"$TEST_ROOT/host-seed/.dotfiles/config/versions.env"
+
+  run bash "$SEED_SCRIPT"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"pins no neovim checksum"* ]]
+  [[ "$output" != *"installing neovim"* ]]
 }
 
 @test "a real ~/.config/nvim is left alone" {

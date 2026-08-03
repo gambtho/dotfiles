@@ -1,7 +1,7 @@
 # Catching an existing `local-seed.sh` up to the template
 
 A per-project `.devcontainer/local-seed.sh` is **gitignored and hand-owned**, so
-it drifts from `devcontainer-host-mounts.md` the moment the template gains a
+it drifts from `templates/local-seed.sh` the moment the template gains a
 block. This is the procedure for closing that gap on one project at a time.
 
 Run it in a **separate session per project**, from that project's directory. Do
@@ -12,7 +12,7 @@ aborts another under `set -euo pipefail`.
 ## Prompt
 
 > Catch this project's `.devcontainer/local-seed.sh` up to the current template
-> at `~/.dotfiles/ai/marketplace/plugins/my/skills/project-claude-setup/devcontainer-host-mounts.md`,
+> at `~/.dotfiles/ai/marketplace/plugins/my/skills/project-claude-setup/templates/local-seed.sh`,
 > following `catch-up-local-seed.md` in that same directory. Audit first, show me
 > what's missing and what you plan to port, then apply it.
 

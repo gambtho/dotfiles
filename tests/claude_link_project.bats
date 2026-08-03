@@ -70,6 +70,10 @@ unlink_stable() {
     run "$LINKER" --unlink "$PROJECT"
 }
 
+run_unlinker() {
+  DOTFILES="$HOME/.dotfiles" run "$LINKER" --unlink "$PROJECT"
+}
+
 @test "skills and agents are linked as directories, not per-file" {
   make_overlay
   make_project
@@ -458,4 +462,83 @@ unlink_stable() {
   [[ "$output" != *"leaving as-is"* ]]
   assert_symlink_target "$PROJECT/.claude/skills" \
     "$STABLE_ROOT/projects/demo/.claude/skills"
+}
+
+@test "unlink removes owned same-home and cross-home top-level links" {
+  make_overlay
+  make_project
+  ln -s "$OVERLAY/CLAUDE.md" "$PROJECT/CLAUDE.md"
+  ln -s /home/ghost/.dotfiles/projects/demo/.claude "$PROJECT/.claude"
+
+  run_unlinker
+
+  [ "$status" -eq 0 ]
+  [ ! -L "$PROJECT/CLAUDE.md" ]
+  [ ! -L "$PROJECT/.claude" ]
+}
+
+@test "unlink preserves top-level links owned by another overlay slug" {
+  make_project
+  ln -s /home/ghost/.dotfiles/projects/other/CLAUDE.md "$PROJECT/CLAUDE.md"
+  ln -s /home/ghost/.dotfiles/projects/other/.claude "$PROJECT/.claude"
+
+  run_unlinker
+
+  [ "$status" -eq 0 ]
+  assert_symlink_target "$PROJECT/CLAUDE.md" \
+    /home/ghost/.dotfiles/projects/other/CLAUDE.md
+  assert_symlink_target "$PROJECT/.claude" \
+    /home/ghost/.dotfiles/projects/other/.claude
+  [[ "$output" == *"not owned by overlay 'demo'"* ]]
+}
+
+@test "unlink removes dangling cross-home per-file links by exact suffix" {
+  make_project
+  mkdir -p "$PROJECT/.claude/commands"
+  ln -s /home/ghost/.dotfiles/projects/demo/.claude/commands/demo.md \
+    "$PROJECT/.claude/commands/demo.md"
+  ln -s /home/ghost/.dotfiles/projects/other/.claude/commands/keep.md \
+    "$PROJECT/.claude/commands/keep.md"
+  # A relative target exercises the other half of link_ownership_target: BSD
+  # readlink has no -m, so on macOS ownership is decided by the manual
+  # dirname-join branch rather than by canonicalization.
+  ln -s ../../../.dotfiles/projects/demo/.claude/commands/rel.md \
+    "$PROJECT/.claude/commands/rel.md"
+
+  run_unlinker
+
+  [ "$status" -eq 0 ]
+  [ ! -L "$PROJECT/.claude/commands/demo.md" ]
+  [ ! -L "$PROJECT/.claude/commands/rel.md" ]
+  assert_symlink_target "$PROJECT/.claude/commands/keep.md" \
+    /home/ghost/.dotfiles/projects/other/.claude/commands/keep.md
+}
+
+@test "unlink removes exact cross-home import shims" {
+  make_project
+  printf '@%s\n' /home/ghost/.dotfiles/projects/demo/CLAUDE.md \
+    >"$PROJECT/CLAUDE.local.md"
+  printf '@%s\n' /home/ghost/.dotfiles/projects/demo/AGENTS.md \
+    >"$PROJECT/AGENTS.local.md"
+
+  run_unlinker
+
+  [ "$status" -eq 0 ]
+  [ ! -e "$PROJECT/CLAUDE.local.md" ]
+  [ ! -e "$PROJECT/AGENTS.local.md" ]
+}
+
+@test "unlink preserves another slug's shim and an edited matching shim" {
+  make_project
+  printf '@%s\n' /home/ghost/.dotfiles/projects/other/CLAUDE.md \
+    >"$PROJECT/CLAUDE.local.md"
+  printf '@%s\nextra line\n' /home/ghost/.dotfiles/projects/demo/AGENTS.md \
+    >"$PROJECT/AGENTS.local.md"
+
+  run_unlinker
+
+  [ "$status" -eq 0 ]
+  [ -f "$PROJECT/CLAUDE.local.md" ]
+  [ -f "$PROJECT/AGENTS.local.md" ]
+  [[ "$output" == *"not a generated import shim"* ]]
 }

@@ -62,6 +62,16 @@ list_files() {
   [[ "$output" == *"ai/claude/install.sh"* ]]
 }
 
+@test "project seed template is covered by every bash source gate" {
+  local expected="ai/marketplace/plugins/my/skills/project-claude-setup/templates/local-seed.sh"
+  local class
+  for class in bash shellcheck shfmt; do
+    list_files "$class"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"$expected"* ]]
+  done
+}
+
 @test "shfmt covers extensionless bin executables" {
   # Extensionless bin/ executables are the bulk of this repo's shell code.
   # Linting but never format-checking them let drift accumulate exactly where

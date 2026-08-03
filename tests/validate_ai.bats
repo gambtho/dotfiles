@@ -37,6 +37,22 @@ write_pi_skills() {
   [[ "$output" == *"package.json: exhaustive Pi skill inventory"* ]]
 }
 
+@test "project setup executable assets remain inside and linked from the canonical skill" {
+  local skill="$REPO_ROOT/ai/marketplace/plugins/my/skills/project-claude-setup"
+
+  [ -f "$skill/templates/local-seed.sh" ]
+  [ -f "$skill/templates/compose-override.yml" ]
+  # One grep per file, not one grep over both: a multi-file grep succeeds when
+  # EITHER matches, so a reference dropped from SKILL.md would pass silently as
+  # long as the other document still mentioned it.
+  local doc
+  for doc in "$skill/SKILL.md" "$skill/devcontainer-host-mounts.md"; do
+    grep -Fq 'templates/local-seed.sh' "$doc"
+    grep -Fq 'templates/compose-override.yml' "$doc"
+    grep -Fq 'bin/claude-merge-compose-override' "$doc"
+  done
+}
+
 @test "validator rejects a nonexistent declared Pi skill" {
   make_validator_repo
   write_pi_skills '["./skills/not-real/SKILL.md"]'

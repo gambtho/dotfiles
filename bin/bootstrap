@@ -182,24 +182,13 @@ install_dotfiles() {
   local overwrite_all=false backup_all=false skip_all="$NON_INTERACTIVE"
   local -a SKIPPED_DESTINATIONS=()
 
-  # Link *.symlink files to $HOME/.<name>
-  while IFS= read -r -d '' src; do
-    dst="$HOME/.$(basename "${src%.*}")"
-    link_file "$src" "$dst"
-  done < <(find -H "$DOTFILES_ROOT" \
-    -not -path '*/archived/*' \
-    -not -path '*/.git/*' \
-    -not -path "$DOTFILES_ROOT/.claude/worktrees/*" \
-    -name '*.symlink' -print0)
-
-  # Link config/ subdirectories to ~/.config/<name>
   if [ -d "$DOTFILES_ROOT/config" ]; then
     mkdir -p "$HOME/.config"
-    for config_dir in "$DOTFILES_ROOT/config"/*/; do
-      config_name=$(basename "$config_dir")
-      link_file "$config_dir" "$HOME/.config/$config_name"
-    done
   fi
+
+  while IFS= read -r -d '' src && IFS= read -r -d '' dst; do
+    link_file "$src" "$dst"
+  done < <(managed_link_pairs "$DOTFILES_ROOT" "$HOME")
 
   if [ ${#SKIPPED_DESTINATIONS[@]} -gt 0 ]; then
     log_warning "${#SKIPPED_DESTINATIONS[@]} destination(s) left UNLINKED because a real file or directory occupies them:"
