@@ -333,3 +333,91 @@ make_scan() {
   [ "$status" -eq 0 ]
   [ "$output" = "1 4" ]
 }
+
+# --- Task 4 helpers ---------------------------------------------------------
+scan_line() {
+  printf '%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" >>"$FIX/in.scan"
+}
+
+norm() {
+  run env SEED_DRIFT_SOURCE_ONLY=1 bash -c \
+    'source "$1"; sd_normalize <"$2"' _ "$SEED_DRIFT" "$FIX/in.scan"
+}
+
+@test "sd_normalize joins backslash continuations and collapses whitespace" {
+  scan_line 1 1 C '  curl -fsSL   \'
+  scan_line 1 2 C '      -o out   url'
+  norm
+  [ "$status" -eq 0 ]
+  [ "$output" = "curl -fsSL -o out url" ]
+}
+
+@test "sd_normalize drops privilege prefixes" {
+  scan_line 1 1 C 'as_user mkdir -p a'
+  scan_line 1 2 C '$SUDO mkdir -p b'
+  scan_line 1 3 C 'sudo -n mkdir -p c'
+  scan_line 1 4 C 'sudo mkdir -p d'
+  scan_line 1 5 C 'runuser -u node -- mkdir -p e'
+  norm
+  [ "$status" -eq 0 ]
+  [ "$output" = "mkdir -p a
+mkdir -p b
+mkdir -p c
+mkdir -p d
+mkdir -p e" ]
+}
+
+@test "sd_normalize drops privilege words in command position, not just at line start" {
+  # Template line 218 vs wanderer's root-flavor equivalent: these must
+  # normalize identically or the spec's required "as_user vs direct
+  # invocation" false-positive guard fails on the core.excludesFile block.
+  scan_line 1 1 C 'if ! as_user test -f "$GITIGNORE"; then'
+  norm
+  [ "$status" -eq 0 ]
+  [ "$output" = 'if ! test -f "$GITIGNORE"; then' ]
+}
+
+@test "sd_normalize drops privilege words after && and ||" {
+  # Template lines 390, 431 and 514 all stack privilege words mid-line.
+  scan_line 1 1 C 'if as_user test -x "$A" || as_user bash -lc "c"; then'
+  scan_line 1 2 C 'if as_user test -f "$N" && as_user test -x "$N"; then'
+  scan_line 1 3 C 'if as_user test -L "$C" || ! as_user test -e "$C"; then'
+  norm
+  [ "$status" -eq 0 ]
+  [ "$output" = 'if test -x "$A" || bash -lc "c"; then
+if test -f "$N" && test -x "$N"; then
+if test -L "$C" || ! test -e "$C"; then' ]
+}
+
+@test "sd_normalize does not strip privilege words outside command position" {
+  # Over-broad stripping is the silent direction, so this guard matters more
+  # than the ones above: a genuine difference in an argument must survive.
+  scan_line 1 1 C 'grep as_user "$f"'
+  scan_line 1 2 C 'run_as_user_thing x'
+  norm
+  [ "$status" -eq 0 ]
+  [ "$output" = 'grep as_user "$f"
+run_as_user_thing x' ]
+}
+
+@test "sd_normalize substitutes the path token only and preserves surrounding quotes" {
+  scan_line 1 1 C '      TS_BIN="$SEED_HOME/.local/bin/tree-sitter"'
+  scan_line 1 2 C 'X="$HOME/a"'
+  scan_line 1 3 C 'Y="$DOTFILES_HOME/config"'
+  scan_line 1 4 C 'Z="$WORKSPACE/p"'
+  norm
+  [ "$status" -eq 0 ]
+  [ "$output" = 'TS_BIN="«HOME»/.local/bin/tree-sitter"
+X="«HOME»/a"
+Y="«HOME»/.dotfiles/config"
+Z="«WS»/p"' ]
+}
+
+@test "sd_normalize drops lines that normalize to empty" {
+  scan_line 1 1 C ''
+  scan_line 1 2 C '   '
+  scan_line 1 3 C 'echo keep'
+  norm
+  [ "$status" -eq 0 ]
+  [ "$output" = "echo keep" ]
+}

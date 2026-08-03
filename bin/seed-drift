@@ -232,6 +232,81 @@ sd_window() {
   printf '%s %s\n' "$start" "$end"
 }
 
+sd_neutralize_paths() {
+  sed -e 's/\${SEED_HOME}/«HOME»/g' -e 's/\$SEED_HOME/«HOME»/g' \
+    -e 's/\${DOTFILES_HOME}/«HOME»\/.dotfiles/g' \
+    -e 's/\$DOTFILES_HOME/«HOME»\/.dotfiles/g' \
+    -e 's/\${WORKSPACE}/«WS»/g' -e 's/\$WORKSPACE/«WS»/g' \
+    -e 's/\${HOME}/«HOME»/g' -e 's/\$HOME/«HOME»/g'
+}
+
+sd_drop_priv_prefix() {
+  # Privilege words are dropped in COMMAND POSITION only: at line start, or
+  # right after an operator/keyword that begins a new command. `as_user` sits
+  # mid-line 8 times in the template (`if as_user test -x ...`,
+  # `... || as_user bash -lc ...`) and the live seeds split on it —
+  # wanderer-kills writes `if ! as_user test -f "$GITIGNORE"; then` where
+  # wanderer writes `if [ ! -f "$GITIGNORE" ]; then` — so a line-start-only
+  # rule would report every one of those shapes as drift.
+  #
+  # No `\b`: that boundary is a GNU extension and this script must also run
+  # under the BSD sed macOS ships. Operators are self-delimiting, so they need
+  # no boundary; the keywords take an explicit `(^|[[:space:]])` left boundary
+  # instead, which is why they are a separate expression. `sd_normalize_code_line`
+  # has already collapsed runs of whitespace to single spaces before we get here.
+  local line="$1" prev=""
+  while [ "$line" != "$prev" ]; do
+    prev="$line"
+    line=$(printf '%s\n' "$line" | sed -E \
+      -e 's/(^|[{(|;!]|&&|\|\|)([[:space:]]+)(as_user|\$SUDO|sudo -n|sudo)[[:space:]]+/\1\2/g' \
+      -e 's/(^|[[:space:]])(if|then|while|until|do|elif)([[:space:]]+)(as_user|\$SUDO|sudo -n|sudo)[[:space:]]+/\1\2\3/g' \
+      -e 's/^(as_user|\$SUDO|sudo -n|sudo)[[:space:]]+//' \
+      -e 's/(^|[{(|;!]|&&|\|\|)([[:space:]]+)runuser -u [^[:space:]]+ --[[:space:]]+/\1\2/g' \
+      -e 's/(^|[[:space:]])(if|then|while|until|do|elif)([[:space:]]+)runuser -u [^[:space:]]+ --[[:space:]]+/\1\2\3/g' \
+      -e 's/^runuser -u [^[:space:]]+ --[[:space:]]+//')
+  done
+  printf '%s' "$line"
+}
+
+sd_normalize_code_line() {
+  local line="$1"
+  line="${line//$'\t'/ }"
+  while [ "$line" != "${line//  / }" ]; do line="${line//  / }"; done
+  line="${line#"${line%%[![:space:]]*}"}"
+  line="${line%"${line##*[![:space:]]}"}"
+  [ -n "$line" ] || return 0
+  line=$(sd_drop_priv_prefix "$line")
+  [ -n "$line" ] || return 0
+  printf '%s\n' "$line" | sd_neutralize_paths
+}
+
+sd_normalize() {
+  local rec tag text rest pending="" joining=0
+  # Positional split, not `IFS=$'\t' read`: that form strips leading tabs from
+  # `text`, which would corrupt every `<<-` heredoc body. `para` and `lineno`
+  # are skipped rather than bound — binding them trips SC2034 under
+  # `shellcheck -S warning`, which this repo gates on.
+  while IFS= read -r rec; do
+    rest="${rec#*$'\t'}"
+    rest="${rest#*$'\t'}"
+    tag="${rest%%$'\t'*}"
+    text="${rest#*$'\t'}"
+    if [ "$joining" = 1 ]; then
+      pending="$pending ${text#"${text%%[![:space:]]*}"}"
+    else
+      pending="$text"
+    fi
+    if [ "${pending%\\}" != "$pending" ]; then
+      pending="${pending%\\}"
+      joining=1
+      continue
+    fi
+    sd_normalize_code_line "$pending"
+    pending="" joining=0
+  done
+  [ "$joining" = 0 ] || sd_normalize_code_line "$pending"
+}
+
 sd_main() {
   local template="$SD_TEMPLATE_DEFAULT" doc="$SD_DOC_DEFAULT"
   SD_CANDIDATES=()
