@@ -617,7 +617,14 @@ sd_visit_candidates() {
   fi
   for cand in "${SD_CANDIDATES[@]}"; do
     if [ -d "$cand" ]; then
-      [ -d "$cand/.devcontainer" ] || continue
+      if [ ! -d "$cand/.devcontainer" ]; then
+        # An explicitly-named project is a promise, not a glob match: a
+        # renamed or removed .devcontainer/ must be visible in the count, not
+        # silently absorbed the way an unrelated discovery-mode directory is.
+        printf '%s  no .devcontainer/ - skipped\n' "$(basename -- "$cand")"
+        SD_SKIPPED=$((SD_SKIPPED + 1))
+        continue
+      fi
       sd_visit_dir "$cand"
     elif [ -e "$cand" ]; then
       # An existing file is a direct local-seed.sh path.

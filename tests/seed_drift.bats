@@ -811,3 +811,32 @@ sd_drift() { run "$SEED_DRIFT" --template "$FIXTURE_TEMPLATE" --doc "$FIXTURE_DO
   [ "$status" -eq 2 ]
   [[ "$output" != *"unbound variable"* ]]
 }
+
+@test "an explicit candidate directory with no .devcontainer is named and skipped, exit 0" {
+  setup_drift_fixtures
+  mkdir -p "$SEED_DRIFT_ROOT/nodev"
+
+  sd_drift "$SEED_DRIFT_ROOT/nodev"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"nodev"*"no .devcontainer/ - skipped"* ]]
+  [[ "$output" == *"0 checked, 1 skipped, 0 blocks drifted"* ]]
+}
+
+@test "discovery that finds nothing is an error, exit 2" {
+  setup_drift_fixtures
+
+  sd_drift
+
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"no projects found under $SEED_DRIFT_ROOT"* ]]
+  [[ "$output" == *"0 checked, 0 skipped, 0 blocks drifted"* ]]
+}
+
+@test "an explicit-candidate run with an equally empty result still exits 0" {
+  setup_drift_fixtures
+
+  sd_drift "$SEED_DRIFT_ROOT/absent-project"
+
+  [ "$status" -eq 0 ]
+}
