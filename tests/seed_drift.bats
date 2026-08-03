@@ -285,3 +285,12 @@ make_scan() {
   [ "$status" -eq 0 ]
   [ "$output" = "4 6" ]
 }
+
+@test "bash -n rejects a lone if header and accepts it split by a blank line" {
+  printf 'if [ -n "$x" ]; then\n' >"$FIX/lone.sh"
+  printf 'if [ -n "$x" ]; then\n\n  echo hi\nfi\n' >"$FIX/split.sh"
+  run bash -n "$FIX/lone.sh"
+  [ "$status" -eq 2 ]
+  run bash -n "$FIX/split.sh"
+  [ "$status" -eq 0 ]
+}
