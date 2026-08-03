@@ -25,6 +25,35 @@ Exit: 0 clean, 1 drift, 2 usage/template/doc/extraction error.
 SDUSAGE
 }
 
+SD_DOC_AWK=$(
+  cat <<'SDAWK'
+BEGIN { FS = "|" }
+/^\|/ && NF >= 4 {
+  name = $2
+  anchor = $3
+  gsub(/^[ \t]+|[ \t]+$/, "", name)
+  gsub(/^[ \t]+|[ \t]+$/, "", anchor)
+  if (name == "Block" || name ~ /^-+$/) next
+  if (anchor !~ /^`.*`$/) next
+  gsub(/`/, "", name)
+  sub(/^`/, "", anchor)
+  sub(/`$/, "", anchor)
+  printf("%s\t%s\n", name, anchor)
+  rows++
+}
+END { if (rows == 0) exit 1 }
+SDAWK
+)
+
+sd_parse_doc() {
+  local doc="$1"
+  if [ ! -r "$doc" ]; then
+    printf 'seed-drift: cannot read doc %s\n' "$doc" >&2
+    return 3
+  fi
+  awk "$SD_DOC_AWK" <"$doc"
+}
+
 sd_main() {
   local template="$SD_TEMPLATE_DEFAULT" doc="$SD_DOC_DEFAULT"
   SD_CANDIDATES=()

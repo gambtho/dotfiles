@@ -20,6 +20,15 @@ sd_source() {
   ' _ "$SEED_DRIFT" "$@"
 }
 
+write_fixture_doc() {
+  cat >"$1" <<'DOC'
+| Block | Anchor in template | Why it matters |
+|---|---|---|
+| Overlay-link gitignore | `lname '*dotfiles/projects/*'` | Adds overlay links. |
+| `core.excludesFile` | `core.excludesFile` | Points git at the seeded ignore file. |
+DOC
+}
+
 @test "seed-drift --help prints usage and exits 0" {
   run "$SEED_DRIFT" --help
 
@@ -54,4 +63,25 @@ sd_source() {
 
   [ "$status" -eq 2 ]
   [[ "$output" == *"cannot read doc"* ]]
+}
+
+@test "sd_parse_doc emits blockname TAB anchor and keeps quotes in the anchor" {
+  local doc="$TEST_ROOT/doc.md"
+  write_fixture_doc "$doc"
+
+  sd_source sd_parse_doc "$doc"
+
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = "$(printf 'Overlay-link gitignore\tlname '"'"'*dotfiles/projects/*'"'"'')" ]
+  [ "${lines[1]}" = "$(printf 'core.excludesFile\tcore.excludesFile')" ]
+  [ "${#lines[@]}" -eq 2 ]
+}
+
+@test "sd_parse_doc reads all nine blocks from the real catch-up doc" {
+  sd_source sd_parse_doc "$REAL_DOC"
+
+  [ "$status" -eq 0 ]
+  [ "${#lines[@]}" -eq 9 ]
+  [[ "$output" == *"TREE_SITTER_VERSION"* ]]
+  [[ "$output" == *"lname '*dotfiles/projects/*'"* ]]
 }
