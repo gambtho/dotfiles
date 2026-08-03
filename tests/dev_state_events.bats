@@ -420,3 +420,47 @@ fill_events() {
   [ "$status" -eq 0 ]
   [ "$output" = "demo" ]
 }
+
+@test "state: a concurrent commit never exposes a torn read" {
+  # dev_state_commit's write is mktemp-in-directory + `mv -f`, an atomic
+  # same-filesystem rename -- a reader must only ever see the old record or
+  # the new one, never a partial write. dev_state_read takes no lock (by
+  # design: reads are cheap and frequent), so this is the exposed path. A
+  # record has to be large enough that a non-atomic write (e.g. an in-place
+  # `printf >"$path"`) is actually interruptible by a concurrent reader; a
+  # few-hundred-byte record writes faster than a reader can catch it mid-write.
+  local rec bad=0 reads=0 writer_pid
+  rec=$(dev_state_new "$WS_ID" slabledger slabledger /w)
+  dev_state_commit "$WS_ID" "" "$rec"
+
+  (
+    local cur a b i
+    cur=$rec
+    # Build the ~2 MB payloads inside jq (string repeat) rather than passing
+    # them as a shell/jq argv string -- a multi-megabyte --arg blows past
+    # ARG_MAX on exec.
+    a=$(jq -c --argjson n 2000000 '.stopped_reason = ("a" * $n)' <<<"$rec")
+    b=$(jq -c --argjson n 2000000 '.stopped_reason = ("b" * $n)' <<<"$rec")
+    for i in $(seq 1 30); do
+      if ((i % 2 == 1)); then
+        dev_state_commit "$WS_ID" "$cur" "$a" && cur=$a
+      else
+        dev_state_commit "$WS_ID" "$cur" "$b" && cur=$b
+      fi
+    done
+  ) &
+  writer_pid=$!
+
+  while kill -0 "$writer_pid" 2>/dev/null; do
+    reads=$((reads + 1))
+    if ! dev_state_read "$WS_ID" | jq empty >/dev/null 2>&1; then
+      bad=$((bad + 1))
+    fi
+  done
+  wait "$writer_pid"
+
+  # Sanity: the loop actually raced the writer, and no read ever saw a
+  # truncated / non-JSON record.
+  [ "$reads" -gt 0 ]
+  [ "$bad" -eq 0 ]
+}
