@@ -7,6 +7,7 @@ WS_ID=9f2c4a7b1e05de3c8a41f07b2e6d95c3a8b17f42e0d6c95183ba7e4f2c0d68a9
 setup() {
   setup_dev_test
   source "$REPO_ROOT/tools/dev/lib/events.sh"
+  source "$REPO_ROOT/tools/dev/lib/state.sh"
 }
 
 # Writes `$1` filler event lines into the live segment. The line is ~190 bytes, so
@@ -270,4 +271,152 @@ fill_events() {
   # Rotation ran: the filler lines are in a segment, not the live file.
   [ "$(find "$DEV_STATE_ROOT/events" -name 'events-*.jsonl' | wc -l)" -eq 1 ]
   [ "$(grep -c '"id":"filler"' "$TEST_ROOT/all.jsonl")" -eq 50000 ]
+}
+
+@test "state: the record path uses the full 64-hex workspace id" {
+  local path
+  path=$(dev_state_path "$WS_ID")
+  [ "$path" = "$DEV_STATE_ROOT/workspaces/$WS_ID.json" ]
+  [ "${#WS_ID}" -eq 64 ]
+  dev_state_commit "$WS_ID" "" "$(dev_state_new "$WS_ID" slabledger slabledger /w)"
+  [ -f "$path" ]
+  [ "$(basename "$path")" = "$WS_ID.json" ]
+}
+
+@test "state: a fresh record has the v1 shape" {
+  local rec
+  rec=$(dev_state_new "$WS_ID" slabledger slabledger /home/tng/workspace/slabledger)
+  [ "$(jq -r .v <<<"$rec")" = 1 ]
+  [ "$(jq -r .workspace_id <<<"$rec")" = "$WS_ID" ]
+  [ "$(jq -r .slug <<<"$rec")" = slabledger ]
+  [ "$(jq -r .session_name <<<"$rec")" = slabledger ]
+  [ "$(jq -r .worktree <<<"$rec")" = /home/tng/workspace/slabledger ]
+  [ "$(jq -r .status <<<"$rec")" = unknown ]
+  [ "$(jq -r .boot_id <<<"$rec")" = null ]
+  [ "$(jq -r .config_digest <<<"$rec")" = null ]
+  [ "$(jq -r .applied_digest <<<"$rec")" = null ]
+  [ "$(jq -c .container <<<"$rec")" = '{"status":"none","kind":null,"id":null,"user":null,"workdir":null,"verified":false,"up_exit_status":null,"up_result":null,"observed_at":null}' ]
+  [ "$(jq -c .agents <<<"$rec")" = '[]' ]
+  [ "$(jq -r .opened_at <<<"$rec")" = null ]
+  [ "$(jq -r .last_seen <<<"$rec")" = null ]
+  [ "$(jq -r .scanned_through <<<"$rec")" = null ]
+  [ "$(jq -r .fold_gap <<<"$rec")" = false ]
+  [ "$(jq -r .stopped_reason <<<"$rec")" = null ]
+}
+
+@test "state: a fresh record round-trips through commit and read unchanged" {
+  local rec out
+  rec=$(dev_state_new "$WS_ID" slabledger slabledger /home/tng/workspace/slabledger)
+  run dev_state_commit "$WS_ID" "" "$rec"
+  [ "$status" -eq 0 ]
+  out=$(dev_state_read "$WS_ID")
+  [ "$(jq -S -c . <<<"$out")" = "$(jq -S -c . <<<"$rec")" ]
+}
+
+@test "state: reading an absent record exits 1 with no output" {
+  run dev_state_read "$WS_ID"
+  [ "$status" -eq 1 ]
+  [ -z "$output" ]
+}
+
+@test "state: committing over an absent record requires an empty expectation" {
+  local rec
+  rec=$(dev_state_new "$WS_ID" slabledger slabledger /w)
+  run dev_state_commit "$WS_ID" "$rec" "$rec"
+  [ "$status" -eq 9 ]
+  [ ! -e "$(dev_state_path "$WS_ID")" ]
+}
+
+@test "state: a stale expectation exits 9 and leaves the file untouched" {
+  local rec stale new before after path
+  path=$(dev_state_path "$WS_ID")
+  rec=$(dev_state_new "$WS_ID" slabledger slabledger /w)
+  dev_state_commit "$WS_ID" "" "$rec"
+  before=$(cat "$path")
+  stale=$(jq -c '.status = "running"' <<<"$rec")
+  new=$(jq -c '.status = "stopped"' <<<"$rec")
+  run dev_state_commit "$WS_ID" "$stale" "$new"
+  [ "$status" -eq 9 ]
+  after=$(cat "$path")
+  [ "$before" = "$after" ]
+}
+
+@test "state: a reordered expectation still matches" {
+  local rec reordered new
+  rec=$(dev_state_new "$WS_ID" slabledger slabledger /w)
+  dev_state_commit "$WS_ID" "" "$rec"
+  reordered=$(jq -c 'to_entries | reverse | from_entries' <<<"$rec")
+  [ "$reordered" != "$rec" ]
+  new=$(jq -c '.status = "running"' <<<"$rec")
+  run dev_state_commit "$WS_ID" "$reordered" "$new"
+  [ "$status" -eq 0 ]
+  [ "$(jq -r .status <"$(dev_state_path "$WS_ID")")" = running ]
+}
+
+@test "state: two concurrent committers give one winner and one exit-9 loser" {
+  local rec a b rca rcb final
+  rec=$(dev_state_new "$WS_ID" slabledger slabledger /w)
+  dev_state_commit "$WS_ID" "" "$rec"
+  a=$(jq -c '.status = "running"' <<<"$rec")
+  b=$(jq -c '.status = "stopped"' <<<"$rec")
+  (
+    rc=0
+    dev_state_commit "$WS_ID" "$rec" "$a" || rc=$?
+    printf '%s\n' "$rc" >"$TEST_ROOT/rc-a"
+  ) &
+  (
+    rc=0
+    dev_state_commit "$WS_ID" "$rec" "$b" || rc=$?
+    printf '%s\n' "$rc" >"$TEST_ROOT/rc-b"
+  ) &
+  wait
+  rca=$(cat "$TEST_ROOT/rc-a")
+  rcb=$(cat "$TEST_ROOT/rc-b")
+  # Exactly one winner (0) and one CAS loser (9).
+  [ "$((rca + rcb))" -eq 9 ]
+  [ "$rca" -ne "$rcb" ]
+  final=$(jq -r .status <"$(dev_state_path "$WS_ID")")
+  [[ "$final" = running || "$final" = stopped ]]
+  # The loser wrote nothing: the file is exactly one of the two candidates.
+  [ "$(jq -S -c . <"$(dev_state_path "$WS_ID")")" = "$(jq -S -c . <<<"$a")" ] ||
+    [ "$(jq -S -c . <"$(dev_state_path "$WS_ID")")" = "$(jq -S -c . <<<"$b")" ]
+}
+
+@test "state: list returns every record path" {
+  local other=1111111111111111111111111111111111111111111111111111111111111111
+  dev_state_commit "$WS_ID" "" "$(dev_state_new "$WS_ID" a a /a)"
+  dev_state_commit "$other" "" "$(dev_state_new "$other" b b /b)"
+  run dev_state_list
+  [ "$status" -eq 0 ]
+  [ "${#lines[@]}" -eq 2 ]
+  [ "${lines[0]}" = "$DEV_STATE_ROOT/workspaces/$other.json" ]
+  [ "${lines[1]}" = "$DEV_STATE_ROOT/workspaces/$WS_ID.json" ]
+}
+
+@test "state: list is empty when no records exist" {
+  run dev_state_list
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "state: the recorded session name beats the resolver's proposal" {
+  # ADR-7's collision guard may have renamed this workspace to
+  # `<slug>--<basename>--<hash6>`. That rename is durable, so every command
+  # after the first `open` must read it back rather than re-derive the plain
+  # name -- re-deriving is what left a collided workspace unreachable.
+  local rec
+  rec=$(dev_state_new "$WS_ID" demo demo /w)
+  rec=$(jq -c '.session_name = "demo--feat--a1b2c3"' <<<"$rec")
+  dev_state_commit "$WS_ID" "" "$rec"
+
+  run dev_state_session_name "$WS_ID" demo
+  [ "$status" -eq 0 ]
+  [ "$output" = "demo--feat--a1b2c3" ]
+}
+
+@test "state: the fallback is used only when no record exists yet" {
+  # The first `dev open`, which is exactly when the resolver's proposal is right.
+  run dev_state_session_name "$(printf 'f%.0s' {1..64})" demo
+  [ "$status" -eq 0 ]
+  [ "$output" = "demo" ]
 }
