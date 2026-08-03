@@ -166,11 +166,19 @@ that does not exist, and inventing one to make a wrong invocation work is the wr
 
 **Scenario 3 — container rebuilt while attached.** The host tmux server never notices; it owns the
 session. What dies is each pane's exec process. With per-window `remain-on-exit on`, those panes
-remain visible with their output intact, marked dead, and tmux fires `pane-died`. The next `dev`
-command reconciles: Container observes the recorded `containerId` no longer exists, `devcontainer up`
-returns a new one, the record is updated, the event pair `container.lost` / `container.replaced` is
-written, and `respawn_pane` reattaches each dead pane to the new id. The running processes are lost —
-nothing can save those — but the session, layout, and prior output survive, and nothing is deleted.
+remain visible with their output intact, marked dead, and tmux fires `pane-died`.
+
+Recovery is split across the two phases, and the split is visible to the user. The next `dev`
+command of *any* kind reconciles: Container observes the recorded `containerId` no longer exists,
+`container.lost` is emitted, and the record is marked. `dev list` and `dev status` stop there and
+report a workspace whose container is gone. **Repair happens on the next `dev open`** (i.e.
+`dev slabledger`), which runs ensure: `devcontainer up` returns a new id, `container.replaced` is
+written, and `respawn_pane` reattaches each dead pane to it. The running processes are lost — nothing
+can save those — but the session, layout, and prior output survive, and nothing is deleted.
+
+Stating it that way is the point rather than pedantry: an earlier draft said the next arbitrary `dev`
+command performed the whole recovery, which contradicts ADR-1's rule that only `open` repairs. A
+`dev list` that silently rebuilds a container is exactly the behavior that rule exists to prevent.
 
 **Scenario 4 — `pkill tmux`, then `dev list`.** The server dies, taking its own hooks with it, so no
 `session-closed` event is emitted; this is the one case hooks structurally cannot self-report.
@@ -229,10 +237,31 @@ existed.
 a backstop for anything hooks cannot report. No daemon.
 
 Hooks are registered in `tools/dev/dev.tmux.conf`, sourced from `tools/tmux/tmux.conf.symlink`
-between idempotency markers, following the existing `agent-teams-extras.conf` pattern. Hooks call
-`tools/dev/dev-event`, which filters by whether the session name maps to a known record and exits
-silently otherwise — global hooks fire for ad-hoc sessions too, and the log must not fill with noise
-about sessions that were never workspaces.
+between idempotency markers, following the existing `agent-teams-extras.conf` pattern.
+
+**Hooks identify their workspace by id, never by session name.** At session creation `open` sets a
+tmux session user option, `@dev_workspace_id`, to the `workspace_id`. Hooks call
+`tools/dev/dev-event` with `#{@dev_workspace_id}` expanded by tmux at fire time, and `dev-event`
+exits silently when it expands empty — which is precisely how ad-hoc sessions are filtered out, since
+global hooks fire for every session and the log must not fill with noise about sessions that were
+never workspaces.
+
+The earlier draft filtered by mapping the session *name* back to a record, and that has a real hole:
+ADR-7's collision guard can choose a hashed session name during `open`, and the record does not carry
+that name until a later reconcile writes it. Any pane or session event in that window is discarded —
+a workspace silently loses events for exactly as long as it is newest, which is when it is most
+active. Carrying identity in-band removes the reverse lookup and the window with it.
+
+This was verified on tmux 3.4 rather than assumed. With two sessions holding different
+`@dev_workspace_id` values, a `pane-died` hook expanded the value belonging to the session whose pane
+died, not the other one's — the option is resolved per-session at fire time. Two further findings
+came out of the same probe and both constrain the implementation. `pane-died` fires on **process
+exit** when `remain-on-exit` holds the pane; it does **not** fire for `kill-pane`, so explicit
+destruction is not observable this way and must be treated as a reconcile-discovered case. And
+`pane-died` is a *window*-scoped hook: it is absent from `show-hooks -g` even when correctly
+installed and firing, and appears only under `show-hooks -gw`, while `session-closed` is
+session-scoped and appears under `-g`. `dev doctor` must probe both scopes or it will report a
+working installation as broken.
 
 `remain-on-exit` is set **per-window on platform-created windows only**, never globally. Set `-g` it
 would change every ordinary pane in daily tmux use to stop closing on shell exit. This is also a
@@ -263,12 +292,21 @@ microseconds, no blocking subprocess inside it, ever. This is what ADR-3's bound
 a lock across `devcontainer up` would mean holding it for minutes across a process that can hang, in
 a language with no way to release it on an unexpected signal path.
 
-*The operation lock* (`locks/<workspace_id>.op`) is taken `flock -n` for the whole of ensure. It is
-not a state lock and is never held while writing records; it exists solely so two `dev` invocations
-cannot repair the same workspace concurrently — two simultaneous `devcontainer up` calls on one
-compose project is a genuine race with a genuinely confusing outcome. Failure to acquire is not an
-error condition to retry: it means another `dev` is already working on this workspace, and the right
-response is to say so and exit non-zero.
+*The operation lock* (`locks/<workspace_id>.op`) is taken `flock -n` for the whole of any
+**workspace-mutating** operation. It is not a state lock and is never held while writing records; it
+exists solely so two `dev` invocations cannot act on the same workspace concurrently — two
+simultaneous `devcontainer up` calls on one compose project is a genuine race with a genuinely
+confusing outcome. Failure to acquire is not an error condition to retry: it means another `dev` is
+already working on this workspace, and the right response is to say so and exit non-zero.
+
+**Every mutating path takes it, not just `open`.** An earlier draft scoped it to ensure alone, which
+leaves the two races that actually bite: `dev stop` running against a concurrent `dev open` (one tears
+down the container the other is mid-way through starting), and the boot autostart unit racing a user
+who opens a workspace during login. The complete list for Phase 1 is `open` (ensure), `stop`, and
+`dev-autostart.service`. `list` and `status` do not take it — they only reconcile, which is read-only
+with respect to the workspace, and making a listing block on a running rebuild would defeat the whole
+reason the phases were split. The rule is therefore exactly: **anything that may mutate the workspace
+takes the operation lock; anything that only observes does not.**
 
 Releasing the state lock before ensure does mean the observation ensure acts on may be a few hundred
 milliseconds stale. That is acceptable because every operation ensure performs is idempotent and
@@ -291,6 +329,41 @@ of the event stream — they lag it by exactly one `dev` invocation. ADR-2's cla
 "authoritative for what happened" is a claim about the pair (record + event log) reaching the same
 answer, not about the record being instantaneously current. The fold-equivalence test in §4.4 tests
 precisely this: replay the log, fold it, and the result must equal what reconcile computed.
+
+**The fold protocol, because "reconcile folds hook events" is otherwise unimplementable.** An earlier
+draft said reconcile folds the events hooks appended and left it there. It cannot be written: records
+carried no cursor, events carried no identifier, and the file rotates underneath both. The
+implementation would have no way to know which events it had already applied, so it would either
+replay transitions or miss events that rotated away. Four rules close it, and they are cheap because
+each was already half-present.
+
+1. **Every event carries `id`** — 16 hex characters, from `openssl rand -hex 8`, generated by the
+   emitter. Not a sequence number (§4.4 explains why there is none) and not a hash of the content,
+   since two identical events can legitimately occur. It exists to be compared, not ordered.
+2. **Every record carries `folded_through`** — `{ "id": ..., "ts": ... }` for the last event applied,
+   written under the state lock in the same read-modify-write that applies the fold. Reconcile scans
+   forward from that position: it reads `events.jsonl` (and, if the watermark is older than the file's
+   first line, the rotated segments back to the one containing it), skips lines up to and including
+   the matching `id`, and applies the rest.
+3. **Folding is idempotent regardless**, and this is the actual safety net. Every fold step is an
+   absolute assignment — `workspace.stopped` sets `status: stopped`, it does not decrement a counter —
+   so replaying an event the record already reflects produces the same record. The watermark is an
+   efficiency and clarity mechanism; correctness does not rest on it. A protocol whose correctness
+   depended on exactly-once delivery of a line in a rotating file is one this design should not sign
+   up for.
+4. **Events older than the current incarnation are ignored.** An event whose `ts` precedes the
+   record's `opened_at` belongs to a previous life of the same working tree, and applying it would
+   mark a freshly opened workspace as stopped. This is a real ordering hazard, not a theoretical one:
+   `workspace.stopped` from yesterday's session sits in the same file as today's `workspace.opened`.
+
+**When the watermark is unreachable.** If `folded_through.id` is not found in any retained segment —
+the workspace was untouched for long enough that its position rotated away — reconcile does not
+guess. It sets `fold_gap: true` on the record, emits nothing for the missing span, and falls back to
+pure observation: whatever the backend currently reports becomes the record's status. `dev status`
+surfaces the flag, because "some transitions between then and now were not recorded" is exactly the
+kind of thing a future notification consumer must not be allowed to assume away. Observation is
+always available and always current, which is why this fallback is safe; the loss is history, not
+correctness.
 
 *Case B — WSL restarts.* The tmux server is gone and no hooks fired. Records claim `running`. Each
 record stores the host **boot id** (`/proc/sys/kernel/random/boot_id`) captured at open. Reconcile
@@ -471,9 +544,38 @@ without an interactive login. The request explicitly asks not to overclaim.
 terminal, dropping SSH, closing a VS Code window — does not touch the session or its processes. This
 requires no systemd involvement whatsoever and it already works.
 
-*Survives reboot:* **containers only, opt-in per workspace, via a `dev-autostart.service` user
-unit.** On boot the unit iterates workspaces with `autostart: true` and runs `devcontainer up` for
-each. It does **not** create tmux sessions, apply layouts, or run startup commands.
+*Survives reboot:* **containers only, opt-in, via a `dev-autostart.service` user unit.** The unit
+runs `devcontainer up` for each eligible workspace. It does **not** create tmux sessions, apply
+layouts, or run startup commands.
+
+**What "eligible" means, because `autostart: true` alone does not determine a set.** `autostart` lives
+in `workspace.yaml`, which is keyed by slug and inherited by every working tree of that project
+(ADR-7). Setting it for slabledger therefore does not name *one* workspace — read naively it selects
+every slabledger worktree that exists, including throwaway review trees, and it says nothing about
+which of them the unit should discover in the first place. An earlier draft said "iterates workspaces
+with `autostart: true`" and quietly assumed a set that the configuration layer cannot produce.
+
+Two rules make it a set:
+
+1. **Primary working tree only.** The unit skips any workspace whose path is a linked worktree
+   (`git rev-parse --git-dir` differing from `--git-common-dir`). Worktrees are short-lived by nature
+   and the containers they need are the ones the user is about to open by hand anyway. This keeps the
+   inherited flag meaningful — it says "this *project's* container should be warm at boot," which is
+   what someone setting it actually means.
+2. **Discovery is from existing records, not from the filesystem.** The unit enumerates
+   `~/.local/state/dev/workspaces/*.json`, filters to primary trees whose merged config sets
+   `autostart: true`, and skips records whose `worktree` path no longer exists. It never scans
+   `DEV_REPO_ROOT`. The consequence is deliberate: a repository that has never been opened is never
+   autostarted, so enabling the flag in a shared overlay cannot cause a machine to start building
+   containers for projects its owner has not touched.
+
+Each autostart is a workspace-mutating operation and takes the operation lock (ADR-1) `flock -n`,
+skipping any workspace already held — a user who logs in and runs `dev` during boot must not race the
+unit.
+
+If a genuinely per-worktree autostart is wanted later, it needs a machine-local per-worktree registry
+rather than a config key, since no slug-keyed file can distinguish inheritors. That is Phase 2 and is
+not designed here.
 
 The unit must copy the pattern `ai/vekil/vekil.service` established: a user unit cannot order itself
 `After=` Docker, because Docker is a system service. It therefore polls for daemon readiness with a
@@ -598,9 +700,16 @@ in an inherited file cannot be correct for more than one of its inheritors.
 
 Repositories outside `DEV_REPO_ROOT` are handled where the ambiguity does not exist: `dev` run from
 inside such a tree resolves by `cwd`, and `DEV_REPO_ROOT` itself is configurable for a wholesale move.
-If a per-project path override is genuinely needed later, it belongs in the un-inherited
-`workspace.local.yaml` layer, where it describes one machine's one checkout rather than every
-inheritor of a shared file.
+
+**A per-project path override cannot be added to `workspace.local.yaml` either, and the earlier draft
+was wrong to suggest it.** `workspace.local.yaml` sits beside `workspace.yaml` under
+`$DEV_OVERLAY_ROOT/<slug>/` and is therefore keyed by slug and inherited by every working tree exactly
+as the tracked file is. Its "local" is *machine-local* — it is gitignored and never leaves this
+machine — which is a different axis entirely from per-worktree. It is the right place for a secret
+that varies by machine; it is the wrong place for anything that must differ between two trees of one
+project, because it cannot. Phase 1 ships **no per-worktree configuration layer** of any kind. Adding
+one means a new file keyed by `workspace_id` under the state directory, and nothing in Phase 1 needs
+it.
 
 This is also what delivers **multiple concurrent window-groups on one project**. Two worktrees of
 slabledger — `~/workspace/slabledger` and `~/workspace/slabledger-pr5` — are two workspaces, two tmux
@@ -608,8 +717,19 @@ sessions, two sets of four windows, and two containers, both inheriting slabledg
 Nothing extra is required to support that; it falls out of one-workspace-per-working-tree.
 
 The addressing is deliberately plain: **a worktree is addressed by its directory basename**, so
-`dev slabledger-pr5` opens the second group. No new syntax is introduced. `dev list` groups its output
-by slug so the several trees of one project read as a set rather than as unrelated entries.
+`dev slabledger-pr5` opens the second group. No new syntax is introduced.
+
+**Ambiguity is an error, not a guess.** The session-name guard above prevents two same-basename
+worktrees from colliding in the *backend*, but it does not answer the user's question: `dev review`
+when both `slabledger/.worktrees/review` and `slabledger/.claude/worktrees/review` exist has two
+correct answers and the resolver must not pick one. It exits non-zero listing the candidate paths and
+naming the two ways to disambiguate — `cd` into the intended tree and run `dev` with no argument
+(`cwd` resolution is unambiguous by construction), or rename one tree. Silently choosing the
+first match found is how a user ends up running an agent against the wrong branch, which is a failure
+they may not notice for some time.
+
+`dev list` groups its output by slug so the several trees of one project read as a set rather than as
+unrelated entries, and marks ambiguous basenames so the condition is visible before it is hit.
 
 Two things are explicitly deferred to Phase 2. A `dev slabledger@pr5` addressing form, which requires
 a worktree-discovery pass and a naming convention neither `~/workspace` nor `.worktrees/` currently
@@ -688,7 +808,9 @@ without restating the layout.
 ```yaml
 version: 1                      # int, required. Schema version
 
-autostart: false                # bool, optional. Default false. Container-only boot start
+autostart: false                # bool, optional. Default false. Container-only boot start.
+                                # Inherited by slug, but applies to the PRIMARY working tree
+                                # only; linked worktrees are never autostarted (ADR-5)
 
 devcontainer:                   # optional. Omit entirely for auto-detection
   enabled: auto                 # auto|true|false. auto = presence of .devcontainer/
@@ -817,6 +939,8 @@ the state lock.
   ],
   "opened_at": "2026-08-03T13:58:02.001Z",
   "last_seen": "2026-08-03T14:02:11.412Z",
+  "folded_through": { "id": "4b1e05a7c39f2d18", "ts": "2026-08-03T14:02:11.412Z" },
+  "fold_gap": false,
   "stopped_reason": null
 }
 ```
@@ -843,6 +967,13 @@ resolved.
 
 `stopped_reason` is `null` while running, and otherwise one of `user`, `host_restart`, `vanished`,
 `container_failed`.
+
+`folded_through` is the event-fold watermark defined in ADR-1: the `id` and `ts` of the last event
+applied to this record. `opened_at` does double duty as the incarnation boundary — events older than
+it belong to a previous life of the same working tree and are never folded. `fold_gap` is set when
+the watermark rotated out of retention before reconcile could reach it, meaning the record was rebuilt
+from observation alone and some transitions are unrecorded. It is surfaced by `dev status` rather than
+silently cleared, because a consumer must be able to tell an uneventful history from a lost one.
 
 ### 4.4 Event stream
 
@@ -892,6 +1023,7 @@ that are only reasoned about are how the `PIPE_BUF` error survived a draft.
 ```json
 {
   "v": 1,
+  "id": "4b1e05a7c39f2d18",
   "ts": "2026-08-03T14:02:11.412Z",
   "event": "container.replaced",
   "workspace_id": "9f2c4a7b1e05",
@@ -902,7 +1034,9 @@ that are only reasoned about are how the `PIPE_BUF` error survived a draft.
 }
 ```
 
-`v` versions the envelope. There is deliberately **no sequence number**: it could only ever be a
+`v` versions the envelope. `id` is 16 random hex characters, unique per event and used solely as the
+fold watermark ADR-1 defines — consumers may use it to deduplicate, and must not read ordering into
+it. There is deliberately **no sequence number**: it could only ever be a
 partial order, since hook-emitted events cannot take the lock required to assign one, and a
 partially-ordered counter invites exactly the total-ordering assumption it cannot support. Ordering
 is by `ts` and by position in the file, both of which are honest about their limits. `ts` is RFC 3339
