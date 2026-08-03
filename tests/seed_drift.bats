@@ -87,6 +87,12 @@ DOC
 }
 
 @test "every anchor in the real doc table is present in the real template" {
+  # Discovery finding zero projects is now a hard error (fix round 2, I-2);
+  # give it one skip-only candidate so this test still exercises only what
+  # it is meant to check: real-doc/real-template anchor agreement, exit 0.
+  export SEED_DRIFT_ROOT="$TEST_ROOT/workspace"
+  mkdir -p "$SEED_DRIFT_ROOT/placeholder/.devcontainer"
+
   run "$SEED_DRIFT" --template "$REAL_TEMPLATE" --doc "$REAL_DOC"
 
   [ "$status" -eq 0 ]

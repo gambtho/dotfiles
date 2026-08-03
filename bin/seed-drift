@@ -600,7 +600,7 @@ sd_visit_dir() {
 }
 
 sd_visit_candidates() {
-  local root="${SEED_DRIFT_ROOT:-$HOME/workspace}" cand rc=0
+  local root="${SEED_DRIFT_ROOT:-$HOME/workspace}" cand rc=0 visited=0
   # The scalar, not `${#SD_CANDIDATES[@]}`: expanding an empty array under
   # `set -u` errors on bash 3.2, still the system bash on macOS
   # (bin/common.sh:392). The `"${SD_CANDIDATES[@]}"` below is reached only
@@ -612,7 +612,17 @@ sd_visit_candidates() {
       # A directory without .devcontainer/ is not a candidate: silent, not skipped.
       [ -d "$cand/.devcontainer" ] || continue
       sd_visit_dir "$cand"
+      visited=$((visited + 1))
     done
+    if [ "$visited" -eq 0 ]; then
+      # Scoped to discovery only: an explicitly-named absent project is
+      # still a skip at exit 0 (the brief states this outright). But
+      # discovery finding zero projects means the detector could not do its
+      # job at all — 0 checked here is a broken gate, not a clean bill of
+      # health, so this fails closed rather than reporting a quiet "clean".
+      printf 'seed-drift: no projects found under %s\n' "$root" >&2
+      return 2
+    fi
     return 0
   fi
   for cand in "${SD_CANDIDATES[@]}"; do
@@ -726,7 +736,13 @@ sd_main() {
   if [ "$absent" -ne 0 ]; then
     return 2
   fi
-  sd_visit_candidates
+  local vrc=0
+  # `|| vrc=$?`, not a bare call: sd_visit_candidates now returns 2 when
+  # discovery finds nothing, and an uncaptured non-zero status here would
+  # trip `set -e` and exit before sd_summary ever runs — silently dropping
+  # the summary line the "discovery finds nothing" report depends on.
+  sd_visit_candidates || vrc=$?
+  sd_worst "$vrc"
   sd_summary
   return "$SD_WORST"
 }
