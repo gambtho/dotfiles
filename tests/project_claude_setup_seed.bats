@@ -749,7 +749,10 @@ cp "$TS_FIXTURE" "$out"
 
   [ "$status" -eq 0 ]
   [[ "$output" == *"tree-sitter ready"* ]]
-  [ -x "$HOME/.local/bin/tree-sitter" ]
+  # Asserted the way the seed's own guard asserts it: the bit says nothing about
+  # whether the file can actually run, which is the whole point of this test.
+  run "$HOME/.local/bin/tree-sitter" --version
+  [ "$status" -eq 0 ]
 }
 
 @test "an installed tree-sitter that stops running is reinstalled" {
@@ -763,7 +766,8 @@ cp "$TS_FIXTURE" "$out"
 
   [ "$status" -eq 0 ]
   [[ "$output" == *"tree-sitter ready"* ]]
-  "$HOME/.local/bin/tree-sitter"
+  run "$HOME/.local/bin/tree-sitter" --version
+  [ "$status" -eq 0 ]
 }
 
 @test "a tree-sitter that cannot execute is not installed" {
