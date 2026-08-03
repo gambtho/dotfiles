@@ -195,3 +195,35 @@ FIX
   [ "$status" -eq 0 ]
   [ "$output" = "204 236" ]
 }
+
+@test "sd_scan excludes herestrings and recognizes every delimiter form" {
+  local f="$TEST_ROOT/forms.sh"
+  printf '%s\n' \
+    'grep q <<<"$v"' \
+    'cat <<A' \
+    'u1' \
+    'A' \
+    "cat <<'B'" \
+    'q1' \
+    'B' \
+    'cat <<"C"' \
+    'q2' \
+    'C' \
+    'cat <<\D' \
+    'q3' \
+    'D' \
+    'cat <<-E' \
+    $'\tu2' \
+    $'\tE' >"$f"
+
+  sd_source sd_scan "$f"
+
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = "$(printf '1\t1\tC\tgrep q <<<"$v"')" ]
+  [ "${lines[2]}" = "$(printf '1\t3\tHu\tu1')" ]
+  [ "${lines[5]}" = "$(printf '1\t6\tHq\tq1')" ]
+  [ "${lines[8]}" = "$(printf '1\t9\tHq\tq2')" ]
+  [ "${lines[11]}" = "$(printf '1\t12\tHq\tq3')" ]
+  [ "${lines[14]}" = "$(printf '1\t15\tHu\t\tu2')" ]
+  [ "${lines[15]}" = "$(printf '1\t16\tC\t\tE')" ]
+}

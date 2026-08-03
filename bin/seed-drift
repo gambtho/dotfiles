@@ -79,7 +79,7 @@ function delimword(line, i, n,   w, c) {
   wend = i
   return w
 }
-function scan(line,   n, i, c, j, w) {
+function scan(line,   n, i, c, j, d, w) {
   n = length(line)
   i = 1
   while (i <= n) {
@@ -100,22 +100,38 @@ function scan(line,   n, i, c, j, w) {
     if (c == "\"") { inq = "\""; i++; continue }
     if (c == "#" && (i == 1 || substr(line, i - 1, 1) ~ /[ \t]/)) return substr(line, 1, i - 1)
     if (c != "<") { i++; continue }
+    if (substr(line, i, 3) == "<<<") { i += 3; continue }
     if (substr(line, i, 2) != "<<") { i++; continue }
     i += 2
+    d = 0
+    if (substr(line, i, 1) == "-") { d = 1; i++ }
+    while (substr(line, i, 1) == " " || substr(line, i, 1) == "\t") i++
     c = substr(line, i, 1)
     if (c == "'" || c == "\"") {
       j = index(substr(line, i + 1), c)
       if (j == 0) fail("unterminated heredoc delimiter quote")
       hdelim = substr(line, i + 1, j - 1)
       hquot = 1
+      hdash = d
       opened = 1
       i = i + j + 1
+      continue
+    }
+    if (c == "\\") {
+      w = delimword(line, i + 1, n)
+      if (w == "") fail("unrecognized heredoc delimiter after <<")
+      hdelim = w
+      hquot = 1
+      hdash = d
+      opened = 1
+      i = wend
       continue
     }
     w = delimword(line, i, n)
     if (w == "") fail("unrecognized heredoc delimiter after <<")
     hdelim = w
     hquot = 0
+    hdash = d
     opened = 1
     i = wend
   }
@@ -123,7 +139,9 @@ function scan(line,   n, i, c, j, w) {
 }
 {
   if (hd) {
-    if ($0 == hdelim) {
+    closer = $0
+    if (hdash) sub(/^\t+/, "", closer)
+    if (closer == hdelim) {
       emit("C", $0)
       hd = 0
     } else {
