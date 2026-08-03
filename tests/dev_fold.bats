@@ -20,7 +20,7 @@ mkevent() {
 }
 
 @test "fold: workspace.opened sets the incarnation and clears fold_gap" {
-  local rec ev out
+  local rec ev out expected
   rec=$(jq -c '.fold_gap = true | .stopped_reason = "user" | .status = "stopped"' <<<"$REC")
   ev=$(mkevent aaaa000000000001 2026-08-03T13:58:02.001Z workspace.opened \
     '{"boot_id":"6f2a1c9e","config_digest":"sha256:9a3f","session_name_actual":"slabledger--wt"}')
@@ -34,10 +34,22 @@ mkevent() {
   [ "$(jq -r .fold_gap <<<"$out")" = false ]
   # config_digest is written by config.changed and by reconcile, never by opened.
   [ "$(jq -r .config_digest <<<"$out")" = null ]
+  # Whole-record comparison: catches a stray write to any field this event
+  # does not own (in particular .last_seen, which only attached/detached write).
+  expected=$(jq -c '
+    .status = "running"
+    | .opened_at = "2026-08-03T13:58:02.001Z"
+    | .boot_id = "6f2a1c9e"
+    | .applied_digest = "sha256:9a3f"
+    | .session_name = "slabledger--wt"
+    | .stopped_reason = null
+    | .fold_gap = false
+  ' <<<"$rec")
+  [ "$(jq -S -c . <<<"$out")" = "$(jq -S -c . <<<"$expected")" ]
 }
 
 @test "fold: workspace.stopped and workspace.vanished set status and reason only" {
-  local rec ev out
+  local rec ev out expected
   rec=$(jq -c '.status = "running" | .container.status = "ready" | .container.id = "a710"' <<<"$REC")
   ev=$(mkevent aaaa000000000002 2026-08-03T14:00:00.000Z workspace.stopped '{"reason":"user"}')
   out=$(dev_fold_apply "$rec" "$ev")
@@ -45,6 +57,10 @@ mkevent() {
   [ "$(jq -r .stopped_reason <<<"$out")" = user ]
   # No workspace.* event may touch the container axis.
   [ "$(jq -c .container <<<"$out")" = "$(jq -c .container <<<"$rec")" ]
+  # Whole-record comparison: catches any field this event does not own,
+  # in particular .last_seen, which only attached/detached write.
+  expected=$(jq -c '.status = "stopped" | .stopped_reason = "user"' <<<"$rec")
+  [ "$(jq -S -c . <<<"$out")" = "$(jq -S -c . <<<"$expected")" ]
 
   ev=$(mkevent aaaa000000000003 2026-08-03T14:00:01.000Z workspace.vanished \
     '{"discovered_at":"2026-08-03T14:00:01.000Z","reason":"host_restart","last_boot_id":"old"}')
@@ -52,6 +68,8 @@ mkevent() {
   [ "$(jq -r .status <<<"$out")" = stopped ]
   [ "$(jq -r .stopped_reason <<<"$out")" = host_restart ]
   [ "$(jq -c .container <<<"$out")" = "$(jq -c .container <<<"$rec")" ]
+  expected=$(jq -c '.status = "stopped" | .stopped_reason = "host_restart"' <<<"$rec")
+  [ "$(jq -S -c . <<<"$out")" = "$(jq -S -c . <<<"$expected")" ]
 }
 
 @test "fold: attached and detached set last_seen and nothing else" {
@@ -95,13 +113,17 @@ mkevent() {
 }
 
 @test "fold: container.starting and container.failed leave status alone" {
-  local rec ev out
+  local rec ev out expected
   rec=$(jq -c '.status = "running"' <<<"$REC")
   ev=$(mkevent aaaa000000000007 2026-08-03T14:00:00.000Z container.starting '{"config_path":".devcontainer/devcontainer.json"}')
   out=$(dev_fold_apply "$rec" "$ev")
   [ "$(jq -r .container.status <<<"$out")" = starting ]
   [ "$(jq -r .container.verified <<<"$out")" = false ]
   [ "$(jq -r .status <<<"$out")" = running ]
+  # Whole-record comparison: catches any field this event does not own,
+  # in particular .last_seen, which only attached/detached write.
+  expected=$(jq -c '.container.status = "starting" | .container.verified = false' <<<"$rec")
+  [ "$(jq -S -c . <<<"$out")" = "$(jq -S -c . <<<"$expected")" ]
 
   ev=$(mkevent aaaa000000000008 2026-08-03T14:00:30.000Z container.failed \
     '{"reason":"compose up failed","up_exit_status":1,"stderr_tail":"no such service"}')
@@ -112,6 +134,12 @@ mkevent() {
   # The one rule an earlier draft broke: container failure is not workspace death.
   [ "$(jq -r .status <<<"$out")" = running ]
   [ "$(jq -r .stopped_reason <<<"$out")" = null ]
+  expected=$(jq -c '
+    .container.status = "failed"
+    | .container.observed_at = "2026-08-03T14:00:30.000Z"
+    | .container.up_exit_status = 1
+  ' <<<"$expected")
+  [ "$(jq -S -c . <<<"$out")" = "$(jq -S -c . <<<"$expected")" ]
 }
 
 @test "fold: container.lost nulls the id and leaves status alone" {
