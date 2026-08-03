@@ -116,3 +116,19 @@ DOC
   [ "${lines[2]}" = "$(printf '2\t5\tC\tthird=3')" ]
   [ "${#lines[@]}" -eq 3 ]
 }
+
+@test "sd_scan strips comments quote-aware so a sed s#...#g program survives" {
+  local f="$TEST_ROOT/comments.sh"
+  cat >"$f" <<'FIX'
+# whole line comment
+links="$(find . | sed 's#^\./##')" # trailing note
+echo "kept # inside quotes"
+FIX
+
+  sd_source sd_scan "$f"
+
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = "$(printf '1\t1\tC\t')" ]
+  [ "${lines[1]}" = "$(printf '1\t2\tC\tlinks="$(find . | sed '"'"'s#^\\./##'"'"')" ')" ]
+  [ "${lines[2]}" = "$(printf '1\t3\tC\techo "kept # inside quotes"')" ]
+}

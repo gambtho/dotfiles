@@ -63,12 +63,36 @@ function emit(tag, text) {
   }
   printf("%d\t%d\t%s\t%s\n", para, NR, tag, text)
 }
+function scan(line,   n, i, c) {
+  n = length(line)
+  i = 1
+  while (i <= n) {
+    c = substr(line, i, 1)
+    if (inq == "'") {
+      if (c == "'") inq = ""
+      i++
+      continue
+    }
+    if (inq == "\"") {
+      if (c == "\\") { i += 2; continue }
+      if (c == "\"") inq = ""
+      i++
+      continue
+    }
+    if (c == "\\") { i += 2; continue }
+    if (c == "'") { inq = "'"; i++; continue }
+    if (c == "\"") { inq = "\""; i++; continue }
+    if (c == "#" && (i == 1 || substr(line, i - 1, 1) ~ /[ \t]/)) return substr(line, 1, i - 1)
+    i++
+  }
+  return line
+}
 {
-  if ($0 ~ /^[ \t]*$/) {
+  if ($0 ~ /^[ \t]*$/ && inq == "") {
     brk = 1
     next
   }
-  emit("C", $0)
+  emit("C", scan($0))
 }
 SDAWK
 )
