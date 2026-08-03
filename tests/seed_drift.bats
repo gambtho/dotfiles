@@ -671,3 +671,57 @@ sd_drift() { run "$SEED_DRIFT" --template "$FIXTURE_TEMPLATE" --doc "$FIXTURE_DO
   [ "$status" -eq 0 ]
   [[ "$output" == *"2 checked, 1 skipped"* ]]
 }
+
+@test "a behind seed exits 1 and the finding names project, block and direction" {
+  setup_drift_fixtures
+  seed_from_template behindp
+  sed -i '/tree-sitter ready/d' "$(seed_path behindp)"
+
+  sd_drift
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"behindp  $(seed_path behindp)"* ]]
+  [[ "$output" == *"BEHIND   tree-sitter CLI      1 template lines absent from seed"* ]]
+  [[ "$output" == *'- echo "seed: tree-sitter ready"'* ]]
+  [[ "$output" == *"port from template; see catch-up-local-seed.md Step 2"* ]]
+  [[ "$output" == *"1 checked, 0 skipped, 1 blocks drifted (1 behind)"* ]]
+}
+
+@test "an ahead seed is a promotion candidate and never suggests overwriting" {
+  setup_drift_fixtures
+  seed_from_template aheadp
+  sed -i '/tree-sitter ready/a echo "seed: project extra"' "$(seed_path aheadp)"
+
+  sd_drift
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"AHEAD    tree-sitter CLI      1 seed lines absent from template"* ]]
+  [[ "$output" == *"promotion candidate; do NOT overwrite the seed"* ]]
+  [[ "$output" != *"overwrite the seed with"* ]]
+}
+
+@test "a reordered seed is DIVERGED and told to inspect by hand" {
+  setup_drift_fixtures
+  seed_from_template reorder
+  sed -i '5d' "$(seed_path reorder)"
+  sed -i '/tree-sitter ready/a install_tree_sitter "$TREE_SITTER_VERSION"' \
+    "$(seed_path reorder)"
+
+  sd_drift
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"DIVERGED tree-sitter CLI"* ]]
+  [[ "$output" == *"inspect by hand; do NOT overwrite the seed"* ]]
+}
+
+@test "an anchor absent from the seed is MISSING" {
+  setup_drift_fixtures
+  seed_from_template gone
+  sed -i '/core.excludesFile/d' "$(seed_path gone)"
+
+  sd_drift
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"MISSING  global gitignore     anchor absent from seed"* ]]
+  [[ "$output" == *"1 blocks drifted (1 missing)"* ]]
+}

@@ -471,6 +471,7 @@ sd_report_action() {
 
 sd_check_seed() {
   local seed="$1" name rc=0 block anchor verdict tnorm snorm sscan
+  local behind ahead nb na est tst
   name=$(basename -- "$(dirname -- "$(dirname -- "$seed")")")
   printf '%s  %s\n' "$name" "$seed"
   # Each file is scanned exactly once. The template scan is built by sd_main
@@ -487,11 +488,84 @@ sd_check_seed() {
   sd_tmp tnorm || return 2
   sd_tmp snorm || return 2
   while IFS=$'\t' read -r block anchor; do
-    sd_extract "$SD_TEMPLATE" "$SD_TEMPLATE_SCAN" "$anchor" >"$tnorm" || continue
-    sd_extract "$seed" "$sscan" "$anchor" >"$snorm" || continue
-    verdict=$(sd_verdict "$tnorm" "$snorm") || continue
+    # Branch on the ORIGINAL status. sd_extract returns 4 for "anchor absent"
+    # and 3 for "the block would not parse"; `if ! sd_extract` flattens both
+    # into one branch, so a seed whose block is unextractable would be
+    # reported as MISSING and exit 1 — a wrong verdict at the wrong severity.
+    tst=0
+    sd_extract "$SD_TEMPLATE" "$SD_TEMPLATE_SCAN" "$anchor" >"$tnorm" || tst=$?
+    case "$tst" in
+      0) ;;
+      4)
+        sd_report_block ERROR "$block" 'anchor absent from template'
+        rc=2
+        continue
+        ;;
+      *)
+        sd_report_block ERROR "$block" 'template block could not be extracted'
+        rc=2
+        continue
+        ;;
+    esac
+    est=0
+    sd_extract "$seed" "$sscan" "$anchor" >"$snorm" || est=$?
+    case "$est" in
+      0) ;;
+      4)
+        sd_report_block MISSING "$block" 'anchor absent from seed'
+        sd_report_action 'port the block; see catch-up-local-seed.md Step 2'
+        SD_MISSING=$((SD_MISSING + 1))
+        [ "$rc" -ge 1 ] || rc=1
+        continue
+        ;;
+      *)
+        sd_report_block ERROR "$block" 'seed block could not be extracted'
+        rc=2
+        continue
+        ;;
+    esac
+    # Same file-not-substitution rule as sd_verdict: a removed blank line must
+    # survive into the count and the samples.
+    sd_tmp behind || return 2
+    sd_tmp ahead || return 2
+    if ! sd_diff_lines "$tnorm" "$snorm" '<' >"$behind" ||
+      ! sd_diff_lines "$tnorm" "$snorm" '>' >"$ahead"; then
+      sd_report_block ERROR "$block" 'diff failed'
+      rc=2
+      continue
+    fi
+    nb=$(sd_count_lines "$behind")
+    na=$(sd_count_lines "$ahead")
+    # From the counts just computed, not `verdict=$(sd_verdict ...)`: that
+    # form re-runs the same two diffs, and its non-zero status on a diff
+    # failure would abort the program under `set -e` — exiting 3 outside the
+    # public 0/1/2 contract and skipping every remaining project.
+    verdict=$(sd_verdict_from_counts "$nb" "$na")
     case "$verdict" in
-      ok) sd_report_block ok "$block" '' ;;
+      ok)
+        sd_report_block ok "$block" ''
+        ;;
+      BEHIND)
+        sd_report_block BEHIND "$block" "$nb template lines absent from seed"
+        sd_report_samples <"$behind"
+        sd_report_action 'port from template; see catch-up-local-seed.md Step 2'
+        SD_BEHIND=$((SD_BEHIND + 1))
+        [ "$rc" -ge 1 ] || rc=1
+        ;;
+      AHEAD)
+        sd_report_block AHEAD "$block" "$na seed lines absent from template"
+        sd_report_samples <"$ahead"
+        sd_report_action 'promotion candidate; do NOT overwrite the seed'
+        SD_AHEAD=$((SD_AHEAD + 1))
+        [ "$rc" -ge 1 ] || rc=1
+        ;;
+      DIVERGED)
+        sd_report_block DIVERGED "$block" \
+          "$nb template lines absent from seed, $na seed lines absent from template"
+        sd_report_action 'inspect by hand; do NOT overwrite the seed'
+        SD_DIVERGED=$((SD_DIVERGED + 1))
+        [ "$rc" -ge 1 ] || rc=1
+        ;;
     esac
   done < <(sd_parse_doc "$SD_DOC")
   return "$rc"
