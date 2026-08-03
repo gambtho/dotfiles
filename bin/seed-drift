@@ -437,7 +437,7 @@ sd_verdict() {
   sd_verdict_from_counts "$behind" "$ahead"
 }
 
-SD_TEMPLATE="" SD_DOC=""
+SD_TEMPLATE="" SD_DOC="" SD_TEMPLATE_SCAN=""
 SD_CHECKED=0 SD_SKIPPED=0
 SD_BEHIND=0 SD_AHEAD=0 SD_DIVERGED=0 SD_MISSING=0
 SD_WORST=0

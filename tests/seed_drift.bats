@@ -787,3 +787,27 @@ sd_drift() { run "$SEED_DRIFT" --template "$FIXTURE_TEMPLATE" --doc "$FIXTURE_DO
   after=$(cksum <"$(seed_path clean)")
   [ "$before" = "$after" ]
 }
+
+@test "sd_check_seed can be called directly without sd_main having run" {
+  setup_drift_fixtures
+  seed_from_template clean
+
+  # Mirrors the review's exact repro: source the script (never call sd_main,
+  # so SD_TEMPLATE_SCAN is never built by anything), then set only SD_TEMPLATE
+  # and SD_DOC before calling sd_check_seed directly. A bare `source` must
+  # leave every global sd_check_seed touches in a defined, empty state under
+  # `set -u` — if SD_TEMPLATE_SCAN is left undeclared, this dies with
+  # "unbound variable" (exit 1) before it ever reaches the anchor check,
+  # which misreports a shell crash as "drift" under the public 0/1/2
+  # contract. With SD_TEMPLATE_SCAN declared empty, an unscanned template
+  # correctly reports an extraction ERROR (exit 2) instead of crashing.
+  run env SEED_DRIFT_SOURCE_ONLY=1 bash -c '
+    source "$1"
+    SD_TEMPLATE="$2"
+    SD_DOC="$3"
+    sd_check_seed "$4"
+  ' _ "$SEED_DRIFT" "$FIXTURE_TEMPLATE" "$FIXTURE_DOC" "$(seed_path clean)"
+
+  [ "$status" -eq 2 ]
+  [[ "$output" != *"unbound variable"* ]]
+}
