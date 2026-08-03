@@ -240,9 +240,8 @@ as_user git config --global core.excludesFile "$GITIGNORE"
 # deliberately NOT '*/.dotfiles/projects/*': links created after the stable-root
 # change target /opt/dotfiles/projects/... with no leading dot, and missing them
 # puts personal overlay files — CLAUDE.md included — into container git status.
-# though the host user's home-directory target is unresolvable here. Discover the
-# enclosing worktree from this mounted script's path. The fallback keeps the
-# seed usable when the project is not a Git checkout.
+# Discover the enclosing worktree from this mounted script's path. The fallback
+# keeps the seed usable when the project is not a Git checkout.
 WORKSPACE="$(git -C "$(dirname "$0")" rev-parse --show-toplevel 2>/dev/null || dirname "$0")"
 GI_MARK_BEGIN="# >>> overlay symlinks (auto, do not edit) >>>"
 GI_MARK_END="# <<< overlay symlinks (auto) <<<"
@@ -423,6 +422,10 @@ if as_user test -f "$SEED_HOME/.local/bin/nvim" && as_user test -x "$SEED_HOME/.
 elif [ -r "$DOTFILES_HOME/config/versions.env" ]; then
   # shellcheck source=/dev/null
   . "$DOTFILES_HOME/config/versions.env"
+  # `:-` like the checksums below it: a versions.env that predates the pin, or
+  # renames it, would otherwise take down the whole seed on the first expansion
+  # under `set -u` — before the non-fatal skip below ever gets to report it.
+  NVIM_VERSION="${NVIM_VERSION:-}"
   case "$(uname -m)" in
     x86_64) NVIM_ARCH=linux-x86_64 NVIM_SHA="${NVIM_SHA256_X86_64:-}" ;;
     aarch64 | arm64) NVIM_ARCH=linux-arm64 NVIM_SHA="${NVIM_SHA256_ARM64:-}" ;;
@@ -430,6 +433,8 @@ elif [ -r "$DOTFILES_HOME/config/versions.env" ]; then
   esac
   if [ -z "$NVIM_ARCH" ]; then
     echo "⚠️  seed: no neovim build for $(uname -m) — skipping (EDITOR falls back to vim)"
+  elif [ -z "$NVIM_VERSION" ]; then
+    echo "⚠️  seed: versions.env pins no NVIM_VERSION — skipping (EDITOR falls back to vim)"
   else
     echo "🌱 seed: installing neovim $NVIM_VERSION ($NVIM_ARCH)"
     NVIM_TMP="$(mktemp -d)"

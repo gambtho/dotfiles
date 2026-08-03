@@ -236,6 +236,11 @@ CASES
   run env HOME="$HOME" bash -c '
     source "$1/bin/relink"
   ' _ "$REPO_ROOT"
+  # Status and a positive marker, not just the absence of the prompt text: an
+  # abort before the loop produces no "already exists at" either, so the
+  # absence check on its own passes for exactly the failure it should catch.
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Creating symlinks for *.symlink files"* ]]
   [[ "$output" != *"already exists at"* ]]
 }
 

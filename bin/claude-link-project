@@ -226,11 +226,16 @@ unlink_local_md_shim() {
   first_line="$(head -n1 "$dst" 2>/dev/null || true)"
   local line_count
   line_count="$(wc -l <"$dst" 2>/dev/null || echo 0)"
+  # BSD/macOS `wc` pads its count with leading spaces, so a string compare
+  # against "1" fails on exactly the shims this is meant to remove. Strip the
+  # padding once, here, so both the test and the warning see a bare integer.
+  line_count="${line_count//[^0-9]/}"
+  line_count="${line_count:-0}"
   import_target="${first_line#@}"
   # Expected shim: exactly one @ import line whose target ends in this
   # overlay's exact slug and managed file. The home prefix is intentionally
   # irrelevant so a host-created shim can be removed from a container home.
-  if [[ "$line_count" == "1" && "$first_line" == @* ]] &&
+  if [[ "$line_count" -eq 1 && "$first_line" == @* ]] &&
     owned_overlay_target "$import_target" "$expected_suffix"; then
     rm "$dst"
     ok "removed import shim: $dst"

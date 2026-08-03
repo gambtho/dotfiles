@@ -499,11 +499,17 @@ run_unlinker() {
     "$PROJECT/.claude/commands/demo.md"
   ln -s /home/ghost/.dotfiles/projects/other/.claude/commands/keep.md \
     "$PROJECT/.claude/commands/keep.md"
+  # A relative target exercises the other half of link_ownership_target: BSD
+  # readlink has no -m, so on macOS ownership is decided by the manual
+  # dirname-join branch rather than by canonicalization.
+  ln -s ../../../.dotfiles/projects/demo/.claude/commands/rel.md \
+    "$PROJECT/.claude/commands/rel.md"
 
   run_unlinker
 
   [ "$status" -eq 0 ]
   [ ! -L "$PROJECT/.claude/commands/demo.md" ]
+  [ ! -L "$PROJECT/.claude/commands/rel.md" ]
   assert_symlink_target "$PROJECT/.claude/commands/keep.md" \
     /home/ghost/.dotfiles/projects/other/.claude/commands/keep.md
 }

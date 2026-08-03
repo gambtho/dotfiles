@@ -250,3 +250,45 @@ SCRIPT
   [[ "$output" == *"current: $KUBERNETES_CHANNEL"* ]]
   [[ "$output" == *"upstream: v9.99"* ]]
 }
+
+@test "versions update writes no pins when a remote HEAD cannot be resolved" {
+  local fixture="$TEST_ROOT/fixture"
+  mkdir -p "$fixture"
+  cp -R "$REPO_ROOT/bin" "$fixture/bin"
+  cp -R "$REPO_ROOT/config" "$fixture/config"
+
+  stub_command mise 'exit 0'
+  stub_command make 'exit 0'
+  # prezto resolves; zsh-defer answers with a ref-less error line, the shape a
+  # renamed or unreachable remote takes. `git ls-remote | awk` reports awk's
+  # status, so nothing about this is visible from the pipeline's exit code.
+  cat >"$STUB_BIN/git" <<SCRIPT
+#!/usr/bin/env bash
+case "\$*" in
+  *ls-remote*prezto*) printf '%s\tHEAD\n' '$PREZTO_REF' ;;
+  *ls-remote*zsh-defer*)
+    printf 'fatal: repository not found\n' >&2
+    exit 128
+    ;;
+  *diff*) exit 0 ;;
+esac
+SCRIPT
+  chmod +x "$STUB_BIN/git"
+  cat >"$STUB_BIN/curl" <<'SCRIPT'
+#!/usr/bin/env bash
+url="${@: -1}"
+case "$url" in
+  *dl.k8s.io*) printf 'v9.99.0\n' ;;
+esac
+SCRIPT
+  chmod +x "$STUB_BIN/curl"
+
+  run bash "$fixture/bin/versions" update
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"no pins were updated"* ]]
+  # Neither pin may move: PREZTO_REF resolved fine, but writing it alone leaves
+  # versions.env half-advanced with ZSH_DEFER_REF blank.
+  [ "$(grep '^PREZTO_REF=' "$fixture/config/versions.env")" = "PREZTO_REF=$PREZTO_REF" ]
+  [ "$(grep '^ZSH_DEFER_REF=' "$fixture/config/versions.env")" = "ZSH_DEFER_REF=$ZSH_DEFER_REF" ]
+}

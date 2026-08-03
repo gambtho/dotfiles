@@ -223,7 +223,7 @@ git commit -m "fix: unlink only owned project overlays"
 - Modify: `Makefile`, CI, `.gitignore`, `tests/repository_hygiene.bats`
 - Delete: tracked `build_gallery.cpython-314.pyc`
 
-- [ ] **Step 1: Write failing Python tests**
+- [x] **Step 1: Write failing Python tests**
 
 Load the module with minimal fake `PIL` modules. Test the wished-for API:
 
@@ -241,7 +241,7 @@ def test_atomic_output_preserves_destination_when_writer_fails(self):
 
 Add success, stage cleanup, empty ffmpeg rejection, retry, image writer, and manifest replacement tests.
 
-- [ ] **Step 2: Wire RED tests into the real gate**
+- [x] **Step 2: Wire RED tests into the real gate**
 
 Add `python-test` to `.PHONY` and make `check: syntax lint test python-test validate`. Define:
 
@@ -252,15 +252,15 @@ python-test:
 
 Add `python3` to CI apt installation, ignore `*.py[cod]`/`__pycache__/`, and reject tracked bytecode in hygiene tests.
 
-- [ ] **Step 3: Verify RED**
+- [x] **Step 3: Verify RED**
 
 Run `make python-test`. Expected: `publish_atomically` absent.
 
-- [ ] **Step 4: Implement atomic output**
+- [x] **Step 4: Implement atomic output**
 
 Use same-directory `tempfile.mkstemp`, invoke a writer with the stage path, reject required empty output, `os.replace` on success, and unlink the stage in `finally`. Route photos, videos, thumbnails, and manifests through it.
 
-- [ ] **Step 5: Verify GREEN and commit**
+- [x] **Step 5: Verify GREEN and commit**
 
 ```bash
 make python-test
@@ -279,7 +279,7 @@ git commit -m "fix: publish gallery outputs atomically"
 - Modify: `platforms/windows/setup-wt-claude-profiles.sh`
 - Create: `tests/windows_terminal_profiles.bats`
 
-- [ ] **Step 1: Write failing source and publication tests**
+- [x] **Step 1: Write failing source and publication tests**
 
 Source the script with `WT_PROFILES_SOURCE_ONLY=1` outside WSL and assert that
 no host discovery runs. Exercise a wished-for `publish_settings MERGED SETTINGS`
@@ -287,7 +287,7 @@ function with valid JSON fixtures. Precreate `settings.json.backup` and a fixed
 UTC timestamp collision, then assert that the old settings survive at the next
 `next_backup_path` name and the new settings replace the destination.
 
-- [ ] **Step 2: Write failing preservation and fixture tests**
+- [x] **Step 2: Write failing preservation and fixture tests**
 
 Stub `mv` to fail when publishing the staged settings file and assert that the
 live destination and its backup remain valid and that no stage remains. Add a
@@ -304,12 +304,12 @@ bash "$REPO_ROOT/platforms/windows/setup-wt-claude-profiles.sh" \
 Assert that supplying only one or two overrides is rejected rather than mixed
 with host discovery.
 
-- [ ] **Step 3: Verify RED**
+- [x] **Step 3: Verify RED**
 
 Run `bats tests/windows_terminal_profiles.bats`.
 Expected: sourcing trips the WSL guard and `publish_settings` is unavailable.
 
-- [ ] **Step 4: Extract main and implement atomic publication**
+- [x] **Step 4: Extract main and implement atomic publication**
 
 Source `bin/common.sh` relative to the script. Move argument parsing and all
 executable workflow into `main`, ending the file with:
@@ -327,7 +327,7 @@ same-directory `mktemp` stage, moving the old destination to its backup, then
 renaming the stage over the destination. On failure, restore the destination
 and remove the stage. Preserve dry-run and confirmation behavior.
 
-- [ ] **Step 5: Verify GREEN and commit**
+- [x] **Step 5: Verify GREEN and commit**
 
 ```bash
 bats tests/windows_terminal_profiles.bats
@@ -343,7 +343,7 @@ git commit -m "fix: publish Windows Terminal settings atomically"
 - Modify: `bin/versions`
 - Modify: `tests/dependency_pins.bats`
 
-- [ ] **Step 1: Write the failing update-policy test**
+- [x] **Step 1: Write the failing update-policy test**
 
 Build an isolated fixture containing `bin/versions`, `bin/common.sh`,
 `config/versions.env`, and `config/mise/config.toml`; stub `mise`, `git`, `curl`,
@@ -360,19 +360,19 @@ Build an isolated fixture containing `bin/versions`, `bin/common.sh`,
 
 Retain the existing check-mode assertion that reports channel drift.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run `bats tests/dependency_pins.bats --filter 'Kubernetes|versions update'`.
 Expected: `versions update` rewrites the fixture's channel.
 
-- [ ] **Step 3: Remove automatic channel mutation**
+- [x] **Step 3: Remove automatic channel mutation**
 
 In `update_pins`, query `latest_kubernetes_channel` only for the review message;
 do not pass it to `update_pin`. Print current and upstream values with a concise
 instruction to select a cluster-compatible minor deliberately. Leave mise,
 Git-ref, artifact, check, full-gate, and diff behavior unchanged.
 
-- [ ] **Step 4: Verify GREEN and commit**
+- [x] **Step 4: Verify GREEN and commit**
 
 ```bash
 bats tests/dependency_pins.bats
@@ -389,7 +389,7 @@ git commit -m "fix: keep Kubernetes channel operator-owned"
 - Modify: `bin/relink`
 - Modify: `tests/link_reconciliation.bats`
 
-- [ ] **Step 1: Write failing inventory tests**
+- [x] **Step 1: Write failing inventory tests**
 
 Create fixture sources including `core/shell/zshrc.symlink`, a `*.symlink` path
 containing spaces, `config/nvim/`, `config/tool with spaces/`, and excluded
@@ -406,12 +406,12 @@ Assert exact source/destination pairs and exclusions. Add integration assertions
 that bootstrap and relink consume this function while their existing conflict
 tests continue to prove their different policies.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run `bats tests/link_reconciliation.bats`.
 Expected: `managed_link_pairs` is not defined.
 
-- [ ] **Step 3: Implement the shared NUL-delimited enumerator**
+- [x] **Step 3: Implement the shared NUL-delimited enumerator**
 
 Add `managed_link_pairs DOTFILES_ROOT HOME_ROOT` to `bin/common.sh`. Emit each
 managed source followed by its destination, both NUL-terminated. Own the
@@ -425,7 +425,7 @@ managed source followed by its destination, both NUL-terminated. Own the
 Use the function in both callers without changing either `link_file` function,
 prompting, backup, replacement, skip reporting, or stale-link cleanup.
 
-- [ ] **Step 4: Verify GREEN and commit**
+- [x] **Step 4: Verify GREEN and commit**
 
 ```bash
 bats tests/link_reconciliation.bats tests/git_commit_msg_hook.bats
@@ -440,7 +440,7 @@ git commit -m "refactor: share managed dotfile inventory"
 - Modify: `tests/repository_hygiene.bats`
 - Modify: `tests/dependency_pins.bats`
 
-- [ ] **Step 1: Write failing documentation contracts**
+- [x] **Step 1: Write failing documentation contracts**
 
 Assert Quick Start uses the repository's canonical `gambtho/dotfiles` owner and
 explains that a pristine macOS bootstrap requires reviewing the Homebrew script
@@ -449,19 +449,19 @@ does not claim to advance Neovim plugins, and that the Neovim section documents
 the explicit lockfile-update workflow. Assert dependency-pin text describes the
 Kubernetes channel as operator-selected rather than automatically refreshed.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run `bats tests/repository_hygiene.bats tests/dependency_pins.bats`.
 Expected: stale clone owner, consent, Neovim, and Kubernetes wording fail.
 
-- [ ] **Step 3: Update README**
+- [x] **Step 3: Update README**
 
 Correct the clone URL, add the pristine-macOS consent command, describe
 `dot-update` as convergence to the tracked Neovim lockfile, document the manual
 lazy.nvim lockfile advancement and review flow, and state that `pins-update`
 reports Kubernetes drift without changing the selected compatible channel.
 
-- [ ] **Step 4: Verify GREEN and commit**
+- [x] **Step 4: Verify GREEN and commit**
 
 ```bash
 bats tests/repository_hygiene.bats tests/dependency_pins.bats
@@ -475,18 +475,18 @@ git commit -m "docs: clarify bootstrap and update ownership"
 - Modify as needed: files changed by Tasks 1-9
 - Modify: `implementation-notes.md`
 
-- [ ] **Step 1: Run `my:polish-core --fix`**
+- [x] **Step 1: Run `my:polish-core --fix`**
 
 Review all changes since `origin/main`, apply only high-confidence safe fixes,
 inspect every resulting edit, and record any unresolved correctness or
 maintainability findings in `implementation-notes.md`.
 
-- [ ] **Step 2: Re-run affected verification**
+- [x] **Step 2: Re-run affected verification**
 
 Run the focused tests and linters for every file changed by polish. Do not keep
 a polish edit whose relevant verification fails.
 
-- [ ] **Step 3: Commit polish edits when present**
+- [x] **Step 3: Commit polish edits when present**
 
 ```bash
 git add -- <only-files-changed-by-polish>
@@ -501,13 +501,13 @@ If polish makes no changes, do not create an empty commit.
 - Delete: `implementation-notes.md`
 - Modify if durable context warrants it: repository design/operations docs
 
-- [ ] **Step 1: Review durable notes and remove the temporary file**
+- [x] **Step 1: Review durable notes and remove the temporary file**
 
 Fold any lasting operational or design facts into the normal documentation,
 then delete `implementation-notes.md`. Confirm there are no placeholders,
 debug output, staged temporary files, or accidental pin changes.
 
-- [ ] **Step 2: Run complete fresh gates**
+- [x] **Step 2: Run complete fresh gates**
 
 ```bash
 make check
@@ -521,13 +521,13 @@ of `check`, the seed template appears in bash/shellcheck/shfmt discovery, the
 Compose rollback test covers failure after the first publish, and tracked
 Python bytecode is absent.
 
-- [ ] **Step 3: Run `my:change-explainer`**
+- [x] **Step 3: Run `my:change-explainer`**
 
 Produce the reviewer-facing explanation from the final diff and verification
 evidence. Include five knowledge-check questions because this cross-cutting
 change is substantial.
 
-- [ ] **Step 4: Commit final documentation cleanup**
+- [x] **Step 4: Commit final documentation cleanup**
 
 ```bash
 git add -u implementation-notes.md

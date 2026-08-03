@@ -144,6 +144,17 @@ update_pin() {
   mv "$temporary" "$PINS_FILE"
 }
 
+# Resolve a remote's HEAD into a validated full commit SHA. `git ls-remote |
+# awk` in an argument position cannot fail the caller: the pipeline's status is
+# awk's, and a dead network simply yields an empty field. Returning the value
+# through here instead lets update_pins abort before it writes an empty pin.
+resolve_remote_head() {
+  local repo="$1" sha
+  sha="$(git ls-remote "$repo" HEAD | awk 'NR == 1 { print $1 }')" || return 1
+  [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || return 1
+  printf '%s\n' "$sha"
+}
+
 update_pins() {
   # Resolve the upstream channel BEFORE any pin is written, and gate on the
   # lookup's exit status as well as its shape. A truncated or retried transfer
@@ -160,9 +171,23 @@ update_pins() {
     exit 1
   }
 
+  # Both remotes resolve before either pin is written, for the same reason the
+  # channel does: a half-updated versions.env pins one dependency to a fresh
+  # HEAD and the other to an empty string, and an empty PREZTO_REF is a clone
+  # that checks out whatever the default branch happens to be that day.
+  local prezto_head zsh_defer_head
+  prezto_head="$(resolve_remote_head "$PREZTO_REPO")" || {
+    printf 'error: unable to resolve %s HEAD; no pins were updated\n' "$PREZTO_REPO" >&2
+    exit 1
+  }
+  zsh_defer_head="$(resolve_remote_head "$ZSH_DEFER_REPO")" || {
+    printf 'error: unable to resolve %s HEAD; no pins were updated\n' "$ZSH_DEFER_REPO" >&2
+    exit 1
+  }
+
   with_mise_config write upgrade --bump --interactive
-  update_pin PREZTO_REF "$(git ls-remote "$PREZTO_REPO" HEAD | awk 'NR == 1 { print $1 }')"
-  update_pin ZSH_DEFER_REF "$(git ls-remote "$ZSH_DEFER_REPO" HEAD | awk 'NR == 1 { print $1 }')"
+  update_pin PREZTO_REF "$prezto_head"
+  update_pin ZSH_DEFER_REF "$zsh_defer_head"
   printf 'operator-managed Kubernetes channel: current: %s upstream: %s\n' \
     "$KUBERNETES_CHANNEL" "$latest_channel"
   printf '%s\n' 'select a cluster-compatible minor manually if upstream has moved'
