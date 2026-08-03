@@ -596,3 +596,78 @@ write_lines() {
   [ "$status" -eq 0 ]
   [ "$output" = "BEHIND" ]
 }
+
+write_drift_template() {
+  cat >"$1" <<'TPL'
+#!/usr/bin/env bash
+set -euo pipefail
+
+TREE_SITTER_VERSION=0.25.10
+install_tree_sitter "$TREE_SITTER_VERSION"
+echo "seed: tree-sitter ready"
+
+GITIGNORE="$HOME/.gitignore_global"
+git config --global core.excludesFile "$GITIGNORE"
+TPL
+}
+
+write_drift_doc() {
+  cat >"$1" <<'DOC'
+| Block | Anchor in template | Why it matters |
+|---|---|---|
+| tree-sitter CLI | `TREE_SITTER_VERSION` | pinned install |
+| global gitignore | `core.excludesFile` | git config |
+DOC
+}
+
+setup_drift_fixtures() {
+  export SEED_DRIFT_ROOT="$TEST_ROOT/workspace"
+  mkdir -p "$SEED_DRIFT_ROOT"
+  FIXTURE_TEMPLATE="$TEST_ROOT/template.sh"
+  FIXTURE_DOC="$TEST_ROOT/catch-up.md"
+  write_drift_template "$FIXTURE_TEMPLATE"
+  write_drift_doc "$FIXTURE_DOC"
+}
+
+make_project() { mkdir -p "$SEED_DRIFT_ROOT/$1/.devcontainer"; }
+seed_path() { printf '%s\n' "$SEED_DRIFT_ROOT/$1/.devcontainer/local-seed.sh"; }
+seed_from_template() { make_project "$1"; write_drift_template "$(seed_path "$1")"; }
+sd_drift() { run "$SEED_DRIFT" --template "$FIXTURE_TEMPLATE" --doc "$FIXTURE_DOC" "$@"; }
+
+@test "a clean seed exits 0 and is counted as checked" {
+  setup_drift_fixtures
+  seed_from_template clean
+
+  sd_drift
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"ok       tree-sitter CLI"* ]]
+  [[ "$output" == *"1 checked, 0 skipped, 0 blocks drifted"* ]]
+}
+
+@test "a candidate with .devcontainer but no seed is skipped and a plain directory is silent" {
+  setup_drift_fixtures
+  seed_from_template clean
+  make_project noseed
+  mkdir -p "$SEED_DRIFT_ROOT/unrelated"
+
+  sd_drift
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"noseed  .devcontainer/ present, no local-seed.sh - skipped"* ]]
+  [[ "$output" != *"unrelated"* ]]
+  [[ "$output" == *"1 checked, 1 skipped, 0 blocks drifted"* ]]
+}
+
+@test "checked plus skipped equals the number of candidates" {
+  setup_drift_fixtures
+  seed_from_template one
+  seed_from_template two
+  make_project three
+  mkdir -p "$SEED_DRIFT_ROOT/not-a-candidate"
+
+  sd_drift
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"2 checked, 1 skipped"* ]]
+}

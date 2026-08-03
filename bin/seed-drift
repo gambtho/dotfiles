@@ -437,6 +437,101 @@ sd_verdict() {
   sd_verdict_from_counts "$behind" "$ahead"
 }
 
+SD_TEMPLATE="" SD_DOC=""
+SD_CHECKED=0 SD_SKIPPED=0
+SD_BEHIND=0 SD_AHEAD=0 SD_DIVERGED=0 SD_MISSING=0
+SD_WORST=0
+
+sd_worst() {
+  [ "$1" -gt "$SD_WORST" ] && SD_WORST="$1"
+  return 0
+}
+
+sd_report_block() {
+  if [ -n "$3" ]; then
+    printf '  %-8s %-20s %s\n' "$1" "$2" "$3"
+  else
+    printf '  %-8s %s\n' "$1" "$2"
+  fi
+}
+
+sd_report_samples() {
+  local shown=0 line
+  while IFS= read -r line; do
+    [ "$shown" -lt 2 ] || break
+    [ "${#line}" -le 56 ] || line="${line:0:53}..."
+    printf '             - %s\n' "$line"
+    shown=$((shown + 1))
+  done
+}
+
+sd_report_action() {
+  printf '             -> %s\n' "$1"
+}
+
+sd_check_seed() {
+  local seed="$1" name rc=0 block anchor verdict tnorm snorm sscan
+  name=$(basename -- "$(dirname -- "$(dirname -- "$seed")")")
+  printf '%s  %s\n' "$name" "$seed"
+  # Each file is scanned exactly once. The template scan is built by sd_main
+  # and reused across every seed; the seed scan is built here, once, and
+  # reused across every block. sd_extract needs a scan path — passing "" would
+  # make awk fail to open its input on every call. `sd_tmp NAME`, never
+  # `$(sd_tmp)`: the subshell form deletes the temp dir on subshell exit.
+  sd_tmp sscan || return 2
+  if ! sd_scan "$seed" >"$sscan"; then
+    sd_report_block ERROR '(whole file)' 'seed could not be scanned'
+    sd_report_action 'check the seed parses; see catch-up-local-seed.md Step 3'
+    return 2
+  fi
+  sd_tmp tnorm || return 2
+  sd_tmp snorm || return 2
+  while IFS=$'\t' read -r block anchor; do
+    sd_extract "$SD_TEMPLATE" "$SD_TEMPLATE_SCAN" "$anchor" >"$tnorm" || continue
+    sd_extract "$seed" "$sscan" "$anchor" >"$snorm" || continue
+    verdict=$(sd_verdict "$tnorm" "$snorm") || continue
+    case "$verdict" in
+      ok) sd_report_block ok "$block" '' ;;
+    esac
+  done < <(sd_parse_doc "$SD_DOC")
+  return "$rc"
+}
+
+sd_summary() {
+  local drifted=$((SD_BEHIND + SD_AHEAD + SD_DIVERGED + SD_MISSING)) parts="" pair
+  for pair in "behind:$SD_BEHIND" "ahead:$SD_AHEAD" \
+    "diverged:$SD_DIVERGED" "missing:$SD_MISSING"; do
+    [ "${pair#*:}" -gt 0 ] || continue
+    parts="${parts:+$parts, }${pair#*:} ${pair%%:*}"
+  done
+  printf '\n%d checked, %d skipped, %d blocks drifted%s\n' \
+    "$SD_CHECKED" "$SD_SKIPPED" "$drifted" "${parts:+ ($parts)}"
+}
+
+sd_visit_dir() {
+  local dir="$1" seed="$1/.devcontainer/local-seed.sh" rc=0
+  if [ ! -f "$seed" ]; then
+    printf '%s  .devcontainer/ present, no local-seed.sh - skipped\n' \
+      "$(basename -- "$dir")"
+    SD_SKIPPED=$((SD_SKIPPED + 1))
+    return 0
+  fi
+  SD_CHECKED=$((SD_CHECKED + 1))
+  sd_check_seed "$seed" || rc=$?
+  sd_worst "$rc"
+}
+
+sd_visit_candidates() {
+  local root="${SEED_DRIFT_ROOT:-$HOME/workspace}" cand
+  shopt -s nullglob
+  for cand in "$root"/*/; do
+    cand="${cand%/}"
+    # A directory without .devcontainer/ is not a candidate: silent, not skipped.
+    [ -d "$cand/.devcontainer" ] || continue
+    sd_visit_dir "$cand"
+  done
+}
+
 sd_main() {
   local template="$SD_TEMPLATE_DEFAULT" doc="$SD_DOC_DEFAULT"
   SD_CANDIDATES=()
@@ -487,18 +582,28 @@ sd_main() {
     return 2
   fi
 
-  local blocks
+  local blocks name anchor absent=0
+  SD_TEMPLATE="$template"
+  SD_DOC="$doc"
+  SD_TEMPLATE_SCAN=""
+  if ! sd_tmp SD_TEMPLATE_SCAN; then
+    printf 'seed-drift: cannot create a temporary file\n' >&2
+    return 2
+  fi
+  if ! sd_scan "$template" >"$SD_TEMPLATE_SCAN"; then
+    printf 'seed-drift: cannot scan template %s\n' "$template" >&2
+    return 2
+  fi
   if ! blocks=$(sd_parse_doc "$doc"); then
     printf 'seed-drift: no block table found in %s\n' "$doc" >&2
     return 2
   fi
-
-  local name anchor absent=0
   while IFS=$'\t' read -r name anchor; do
-    # Raw grep is deliberately the Task 1 form; Task 6 replaces it with a check
-    # against the template scan's C records once the scanner exists, so that an
-    # anchor appearing only in a comment fails validation.
-    if ! grep -qF -- "$anchor" "$template"; then
+    # Against the scan, not `grep -qF "$anchor" "$template"`. Anchors name
+    # code, and the scan's C records are comment-stripped — so an anchor that
+    # survives only inside a comment now fails validation instead of passing
+    # and then extracting nothing.
+    if [ -z "$(sd_paras_with_anchor "$SD_TEMPLATE_SCAN" "$anchor")" ]; then
       printf 'seed-drift: anchor %s (block: %s) is absent from %s\n' \
         "$anchor" "$name" "$template" >&2
       absent=1
@@ -507,8 +612,9 @@ sd_main() {
   if [ "$absent" -ne 0 ]; then
     return 2
   fi
-
-  return 0
+  sd_visit_candidates
+  sd_summary
+  return "$SD_WORST"
 }
 
 if [ "${SEED_DRIFT_SOURCE_ONLY:-0}" != 1 ]; then
