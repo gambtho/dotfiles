@@ -186,7 +186,12 @@ if [ "$CURRENT_SHELL" != "$ZSH_PATH" ]; then
   if command -v chsh >/dev/null 2>&1 && $SUDO chsh -s "$ZSH_PATH" "$SEED_USER" >/dev/null 2>&1; then
     echo "🌱 seed: set $SEED_USER default shell to zsh"
   elif { [ -w /etc/passwd ] || [ "$(id -u)" -eq 0 ]; } &&
-    $SUDO sed -i "s#^\($SEED_USER:.*:\)[^:]*\$#\1$ZSH_PATH#" /etc/passwd; then
+    $SUDO sed -i "s#^\($SEED_USER:.*:\)[^:]*\$#\1$ZSH_PATH#" /etc/passwd &&
+    # sed exits 0 whether or not the address matched, so the edited field is read
+    # back before claiming success: a SEED_USER absent from /etc/passwd (NSS-only
+    # accounts) would otherwise report a shell change that never happened and let
+    # terminals keep opening bash past the fatal branch below.
+    [ "$(getent passwd "$SEED_USER" | cut -d: -f7)" = "$ZSH_PATH" ]; then
     echo "🌱 seed: set $SEED_USER default shell to zsh (via /etc/passwd)"
   else
     echo "❌ seed: could not set $SEED_USER's login shell to zsh — neither chsh" >&2
@@ -240,12 +245,18 @@ as_user git config --global core.excludesFile "$GITIGNORE"
 # deliberately NOT '*/.dotfiles/projects/*': links created after the stable-root
 # change target /opt/dotfiles/projects/... with no leading dot, and missing them
 # puts personal overlay files — CLAUDE.md included — into container git status.
-# Discover the enclosing worktree from this mounted script's path. The fallback
-# keeps the seed usable when the project is not a Git checkout.
-WORKSPACE="$(git -C "$(dirname "$0")" rev-parse --show-toplevel 2>/dev/null || dirname "$0")"
+# Substituted at render time from the container workspace inspected in Step 6,
+# not derived from this script's own path: the seed is mounted at an arbitrary
+# container path that need not sit inside the checkout, and `git rev-parse` from
+# there resolves to the wrong tree — or to nothing, whereupon the old fallback
+# scanned the mount directory and reported a successful refresh of zero entries.
+WORKSPACE="{WORKSPACE}"
 GI_MARK_BEGIN="# >>> overlay symlinks (auto, do not edit) >>>"
 GI_MARK_END="# <<< overlay symlinks (auto) <<<"
-if [ -d "$WORKSPACE" ]; then
+if [ ! -d "$WORKSPACE" ]; then
+  echo "⚠️  seed: workspace $WORKSPACE is not a directory — leaving ~/.gitignore" >&2
+  echo "   overlay-symlink list untouched; overlay files may show up in git status" >&2
+else
   overlay_links="$(cd "$WORKSPACE" && find . -type l -lname '*dotfiles/projects/*' \
     -not -path './node_modules/*' 2>/dev/null | sed 's#^\./##' | sort)"
   # Rewrite the marked block: strip any existing one, then append the current set.
@@ -435,6 +446,11 @@ elif [ -r "$DOTFILES_HOME/config/versions.env" ]; then
     echo "⚠️  seed: no neovim build for $(uname -m) — skipping (EDITOR falls back to vim)"
   elif [ -z "$NVIM_VERSION" ]; then
     echo "⚠️  seed: versions.env pins no NVIM_VERSION — skipping (EDITOR falls back to vim)"
+  elif [ -z "$NVIM_SHA" ]; then
+    # Same reason the tree-sitter block checks its checksum up front rather than
+    # leaving it to the verify step: an unpinned SHA turns every start into a
+    # ~10MB download that can only ever fail `sha256sum -c` at the end.
+    echo "⚠️  seed: versions.env pins no neovim checksum for $(uname -m) — skipping (EDITOR falls back to vim)"
   else
     echo "🌱 seed: installing neovim $NVIM_VERSION ($NVIM_ARCH)"
     NVIM_TMP="$(mktemp -d)"

@@ -10,7 +10,8 @@ setup() {
   SEED_FILE="$TEST_ROOT/local-seed.sh"
   REMOTE_HOME="/home/vscode"
   SEED_CONTAINER_PATH="/workspaces/demo/.devcontainer/local-seed.sh"
-  export HELPER OVERRIDE SEED_FILE REMOTE_HOME SEED_CONTAINER_PATH
+  CONTAINER_WORKSPACE="/workspaces/demo"
+  export HELPER OVERRIDE SEED_FILE REMOTE_HOME SEED_CONTAINER_PATH CONTAINER_WORKSPACE
 
   mkdir -p "$HOME/.claude/config" "$HOME/.claude/commands" \
     "$HOME/.claude/skills" "$HOME/.dotfiles" "$HOME/.ssh" \
@@ -27,6 +28,7 @@ run_helper() {
     --seed-file "$SEED_FILE" \
     --seed-container-path "$SEED_CONTAINER_PATH" \
     --base-command-json '["sleep","infinity"]' \
+    --workspace "$CONTAINER_WORKSPACE" \
     "$@" "$OVERRIDE"
 }
 
@@ -104,7 +106,8 @@ YAML
   run env HOME="$HOME" "$HELPER" \
     --service app --remote-user vscode --remote-home "$REMOTE_HOME" \
     --seed-file "$SEED_FILE" --seed-container-path "$SEED_CONTAINER_PATH" \
-    --base-command-json '"printf \"one two\"; sleep infinity"' "$OVERRIDE"
+    --base-command-json '"printf \"one two\"; sleep infinity"' \
+    --workspace "$CONTAINER_WORKSPACE" "$OVERRIDE"
 
   [ "$status" -eq 0 ]
   [ "$(yq -o=json -I=0 '.services.app.command' "$OVERRIDE")" = \
@@ -117,7 +120,7 @@ YAML
     run env HOME="$HOME" "$HELPER" \
       --service app --remote-user vscode --remote-home "$REMOTE_HOME" \
       --seed-file "$SEED_FILE" --seed-container-path "$SEED_CONTAINER_PATH" \
-      --base-command-json "$value" "$OVERRIDE"
+      --base-command-json "$value" --workspace "$CONTAINER_WORKSPACE" "$OVERRIDE"
     [ "$status" -eq 2 ]
     [[ "$output" == *"invalid --base-command-json"* ]]
     [ ! -e "$OVERRIDE" ]
@@ -127,16 +130,40 @@ YAML
   run env HOME="$HOME" "$HELPER" \
     --service app --remote-user vscode --remote-home home/vscode \
     --seed-file "$SEED_FILE" --seed-container-path "$SEED_CONTAINER_PATH" \
-    --base-command-json '["sleep"]' "$OVERRIDE"
+    --base-command-json '["sleep"]' --workspace "$CONTAINER_WORKSPACE" "$OVERRIDE"
   [ "$status" -eq 2 ]
   [[ "$output" == *"absolute --remote-home"* ]]
 
   run env HOME="$HOME" "$HELPER" \
     --service app --remote-user vscode --remote-home "$REMOTE_HOME" \
     --seed-file "$SEED_FILE" --seed-container-path relative/seed.sh \
-    --base-command-json '["sleep"]' "$OVERRIDE"
+    --base-command-json '["sleep"]' --workspace "$CONTAINER_WORKSPACE" "$OVERRIDE"
   [ "$status" -eq 2 ]
   [[ "$output" == *"absolute --seed-container-path"* ]]
+  [ ! -e "$OVERRIDE" ]
+  [ ! -e "$SEED_FILE" ]
+}
+
+@test "a missing or unusable workspace fails before writes" {
+  run env HOME="$HOME" "$HELPER" \
+    --service app --remote-user vscode --remote-home "$REMOTE_HOME" \
+    --seed-file "$SEED_FILE" --seed-container-path "$SEED_CONTAINER_PATH" \
+    --base-command-json '["sleep"]' "$OVERRIDE"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--workspace required"* ]]
+
+  local value
+  # Relative, and paths whose characters are sed-replacement metacharacters:
+  # both would render a seed pointing somewhere other than the checkout.
+  for value in workspaces/demo '/workspaces/de#mo' '/workspaces/de&mo'; do
+    run env HOME="$HOME" "$HELPER" \
+      --service app --remote-user vscode --remote-home "$REMOTE_HOME" \
+      --seed-file "$SEED_FILE" --seed-container-path "$SEED_CONTAINER_PATH" \
+      --base-command-json '["sleep"]' --workspace "$value" "$OVERRIDE"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"--workspace"* ]]
+  done
+
   [ ! -e "$OVERRIDE" ]
   [ ! -e "$SEED_FILE" ]
 }
@@ -206,7 +233,9 @@ EOF
 
   [ "$status" -eq 0 ]
   grep -Fqx 'SEED_USER="vscode"' "$SEED_FILE"
-  grep -Fq 'git -C "$(dirname "$0")" rev-parse --show-toplevel' "$SEED_FILE"
+  # The seed is mounted at .devcontainer/local-seed.sh, one level below the
+  # workspace, so a path derived from `dirname $0` would differ from this.
+  grep -Fqx "WORKSPACE=\"$CONTAINER_WORKSPACE\"" "$SEED_FILE"
   run rg -n '\{USER\}|\{WORKSPACE\}' "$SEED_FILE"
   [ "$status" -eq 1 ]
 }

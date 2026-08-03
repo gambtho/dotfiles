@@ -143,6 +143,35 @@ SCRIPT
   done
 }
 
+@test "versions check rejects a malformed Kubernetes channel instead of reporting it" {
+  stub_command mise 'exit 0'
+  cat >"$STUB_BIN/git" <<SCRIPT
+#!/usr/bin/env bash
+case "\$*" in
+  *prezto*) printf '%s\tHEAD\n' '$PREZTO_REF' ;;
+  *zsh-defer*) printf '%s\tHEAD\n' '$ZSH_DEFER_REF' ;;
+esac
+SCRIPT
+  chmod +x "$STUB_BIN/git"
+  # A successful transfer of the wrong body: an interstitial or error page from
+  # the CDN exits 0, so only the shape check can catch it. Reporting it verbatim
+  # would announce the pin as outdated against a value nothing upstream moved to.
+  cat >"$STUB_BIN/curl" <<'SCRIPT'
+#!/usr/bin/env bash
+url="${@: -1}"
+case "$url" in
+  *dl.k8s.io*) printf '<!doctype html>\n' ;;
+esac
+SCRIPT
+  chmod +x "$STUB_BIN/curl"
+
+  run env PATH="$PATH" bash "$REPO_ROOT/bin/versions" check
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"error channel kubernetes: unable to query upstream stable channel"* ]]
+  [[ "$output" != *"outdated channel kubernetes"* ]]
+}
+
 @test "versions check fails when the Kubernetes channel lookup fails" {
   stub_command mise 'exit 0'
   cat >"$STUB_BIN/git" <<SCRIPT

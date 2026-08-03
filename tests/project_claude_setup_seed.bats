@@ -106,8 +106,12 @@ extract_seed_script() {
   # aborts the whole script under `set -euo pipefail` before any assertion runs.
   # SEED_HOME is resolved from passwd at runtime, which would resolve to the
   # real home rather than the sandbox, so it is pinned to $HOME for the test.
+  # WORKSPACE is templated as {WORKSPACE} and rendered by the helper from the
+  # workspace the setup skill inspected; the sandbox stands in for it here.
+  mkdir -p "$TEST_ROOT/workspace"
   sed -i \
     -e "s|^SEED_USER=\"{USER}\"|SEED_USER=\"$(id -un)\"|" \
+    -e "s|^WORKSPACE=\"{WORKSPACE}\"|WORKSPACE=\"$TEST_ROOT/workspace\"|" \
     -e "s|^SEED_HOME=\"\$(getent passwd .*|SEED_HOME=\"$HOME\"|" \
     -e "s|SEED_CLAUDE=\"/host-seed/.claude\"|SEED_CLAUDE=\"$TEST_ROOT/host-seed/.claude\"|" \
     -e "s|SEED_DOTFILES=\"/host-seed/.dotfiles\"|SEED_DOTFILES=\"$TEST_ROOT/host-seed/.dotfiles\"|" \
@@ -390,10 +394,11 @@ extract_seed_script() {
   [[ "$output" == *"codex: function"* ]]
 }
 
-@test "seed discovers a workspace when mounted beneath its .devcontainer directory" {
+@test "seed refreshes the gitignore list from the workspace it was rendered with" {
   local workspace="$TEST_ROOT/workspace"
   mkdir -p "$workspace/.devcontainer" "$workspace/.claude"
-  git -C "$workspace" init -q
+  # The seed sits below the workspace, the shape that used to be discovered by
+  # rev-parse; the rendered WORKSPACE is what decides now, not this location.
   mv "$SEED_SCRIPT" "$workspace/.devcontainer/local-seed.sh"
   SEED_SCRIPT="$workspace/.devcontainer/local-seed.sh"
   ln -s /foreign/.dotfiles/projects/demo/agent.md \
@@ -403,6 +408,19 @@ extract_seed_script() {
 
   [ "$status" -eq 0 ]
   grep -Fqx '.claude/personal-agent.md' "$HOME/.gitignore"
+}
+
+@test "an unusable workspace warns instead of reporting an empty refresh" {
+  # A workspace that is not a directory is a rendering or mount mistake. The old
+  # rev-parse fallback made it indistinguishable from a real checkout with no
+  # overlay links: both printed "refreshed ... (0 entries)".
+  rmdir "$TEST_ROOT/workspace"
+
+  run bash "$SEED_SCRIPT"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"is not a directory"* ]]
+  [[ "$output" != *"refreshed ~/.gitignore overlay-symlink list"* ]]
 }
 
 @test "a failed marketplace install still starts the container's base command" {
@@ -723,6 +741,21 @@ extract_seed_script() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"nvim already present"* ]]
   [ "$(readlink "$HOME/.config/nvim")" = "$HOME/.dotfiles/config/nvim" ]
+}
+
+@test "a neovim pin without a checksum skips the install instead of downloading" {
+  # The checksum is checked before the download, not left to the verify step: an
+  # unpinned SHA can only ever fail `sha256sum -c` after the whole tarball is on
+  # disk, once per container start.
+  mkdir -p "$TEST_ROOT/host-seed/.dotfiles/config"
+  printf 'NVIM_VERSION=0.11.0\n' \
+    >"$TEST_ROOT/host-seed/.dotfiles/config/versions.env"
+
+  run bash "$SEED_SCRIPT"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"pins no neovim checksum"* ]]
+  [[ "$output" != *"installing neovim"* ]]
 }
 
 @test "a real ~/.config/nvim is left alone" {

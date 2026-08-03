@@ -20,6 +20,7 @@ Usage: claude-merge-compose-override \
   --seed-file HOST_PATH \
   --seed-container-path CONTAINER_PATH \
   --base-command-json JSON \
+  --workspace CONTAINER_WORKSPACE \
   [--share-host-auth] \
   [--dry-run] \
   OVERRIDE_PATH
@@ -46,6 +47,7 @@ REMOTE_HOME=""
 SEED_FILE=""
 SEED_CONTAINER_PATH=""
 BASE_COMMAND_JSON=""
+WORKSPACE=""
 SHARE_HOST_AUTH=0
 DRY_RUN=0
 OVERRIDE=""
@@ -82,6 +84,11 @@ while [[ $# -gt 0 ]]; do
       BASE_COMMAND_JSON="$2"
       shift 2
       ;;
+    --workspace)
+      require_value "$@"
+      WORKSPACE="$2"
+      shift 2
+      ;;
     --share-host-auth)
       SHARE_HOST_AUTH=1
       shift
@@ -115,6 +122,14 @@ done
 [[ "$SEED_CONTAINER_PATH" == /* && "$SEED_CONTAINER_PATH" != *:* && "$SEED_CONTAINER_PATH" != *$'\n'* ]] ||
   die_usage "absolute --seed-container-path required"
 [[ -n "$BASE_COMMAND_JSON" ]] || die_usage "--base-command-json required"
+[[ -n "$WORKSPACE" ]] || die_usage "--workspace required"
+[[ "$WORKSPACE" == /* && "$WORKSPACE" != *:* && "$WORKSPACE" != *$'\n'* ]] ||
+  die_usage "absolute --workspace required"
+# `#`, `&` and `\` are metacharacters in the sed replacement that renders this
+# into the seed; a container workspace path containing one is rejected rather
+# than silently mangled.
+[[ "$WORKSPACE" != *'#'* && "$WORKSPACE" != *'&'* && "$WORKSPACE" != *'\'* ]] ||
+  die_usage "invalid --workspace"
 [[ -n "$OVERRIDE" ]] || die_usage "override path required"
 [[ "$OVERRIDE" != "$SEED_FILE" ]] || die_usage "override and seed paths must differ"
 [[ -d "$(dirname "$OVERRIDE")" ]] || die_usage "override directory does not exist"
@@ -225,7 +240,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-sed "s/^SEED_USER=\"{USER}\"$/SEED_USER=\"$REMOTE_USER\"/" \
+sed -e "s/^SEED_USER=\"{USER}\"$/SEED_USER=\"$REMOTE_USER\"/" \
+  -e "s#^WORKSPACE=\"{WORKSPACE}\"\$#WORKSPACE=\"$WORKSPACE\"#" \
   "$SEED_TEMPLATE" >"$SEED_STAGE"
 if grep -Eq '\{USER\}|\{WORKSPACE\}' "$SEED_STAGE"; then
   die "unresolved seed template placeholder"

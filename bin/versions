@@ -122,6 +122,14 @@ check_pins() {
     printf 'error channel kubernetes: unable to query upstream stable channel\n' >&2
     return 1
   }
+  # Same shape check update_pins applies before it writes. curl can exit 0 on a
+  # truncated transfer, and comparing KUBERNETES_CHANNEL against that garbage
+  # reports "outdated ... -> <html>" — a check that says the pin is stale when
+  # nothing upstream moved.
+  [[ "$latest_channel" =~ ^v[0-9]+\.[0-9]+$ ]] || {
+    printf 'error channel kubernetes: unable to query upstream stable channel\n' >&2
+    return 1
+  }
   if [[ "$KUBERNETES_CHANNEL" == "$latest_channel" ]]; then
     printf 'current channel kubernetes %s\n' "$KUBERNETES_CHANNEL"
   else

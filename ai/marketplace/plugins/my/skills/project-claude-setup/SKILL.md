@@ -92,7 +92,7 @@ Read concrete files. **Don't infer**; cite the file you read.
 | Build/test/lint commands | `Makefile` (parse target names), `package.json` scripts, `justfile`, `Taskfile.yml`, `.github/workflows/*.yml` |
 | Container **remoteUser** (terminal/extension user — what mounts + seed target) | **Best: ask the user to run `id; echo $HOME` in their VS Code terminal.** Else `remoteUser` in `devcontainer.json`, or read the *VS Code-launched* container (`docker ps -q --filter "label=devcontainer.local_folder=$PWD"` — scoped to *this* workspace, never the first devcontainer running. **On Windows+WSL that label holds a UNC path** (`\\wsl.localhost\Ubuntu\home\you\proj`), so a POSIX `$PWD` match returns nothing even when the container is healthy; fall back to `devcontainer.config_file=$PWD/.devcontainer/devcontainer.json` or `com.docker.compose.project.working_dir=$PWD/.devcontainer`, which are always POSIX. See `devcontainer_cid()` in Step 8. **Require exactly one non-empty ID before any `docker exec`**: zero means rebuild first, more than one must be disambiguated by hand. Then `docker exec <it> sh -c 'id -un'` and `sh -c 'getent passwd "$1" \| cut -d: -f6' _ <user>` for the home, treating empty passwd output as "no such user" rather than falling through to a guess). NOT uid 1000, NOT `docker inspect .Config.User`, and NOT a container you `docker compose up` yourself — each can resolve to a different user than the one VS Code opens terminals as. Record the resulting user/home pair once and reuse it for every mount target, the seed, and verification. |
 | Container service name | `service` in `devcontainer.json` if set, else the first key under `services:` in the base compose file |
-| Container workspace path | `workspaceFolder` in `devcontainer.json`, otherwise the Compose/devcontainer default confirmed in the running VS Code terminal |
+| Container workspace path | `workspaceFolder` in `devcontainer.json`, otherwise the Compose/devcontainer default confirmed in the running VS Code terminal. Record it as `workspace=<path>` and pass that exact value to `--workspace` in Step 6 — the seed no longer derives it from its own mount point |
 | Seed privilege (Compose, non-root user) | Passwordless `sudo` already supplied by the image or existing Dockerfile; inspect only, and verify a running container with `sudo -n true` when available |
 
 Summarize in 4–6 lines:
@@ -357,10 +357,15 @@ COMPOSE_DIR="$(dirname "$BASE_COMPOSE")"
 OVERRIDE_COMPOSE="$COMPOSE_DIR/docker-compose.override.yml"
 SEED_FILE="$COMPOSE_DIR/local-seed.sh"
 SEED_CONTAINER_PATH="<absolute container path for $SEED_FILE>"
+# The container workspace recorded as workspace=<path> in Step 2. The seed no
+# longer derives this from its own mount point, which may sit outside the checkout.
+CONTAINER_WORKSPACE="<workspace=<path> from Step 2>"
 BASE_COMMAND_JSON="<non-empty JSON string or array resolved from the base service>"
 AUTH_ARGS=()
 # Add this only after the user explicitly opts in. The default remains no host SSH or gh credentials.
-(( SHARE_HOST_AUTH )) && AUTH_ARGS+=(--share-host-auth)
+# `:-0` because SHARE_HOST_AUTH is unset unless the user opted in, and a bare
+# arithmetic expansion of an unset name aborts under `set -u`.
+(( ${SHARE_HOST_AUTH:-0} )) && AUTH_ARGS+=(--share-host-auth)
 
 ~/.dotfiles/bin/claude-merge-compose-override \
   --service "$SERVICE" \
@@ -369,7 +374,8 @@ AUTH_ARGS=()
   --seed-file "$SEED_FILE" \
   --seed-container-path "$SEED_CONTAINER_PATH" \
   --base-command-json "$BASE_COMMAND_JSON" \
-  "${AUTH_ARGS[@]}" \
+  --workspace "$CONTAINER_WORKSPACE" \
+  "${AUTH_ARGS[@]+"${AUTH_ARGS[@]}"}" \
   "$OVERRIDE_COMPOSE"
 ```
 
