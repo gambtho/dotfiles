@@ -115,7 +115,8 @@ it runs the full detector before the function under test is even called.
 - `.bats` files are emitted for neither linter (`shfmt` takes only `tests/test_helper.bash`), so `tests/seed_drift.bats` is unlinted. That gap is deliberate, consistent with all 22 existing suites, and is left alone.
 - The detector is strictly **READ-ONLY**: seeds are gitignored, hand-owned files with no `git diff` and no revert path. Nothing in `bin/seed-drift` may open a seed for writing.
 - `SEED_VERSION` must never be compared, and must never appear as an anchor or in a comparison path.
-- `command make check` must pass — it runs `syntax lint test python-test validate`; baseline before this work is **323 passing bats tests**.
+- `command make check` must pass — it runs `syntax lint test python-test validate`; baseline before this work is **330 passing bats tests** (measured on this branch
+  after rebasing onto `origin/main` at #41, which added seven).
 - All bats tests use fixture `--template` / `--doc` files and a fixture `SEED_DRIFT_ROOT`; no test may depend on the real `~/workspace`.
 - `make` is shadowed by a zsh function in this environment; every make invocation is written `command make`.
 
