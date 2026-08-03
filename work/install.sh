@@ -36,9 +36,13 @@ setup_kubernetes_repository() {
 
 setup_microsoft_repositories() {
   download_apt_key https://packages.microsoft.com/keys/microsoft.asc /etc/apt/keyrings/microsoft.gpg || return
-  printf 'deb [arch=%s signed-by=/etc/apt/keyrings/microsoft.gpg] https://packages.microsoft.com/repos/azure-cli/ %s main\n' \
-    "$(dpkg --print-architecture)" "$(. /etc/os-release && printf '%s' "$VERSION_CODENAME")" |
-    sudo tee /etc/apt/sources.list.d/azure-cli.list >/dev/null || return
+  # The azure-cli installer ships a deb822 azure-cli.sources. Write the same
+  # file rather than a legacy .list so the two cannot describe the same repo at
+  # once, which makes apt warn about duplicate targets on every update.
+  printf 'Types: deb\nURIs: https://packages.microsoft.com/repos/azure-cli/\nSuites: %s\nComponents: main\nArchitectures: %s\nSigned-By: /etc/apt/keyrings/microsoft.gpg\n' \
+    "$(. /etc/os-release && printf '%s' "$VERSION_CODENAME")" "$(dpkg --print-architecture)" |
+    sudo tee /etc/apt/sources.list.d/azure-cli.sources >/dev/null || return
+  sudo rm -f /etc/apt/sources.list.d/azure-cli.list || return
   printf '%s\n' 'deb [arch=amd64,arm64,armhf signed-by=/etc/apt/keyrings/microsoft.gpg] https://packages.microsoft.com/repos/code stable main' |
     sudo tee /etc/apt/sources.list.d/vscode.list >/dev/null
 }
