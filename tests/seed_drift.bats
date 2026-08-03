@@ -588,3 +588,11 @@ write_lines() {
   [ "$status" -eq 0 ]
   [ "$output" = "DIVERGED" ]
 }
+
+@test "sd_verdict reports BEHIND when the only difference is a removed blank line" {
+  printf 'export A=1\n\nexport B=2\n' >"$TEST_ROOT/tpl"
+  printf 'export A=1\nexport B=2\n' >"$TEST_ROOT/seed"
+  sd_source sd_verdict "$TEST_ROOT/tpl" "$TEST_ROOT/seed"
+  [ "$status" -eq 0 ]
+  [ "$output" = "BEHIND" ]
+}
