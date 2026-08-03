@@ -19,7 +19,7 @@ setup() {
   run bash "$REPO_ROOT/bin/versions" list
   [ "$status" -eq 0 ]
   [[ "$output" == *"mise go 1.25.12"* ]]
-  [[ "$output" == *"git prezto 9739c8bdc9c288ffc134c209225543180e32ff69"* ]]
+  [[ "$output" == *"git prezto $PREZTO_REF"* ]]
   [[ "$output" == *"git zsh-defer $ZSH_DEFER_REF"* ]]
   [[ "$output" == *"channel kubernetes v1.28"* ]]
   [[ "$output" == *"artifact mise v2026.7.18"* ]]
