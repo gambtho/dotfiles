@@ -54,6 +54,34 @@ sd_parse_doc() {
   awk "$SD_DOC_AWK" <"$doc"
 }
 
+SD_SCAN_AWK=$(
+  cat <<'SDAWK'
+function emit(tag, text) {
+  if (para == 0 || brk) {
+    para++
+    brk = 0
+  }
+  printf("%d\t%d\t%s\t%s\n", para, NR, tag, text)
+}
+{
+  if ($0 ~ /^[ \t]*$/) {
+    brk = 1
+    next
+  }
+  emit("C", $0)
+}
+SDAWK
+)
+
+sd_scan() {
+  local file="$1"
+  if [ ! -r "$file" ]; then
+    printf 'seed-drift: cannot read %s\n' "$file" >&2
+    return 3
+  fi
+  awk "$SD_SCAN_AWK" <"$file"
+}
+
 sd_main() {
   local template="$SD_TEMPLATE_DEFAULT" doc="$SD_DOC_DEFAULT"
   SD_CANDIDATES=()

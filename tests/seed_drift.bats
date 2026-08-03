@@ -103,3 +103,16 @@ DOC
   [[ "$output" == *"is absent from"* ]]
   [[ "$output" == *"core.excludesFile"* ]]
 }
+
+@test "sd_scan numbers every line and starts a new paragraph after a blank line" {
+  local f="$TEST_ROOT/paras.sh"
+  printf '%s\n' 'first=1' 'second=2' '' '   ' 'third=3' >"$f"
+
+  sd_source sd_scan "$f"
+
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = "$(printf '1\t1\tC\tfirst=1')" ]
+  [ "${lines[1]}" = "$(printf '1\t2\tC\tsecond=2')" ]
+  [ "${lines[2]}" = "$(printf '2\t5\tC\tthird=3')" ]
+  [ "${#lines[@]}" -eq 3 ]
+}
