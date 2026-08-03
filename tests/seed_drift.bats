@@ -513,18 +513,33 @@ echo after' ]
   [ "$(cat "$behind")" = '{ chown -R "$SEED_UID:$SEED_GID" "$NVIM_DIST.new" 2>/dev/null ||' ]
 }
 
-@test "the ownership rule is exact: target, -R, identity, and unrelated chown all survive" {
-  scan_line 1 1 C '{ chown -R "$SEED_UID:$SEED_GID" "$OTHER.new" 2>/dev/null ||'
-  scan_line 1 2 C '{ chown "$SEED_UID:$SEED_GID" "$NVIM_DIST.new" 2>/dev/null ||'
-  scan_line 1 3 C '{ chown -R "$SEED_UID:0" "$NVIM_DIST.new" 2>/dev/null ||'
-  scan_line 1 4 C 'chown -R node:node /app'
-  norm
-  [ "$status" -eq 0 ]
-  [ "$output" = '{ chown -R "$SEED_UID:$SEED_GID" "$OTHER.new" 2>/dev/null ||
-{ chown "$SEED_UID:$SEED_GID" "$NVIM_DIST.new" 2>/dev/null ||
-{ chown -R "$SEED_UID:0" "$NVIM_DIST.new" 2>/dev/null ||
-chown -R node:node /app' ]
+# Fix round 1 (Task 7 review, I-1): pins SD_OWNERSHIP_GUARD_PATTERN to
+# SD_OWNERSHIP_DROP so the two cannot drift apart silently. The guard exists
+# to recognize when AHEAD_FILE still carries a trace of an idiom line; if a
+# future idiom entry is added to the array whose distinguishing tokens the
+# guard doesn't cover, this is exactly the class of bug the find-half
+# regression test (below, in the Task 7 end-to-end block) caught — and it
+# would recur silently, one entry at a time, without this test.
+@test "SD_OWNERSHIP_GUARD_PATTERN matches every SD_OWNERSHIP_DROP entry" {
+  run env SEED_DRIFT_SOURCE_ONLY=1 bash -c '
+    source "$1"
+    for line in "${SD_OWNERSHIP_DROP[@]}"; do
+      grep -qE "$SD_OWNERSHIP_GUARD_PATTERN" <<<"$line" || printf "MISS: %s\n" "$line"
+    done
+  ' _ "$SEED_DRIFT"
+  [ -z "$output" ]
 }
+
+# Fix round 1 (Task 7 review, M-2): this test used to claim to cover "the
+# ownership rule" but only ever exercised sd_normalize passthrough — it would
+# pass identically with no ownership rule at all, since sd_normalize stopped
+# touching these lines the moment the drop moved to sd_apply_ownership_rule
+# (see "sd_normalize no longer drops..." above). That passthrough claim is
+# already covered there; the actual rule (target/-R/identity/unrelated-chown
+# all producing real drift) is covered end-to-end, against the real tool, by
+# the four "ownership idiom ... is drift, not dropped" tests and "an
+# unrelated chown line is compared normally" below. Deleted as a redundant,
+# uncatchable duplicate rather than kept as a test that cannot fail.
 
 @test "sd_extract unions windows in file order, deduped, and normalizes" {
   printf 'echo ANCHOR one\n\necho middle\n\nas_user echo ANCHOR two\n' >"$FIX/f.sh"
@@ -807,6 +822,10 @@ sd_drift() { run "$SEED_DRIFT" --template "$FIXTURE_TEMPLATE" --doc "$FIXTURE_DO
   [[ "$output" == *"1 checked, 0 skipped"* ]]
 }
 
+# Fix round 1 (Task 7 review, M-3): a t7_-style duplicate of this test ("a
+# malformed seed does not suppress drift reporting for the others") was
+# folded in here rather than kept alongside it — same intent, weaker
+# assertions (no "does not parse" text, no exact summary count).
 @test "a malformed seed exits 2 without suppressing drift in the others" {
   setup_drift_fixtures
   seed_from_template aaa-broken
@@ -1028,8 +1047,12 @@ t7_run() {
 @test "privilege normalization is portable and keyword-boundary correct" {
   # `\b` is a GNU sed extension; BSD sed (macOS, which this script supports)
   # silently fails to match it, so every `if as_user ...` line would keep its
-  # privilege word and report as drift on a Mac and clean on Linux.
-  run grep -n '\\b' "$SEED_DRIFT"
+  # privilege word and report as drift on a Mac and clean on Linux. Fix
+  # round 1 (Task 7 review, M-4): scoped to sd_drop_priv_prefix's own body —
+  # the only function that runs `sed -E` — rather than the whole file, so
+  # unrelated prose elsewhere (this comment included) is free to name the
+  # token without tripping the check.
+  run bash -c "sed -n '/^sd_drop_priv_prefix()/,/^}/p' '$SEED_DRIFT' | grep -n '\\\\b'"
   [ "$status" -ne 0 ]
 
   scan_line 1 1 C 'if as_user test -x /x; then'
@@ -1510,6 +1533,34 @@ SEEDEOF
   [[ "$output" == *DIVERGED* ]]
 }
 
+@test "ownership idiom with only the find-half identity changed is drift, not dropped" {
+  t7_setup
+  t7_doc "neovim install" NVIM_DIST
+  t7_own_tpl
+  # The chown half is byte-identical to the template on both sides here, so
+  # it cancels in the diff and never reaches AHEAD_FILE. Only the find-half
+  # (`! -uid`) changed. A guard that only looks for `chown` in AHEAD_FILE is
+  # blind to this: AHEAD_FILE holds nothing but the modified find-half line,
+  # which has no `chown` token, so the guard fires anyway, the idiom is
+  # dropped from BEHIND_FILE, and the block reports AHEAD with "promotion
+  # candidate" advice — silently wrong, since the seed's ownership check no
+  # longer verifies the group it claims to.
+  cat >"$SEED" <<'SEEDEOF'
+#!/usr/bin/env bash
+
+NVIM_DIST="$SEED_HOME/.local/nvim"
+if [ -d "$NVIM_DIST.new" ]; then
+  { chown -R "$SEED_UID:$SEED_GID" "$NVIM_DIST.new" 2>/dev/null ||
+    [ -z "$(find "$NVIM_DIST.new" \( ! -uid "0" -o ! -gid "$SEED_GID" \) -print -quit 2>/dev/null)" ]; } &&
+    as_user mv "$NVIM_DIST.new" "$NVIM_DIST"
+fi
+SEEDEOF
+  t7_run "$SEED"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *DIVERGED* ]]
+  [[ "$output" != *"promotion candidate"* ]]
+}
+
 @test "an unrelated chown line is compared normally" {
   t7_setup
   t7_doc "neovim install" NVIM_DIST
@@ -1739,36 +1790,4 @@ SEEDEOF
   [ "$status" -eq 1 ]
   after="$(find "$WS" -type f -exec sha256sum {} + | sort)"
   [ "$before" = "$after" ]
-}
-
-@test "a malformed seed does not suppress drift reporting for the others" {
-  t7_setup
-  t7_doc "tree-sitter CLI" TREE_SITTER_VERSION
-  cat >"$TPL" <<'TPLEOF'
-#!/usr/bin/env bash
-
-if [ -n "${TREE_SITTER_VERSION:-}" ]; then
-  echo "seed: installing tree-sitter $TREE_SITTER_VERSION"
-  as_user mv "$TS_BIN.new" "$TS_BIN"
-fi
-TPLEOF
-  mkdir -p "$WS/broken/.devcontainer"
-  cat >"$WS/broken/.devcontainer/local-seed.sh" <<'BROKENEOF'
-#!/usr/bin/env bash
-
-if [ -n "${TREE_SITTER_VERSION:-}" ]; then
-  echo "unterminated"
-BROKENEOF
-  cat >"$SEED" <<'SEEDEOF'
-#!/usr/bin/env bash
-
-if [ -n "${TREE_SITTER_VERSION:-}" ]; then
-  echo "seed: installing tree-sitter $TREE_SITTER_VERSION"
-fi
-SEEDEOF
-  run "$REPO_ROOT/bin/seed-drift" --template "$TPL" --doc "$DOC"
-  [ "$status" -eq 2 ]
-  [[ "$output" == *broken* ]]
-  [[ "$output" == *demo* ]]
-  [[ "$output" == *BEHIND* ]]
 }
