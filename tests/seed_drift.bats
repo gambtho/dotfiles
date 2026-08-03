@@ -443,3 +443,27 @@ $HOME/literal' ]
   [ "$status" -eq 0 ]
   [ "$output" = '  «HOME»/x   # not a comment' ]
 }
+
+@test "sd_normalize drops the four exact ownership-verification lines" {
+  scan_line 1 1 C '      { chown -R "$SEED_UID:$SEED_GID" "$NVIM_DIST.new" 2>/dev/null ||'
+  scan_line 1 2 C '        [ -z "$(find "$NVIM_DIST.new" \( ! -uid "$SEED_UID" -o ! -gid "$SEED_GID" \) -print -quit 2>/dev/null)" ]; } &&'
+  scan_line 1 3 C '      { chown "$SEED_UID:$SEED_GID" "$TS_BIN.new" 2>/dev/null ||'
+  scan_line 1 4 C '        [ -z "$(find "$TS_BIN.new" \( ! -uid "$SEED_UID" -o ! -gid "$SEED_GID" \) -print -quit 2>/dev/null)" ]; } &&'
+  scan_line 1 5 C 'echo after'
+  norm
+  [ "$status" -eq 0 ]
+  [ "$output" = "echo after" ]
+}
+
+@test "the ownership rule is exact: target, -R, identity, and unrelated chown all survive" {
+  scan_line 1 1 C '{ chown -R "$SEED_UID:$SEED_GID" "$OTHER.new" 2>/dev/null ||'
+  scan_line 1 2 C '{ chown "$SEED_UID:$SEED_GID" "$NVIM_DIST.new" 2>/dev/null ||'
+  scan_line 1 3 C '{ chown -R "$SEED_UID:0" "$NVIM_DIST.new" 2>/dev/null ||'
+  scan_line 1 4 C 'chown -R node:node /app'
+  norm
+  [ "$status" -eq 0 ]
+  [ "$output" = '{ chown -R "$SEED_UID:$SEED_GID" "$OTHER.new" 2>/dev/null ||
+{ chown "$SEED_UID:$SEED_GID" "$NVIM_DIST.new" 2>/dev/null ||
+{ chown -R "$SEED_UID:0" "$NVIM_DIST.new" 2>/dev/null ||
+chown -R node:node /app' ]
+}

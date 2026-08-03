@@ -232,6 +232,18 @@ sd_window() {
   printf '%s %s\n' "$start" "$end"
 }
 
+# The non-root ownership-verification idiom, matched fully literally after
+# normalization: template lines 491-492 (chown -R, "$NVIM_DIST.new") and
+# 594-595 (plain chown, "$TS_BIN.new"). Two physical lines each, because the
+# first ends in `||` and the second in `; } &&`. Nothing in the match is free —
+# a changed flag, target or identity is drift, not vocabulary.
+SD_OWNERSHIP_DROP=(
+  '{ chown -R "$SEED_UID:$SEED_GID" "$NVIM_DIST.new" 2>/dev/null ||'
+  '[ -z "$(find "$NVIM_DIST.new" \( ! -uid "$SEED_UID" -o ! -gid "$SEED_GID" \) -print -quit 2>/dev/null)" ]; } &&'
+  '{ chown "$SEED_UID:$SEED_GID" "$TS_BIN.new" 2>/dev/null ||'
+  '[ -z "$(find "$TS_BIN.new" \( ! -uid "$SEED_UID" -o ! -gid "$SEED_GID" \) -print -quit 2>/dev/null)" ]; } &&'
+)
+
 sd_neutralize_paths() {
   sed -e 's/\${SEED_HOME}/«HOME»/g' -e 's/\$SEED_HOME/«HOME»/g' \
     -e 's/\${DOTFILES_HOME}/«HOME»\/.dotfiles/g' \
@@ -269,7 +281,7 @@ sd_drop_priv_prefix() {
 }
 
 sd_normalize_code_line() {
-  local line="$1"
+  local line="$1" drop
   line="${line//$'\t'/ }"
   while [ "$line" != "${line//  / }" ]; do line="${line//  / }"; done
   line="${line#"${line%%[![:space:]]*}"}"
@@ -277,6 +289,9 @@ sd_normalize_code_line() {
   [ -n "$line" ] || return 0
   line=$(sd_drop_priv_prefix "$line")
   [ -n "$line" ] || return 0
+  for drop in "${SD_OWNERSHIP_DROP[@]}"; do
+    [ "$line" = "$drop" ] && return 0
+  done
   printf '%s\n' "$line" | sd_neutralize_paths
 }
 
