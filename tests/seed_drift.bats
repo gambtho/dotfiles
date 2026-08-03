@@ -501,3 +501,22 @@ fi' ]
   sd_source sd_extract "$FIX/f.sh" "$FIX/f.sh.scan" NOPE
   [ "$status" -eq 4 ]
 }
+
+write_lines() {
+  local path="$1"
+  shift
+  printf '%s\n' "$@" >"$path"
+}
+
+@test "sd_diff_lines names the lines missing from each side" {
+  write_lines "$TEST_ROOT/tpl" 'export A=1' 'run_old'
+  write_lines "$TEST_ROOT/seed" 'export A=1' 'run_new'
+
+  sd_source sd_diff_lines "$TEST_ROOT/tpl" "$TEST_ROOT/seed" '<'
+  [ "$status" -eq 0 ]
+  [ "$output" = "run_old" ]
+
+  sd_source sd_diff_lines "$TEST_ROOT/tpl" "$TEST_ROOT/seed" '>'
+  [ "$status" -eq 0 ]
+  [ "$output" = "run_new" ]
+}

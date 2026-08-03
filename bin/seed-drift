@@ -355,6 +355,56 @@ sd_extract() {
     sd_normalize
 }
 
+# One temp dir for the whole run, removed by a single trap. Callers never
+# clean up individually, so no early `return` can leak a file.
+SD_TMPDIR=""
+
+# sd_tmp VARNAME — assigns a fresh temp file path to VARNAME in the CALLER's
+# scope, and must never be called inside a command substitution. `$(sd_tmp)`
+# runs in a subshell: the subshell creates the directory, installs the EXIT
+# trap, prints the path, and then — on subshell exit — fires that trap and
+# `rm -rf`s the directory before the caller can write a single byte. The
+# directory and its trap have to be established in the shell that will
+# actually use them, so the path comes back through `printf -v`, not stdout.
+sd_tmp() {
+  local __sd_new
+  if [ -z "$SD_TMPDIR" ]; then
+    SD_TMPDIR="$(mktemp -d)" || return 3
+    trap 'rm -rf -- "$SD_TMPDIR"' EXIT HUP INT TERM
+  fi
+  __sd_new="$(mktemp "$SD_TMPDIR/sd.XXXXXX")" || return 3
+  printf -v "$1" '%s' "$__sd_new"
+}
+
+sd_diff_lines() {
+  # TPL_NORM SEED_NORM MARKER; MARKER is '<' for template-only lines and '>'
+  # for seed-only lines. The diff is ordered, so a pure reordering yields lines
+  # under both markers rather than comparing equal.
+  #
+  # diff goes to a FILE, not a command substitution. A removed blank line is
+  # emitted by diff as the record `< ` (marker, space, empty text); command
+  # substitution would strip the trailing newline and sed, preserving the
+  # absent final newline, would then emit zero bytes — making a deleted blank
+  # line read as no difference at all. Via a file every record keeps its
+  # newline and the blank one survives.
+  local rc=0 raw
+  sd_tmp raw || return 3
+  diff -- "$1" "$2" >"$raw" || rc=$?
+  if [ "$rc" -gt 1 ]; then
+    printf 'seed-drift: diff failed comparing %s and %s\n' "$1" "$2" >&2
+    return 3
+  fi
+  sed -n "s/^$3 //p" "$raw"
+}
+
+# Takes a FILE, and counts every record including empty ones. `grep -c .`
+# would skip exactly the blank lines this tool has to notice.
+sd_count_lines() {
+  local n
+  n=$(wc -l <"$1")
+  printf '%s' "${n//[[:space:]]/}"
+}
+
 sd_main() {
   local template="$SD_TEMPLATE_DEFAULT" doc="$SD_DOC_DEFAULT"
   SD_CANDIDATES=()
