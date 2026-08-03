@@ -638,6 +638,174 @@ extract_seed_script() {
   [ "$(cat "$HOME/.config/nvim/init.lua")" = mine ]
 }
 
+# --- tree-sitter CLI -------------------------------------------------------
+# config/nvim pins nvim-treesitter to its `main` branch, whose installer shells
+# out to `tree-sitter build` for every parser with no fallback to a bare `cc`.
+# A container with gcc but no CLI still fails every parser at first launch.
+
+# Stages a gzipped fake tree-sitter, points a curl stub at it, and writes a
+# versions.env whose checksum matches. Both arch SHAs get the same value so the
+# suite passes on x86_64 and arm64 runners alike.
+stage_tree_sitter_download() {
+  local body="$1"
+  mkdir -p "$TEST_ROOT/host-seed/.dotfiles/config" "$HOME/.local/bin"
+
+  printf '#!/usr/bin/env bash\n%s\n' "$body" >"$TEST_ROOT/ts-bin"
+  # -n suppresses the mtime header, so the checksum is reproducible.
+  gzip -n -c "$TEST_ROOT/ts-bin" >"$TEST_ROOT/ts.gz"
+  TS_FIXTURE="$TEST_ROOT/ts.gz"
+  export TS_FIXTURE
+
+  local sha
+  sha="$(sha256sum "$TS_FIXTURE" | cut -d' ' -f1)"
+  cat >"$TEST_ROOT/host-seed/.dotfiles/config/versions.env" <<EOF
+TREE_SITTER_VERSION=0.26.11
+TREE_SITTER_SHA256_X86_64=$sha
+TREE_SITTER_SHA256_ARM64=$sha
+EOF
+
+  # The nvim block shares this curl stub, so keep it out of the way by
+  # presenting an already-installed binary — this test is about tree-sitter.
+  printf '#!/usr/bin/env bash\nexit 0\n' >"$HOME/.local/bin/nvim"
+  chmod +x "$HOME/.local/bin/nvim"
+
+  stub_command curl '
+set -euo pipefail
+out=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -o) out="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+[ -n "$out" ] || exit 1
+cp "$TS_FIXTURE" "$out"
+'
+}
+
+@test "the seed installs the tree-sitter CLI nvim-treesitter needs" {
+  stage_tree_sitter_download 'exit 0'
+
+  run bash "$SEED_SCRIPT"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"tree-sitter ready"* ]]
+  [ -x "$HOME/.local/bin/tree-sitter" ]
+  # The staging file must never survive a successful install.
+  [ ! -e "$HOME/.local/bin/tree-sitter.new" ]
+}
+
+@test "an existing tree-sitter is left alone" {
+  stage_tree_sitter_download 'exit 0'
+  stub_command tree-sitter 'exit 0'
+
+  run bash "$SEED_SCRIPT"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"tree-sitter already present"* ]]
+  [ ! -e "$HOME/.local/bin/tree-sitter" ]
+}
+
+@test "a warm restart reuses the installed tree-sitter instead of re-downloading" {
+  # The seed runs as a container `command:`, whose PATH does not include
+  # ~/.local/bin — so a `command -v` guard alone would miss the binary this block
+  # installed and pull 26MB again on every single container start. The guard has
+  # to test the path.
+  stage_tree_sitter_download 'exit 0'
+  printf '#!/usr/bin/env bash\nexit 0\n' >"$HOME/.local/bin/tree-sitter"
+  chmod +x "$HOME/.local/bin/tree-sitter"
+  # Any download attempt is a failure of this test, so make one impossible.
+  stub_command curl 'exit 1'
+
+  run bash "$SEED_SCRIPT"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"tree-sitter already present"* ]]
+  [[ "$output" != *"installing tree-sitter"* ]]
+}
+
+@test "an unpinned checksum skips tree-sitter before spending a download" {
+  stage_tree_sitter_download 'exit 0'
+  sed -i 's/^TREE_SITTER_SHA256_\(.*\)=.*/TREE_SITTER_SHA256_\1=/' \
+    "$TEST_ROOT/host-seed/.dotfiles/config/versions.env"
+  stub_command curl 'exit 1'
+
+  run bash "$SEED_SCRIPT"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"no pinned tree-sitter build"* ]]
+  [[ "$output" != *"installing tree-sitter"* ]]
+  [ ! -e "$HOME/.local/bin/tree-sitter" ]
+}
+
+@test "a tree-sitter on PATH that cannot run is replaced, not trusted" {
+  # `command -v` is satisfied by a shim whose tool was never installed, and by a
+  # glibc binary on a musl base that dies at exec time. Trusting either latches
+  # the block shut: "already present" every start, parsers failing every start.
+  stage_tree_sitter_download 'exit 0'
+  stub_command tree-sitter 'exit 127'
+
+  run bash "$SEED_SCRIPT"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"tree-sitter ready"* ]]
+  # Asserted the way the seed's own guard asserts it: the bit says nothing about
+  # whether the file can actually run, which is the whole point of this test.
+  run "$HOME/.local/bin/tree-sitter" --version
+  [ "$status" -eq 0 ]
+}
+
+@test "an installed tree-sitter that stops running is reinstalled" {
+  stage_tree_sitter_download 'exit 0'
+  # Executable, on the expected path, and broken — the shape a base-image change
+  # leaves behind. The guard must not accept it on the strength of `test -x`.
+  printf '#!/usr/bin/env bash\nexit 127\n' >"$HOME/.local/bin/tree-sitter"
+  chmod +x "$HOME/.local/bin/tree-sitter"
+
+  run bash "$SEED_SCRIPT"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"tree-sitter ready"* ]]
+  run "$HOME/.local/bin/tree-sitter" --version
+  [ "$status" -eq 0 ]
+}
+
+@test "a tree-sitter that cannot execute is not installed" {
+  # The release binaries are dynamically linked against glibc, so on a musl base
+  # image the file is executable and still dies at exec time. `test -x` would
+  # accept it and leave a binary that looks installed while nvim-treesitter keeps
+  # failing — so the seed validates by actually running --version.
+  stage_tree_sitter_download 'exit 127'
+
+  run bash "$SEED_SCRIPT"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"tree-sitter install failed"* ]]
+  [ ! -e "$HOME/.local/bin/tree-sitter" ]
+  [ ! -e "$HOME/.local/bin/tree-sitter.new" ]
+}
+
+@test "a checksum mismatch never lands a tree-sitter binary" {
+  stage_tree_sitter_download 'exit 0'
+  sed -i 's/^TREE_SITTER_SHA256_\(.*\)=.*/TREE_SITTER_SHA256_\1=deadbeef/' \
+    "$TEST_ROOT/host-seed/.dotfiles/config/versions.env"
+
+  run bash "$SEED_SCRIPT"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"tree-sitter install failed"* ]]
+  [ ! -e "$HOME/.local/bin/tree-sitter" ]
+}
+
+@test "a missing versions.env skips tree-sitter without aborting the seed" {
+  # Non-fatal throughout: treesitter highlighting is a nicety, and an editor that
+  # opens without it beats a container that will not start.
+  run bash "$SEED_SCRIPT"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"tree-sitter ready"* ]]
+}
+
 @test "the dotfiles shell loader is installed exactly once" {
   # load-custom.zsh is the supported entry point. Globbing **/*.zsh instead also
   # matches load-custom.zsh itself, so the whole tree loads twice — aliases

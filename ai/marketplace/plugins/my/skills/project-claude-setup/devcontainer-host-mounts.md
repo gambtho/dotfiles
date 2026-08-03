@@ -791,6 +791,91 @@ if [ -d "$DOTFILES_HOME/config/nvim" ]; then
   fi
 fi
 
+# tree-sitter CLI (ephemeral target ~/.local/bin). config/nvim pins
+# nvim-treesitter to its `main` branch, whose installer shells out to
+# `tree-sitter build` for EVERY parser — there is no fallback to a bare `cc`, so
+# a container with gcc but no CLI still fails every parser with
+# `Error during "tree-sitter build": ... ENOENT ... (cmd): 'tree-sitter'`, on the
+# bootstrap set (bash, c, lua, markdown, vimdoc, ...) at the first nvim launch.
+# On a host the CLI arrives from mise (`npm:tree-sitter-cli` in
+# config/mise/config.toml); the seed never runs mise, so it is supplied here as a
+# pinned release binary. Keep TREE_SITTER_VERSION in step with the mise pin.
+#
+# Always-run for the same reason as nvim: ~/.local/bin is the ephemeral writable
+# layer, so a version-gated step would be skipped as "already seeded" and the
+# binary would be gone after every rebuild.
+#
+# Non-fatal throughout, like nvim: treesitter highlighting is a nicety, and an
+# editor that opens without it beats a container that will not start.
+#
+# Two guards, in this order, and the order matters. `command -v` alone is NOT
+# enough: the seed runs as a container `command:`, whose PATH does not include
+# ~/.local/bin, so on every warm start our own installed binary would look
+# missing and be re-downloaded (26MB) each launch. The path test is the
+# PATH-independent guard for what this block installed; the `command -v` probe
+# only catches a CLI the image itself supplies somewhere else on PATH.
+#
+# Both guards confirm by RUNNING --version, for the same reason the install path
+# below does: `test -x` and `command -v` are satisfied by a binary that dies at
+# exec time (glibc release binary on a musl base) and by a shim whose tool was
+# never installed. Either one would latch this block shut — the seed would report
+# "already present" on every start while nvim-treesitter kept failing every
+# parser. Confirming by execution instead makes the guard self-healing: an
+# unusable CLI is simply replaced on the next start.
+if as_user test -f "$SEED_HOME/.local/bin/tree-sitter" \
+  && as_user "$SEED_HOME/.local/bin/tree-sitter" --version >/dev/null 2>&1; then
+  echo "🌱 seed: tree-sitter already present"
+elif as_user sh -c 'command -v tree-sitter >/dev/null 2>&1 && tree-sitter --version >/dev/null 2>&1'; then
+  echo "🌱 seed: tree-sitter already present (image-provided)"
+elif [ -r "$DOTFILES_HOME/config/versions.env" ]; then
+  # shellcheck source=/dev/null
+  . "$DOTFILES_HOME/config/versions.env"
+  case "$(uname -m)" in
+    x86_64) TS_ARCH=linux-x64 TS_SHA="${TREE_SITTER_SHA256_X86_64:-}" ;;
+    aarch64 | arm64) TS_ARCH=linux-arm64 TS_SHA="${TREE_SITTER_SHA256_ARM64:-}" ;;
+    *) TS_ARCH="" TS_SHA="" ;;
+  esac
+  # TS_SHA is checked here, not left to the verify step: an unpinned checksum
+  # would otherwise cost a 26MB download before failing, every single start.
+  if [ -z "$TS_ARCH" ] || [ -z "$TS_SHA" ] || [ -z "${TREE_SITTER_VERSION:-}" ]; then
+    echo "⚠️  seed: no pinned tree-sitter build for $(uname -m) — skipping (treesitter parsers will not compile)"
+  else
+    echo "🌱 seed: installing tree-sitter $TREE_SITTER_VERSION ($TS_ARCH)"
+    TS_TMP="$(mktemp -d)"
+    TS_BIN="$SEED_HOME/.local/bin/tree-sitter"
+    # The release asset is a single gzipped binary (.gz), NOT a tarball — there
+    # is no directory to extract and no runtime tree to place beside it.
+    #
+    # Staged as tree-sitter.new on the destination filesystem and validated by
+    # actually RUNNING it before the final mv. `test -x` is not enough: these are
+    # dynamically linked against glibc, so on a musl base image the file is
+    # executable and still dies with "not found" at exec time — which would
+    # surface later as the same confusing treesitter build failure this block
+    # exists to fix, only now with a binary sitting in place looking installed.
+    #
+    # Bounded curl timeouts for the same reason as nvim: the default is no
+    # timeout at all, so a blackholed CDN would hang container start forever.
+    if curl -fsSL --connect-timeout 10 --max-time 300 \
+      -o "$TS_TMP/tree-sitter.gz" "https://github.com/tree-sitter/tree-sitter/releases/download/v${TREE_SITTER_VERSION}/tree-sitter-${TS_ARCH}.gz" \
+      && echo "$TS_SHA  $TS_TMP/tree-sitter.gz" | sha256sum -c - >/dev/null 2>&1 \
+      && gunzip -c "$TS_TMP/tree-sitter.gz" > "$TS_TMP/tree-sitter" \
+      && as_user mkdir -p "$SEED_HOME/.local/bin" \
+      && rm -f "$TS_BIN.new" \
+      && cp "$TS_TMP/tree-sitter" "$TS_BIN.new" \
+      && chmod 0755 "$TS_BIN.new" \
+      && { chown "$SEED_UID:$SEED_GID" "$TS_BIN.new" 2>/dev/null \
+        || [ -z "$(find "$TS_BIN.new" \( ! -uid "$SEED_UID" -o ! -gid "$SEED_GID" \) -print -quit 2>/dev/null)" ]; } \
+      && as_user "$TS_BIN.new" --version >/dev/null 2>&1 \
+      && as_user mv "$TS_BIN.new" "$TS_BIN"; then
+      echo "🌱 seed: tree-sitter ready"
+    else
+      echo "⚠️  seed: tree-sitter install failed (non-fatal; treesitter parsers will not compile)"
+    fi
+    rm -f "$TS_BIN.new"
+    rm -rf "$TS_TMP"
+  fi
+fi
+
 # --- Versioned gate --------------------------------------------------------
 # ---------------------------------------------------------------------------
 # AUTHORED ~/.claude COPY — ALWAYS-RUN, deliberately ABOVE the version gate.
