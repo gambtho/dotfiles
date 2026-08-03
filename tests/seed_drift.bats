@@ -251,3 +251,37 @@ FIX
   [ "$status" -eq 3 ]
   [[ "$output" == *"unterminated heredoc E"* ]]
 }
+
+# --- Task 3 helpers ---------------------------------------------------------
+# Sourcing goes through Task 1's `sd_source`, which sets SEED_DRIFT_SOURCE_ONLY=1.
+# make_scan needs its own form because it captures stdout to a file rather than
+# going through bats' `run`, but it sets the same guard.
+make_scan() {
+  env SEED_DRIFT_SOURCE_ONLY=1 bash -c \
+    'source "$1"; sd_scan "$2"' _ "$SEED_DRIFT" "$1" >"$1.scan"
+}
+
+@test "sd_paras_with_anchor matches C-tag text as a fixed string, every occurrence" {
+  printf 'A="lname '"'"'*dotfiles/projects/*'"'"'"\n\necho other\n\nB="lname '"'"'*dotfiles/projects/*'"'"'"\n' >"$FIX/f.sh"
+  make_scan "$FIX/f.sh"
+  sd_source sd_paras_with_anchor "$FIX/f.sh.scan" "lname '*dotfiles/projects/*'"
+  [ "$status" -eq 0 ]
+  [ "$output" = "1
+3" ]
+}
+
+@test "sd_paras_with_anchor ignores an anchor that appears only in a comment" {
+  printf 'echo hi # TREE_SITTER_VERSION is pinned\n\nTS=1\n' >"$FIX/f.sh"
+  make_scan "$FIX/f.sh"
+  sd_source sd_paras_with_anchor "$FIX/f.sh.scan" TREE_SITTER_VERSION
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "sd_para_range reports the first and last source line of a paragraph" {
+  printf 'a\nb\n\nc\nd\ne\n' >"$FIX/f.sh"
+  make_scan "$FIX/f.sh"
+  sd_source sd_para_range "$FIX/f.sh.scan" 2
+  [ "$status" -eq 0 ]
+  [ "$output" = "4 6" ]
+}

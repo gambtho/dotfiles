@@ -186,6 +186,21 @@ sd_scan() {
   awk "$SD_SCAN_AWK" <"$file"
 }
 
+sd_paras_with_anchor() {
+  # $4 would stop at the next tab; take everything after the third tab so a
+  # tab-bearing line is matched in full.
+  awk -F'\t' -v a="$2" '
+    $3 == "C" {
+      t = $0
+      sub(/^[^\t]*\t[^\t]*\t[^\t]*\t/, "", t)
+      if (index(t, a) && !seen[$1]++) print $1
+    }' "$1"
+}
+
+sd_para_range() {
+  awk -F'\t' -v p="$2" '$1 == p { if (!s) s = $2; e = $2 } END { if (s) print s, e }' "$1"
+}
+
 sd_main() {
   local template="$SD_TEMPLATE_DEFAULT" doc="$SD_DOC_DEFAULT"
   SD_CANDIDATES=()
