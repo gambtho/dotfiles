@@ -130,6 +130,49 @@ setup_profile() {
   esac
 }
 
+setup_projects_overlay() {
+  # Per-project Claude overlays live in a separate private repository, cloned to
+  # the canonical checkout so bin/claude-link-project and the /opt/dotfiles
+  # stable link root find them at the path they already expect. This is never
+  # fatal: a machine without overlays is a working machine, it just has no
+  # project links.
+  local overlay_dir="$HOME/.dotfiles/projects"
+  local remote_file="$HOME/.dotfiles-projects-remote"
+  local remote
+
+  if [ -d "$overlay_dir/.git" ]; then
+    log_info "Project overlays already attached at $overlay_dir"
+    return 0
+  fi
+
+  if [ -d "$overlay_dir" ] && [ -n "$(ls -A "$overlay_dir" 2>/dev/null)" ]; then
+    log_warning "$overlay_dir exists, is not a git repo, and is not empty -- leaving it alone"
+    log_warning "Move it aside and re-run bootstrap to attach the private overlay repo"
+    return 0
+  fi
+
+  # The remote lives in an untracked file rather than in this repo: this repo is
+  # public, and the overlay repo's name is itself worth withholding.
+  if [ ! -f "$remote_file" ]; then
+    log_info "No project overlay repo configured; skipping"
+    log_info "To attach one: printf '%s\\n' '<clone-url>' > $remote_file"
+    return 0
+  fi
+
+  remote="$(tr -d '[:space:]' <"$remote_file")"
+  if [ -z "$remote" ]; then
+    log_warning "$remote_file is empty; skipping project overlay clone"
+    return 0
+  fi
+
+  if git clone "$remote" "$overlay_dir"; then
+    log_success "Project overlays attached at $overlay_dir"
+  else
+    log_warning "Could not clone the project overlay repo; continuing without overlays"
+  fi
+  return 0
+}
+
 link_file() {
   local src=$1 dst=$2
   local label policy
@@ -279,6 +322,7 @@ main() {
   # run from, which may be a disposable linked worktree. The stable root must
   # name the canonical checkout.
   ensure_stable_link_root "$HOME/.dotfiles"
+  setup_projects_overlay
   install_dotfiles
 
   log_success "Bootstrap complete. Run 'bin/install' to complete setup."

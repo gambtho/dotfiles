@@ -267,3 +267,76 @@ CASES
   [ "$status" -eq 0 ]
   [ "${#lines[@]}" -eq 2 ]
 }
+
+# --- project overlay attach -------------------------------------------------
+#
+# setup_projects_overlay clones the private overlay repo to ~/.dotfiles/projects.
+# It must never be fatal: a machine without overlays is a working machine, so
+# every failure path logs and returns 0 rather than aborting `set -e` bootstrap.
+
+run_setup_projects_overlay() {
+  run env BOOTSTRAP_SOURCE_ONLY=1 HOME="$HOME" bash -c \
+    'source "$1/bin/bootstrap"; setup_projects_overlay' _ "$REPO_ROOT"
+}
+
+@test "overlay attach skips when no remote is configured" {
+  run_setup_projects_overlay
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"No project overlay repo configured"* ]]
+  [ ! -e "$HOME/.dotfiles/projects" ]
+}
+
+@test "overlay attach clones the configured remote to the canonical path" {
+  local source_repo="$TEST_ROOT/overlay-source"
+  mkdir -p "$source_repo/myrepo"
+  printf '%s\n' "# myrepo" >"$source_repo/myrepo/CLAUDE.md"
+  git -C "$source_repo" init -q
+  git -C "$source_repo" -c user.name=T -c user.email=t@e add -A
+  git -C "$source_repo" -c user.name=T -c user.email=t@e commit -q -m seed
+  printf '%s\n' "$source_repo" >"$HOME/.dotfiles-projects-remote"
+
+  run_setup_projects_overlay
+  [ "$status" -eq 0 ]
+  # The canonical checkout, not DOTFILES_ROOT: bootstrap may be run from a
+  # disposable linked worktree, and the overlays must land where the linker
+  # and the stable link root look for them.
+  [ -d "$HOME/.dotfiles/projects/.git" ]
+  [ "$(cat "$HOME/.dotfiles/projects/myrepo/CLAUDE.md")" = "# myrepo" ]
+}
+
+@test "overlay attach leaves an already-attached repo alone" {
+  mkdir -p "$HOME/.dotfiles/projects/.git"
+  printf '%s\n' "/nonexistent/remote.git" >"$HOME/.dotfiles-projects-remote"
+
+  run_setup_projects_overlay
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"already attached"* ]]
+}
+
+@test "overlay attach refuses to touch a non-empty non-repo directory" {
+  mkdir -p "$HOME/.dotfiles/projects/myrepo"
+  printf '%s\n' "local work" >"$HOME/.dotfiles/projects/myrepo/CLAUDE.md"
+  printf '%s\n' "/nonexistent/remote.git" >"$HOME/.dotfiles-projects-remote"
+
+  run_setup_projects_overlay
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"leaving it alone"* ]]
+  [ "$(cat "$HOME/.dotfiles/projects/myrepo/CLAUDE.md")" = "local work" ]
+}
+
+@test "overlay attach survives a failing clone" {
+  printf '%s\n' "$TEST_ROOT/does-not-exist.git" >"$HOME/.dotfiles-projects-remote"
+
+  run_setup_projects_overlay
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"continuing without overlays"* ]]
+}
+
+@test "overlay attach ignores an empty remote pointer" {
+  printf '\n' >"$HOME/.dotfiles-projects-remote"
+
+  run_setup_projects_overlay
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"is empty"* ]]
+  [ ! -e "$HOME/.dotfiles/projects" ]
+}
