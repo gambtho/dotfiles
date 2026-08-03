@@ -53,7 +53,8 @@ Additional confirmed facts that shape the design:
 
 **`bin/dev`** — dispatcher only. Resolves `dev <word>` to a subcommand, or failing that to
 `open <word>`, then delegates to `tools/dev/commands/<name>.sh`. One file per subcommand is what
-makes `close`, `doctor`, `update`, `notify`, `logs`, and `agent` additive rather than structural.
+makes `close`, `doctor`, `update`, `notify`, `logs`, `restart`, and `agent` additive rather than
+structural.
 
 Seven libraries under `tools/dev/lib/`, each with a single responsibility:
 
@@ -113,7 +114,8 @@ disagree.
 
 The load-bearing invariant: **`open` never destroys.** It is `reconcile → ensure → attach`, where
 `ensure` is a set of idempotent existence checks. There is no code path from `open` to
-`kill-session`. `dev restart` is the only command permitted to destroy, and it says so in its name.
+`kill-session`. In Phase 1 the only command permitted to destroy is `dev stop`, and it says so in its
+name; `restart` is deferred (§5.2) because `stop` followed by `open` already is it.
 
 ### 1.3 The host-side tmux decision, stated plainly
 
@@ -129,7 +131,10 @@ session, the layout, and every line of scrollback with it.
 
 Corollary constraint: **`dev` is a host-side tool and must never be required to run inside a
 container.** The container's `~/.dotfiles` is a seed-copy, so a `dev` invoked in there would be
-operating on stale configuration against a tmux server it cannot see.
+operating on stale configuration against a tmux server it cannot see. Phase 1 handles this by
+**refusing**: `dev` detects `/.dockerenv` and exits with a message naming the host tmux server as the
+place to run it. Detecting and delegating to the host would be friendlier but requires a host channel
+that does not exist, and inventing one to make a wrong invocation work is the wrong trade.
 
 ### 1.4 Acceptance scenario walkthroughs
 
@@ -153,6 +158,11 @@ unknown — honest rather than crashing, and honest rather than inventing a time
 finds the container healthy and every declared window already present. `open` degenerates to
 `attach`. No window is recreated, no command re-run, no pane respawned. The scratch buffer is
 untouched because no code path from `open` reaches a destructive tmux verb.
+
+Two independent guarantees protect that buffer, which is deliberate. The first is the non-destructive
+`open` path above. The second is that the default `scratch` window is host-side (§4.2), so even the
+one event that *does* kill panes — a container rebuild — cannot reach it. A repository that moves
+`scratch` into the container keeps the first guarantee and gives up the second.
 
 **Scenario 1 — lid closed, reconnect from iPad hours later.** Honest answer, split in two. *Over
 SSH to a remote host* (Azure VM, reached via Tailscale): the tmux server and its panes are
@@ -217,7 +227,8 @@ and respawns dead panes against the new id.
 
 *Case D — workspace YAML edited while running.* The stored `config_digest` no longer matches the
 computed one. Reconcile emits `config.changed` and **does not mutate the running session**.
-`dev status` reports that config has drifted and that `dev restart` will apply it. Additive
+`dev status` reports that config has drifted and that `dev stop` followed by `dev <workspace>` will
+apply it. Additive
 reconciliation — creating newly declared windows into a live session — is deliberately *not* done in
 Phase 1: it is half a migration, and a half-applied layout is harder to reason about than a clearly
 stale one. The record retains both digests so a future `dev update` can implement this properly.
@@ -327,21 +338,22 @@ dangles across the mount boundary.
 *File watching* operates on the container's view of the bind-mounted repository. This is a native
 Docker Engine on WSL2 ext4, not Docker Desktop over a 9p translation layer, so inotify behaves.
 
-*On rebuild*, the agent pane dies with every other pane and is respawned against the new container
-id. The agent restarts fresh. The requirement explicitly declines to assume the agent is a
+*On rebuild*, the agent panes die with every other pane and are respawned against the new container
+id. Each agent restarts fresh. The requirement explicitly declines to assume the agent is a
 well-behaved long-running process, so the design preserves no agent state across a rebuild and
-promises none — the record notes an `agent.exited` / `agent.started` pair and the scrollback of the
-prior conversation remains visible in the dead pane's retained output.
+promises none — the record notes an `agent.exited` / `agent.started` pair **per agent window** and the
+scrollback of the prior conversation remains visible in each dead pane's retained output.
 
 **Alternatives considered.**
 *On the WSL host.* Rejected: with vekil already bridging credentials, running the agent outside costs
 the container's toolchain — usually the entire reason the repository has a devcontainer — and buys
 nothing.
-*Configurable per workspace.* Rejected for Phase 1 as speculative. The schema's `agent.location` field
-is reserved but unimplemented, so adding it later is additive.
+*Configurable per window.* Rejected for Phase 1 as speculative. The schema's `windows[].agent_location`
+field is reserved but unimplemented, so adding it later is additive.
 
-**Consequences.** A repository whose devcontainer image lacks the agent binary gets a dead agent
-window rather than a working one. The platform emits `agent.failed` and leaves the pane; it does not
+**Consequences.** A repository whose devcontainer image lacks the agent binary gets dead agent
+windows rather than working ones. The platform emits `agent.failed` carrying the window name and
+leaves the pane; it does not
 attempt to install the agent into the image. That is a deliberate reversal of what
 `claude-devcontainer-up` does for tmux today, and it is correct: the host-tmux decision removes the
 need to install anything into images, and re-introducing image mutation for the agent would give back
@@ -430,6 +442,21 @@ pointing at a nonexistent path — handled as the same case as "repository path 
 which reconciliation must handle regardless. Session names must disambiguate working trees, so the
 session name is the working-tree basename, not the slug.
 
+This is also what delivers **multiple concurrent window-groups on one project**. Two worktrees of
+slabledger — `~/workspace/slabledger` and `~/workspace/slabledger-pr5` — are two workspaces, two tmux
+sessions, two sets of four windows, and two containers, both inheriting slabledger's `workspace.yaml`.
+Nothing extra is required to support that; it falls out of one-workspace-per-working-tree.
+
+The addressing is deliberately plain: **a worktree is addressed by its directory basename**, so
+`dev slabledger-pr5` opens the second group. No new syntax is introduced. `dev list` groups its output
+by slug so the several trees of one project read as a set rather than as unrelated entries.
+
+Two things are explicitly deferred to Phase 2. A `dev slabledger@pr5` addressing form, which requires
+a worktree-discovery pass and a naming convention neither `~/workspace` nor `.worktrees/` currently
+follows consistently. And platform-created worktrees (`dev new slabledger pr5`) — that would put
+`git worktree add` and `git worktree remove` inside a tool whose central invariant is that it never
+destroys, and Phase 1 should not be where destructive git operations are introduced.
+
 ---
 
 ## 3. Project structure
@@ -460,8 +487,7 @@ tools/dev/
     attach.sh                          # Attach only; fails if absent rather than creating
     list.sh                            # Reconciled listing, human or --json
     status.sh                          # Single-workspace detail including drift
-    stop.sh                            # Ends session; optionally stops container
-    restart.sh                         # The only destructive verb; applies drifted config
+    stop.sh                            # Ends session; optionally stops container. The only destructive verb
     config.sh                          # Prints merged config JSON
 tools/tmux/
   tmux.conf.symlink                    # MODIFIED: marker block sourcing tools/dev/dev.tmux.conf
@@ -511,20 +537,31 @@ devcontainer:                   # optional. Omit entirely for auto-detection
 environment:                    # map<str,str>, optional. NON-SECRET values only
   CGO_ENABLED: "0"              # Secrets belong in workspace.local.yaml
 
-agent:                          # optional. Omit for no agent window
-  command: claude               # str. Launched in the window named by `window`
-  window: agent                 # str. Must match a window name below
-
 windows:                        # list, required (supplied by the default layer)
-  - name: agent                 # str, required. Unique; also the merge key
-    command: null               # str|null. null = interactive shell only
+  - name: agent-1               # str, required. Unique; also the merge key
+    agent: claude               # str|null. Non-null makes this an agent window
+    command: null               # str|null. null = interactive shell. Mutually exclusive with agent
     cwd: null                   # str|null. Relative to repo root. null = repo root
     location: container         # container|host. Default container when one exists
     focus: false                # bool. Exactly one window may set true
 ```
 
+There is deliberately **no top-level `agent:` block**. An agent is a property of a window, which is
+what allows more than one per workspace. A single top-level block would need a `window:` field
+cross-referencing `windows[]` by name, and that reference can drift out of sync with the list it
+points at — a validation burden that buys nothing. Making the window the agent removes the reference
+entirely and generalizes to N agents for free.
+
+This also improves the event stream: `agent.started` / `agent.exited` / `agent.failed` carry the
+`window` that identifies *which* agent. The single-agent design could not express that, and it is
+precisely what the future "agents as first-class objects with status" capability requires.
+
+`agent:` and `command:` are mutually exclusive on the same window; setting both is a config error
+reported by `dev config`.
+
 Reserved but unimplemented in Phase 1, documented so their later addition is additive rather than
-breaking: `windows[].idempotent`, `agent.location`, `hooks.*`, `kubernetes.context`.
+breaking: `windows[].idempotent`, `windows[].agent_location`, `layouts.*`, `hooks.*`,
+`kubernetes.context`.
 
 ### 4.2 Worked example — slabledger
 
@@ -537,34 +574,31 @@ devcontainer:
   enabled: auto
   start_timeout: 300
 windows:
-  - name: agent
-    command: null
+  - name: agent-1
+    agent: claude
     focus: true
+  - name: agent-2
+    agent: claude
   - name: shell
-    command: null
-  - name: tests
-    command: null
-  - name: logs
     command: null
   - name: scratch
     command: null
     location: host
 ```
 
+Four windows: two always agents, one shell that is the everyday terminal interface, and one
+`scratch` that a repository may repurpose into whatever it actually needs.
+
 `$DEV_OVERLAY_ROOT/slabledger/workspace.yaml` (tracked; overrides only what differs):
 
 ```yaml
 version: 1
-agent:
-  command: claude
-  window: agent
 environment:
   CGO_ENABLED: "1"
 windows:
-  - name: tests
+  - name: scratch
     command: make test
-  - name: logs
-    command: docker compose -f .devcontainer/docker-compose.yml logs -f app
+    location: container
 ```
 
 `$DEV_OVERLAY_ROOT/slabledger/workspace.local.yaml` (gitignored; never leaves the machine):
@@ -576,15 +610,19 @@ environment:
 ```
 
 Resulting behavior: `dev slabledger` detects the compose-based devcontainer, brings it up, and
-creates five windows on the host tmux server. `agent`, `shell`, `tests`, and `logs` exec into the
-`app` service at `/workspace`; `scratch` stays on the WSL host at `~/workspace/slabledger`, which is
-where host-side git operations belong. `make test` runs inside the container with `CGO_ENABLED=1` and
-`DATABASE_URL` set. The `logs` window is deliberately a host-side compose command reaching in, since
-the log stream is a property of the stack rather than of the service.
+creates four windows on the host tmux server. `agent-1`, `agent-2`, and `shell` exec into the `app`
+service at `/workspace`; slabledger has repurposed `scratch` into a test window and moved it into the
+container, so `make test` runs there with `CGO_ENABLED=1` and `DATABASE_URL` set. A repository that
+leaves `scratch` alone gets a host-side pane at `~/workspace/<tree>`, which is where host-side git
+operations belong.
 
-Note the `scratch` window's `location: host` in the default layer. This is the window most likely to
-hold unsaved work (scenario 2), and keeping it host-side means a container rebuild cannot touch it at
-all — its pane never dies.
+Note the default `location:` split. `shell` defaults into the container because for a devcontainer
+repository that is the development environment. `scratch` defaults to the **host**, and that is
+load-bearing rather than incidental: it is the window most likely to hold unsaved work
+(scenario 2), and a host-side pane cannot be killed by a container rebuild. Scenario 2's guarantee is
+structural for as long as `scratch` stays on the host — a repository that overrides it into the
+container, as slabledger does above, trades that guarantee away knowingly.
+
 
 ### 4.3 Workspace record
 
@@ -609,7 +647,10 @@ Referenced throughout §2 but defined here. One file per working tree at
     "verified": false,
     "observed_at": "2026-08-03T14:02:11.412Z"
   },
-  "agent": { "command": "claude", "window": "agent", "state": "started" },
+  "agents": [
+    { "window": "agent-1", "command": "claude", "state": "started" },
+    { "window": "agent-2", "command": "claude", "state": "exited" }
+  ],
   "opened_at": "2026-08-03T13:58:02.001Z",
   "last_seen": "2026-08-03T14:02:11.412Z",
   "stopped_reason": null
@@ -626,6 +667,11 @@ occurred, which is what `dev status` reports and what a future `dev update` woul
 
 `boot_id` is the host boot id captured at open, and is the discriminator that separates "the machine
 rebooted" from "you killed it" (ADR-1 case B).
+
+`agents` is a list rather than a single object because the schema makes the agent a property of a
+window (§4.1) and the default layout carries two. Each entry's `state` is `started`, `exited`, or
+`failed`, and mirrors the last `agent.*` event emitted for that window. This is the field a future
+"agents as first-class objects" capability reads.
 
 `container.verified` is `false` whenever the container was reported up but no readiness probe
 confirmed it usable. In Phase 1 it is always `false`; see §5.3 for why this is recorded rather than
@@ -651,7 +697,6 @@ not atomic and a concurrent hook append during a rename would be lost.
 ```json
 {
   "v": 1,
-  "seq": 141,
   "ts": "2026-08-03T14:02:11.412Z",
   "event": "container.replaced",
   "workspace": "slabledger",
@@ -661,16 +706,23 @@ not atomic and a concurrent hook append during a rename would be lost.
 }
 ```
 
-`v` versions the envelope. `seq` is monotonic per workspace, assigned under the lock during
-reconcile and left absent for hook-emitted events (which cannot take the lock) — consumers must treat
-`seq` as a partial order, not a total one. `ts` is RFC 3339 UTC with milliseconds. Events discovered
-rather than observed additionally carry `discovered_at`, and consumers must not treat `ts` as exact
-when it is present.
+`v` versions the envelope. There is deliberately **no sequence number**: it could only ever be a
+partial order, since hook-emitted events cannot take the lock required to assign one, and a
+partially-ordered counter invites exactly the total-ordering assumption it cannot support. Ordering
+is by `ts` and by position in the file, both of which are honest about their limits. `ts` is RFC 3339
+UTC with milliseconds. Events discovered rather than observed additionally carry `discovered_at`, and
+consumers must not treat `ts` as exact when it is present.
 
 **Event types in Phase 1.** `workspace.opened`, `workspace.attached`, `workspace.detached`,
 `workspace.stopped`, `workspace.vanished`; `window.created`; `pane.died`, `pane.respawned`;
 `container.starting`, `container.ready`, `container.failed`, `container.lost`, `container.replaced`;
-`agent.started`, `agent.exited`, `agent.failed`; `config.changed`; `reconcile.drift`.
+`agent.started`, `agent.exited`, `agent.failed`; `config.changed`.
+
+Every `agent.*` event carries `data.window` naming which agent it describes, since a workspace has
+more than one. There is no `reconcile.drift` event: a reconcile pass emits the specific events for
+what it found (`workspace.vanished`, `container.lost`, `config.changed`), and a summary event on top
+of those would carry no information the specific ones do not, while giving consumers a second, vaguer
+thing to subscribe to.
 
 The namespacing is deliberate: a future consumer subscribes to `agent.*` or `container.*` without
 enumerating types, so adding types later does not break it.
@@ -716,26 +768,32 @@ split has to be reasoned about again.
 host-side or container-side. Two or three are fine. If it reaches five, the exec builder abstraction is
 too thin and the right fix is to push more of the environment decision down into Container.
 
-### 5.2 Where this is over-engineered for Phase 1
+### 5.2 Where this was over-engineered for Phase 1
 
-**`seq` numbering is not worth what it costs.** It is only partially ordered anyway — hook-emitted
-events cannot take the lock to assign one — so it delivers a guarantee weaker than the one its name
+The three cuts below were identified in review and are **applied** in the sections above; they are
+recorded here with their reasoning so the decision is not silently re-litigated later.
+
+**`seq` numbering was not worth what it cost.** It is only partially ordered anyway — hook-emitted
+events cannot take the lock to assign one — so it delivered a guarantee weaker than the one its name
 implies, while adding a field consumers may misread as total ordering. Timestamps plus the file's
-natural append order already give consumers everything they need. Cut it; the envelope is versioned,
-so it can be added later if a consumer genuinely needs it.
+natural append order already give consumers everything they need. Cut; the envelope is versioned, so
+it can be added later if a consumer genuinely needs it.
 
-**`reconcile.drift` as a distinct event type** duplicates information already carried by the specific
-events emitted during the same pass. Cut it.
+**`reconcile.drift` as a distinct event type** duplicated information already carried by the specific
+events emitted during the same pass. Cut.
 
-**`dev restart` could be deferred.** `stop` followed by `open` is the same thing, and shipping
-`restart` means shipping the only destructive code path in Phase 1 before anything needs it. Keeping
-Phase 1 free of destructive verbs entirely has real value while the reconciliation model is still
-being trusted.
+**`dev restart` is deferred.** `stop` followed by `open` is the same thing, and shipping `restart`
+would mean shipping a second destructive code path in Phase 1 before anything needs it. Keeping
+Phase 1's destructive surface down to `dev stop` has real value while the reconciliation model is
+still being trusted.
 
-**Five windows may be more than the default should carry.** `logs` and `scratch` are speculative for
-repositories that have neither meaningful logs nor scratch work, and the default layer is the hardest
-layer to change later because every workspace inherits it. Three windows — `agent`, `shell`, `tests` —
-with the others added per-repo would be the more defensible default.
+One candidate cut was **rejected**: reducing the default layout below four windows. The original
+five-window default (`agent`, `shell`, `tests`, `logs`, `scratch`) was speculative in the wrong
+places — `logs` and `tests` assume every repository has a meaningful long-running log and a
+single test command. The replacement is not smaller but better shaped: two agent windows, a `shell`
+that is the everyday terminal interface, and a `scratch` window a repository can repurpose. The
+count is unchanged in spirit; what changed is that the default no longer guesses at project-specific
+commands, and the layout matches how the workspaces are actually used.
 
 None of these cuts change the Phase 2 destination. Everything genuinely load-bearing — the event
 envelope, the record schema, the Backend contract, the merge order — stays.
@@ -758,16 +816,17 @@ an agent window with subtly wrong configuration, or a test window that fails for
 the code.
 
 The honest mitigation is a per-workspace readiness probe in the schema — a command that must exit 0
-before windows are considered ready — but that is real complexity and I have deliberately not put it
-in Phase 1. What I would do instead: record the `devcontainer up` exit status and the full parsed JSON
-in the record, emit `container.ready` with an explicit `verified: false`, and let the first honest
-consumer of that field decide it needs a probe. Naming the uncertainty in the data is cheaper than
-guessing at the mechanism now.
+before windows are considered ready — but that is real complexity and it is deliberately **not** in
+Phase 1. Instead: record the `devcontainer up` exit status and the full parsed JSON in the record,
+emit `container.ready` with an explicit `verified: false`, and let the first honest consumer of that
+field decide it needs a probe. Naming the uncertainty in the data is cheaper than guessing at the
+mechanism now. This is a reversible call — adding a `readiness:` key to the schema later is purely
+additive, and `container.verified` is already the field that would flip to `true`.
 
 I am also moderately unconfident about **concurrent `dev` invocations from inside panes of the
-workspace being reconciled** — `dev restart` run from within the session it restarts kills its own
+workspace being reconciled** — `dev stop` run from within the session it stops kills its own
 pane mid-command. This needs an explicit guard (detect `$TMUX` and the target session, refuse or
-re-exec detached), and I have specified the guard but not proven it is sufficient.
+re-exec detached), and the guard is specified but not proven sufficient.
 
 ### 5.4 Pushback on the specification
 
@@ -820,19 +879,18 @@ a consumer exists. Eight megabytes of JSONL and `jq` will serve for a long time.
 4. `bin/claude-devcontainer-up` is superseded and its tmux-installation block is removed as part of
    this work rather than left to rot. Its compose-bug workaround moves into `container.sh`.
 5. Phase 1 is verified against local WSL only. The SSH/Azure path is designed for but not tested.
+6. The default layout is two agent windows, `shell`, and `scratch`, with `shell` defaulting into the
+   container and `scratch` defaulting to the host. The `scratch` default is what keeps scenario 2's
+   guarantee structural rather than incidental (§4.2).
+7. No readiness probe in Phase 1; `container.verified` records the uncertainty instead (§5.3).
+   Reversible and additive if a "up but not usable" container bites in practice.
+8. `dev` refuses to run inside a container rather than detecting and delegating to the host.
+   Refusing is simple and safe; delegating needs a host channel that does not currently exist.
+9. Concurrent worktree groups are addressed by directory basename. `dev slabledger@pr5` addressing
+   and platform-created worktrees are Phase 2 (ADR-7).
 
 **Genuinely open, needing your input:**
 
-1. **Do you want the §5.2 cuts applied?** Specifically dropping `seq`, dropping `reconcile.drift`,
-   deferring `restart`, and reducing the default layout to three windows. I recommend all four. The
-   default-layout reduction is the one I would most like your view on, since you specified the
-   five-window shape and you know your own habits better than I can infer them.
-2. **Is a readiness probe worth Phase 1?** §5.3 argues the risk is real but the mechanism is
-   premature. If you have been bitten by a devcontainer that was "up" but not usable, that changes
-   the calculation and I would add `devcontainer.ready_command` to the schema now.
-3. **Should `dev` refuse to run inside a container**, or attempt to detect and delegate to the host?
-   Refusing is simpler and safe; delegating is friendlier but needs a host channel that does not
-   currently exist. I lean toward refusing with a clear message.
-4. **How much of `claude-devcontainer-up`'s behavior is load-bearing** beyond what I found by
+1. **How much of `claude-devcontainer-up`'s behavior is load-bearing** beyond what I found by
    reading it? If you have hit devcontainer failure modes it silently handles, they belong in
    `container.sh` and I would rather learn them now than rediscover them.
