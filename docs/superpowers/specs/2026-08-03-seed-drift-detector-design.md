@@ -43,10 +43,31 @@ gives.
 
 ## Decision 1 — representation
 
-**Chosen: normalized per-block line-multiset diff.**
+**Chosen: normalized per-block, order-preserving line-sequence diff.**
 
 Extract the block around each documented anchor from both files, normalize both
-sides, and compare as sorted line multisets.
+sides, and diff the resulting line **sequences** — preserving order.
+
+### Order is load-bearing; multisets discard it
+
+An earlier draft compared *sorted* line multisets. That is a false-clean bug of
+exactly the class this tool exists to eliminate, because statement order in
+these seeds is behaviorally significant and sometimes explicitly specified.
+
+`catch-up-local-seed.md:83` requires the `load-custom.zsh` loader to be appended
+**before** the Vekil hook, because `ai/vekil/env.zsh` exports `ANTHROPIC_MODEL`,
+which outranks `settings.json` and must get the last word. The template devotes a
+long comment to this, including the instruction to *compare positions* rather
+than merely detect presence, precisely because an already-seeded volume can carry
+both hooks in the wrong order.
+
+Under a sorted comparison, a seed with the two hooks inverted contains the same
+lines as the template and reports clean — while the container silently runs on
+the wrong model. Sorting is therefore abandoned: comparison is an ordered diff.
+
+A pure reordering surfaces as differences in **both** directions, and so is
+reported as `DIVERGED` — correctly, since the tool cannot know which order was
+intended without reading the doc.
 
 ### Evidence
 
@@ -66,6 +87,10 @@ It finds the motivating drift on all five. `ahead=0` confirms the vocabulary
 neutralization is not manufacturing phantom differences. The reported lines are
 the genuine #38 change — the two-guard `--version` probe and the image-provided
 branch.
+
+(The prototype used sorted comparison; the counts above are unaffected, since
+these differences are insertions rather than reorderings. The order defect it
+would have missed is a separate class, described above.)
 
 ### Alternative considered and rejected: per-block fingerprints
 
@@ -124,27 +149,92 @@ hard error (exit 2), not a per-block verdict.
 
 ## Decision 3 — block extraction
 
-A block is the **union of every top-level statement whose non-comment text
-contains the anchor**, matched as a **fixed string**.
+**An anchor locates a block; it does not define its membership.**
 
-Three findings drove this:
+A block is the **union of every blank-line-delimited paragraph whose non-comment
+text contains the anchor**, matched as a **fixed string**. Paragraph detection is
+**heredoc-aware**: a blank line inside a heredoc body does not end a paragraph.
+
+### Why not "the enclosing top-level statement"
+
+That was the first rule proposed, and it is wrong. `core.excludesFile` occurs in
+code exactly once, at template line 236, as a standalone top-level command:
+
+```sh
+as_user git config --global core.excludesFile "$GITIGNORE"
+```
+
+The enclosing-statement rule captures that one line and nothing else. The
+`GITIGNORE=` assignment and the entire `if ! as_user test -f "$GITIGNORE"` block
+that writes the file — template lines 217-235, which is the whole substance of
+the block — fall outside it. The seeded gitignore contents could be rewritten
+wholesale and the detector would report clean. That is the same false-clean class
+as the anchor grep this tool exists to replace, so the rule is disqualified.
+
+The overlay-gitignore block fails the same way: its workspace and marker
+assignments sit outside the statement holding the anchor.
+
+### Why paragraphs work
+
+The template separates blocks with a blank line and separates *comment*
+paragraphs within a block using a bare `#` line rather than a blank. So the
+blank-line paragraph is already the semantic unit. For `core.excludesFile` it
+yields lines 204-236 — comment preamble, assignment, heredoc block, and the
+`git config` line together.
+
+Verified: blank line at 203, contiguous content 204-236, blank line at 237.
+
+Heredoc awareness is required, not optional: lines 223 and 229 are blank lines
+*inside* the `GITEOF` heredoc, and a naive splitter would cut the block in three.
+The scanner tracks `<<TAG`, `<<'TAG'`, and `<<-TAG` to its closing delimiter.
+
+### Why fixed-string matching, and why comments are excluded from matching
 
 - Anchors are not unique. `config/nvim` occurs 9 times in the template (5 in
-  code), `NVIM_VERSION` 5, `DOTFILES_LOAD_HOOK` 5, `core.hooksPath` 3. "First
-  occurrence" is arbitrary.
+  code), `NVIM_VERSION` 5, `DOTFILES_LOAD_HOOK` 5, `core.hooksPath` 3. Hence the
+  union over all matching paragraphs rather than a first-occurrence pick.
 - `TREE_SITTER_VERSION`'s first occurrence is a *comment* (template line 530);
-  its first code use is line 568. Matching must ignore comments.
-- One anchor, `lname '*dotfiles/projects/*'`, contains `*` and quotes, so
-  matching must be fixed-string, not regex.
-
-Boundaries: walk up from the matched line to the nearest column-0 statement
-start, down to its matching column-0 `fi` / `done` / `esac` / `}`. Valid because
-template and seeds are `shfmt -i 2 -ci` clean. Comment separators are ignored
-entirely — they are inconsistent across seeds and unusable as boundaries.
+  its first code use is line 568. Matching that counted comments would anchor on
+  prose.
+- `lname '*dotfiles/projects/*'` contains `*` and quotes, so matching must be
+  fixed-string, not regex.
 
 Because the rule is applied identically to both sides, overlapping blocks are
 symmetric. Overlap means a drifted region may be reported under more than one
 block name: noise, not silence, which is the correct direction.
+
+### Formatting independence
+
+Paragraph boundaries depend on blank lines and heredoc structure, not on
+indentation, so extraction does **not** assume `shfmt`-clean input. This is a
+deliberate change from the first draft, which assumed column-0 boundaries and
+then proposed to validate that assumption with `bash -n` — a check that passes
+on syntactically valid but unformatted shell, so it would not have validated the
+assumption at all.
+
+All five live seeds and the template are in fact `shfmt -i 2 -ci` clean today
+(verified), so an shfmt precondition would have been viable. It is not adopted,
+because a formatting-independent extractor is strictly better than a formatting
+dependency plus a gate enforcing it.
+
+### Residual limitation
+
+A semantic block that spans two paragraphs where only one contains the anchor is
+compared only in part. This is far narrower than the enclosing-statement failure
+above — the paragraph always carries the anchor's full statement group and its
+comment preamble — but it is not zero, and it is not detectable from inside the
+tool.
+
+### Alternative considered and deferred: whole-file paragraph matching
+
+Normalize both files into paragraphs, match them by similarity, name matched
+paragraphs from the doc table, and report unmatched ones. This would eliminate
+the residual limitation above *and* the novel-block limitation in Decision 5.
+
+Deferred, not rejected: unmatched paragraphs include every legitimately
+project-specific block, so the promotion-candidate report would be dominated by
+noise — which constraint 3 rules out. Revisit if the anchored version proves too
+narrow in practice.
 
 ## Decision 4 — normalization
 
@@ -157,11 +247,24 @@ Applied to both sides, narrowest first:
 | Collapse whitespace runs, trim | reindentation is noise |
 | Drop `as_user`, `$SUDO`, `sudo [-n]`, `runuser -u X --` prefixes | privilege vocabulary |
 | `$SEED_HOME` / `$HOME` -> `«HOME»`; `$DOTFILES_HOME` -> `«HOME»/.dotfiles`; `$WORKSPACE` -> `«WS»` | path vocabulary; substitute the token only, preserving surrounding quotes |
-| Drop `chown` / `chgrp` lines and the `{ chown ... \|\| [ -z "$(find ... -uid ...)" ]; }` idiom | ownership verification exists only in the non-root flavor |
+| Drop the two **exact** ownership-verification lines listed below | that idiom exists only in the non-root flavor |
 
-The ownership rule is not ad hoc: that idiom exists solely because the template
-targets a non-root remoteUser. A root-user seed correctly omits it, and the
-prototype showed it as the single largest source of false "behind" lines.
+The ownership rule is deliberately **not** "drop every `chown`/`chgrp` line".
+An earlier draft said that, and it was too broad in exactly the direction this
+design calls dangerous: it would hide a genuine change to the target path, the
+recursion flag, the identity, or the failure handling of any ownership repair
+anywhere in a block.
+
+Instead the rule matches two literal normalized forms, and nothing else:
+
+```
+{ chown "$SEED_UID:$SEED_GID" <arg> 2>/dev/null ||
+[ -z "$(find <arg> \( ! -uid "$SEED_UID" -o ! -gid "$SEED_GID" \) -print -quit 2>/dev/null)" ]; } &&
+```
+
+`<arg>` is the only free element. Any other `chown` or `chgrp` line is compared
+normally. Each form gets its own test, and a test asserts that an *unrelated*
+`chown` line is **not** dropped.
 
 Known residual false-positive source, accepted and documented rather than
 normalized: **literal** workspace paths (`/app` vs `/workspace`). Only the
@@ -170,15 +273,15 @@ configuration and risks over-broad matching.
 
 ## Decision 5 — drift direction
 
-Per (project, block), on normalized line multisets:
+Per (project, block), on the ordered diff of normalized line sequences:
 
 | Verdict | Condition | Reported action |
 |---|---|---|
-| `ok` | equal | — |
+| `ok` | sequences identical | — |
 | `MISSING` | anchor absent from seed | port the block (catch-up Step 2) |
 | `BEHIND` | template-only lines | port the change |
 | `AHEAD` | seed-only lines | promotion candidate — do **not** overwrite the seed |
-| `DIVERGED` | lines in both directions | inspect by hand; direction is genuinely unclear |
+| `DIVERGED` | lines in both directions, **including pure reordering** | inspect by hand; direction is genuinely unclear |
 
 `AHEAD` and `DIVERGED` messages never suggest overwriting.
 
@@ -201,30 +304,46 @@ tool states this in its output rather than implying full coverage.
 
 ## Decision 6 — discovery, exit codes, safety
 
-**Discovery.** No arguments: glob `${SEED_DRIFT_ROOT:-$HOME/workspace}/*/.devcontainer/local-seed.sh`.
-With arguments: check exactly those paths. A glob is self-maintaining as
-projects are added; a hand-maintained list goes stale silently, which is the
-same failure class as the bug being fixed.
+**Discovery.** A **candidate** is a directory containing `.devcontainer/`. A
+candidate with no `.devcontainer/local-seed.sh` is a **skip**; a candidate with
+one is **checked**.
 
-**Skips.** A project without a seed is skipped with a note and does not affect
+- No arguments: candidates are `${SEED_DRIFT_ROOT:-$HOME/workspace}/*/`.
+- With arguments: each argument is a candidate. A project directory and a direct
+  path to a `local-seed.sh` are both accepted; the tool distinguishes them by
+  testing whether the argument is a directory.
+
+An earlier draft globbed `*/.devcontainer/local-seed.sh` directly. That is
+inconsistent with the skip requirement: globbing seed files enumerates only
+projects that *have* one, so a project missing its seed is invisible rather than
+skipped — and the sample output claimed a skip that the discovery rule could not
+have produced. Globbing candidate directories and then testing for the seed makes
+the skip real.
+
+Directories without `.devcontainer/` are not candidates at all, so unrelated
+entries under `~/workspace` are silent rather than reported as skips.
+
+A glob is self-maintaining as projects are added; a hand-maintained list goes
+stale silently, which is the same failure class as the bug being fixed.
+
+**Skips.** A candidate without a seed is reported with a note and does not affect
 the exit code.
 
 **Exit codes.** `0` clean (skips included); `1` any drift, in any direction; `2`
 usage error, unreadable template, doc/template disagreement, or a seed whose
 block boundaries cannot be resolved.
 
-A run does not abort on the first bad seed. It reports every project, then exits
-with the highest severity encountered (`2` outranks `1` outranks `0`), so one
-malformed seed cannot hide drift in the other four.
+A run does not abort on the first bad seed. It reports every candidate, then
+exits with the highest severity encountered (`2` outranks `1` outranks `0`), so
+one malformed seed cannot hide drift in the other four.
 
-**Extraction failure must never read as clean.** The column-0 boundary rule
-assumes a `shfmt`-clean file. A seed hand-edited since its last catch-up may not
-be. Both sides are checked with `bash -n` — the template as well as each seed,
-since a broken template would otherwise silently produce empty blocks that
-compare equal to everything. If a block's enclosing statement cannot be
-resolved, or either file fails `bash -n`, the tool errors rather than falling
-through to `ok`: a silent pass here would reproduce the exact false-clean bug
-being fixed.
+**Extraction failure must never read as clean.** Paragraph extraction is
+formatting-independent (Decision 3), so there is no `shfmt` precondition. Both
+files are still checked with `bash -n` — the template as well as each seed, since
+a broken template would otherwise silently produce empty blocks that compare
+equal to everything. An anchor that the template does not contain, or a block
+that extracts to nothing on the template side, is an error rather than an `ok`:
+a silent pass here would reproduce the exact false-clean bug being fixed.
 
 **Read-only.** The detector never writes to a seed. These are gitignored,
 hand-owned files with no revert path. Asserted by test.
@@ -240,10 +359,13 @@ slabledger  /home/tng/workspace/slabledger/.devcontainer/local-seed.sh
   AHEAD    codex guard          2 seed lines absent from template
              -> promotion candidate; do NOT overwrite the seed
   ok       neovim install
-double-holo-ui  no seed - skipped
+double-holo-ui  .devcontainer/ present, no local-seed.sh - skipped
 
-5 checked, 0 skipped, 2 blocks drifted (1 behind, 1 ahead)
+4 checked, 1 skipped, 2 blocks drifted (1 behind, 1 ahead)
 ```
+
+Counts are consistent by construction: `checked + skipped` equals the number of
+candidates, and a skipped candidate contributes no verdicts.
 
 Every finding names the project, the block, and the direction.
 
@@ -258,15 +380,28 @@ Required cases:
 - **anchor present, surrounding block outdated -> `BEHIND`, exit 1.** The case
   that motivated the work. A detector that passes the current five without this
   test proves nothing.
+- **reordered lines -> `DIVERGED`, exit 1, never `ok`.** Guards the order defect
+  in Decision 1. Modelled on the real constraint: a seed with the
+  `load-custom.zsh` hook placed *after* the Vekil hook must not report clean.
+- **a change confined to a block's non-anchor lines -> reported.** Guards the
+  extraction defect in Decision 3, using the `core.excludesFile` shape: edit the
+  seeded gitignore heredoc, leave the `git config` line untouched, expect drift.
+- **a blank line inside a heredoc does not split the block.** Guards heredoc
+  awareness directly.
 - anchor absent -> `MISSING`
 - extra seed lines -> `AHEAD`, wording is promotion, not overwrite
 - differences both directions -> `DIVERGED`
 - false-positive guards, one test each: `as_user` vs direct invocation,
   `$SEED_HOME` vs `$HOME`, `$DOTFILES_HOME` vs `$HOME/.dotfiles`, restyled line
-  continuations, reworded comments, ownership idiom present vs absent
+  continuations, reworded comments, the two exact ownership-idiom forms
+- **an unrelated `chown` line is NOT dropped.** Guards against the over-broad
+  ownership rule rejected in Decision 4.
 - `sed 's#...#g'` survives comment stripping
-- absent project -> skipped, exit 0
-- malformed / non-`shfmt` seed -> exit 2, never `ok`
+- an anchor appearing only in a comment does not anchor a block
+- candidate with `.devcontainer/` but no seed -> skipped, exit 0, counted as
+  skipped; a directory with no `.devcontainer/` is not reported at all
+- argument accepted both as a project directory and as a direct seed path
+- unparseable seed (`bash -n` fails) -> exit 2, never `ok`
 - a malformed seed does not suppress drift reporting for the others
 - doc table anchor missing from template -> exit 2
 - seeds unmodified after a run (read-only)
