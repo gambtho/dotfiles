@@ -288,6 +288,11 @@ fi
 # named volume persists across rebuilds, so without --delete a deleted path
 # lingers until a manual wipe). Fall back to cp -a where rsync is absent.
 if [ -d "$SEED_DOTFILES" ]; then
+  # Status is captured rather than left to `set -e` so the prune below still runs
+  # when the transfer fails: a partial rsync/cp can already have written
+  # projects/.git into the volume, and the volume outlives this container. The
+  # original status is re-raised after the prune, so a failed seed still fails.
+  sync_status=0
   if command -v rsync >/dev/null 2>&1; then
     # -c checksums instead of the default size+mtime quick check. The quick
     # check compares mtime at 1-second resolution, so a same-size edit made
@@ -301,16 +306,22 @@ if [ -d "$SEED_DOTFILES" ]; then
     # from it. The pattern is anchored (leading /) so it means the mirror root
     # and not some other projects/.git deeper in the tree, and carries no
     # trailing / so it matches whether .git is a directory or a gitfile.
-    as_user rsync -ac --delete --exclude='/projects/.git' \
-      "$SEED_DOTFILES/" "$DOTFILES_HOME/"
-    echo "🌱 seed: mirrored ~/.dotfiles via rsync ($(du -sh "$DOTFILES_HOME" | cut -f1))"
+    if as_user rsync -ac --delete --exclude='/projects/.git' \
+      "$SEED_DOTFILES/" "$DOTFILES_HOME/"; then
+      echo "🌱 seed: mirrored ~/.dotfiles via rsync ($(du -sh "$DOTFILES_HOME" | cut -f1))"
+    else
+      sync_status=$?
+    fi
   else
     # No non-pruning fallback. DOTFILES_HOME persists across rebuilds and the
     # always-run installers below EXECUTE files from it, so a stale installer
     # deleted upstream would keep running. Wipe-then-copy prunes equivalently.
-    as_user find "$DOTFILES_HOME" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-    as_user cp -a "$SEED_DOTFILES/." "$DOTFILES_HOME/"
-    echo "🌱 seed: rebuilt ~/.dotfiles via wipe+cp (no rsync) ($(du -sh "$DOTFILES_HOME" | cut -f1))"
+    if as_user find "$DOTFILES_HOME" -mindepth 1 -maxdepth 1 -exec rm -rf {} + &&
+      as_user cp -a "$SEED_DOTFILES/." "$DOTFILES_HOME/"; then
+      echo "🌱 seed: rebuilt ~/.dotfiles via wipe+cp (no rsync) ($(du -sh "$DOTFILES_HOME" | cut -f1))"
+    else
+      sync_status=$?
+    fi
   fi
   # Unconditional, and not folded into the rsync exclude alone, for two reasons:
   # cp -a has no exclusion mechanism, and rsync PROTECTS an excluded path on the
@@ -318,7 +329,13 @@ if [ -d "$SEED_DOTFILES" ]; then
   # exclusion would keep its copy forever. Losing it costs nothing -- this tree
   # is a copy, and container writes never reach the host, so committing here was
   # never a way to save overlay edits.
-  as_user rm -rf "$DOTFILES_HOME/projects/.git"
+  #
+  # rm -rf on an absent path succeeds, so this is idempotent. A failure here is
+  # reported but not fatal: it must not mask the sync status re-raised below.
+  if ! as_user rm -rf "$DOTFILES_HOME/projects/.git"; then
+    echo "⚠️  seed: could not remove $DOTFILES_HOME/projects/.git" >&2
+  fi
+  [ "$sync_status" -eq 0 ] || exit "$sync_status"
 fi
 
 # Stable link root: /opt/dotfiles -> this container's dotfiles checkout.

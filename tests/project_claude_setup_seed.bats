@@ -353,6 +353,44 @@ extract_seed_script() {
   [ -f "$HOME/.dotfiles/projects/myrepo/CLAUDE.md" ]
 }
 
+@test "the overlay git directory never reaches the destination during the transfer" {
+  # The two final-state assertions above cannot tell exclusion from pruning: with
+  # the prune in place they pass even if --exclude is dropped, and rsync would
+  # then write the private repo's history into the volume first. Record the
+  # transfer's own arguments so the exclusion is verified where it happens.
+  local real_rsync
+  if ! real_rsync="$(command -v rsync)"; then
+    skip "rsync not installed; the seed takes the wipe+cp path"
+  fi
+  cat >"$STUB_BIN/rsync" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >>"$TEST_ROOT/rsync.args"
+exec "$real_rsync" "\$@"
+EOF
+  chmod +x "$STUB_BIN/rsync"
+  mkdir -p "$TEST_ROOT/host-seed/.dotfiles/projects/.git"
+  printf 'host\n' >"$TEST_ROOT/host-seed/.dotfiles/projects/.git/config"
+
+  run bash "$SEED_SCRIPT"
+
+  [ "$status" -eq 0 ]
+  grep -Fq -- "--exclude=/projects/.git" "$TEST_ROOT/rsync.args"
+}
+
+@test "a failed mirror still prunes the overlay git directory and reports the failure" {
+  # A partial transfer can already have written projects/.git into the named
+  # volume, which outlives the container, so the prune must not be skipped when
+  # the sync aborts -- and the seed must still fail rather than swallow it.
+  mkdir -p "$HOME/.dotfiles/projects/.git"
+  printf 'stale\n' >"$HOME/.dotfiles/projects/.git/config"
+  stub_command rsync 'exit 23'
+
+  run bash "$SEED_SCRIPT"
+
+  [ "$status" -eq 23 ]
+  [ ! -e "$HOME/.dotfiles/projects/.git" ]
+}
+
 @test "config removed from the host is pruned from the persisted volume" {
   # The destination lives in the persisted claude-local-home named volume, so a
   # source the host DELETED must be cleared on the next gated reseed. Pruning
