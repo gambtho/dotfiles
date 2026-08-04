@@ -883,8 +883,53 @@ t7_doc() {
   } >"$DOC"
 }
 
+# t7_run_tool TOOL [CANDIDATE...] — run an explicit seed-drift executable
+# against the current fixture template and doc. t7_run is the ordinary form,
+# running the repository's own copy; the sabotage probes pass a private copy.
+t7_run_tool() {
+  local tool="$1"
+  shift
+  run "$tool" --template "$TPL" --doc "$DOC" "$@"
+}
+
 t7_run() {
-  run "$REPO_ROOT/bin/seed-drift" --template "$TPL" --doc "$DOC" "$@"
+  t7_run_tool "$REPO_ROOT/bin/seed-drift" "$@"
+}
+
+# Takes a private copy of bin/seed-drift in the test's own temp dir and sets
+# T7_TOOL to it, along with T7_TOOL_PRISTINE, a byte snapshot of the repository
+# file as it stood before the test ran.
+#
+# Sabotage probes must edit the COPY, never $REPO_ROOT/bin/seed-drift. Editing
+# the repository file in place has three failure modes, all of which this
+# removes at once: bats aborts a test at the first failing assertion, so a
+# failure between sabotage and restore leaves the real tool broken; restoring
+# with `git checkout --` restores to HEAD and so destroys any uncommitted work
+# a developer has in the file under test (this already bit an earlier round of
+# this project); and restoring with `cp` is worse still, because `cp` in this
+# environment is interactive and silently declines. Working on a copy also
+# makes the suite parallel-safe.
+t7_copy_tool() {
+  T7_TOOL="$BATS_TEST_TMPDIR/seed-drift"
+  T7_TOOL_PRISTINE="$BATS_TEST_TMPDIR/seed-drift.pristine"
+  cp "$REPO_ROOT/bin/seed-drift" "$T7_TOOL"
+  cp "$REPO_ROOT/bin/seed-drift" "$T7_TOOL_PRISTINE"
+  # Verify rather than trust: see the `cp` note above. Both copies land on
+  # fresh paths, where cp does not prompt, but the whole point of this helper
+  # is that a silently-skipped copy must not become a green test.
+  cmp -s "$REPO_ROOT/bin/seed-drift" "$T7_TOOL"
+  cmp -s "$REPO_ROOT/bin/seed-drift" "$T7_TOOL_PRISTINE"
+  chmod +x "$T7_TOOL"
+}
+
+# The property the copy-based sabotage buys us, asserted directly: the suite
+# never writes the repository's own bin/seed-drift. Compared against the
+# snapshot taken by t7_copy_tool rather than against HEAD, so the assertion
+# still holds — and still means exactly this — while a developer has
+# uncommitted edits in the file.
+t7_assert_repo_tool_untouched() {
+  cmp -s "$T7_TOOL_PRISTINE" "$REPO_ROOT/bin/seed-drift"
+  [ ! -e "$REPO_ROOT/bin/seed-drift.orig" ]
 }
 
 @test "a tab inside a heredoc payload survives extraction verbatim" {
@@ -1826,15 +1871,10 @@ t8_pad() {
   # quotes, `$` sigils), so the swap goes through python3 doing an exact,
   # asserted-unique literal replacement instead.
   #
-  # bin/seed-drift is committed at 6091300 with no further edits since, so
-  # restoring via `git checkout --` is safe here (unlike the file-under-
-  # construction case the /tmp-backup convention above guards against). Still
-  # take the /tmp backup and diff-verify the restore, per the standing
-  # process note: `cp` in this environment is interactive and silently
-  # declines instead of failing loudly — confirmed again while building this
-  # very test.
-  local backup="/tmp/seed-drift.t8-union-sabotage.bak.$$"
-  cp "$REPO_ROOT/bin/seed-drift" "$backup"
+  # The sabotage lands on a private copy of the tool (t7_copy_tool), so there
+  # is no restore step to get wrong and no window in which the repository's
+  # own bin/seed-drift is broken.
+  t7_copy_tool
 
   t7_setup
   t7_doc "multi block" MULTI_ANCHOR
@@ -1845,7 +1885,14 @@ t8_pad() {
   } >"$TPL"
   printf '#!/usr/bin/env bash\n\n# s1\n# s2\nMULTI_ANCHOR=1\n\n# s3\n# s4\nMULTI_ANCHOR_TWO=2\n' >"$SEED"
 
-  python3 - "$REPO_ROOT/bin/seed-drift" <<'PYEOF'
+  # Unsabotaged first, so the probe shows the flip in both directions from a
+  # single run rather than relying on the sibling test above.
+  t7_run_tool "$T7_TOOL"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *AHEAD* ]]
+  [[ "$output" != *"window is only"* ]]
+
+  python3 - "$T7_TOOL" <<'PYEOF'
 import sys
 path = sys.argv[1]
 old = '''  SD_LAST_WINDOW_SIZE=$(printf '%s\\n' "$keep" | awk 'END { print NR }')'''
@@ -1855,27 +1902,18 @@ assert text.count(old) == 1, "sabotage target line not found or not unique"
 open(path, "w").write(text.replace(old, new))
 PYEOF
 
-  t7_run
+  t7_run_tool "$T7_TOOL"
   [ "$status" -eq 1 ]
   [[ "$output" == *"seed window is only 3 lines"* ]]
 
-  git -C "$REPO_ROOT" checkout -- bin/seed-drift
-  diff -q "$backup" "$REPO_ROOT/bin/seed-drift" >/dev/null
-  rm -f "$backup"
-
-  t7_run
-  [ "$status" -eq 1 ]
-  [[ "$output" == *AHEAD* ]]
-  [[ "$output" != *"window is only"* ]]
+  t7_assert_repo_tool_untouched
 }
 
 @test "sabotage: raising SD_THIN_WINDOW past the seed's window size hides the note" {
   # Pins the load-bearing test above to the actual threshold constant, not to
-  # a hardcoded string it happens to match. Backed up to /tmp first per the
-  # brief: `git checkout --` restores to HEAD, not to a moment ago, and would
-  # silently destroy any uncommitted work in this file.
-  local backup="/tmp/seed-drift.t8-sabotage.bak.$$"
-  cp "$REPO_ROOT/bin/seed-drift" "$backup"
+  # a hardcoded string it happens to match. The edit goes to a private copy of
+  # the tool, never to $REPO_ROOT/bin/seed-drift — see t7_copy_tool for why.
+  t7_copy_tool
 
   t7_setup
   t7_doc "anchor block" ANCHOR_VAR
@@ -1886,15 +1924,14 @@ PYEOF
   } >"$TPL"
   printf '#!/usr/bin/env bash\n\nANCHOR_VAR=1\n' >"$SEED"
 
-  sed -i.orig 's/^SD_THIN_WINDOW=5$/SD_THIN_WINDOW=1/' "$REPO_ROOT/bin/seed-drift"
-  t7_run
+  t7_run_tool "$T7_TOOL"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"seed window is only 1 lines"* ]]
+
+  sed -i 's/^SD_THIN_WINDOW=5$/SD_THIN_WINDOW=1/' "$T7_TOOL"
+  t7_run_tool "$T7_TOOL"
   [ "$status" -eq 0 ]
   [[ "$output" != *"window is only"* ]]
 
-  cp "$backup" "$REPO_ROOT/bin/seed-drift"
-  rm -f "$backup" "$REPO_ROOT/bin/seed-drift.orig"
-
-  t7_run
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"seed window is only 1 lines"* ]]
+  t7_assert_repo_tool_untouched
 }
