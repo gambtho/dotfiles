@@ -60,8 +60,12 @@ dev_cmd_status() {
     printf '  config:     drift: this session was built from %s, but the merged configuration is now %s.\n' \
       "$applied" "$current"
     # Phase 1 does no additive reconciliation; saying "it will converge" would
-    # be a promise nothing in this phase keeps.
-    printf '              Run `dev stop %s` and then `dev %s` to apply it.\n' "$session" "$session"
+    # be a promise nothing in this phase keeps. The hint names the WORKSPACE
+    # (worktree directory), not the session: after an ADR-7 collision rename
+    # the session name no longer resolves through dev_resolve.
+    local ws_arg
+    ws_arg=$(basename "$worktree")
+    printf '              Run `dev stop %s` and then `dev %s` to apply it.\n' "$ws_arg" "$ws_arg"
   fi
 
   if [[ "$(printf '%s' "$record" | jq -r '.fold_gap')" == "true" ]]; then

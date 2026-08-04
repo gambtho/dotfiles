@@ -57,12 +57,13 @@ dev_event_build() {
 # Appends one composed line. The whole line is emitted by a single printf whose
 # redirection is outside it, so the kernel sees exactly one write(2) against an
 # O_APPEND descriptor; two syscalls could interleave with another appender's.
-dev_event_append() {
+# Enforce the size cap on one composed event line, WITHOUT taking any lock or
+# writing anything: prints the (possibly truncated) line, or fails when even
+# an empty-data envelope cannot fit. Split out of dev_event_append so
+# dev_events_append_if_absent can cap under its own exclusive lock.
+dev_event_cap_line() {
   local line=$1
-  local file="$DEV_STATE_ROOT/events/events.jsonl"
-  local lock="$DEV_STATE_ROOT/locks/events.lock"
   local size
-  mkdir -p "$DEV_STATE_ROOT/events" "$DEV_STATE_ROOT/locks"
   size=$(printf '%s' "$line" | wc -c)
   # The trailing newline printf'd below makes the actual write size+1 bytes.
   # The single-write invariant this cap exists to protect needs THAT to fit
@@ -70,6 +71,18 @@ dev_event_append() {
   # (measured: a 4096-byte line plus its newline is emitted as two write(2)
   # calls, which two `flock -s` holders can interleave between).
   if ((size + 1 > DEV_EVENT_MAX_BYTES)); then
+    # First tier: drop only the KNOWN-BULKY optional fields (a container.ready
+    # or container.failed can carry a large up_result / stderr_tail). This
+    # preserves the required fields the fold depends on — replacing the whole
+    # data object would fold an oversized container.ready into a ready status
+    # with a null id, user, and workdir.
+    local tier1
+    tier1=$(printf '%s' "$line" |
+      jq -c '.data |= (del(.up_result, .stderr_tail) + {truncated: true})')
+    if (($(printf '%s' "$tier1" | wc -c) + 1 <= DEV_EVENT_MAX_BYTES)); then
+      printf '%s\n' "$tier1"
+      return 0
+    fi
     # Replace free-form data with a truncated rendering and mark it. The budget
     # is an estimate (JSON escaping of the truncated prefix can still shift it
     # slightly), so the loop re-measures and halves until the composed line
@@ -86,14 +99,56 @@ dev_event_append() {
       candidate=$(printf '%s' "$line" |
         jq -c --arg raw "${raw:0:budget}" '.data = {truncated: true, raw: $raw}')
       size=$(printf '%s' "$candidate" | wc -c)
-      if ((size + 1 <= DEV_EVENT_MAX_BYTES)) || ((budget == 0)); then
+      if ((size + 1 <= DEV_EVENT_MAX_BYTES)); then
         line=$candidate
         break
+      fi
+      if ((budget == 0)); then
+        # The ENVELOPE alone exceeds the cap (a pathological worktree path or
+        # session name). Appending it would break the single-write atomicity
+        # invariant the cap exists for; refuse loudly instead.
+        printf 'dev: refusing to append event larger than %s bytes even with empty data\n' \
+          "$DEV_EVENT_MAX_BYTES" >&2
+        return 1
       fi
       budget=$((budget / 2))
     done
   fi
+  printf '%s\n' "$line"
+}
+
+dev_event_append() {
+  local line=$1
+  local file="$DEV_STATE_ROOT/events/events.jsonl"
+  local lock="$DEV_STATE_ROOT/locks/events.lock"
+  mkdir -p "$DEV_STATE_ROOT/events" "$DEV_STATE_ROOT/locks"
+  line=$(dev_event_cap_line "$line") || return 1
   { flock -s 9 && printf '%s\n' "$line" >>"$file"; } 9>"$lock"
+}
+
+# Check-and-append as ONE exclusive-lock operation. The separate
+# has-id-then-append pair is racy: two concurrent reconciles can both observe
+# a deterministic discovery id as absent and both append it, and duplicate ids
+# downstream stall the fold cursor. Exclusive beats shared here because the
+# check and the write must be indivisible against other appenders.
+dev_events_append_if_absent() {
+  local id=$1 line=$2
+  local file="$DEV_STATE_ROOT/events/events.jsonl"
+  local lock="$DEV_STATE_ROOT/locks/events.lock"
+  mkdir -p "$DEV_STATE_ROOT/events" "$DEV_STATE_ROOT/locks"
+  line=$(dev_event_cap_line "$line") || return 1
+  {
+    flock -x 9
+    local -a segs=()
+    mapfile -t segs < <(dev_events_segments)
+    # Same grep-prefilter-then-exact-jq shape as dev_events_has_id; inlined
+    # because calling it here would try to take a second lock on this file.
+    if ((${#segs[@]} > 0)) && grep -qF -- "$id" "${segs[@]}" &&
+      cat "${segs[@]}" | jq -e -s --arg id "$id" 'any(.[]; .id == $id)' >/dev/null; then
+      return 0
+    fi
+    printf '%s\n' "$line" >>"$file"
+  } 9>"$lock"
 }
 
 # Rotated segments carry an RFC 3339 basic stamp, so glob order (lexicographic)

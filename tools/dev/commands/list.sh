@@ -31,11 +31,17 @@ dev_cmd_list() {
 
   local tmp
   tmp=$(mktemp)
+  # Expanding $tmp now is deliberate; it never changes after mktemp.
+  # shellcheck disable=SC2064
+  trap "rm -f '$tmp'" RETURN
   local path record slug worktree is_primary resolved config digest updated entry stale
 
   while IFS= read -r path; do
     [[ -n "$path" ]] || continue
     record=$(cat "$path") || continue
+    # One corrupt record must not abort the listing of every other workspace;
+    # skipping mirrors the unreadable-file branch above.
+    printf '%s' "$record" | jq -e . >/dev/null 2>&1 || continue
     slug=$(printf '%s' "$record" | jq -r '.slug')
     worktree=$(printf '%s' "$record" | jq -r '.worktree')
 
@@ -85,7 +91,6 @@ dev_cmd_list() {
   else
     dev_list_render_human <"$tmp"
   fi
-  rm -f "$tmp"
 }
 
 # Groups by slug so the several working trees of one project read as a set, and

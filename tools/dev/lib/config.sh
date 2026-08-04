@@ -53,7 +53,10 @@ dev_config_layer_json() {
     printf '{}\n'
     return 0
   fi
-  yq -o=json -I=0 '.' "$file"
+  # `. // {}`: an existing file that parses to null (empty file, `---` only,
+  # or a lone comment) must merge as an empty layer, not poison the jq
+  # multiplication downstream with a literal null.
+  yq -o=json -I=0 '. // {}' "$file"
 }
 
 # worktree is accepted for signature stability; no Phase 1 layer is keyed by it

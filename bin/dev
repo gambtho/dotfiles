@@ -10,6 +10,15 @@ set -euo pipefail
 
 DEV_DOTFILES_ROOT="${DEV_DOTFILES_ROOT:-$HOME/.dotfiles}"
 DEV_CONTAINER_MARKER="${DEV_CONTAINER_MARKER:-/.dockerenv}"
+# The libs reference these under `set -u`; without defaults a bare invocation
+# dies with an unbound-variable error mid-command (and `dev list --json` then
+# misleadingly printed an empty snapshot with exit 0). Same defaults as
+# tools/dev/dev-autostart.
+DEV_STATE_ROOT="${DEV_STATE_ROOT:-$HOME/.local/state/dev}"
+DEV_REPO_ROOT="${DEV_REPO_ROOT:-$HOME/workspace}"
+DEV_OVERLAY_ROOT="${DEV_OVERLAY_ROOT:-$DEV_DOTFILES_ROOT/projects}"
+DEV_TMUX_SOCKET="${DEV_TMUX_SOCKET:-}"
+export DEV_STATE_ROOT DEV_REPO_ROOT DEV_OVERLAY_ROOT DEV_TMUX_SOCKET
 
 dev_usage() {
   cat <<'USAGE'
@@ -29,7 +38,9 @@ USAGE
 }
 
 dev_refuse_in_container() {
-  if [[ -e "$DEV_CONTAINER_MARKER" ]]; then
+  # /run/.containerenv is podman's marker; DEV_CONTAINER_MARKER (default
+  # /.dockerenv) covers docker and the tests' override.
+  if [[ -e "$DEV_CONTAINER_MARKER" || -e /run/.containerenv ]]; then
     # The container's ~/.dotfiles is a stale seed-copy, and the tmux server that
     # owns every session lives on the host and is not reachable from in here, so
     # this invocation cannot be made correct. Delegating to the host would need a

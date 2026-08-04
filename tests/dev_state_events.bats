@@ -212,7 +212,6 @@ fill_events() {
   fill_events 50000
   dev_events_rotate_if_needed
   [ "$(find "$d" -name 'events-*.jsonl' | wc -l)" -eq 5 ]
-  [ ! -e "$d/events-2020010" ]
   [ ! -e "$d/events-20200101T000000Z.jsonl" ]
   [ ! -e "$d/events-20200102T000000Z.jsonl" ]
   [ -e "$d/events-20200103T000000Z.jsonl" ]

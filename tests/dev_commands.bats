@@ -339,7 +339,11 @@ dev_open_events() {
   [ "$status" -eq 0 ]
 
   dev_tmux send-keys -t '=demo:=scratch' 'MARKER-SCENARIO-2' Enter
-  sleep 0.3
+  local i
+  for i in $(seq 1 50); do
+    dev_tmux capture-pane -p -t '=demo:=scratch' | grep -q MARKER-SCENARIO-2 && break
+    sleep 0.1
+  done
 
   local before
   before=$(dev_tmux list-panes -a -F '#{pane_id}' | sort | tr '\n' ' ')
@@ -390,7 +394,12 @@ dev_open_events() {
 
   flock -x "$DEV_STATE_ROOT/locks/$ws_id.op" sleep 5 &
   local holder=$!
-  sleep 0.4
+  # Wait until the background flock genuinely owns the lock.
+  local i
+  for i in $(seq 1 50); do
+    flock -n "$DEV_STATE_ROOT/locks/$ws_id.op" true || break
+    sleep 0.1
+  done
 
   run dev_cmd_open demo
   [ "$status" -eq 7 ]
@@ -462,7 +471,11 @@ esac
   dev_backend_apply_layout "$session" "$(dev_config_merged demo "$dir")" "$record"
   dev_tmux set-window-option -t '=demo:=shell' remain-on-exit on
   dev_tmux respawn-pane -k -t '=demo:=shell' 'exit 3'
-  sleep 0.6
+  local i
+  for i in $(seq 1 50); do
+    [[ "$(dev_tmux list-panes -t '=demo:=shell' -F '#{pane_dead}')" == "1" ]] && break
+    sleep 0.1
+  done
   [ "$(dev_tmux list-panes -t '=demo:=shell' -F '#{pane_dead}')" = "1" ]
 
   run dev_cmd_open demo
@@ -745,7 +758,12 @@ exit 0
 
   flock -x "$DEV_STATE_ROOT/locks/$ws_id.op" sleep 5 &
   local holder=$!
-  sleep 0.4
+  # Wait until the background flock genuinely owns the lock.
+  local i
+  for i in $(seq 1 50); do
+    flock -n "$DEV_STATE_ROOT/locks/$ws_id.op" true || break
+    sleep 0.1
+  done
 
   run dev_cmd_stop demo
   [ "$status" -eq 7 ]

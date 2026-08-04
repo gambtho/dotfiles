@@ -159,9 +159,9 @@ dev_reconcile() {
     if ((${#discoveries[@]} > 0)); then
       for ev in "${discoveries[@]}"; do
         id=$(jq -r '.id' <<<"$ev")
-        if ! dev_events_has_id "$id"; then
-          dev_event_append "$ev"
-        fi
+        # One exclusive-lock operation: a separate has-id check and append let
+        # two concurrent reconciles both observe absence and double-append.
+        dev_events_append_if_absent "$id" "$ev"
         computed=$(dev_fold_apply "$computed" "$ev")
       done
     fi

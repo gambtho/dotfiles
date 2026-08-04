@@ -104,8 +104,13 @@ dev_backend_apply_layout() {
 
     ev_id=$(dev_event_id_random)
     ev_ts=$(dev_now)
-    data=$(jq -nc --arg w "$name" --arg loc "$location" --arg cmd "$inner" \
-      '{window: $w, location: $loc, command: $cmd}')
+    # The DECLARED command/agent, never the rendered inner command: the
+    # rendering embeds every configured `environment` value as an export, so
+    # recording it would persist secrets from workspace.local.yaml into the
+    # event log.
+    data=$(jq -c --arg w "$name" --arg loc "$location" \
+      '{window: $w, location: $loc, command: (.command // .agent // null)}' \
+      <<<"$window_json")
     line=$(dev_event_build "$ev_id" "$ev_ts" "window.created" \
       "$workspace_id" "$slug" "$session_name" "$worktree" "$data")
     dev_event_append "$line"

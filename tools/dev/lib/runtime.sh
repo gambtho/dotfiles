@@ -58,21 +58,27 @@ dev_runtime_docker_ok() {
   docker version --format '{{.Server.Version}}' >/dev/null 2>&1
 }
 
-# devcontainer.json is JSONC. Strip // comments that are outside string
-# literals, then trailing commas, so jq can parse it. A literal ", }" inside a
-# string would be mangled; no devcontainer.json in ~/workspace contains one.
+# devcontainer.json is JSONC. Strip // line comments and /* ... */ block
+# comments that are outside string literals, then trailing commas, so jq can
+# parse it. A literal ", }" inside a string would be mangled; no
+# devcontainer.json in ~/workspace contains one. Block-comment state (inblk)
+# persists across lines because /* ... */ may span them.
 dev_runtime_jsonc_to_json() {
   awk '
+    BEGIN { inblk = 0 }
     {
       out = ""; instr = 0; i = 1; n = length($0)
       while (i <= n) {
         c = substr($0, i, 1)
-        if (instr) {
+        if (inblk) {
+          if (c == "*" && substr($0, i + 1, 1) == "/") { inblk = 0; i++ }
+        } else if (instr) {
           out = out c
           if (c == "\\") { i++; out = out substr($0, i, 1) }
           else if (c == "\"") { instr = 0 }
         } else if (c == "\"") { instr = 1; out = out c }
         else if (c == "/" && substr($0, i + 1, 1) == "/") { break }
+        else if (c == "/" && substr($0, i + 1, 1) == "*") { inblk = 1; i++ }
         else { out = out c }
         i++
       }

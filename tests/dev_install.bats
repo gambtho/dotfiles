@@ -128,6 +128,21 @@ dev_hook_env() {
   mkdir -p "$DEV_STATE_ROOT/sessions"
 }
 
+# Hooks run via `run-shell -b`, so the event lands asynchronously. Poll for it
+# (bounded, ~5s) instead of a fixed sleep: the fixed-sleep form flaked under
+# full-suite load and once wedged `make check` via a leaked server.
+dev_wait_for_event() {
+  local event="$1" i
+  for i in $(seq 1 50); do
+    if jq -e -s --arg e "$event" 'any(.[]; .event == $e)' \
+      "$DEV_STATE_ROOT/events/events.jsonl" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  return 1
+}
+
 @test "session-closed emits workspace.stopped through the session index" {
   setup_dev_test
   dev_hook_env
@@ -144,7 +159,7 @@ dev_hook_env() {
   dev_tmux source-file "$REPO_ROOT/tools/dev/dev.tmux.conf"
   dev_tmux new-session -d -s demo
   dev_tmux kill-session -t '=demo'
-  sleep 0.8
+  dev_wait_for_event workspace.stopped
 
   [ "$(jq -r 'select(.event == "workspace.stopped") | .workspace_id' \
     "$DEV_STATE_ROOT/events/events.jsonl")" = "wsid9" ]
@@ -177,7 +192,7 @@ dev_hook_env() {
   # hand-renamed window must not be able to corrupt the log.
   dev_tmux new-window -t '=quoted' -n 'we"ird' 'sleep 0.4; exit 3'
   dev_tmux set-window-option -t '=quoted:' remain-on-exit on
-  sleep 1.2
+  dev_wait_for_event pane.died
 
   run jq -e . "$DEV_STATE_ROOT/events/events.jsonl"
   [ "$status" -eq 0 ]
@@ -208,7 +223,7 @@ dev_hook_env() {
   # The spec warns that an immediate `exit 3` races remain-on-exit being set.
   dev_tmux new-window -t '=demo' -n shell 'sleep 0.4; exit 3'
   dev_tmux set-window-option -t '=demo:=shell' remain-on-exit on
-  sleep 1.2
+  dev_wait_for_event pane.died
 
   [ "$(jq -r 'select(.event == "pane.died") | .workspace_id' \
     "$DEV_STATE_ROOT/events/events.jsonl")" = "wsid8" ]
@@ -259,6 +274,7 @@ dev_hook_env() {
   [ -d "$DEV_STATE_ROOT/workspaces" ]
   [ -d "$DEV_STATE_ROOT/events" ]
   [ -d "$DEV_STATE_ROOT/locks" ]
+  [ -d "$DEV_STATE_ROOT/sessions" ]
 }
 
 @test "install.sh is idempotent" {

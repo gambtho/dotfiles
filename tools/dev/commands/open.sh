@@ -82,11 +82,22 @@ dev_open_container_up() {
   fi
   dev_open_emit container.starting '{}'
 
-  up=$(dev_container_up "$DEV_OPEN_WORKTREE" "$config") || up='{"exit_status":1}'
-  status=$(jq -r '.exit_status // 1' <<<"$up")
+  # Keep dev_container_up's own JSON even on failure: it carries the REAL exit
+  # status (124 from timeout, a CLI-specific code) and stderr_tail, which are
+  # exactly what container.failed exists to preserve (§4.4). Synthesize a
+  # payload only when nothing parseable was printed, and then use the actual
+  # return code rather than a flat 1.
+  local up_rc=0
+  up=$(dev_container_up "$DEV_OPEN_WORKTREE" "$config") || up_rc=$?
+  if ! jq -e . >/dev/null 2>&1 <<<"$up"; then
+    up=$(jq -nc --argjson s "${up_rc:-1}" '{exit_status: $s}')
+  fi
+  status=$(jq -r ".exit_status // ${up_rc:-1}" <<<"$up")
   if [[ "$status" != "0" ]]; then
     dev_open_emit container.failed \
-      "$(jq -n --argjson s "$status" '{reason: "devcontainer up failed", up_exit_status: $s}')"
+      "$(jq -c --argjson s "$status" \
+        '{reason: "devcontainer up failed", up_exit_status: $s}
+         + (if (.stderr_tail // "") == "" then {} else {stderr_tail} end)' <<<"$up")"
     printf 'dev: devcontainer up failed for %s (exit %s)\n' "$DEV_OPEN_SESSION" "$status" >&2
     return 1
   fi

@@ -69,6 +69,10 @@ dev_cmd_stop() {
       --container)
         stop_container=1
         ;;
+      -h | --help)
+        printf 'usage: dev stop [<name>] [--container]\n'
+        return 0
+        ;;
       -*)
         printf 'usage: dev stop [<name>] [--container]\n' >&2
         return 2

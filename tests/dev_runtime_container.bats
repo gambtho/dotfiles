@@ -483,3 +483,22 @@ exit 18'
   [ "$status" -eq 0 ]
   [[ "$output" == *"; exec make test"* ]]
 }
+
+@test "runtime kind survives /* */ block comments in a compose fixture" {
+  # Block comments are legal JSONC and common in VS Code-generated files. An
+  # unstripped one makes jq fail and dev_runtime_kind fall through to single,
+  # silently misclassifying a compose project.
+  mkdir -p "$WT/.devcontainer"
+  cat >"$WT/.devcontainer/devcontainer.json" <<'JSON'
+{
+  /* compose project,
+     block comment spanning lines */
+  "name": "demo", /* inline */ "dockerComposeFile": "docker-compose.yml",
+  "service": "app",
+  "image": "https://example.com/img/*not-a-comment*/x",
+}
+JSON
+  run dev_runtime_kind "$WT"
+  [ "$status" -eq 0 ]
+  [ "$output" = compose ]
+}
