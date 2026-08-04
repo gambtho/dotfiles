@@ -2,6 +2,12 @@
 
 load test_helper
 
+teardown() {
+  if [[ -n "${DEV_TMUX_SOCKET:-}" ]]; then
+    tmux -L "$DEV_TMUX_SOCKET" kill-server 2>/dev/null || true
+  fi
+}
+
 @test "dev-event with an empty workspace_id writes nothing and exits 0" {
   setup_dev_test
   run "$REPO_ROOT/tools/dev/dev-event" "" slug sess /tmp/tree workspace.stopped reason=user

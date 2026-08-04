@@ -98,7 +98,7 @@ main() {
       autostart_log "skip $record_path: unreadable record"
       continue
     fi
-    autostart_one "$record"
+    autostart_one "$record" || autostart_log "skip $record_path: autostart failed"
   done < <(dev_state_list)
 }
 
