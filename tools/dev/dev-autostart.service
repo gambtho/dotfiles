@@ -1,0 +1,26 @@
+[Unit]
+Description=Start opted-in dev workspace containers
+Documentation=file://@DOTFILES_ROOT@/docs/superpowers/specs/2026-08-03-dev-workspace-platform-design.md
+After=default.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+
+# A unit's default environment has neither mise nor its shims on PATH, and
+# dev-autostart resolves the devcontainer CLI through an absolute mise binary.
+# Without this the unit fails in a way that gets misattributed to Docker.
+Environment=PATH=%h/.local/bin:%h/.local/share/mise/shims:/usr/local/bin:/usr/bin:/bin
+
+# Docker runs as a system service, so a user unit cannot order itself After= it.
+# Poll for the daemon instead, bounded, then run anyway -- dev-autostart reports
+# an unavailable daemon and exits 0 rather than failing the unit.
+ExecStartPre=/usr/bin/env bash -c 'for _ in $(seq 1 60); do docker info >/dev/null 2>&1 && exit 0; sleep 1; done; exit 0'
+
+ExecStart=@DOTFILES_ROOT@/tools/dev/dev-autostart
+
+# Cold devcontainer builds are slow; several in sequence are slower still.
+TimeoutStartSec=1800
+
+[Install]
+WantedBy=default.target

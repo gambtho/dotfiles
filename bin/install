@@ -193,6 +193,7 @@ main() {
     run_phase optional fonts setup_fonts
   fi
   run_phase optional work setup_work
+  run_phase optional dev bash "$DOTFILES_ROOT/tools/dev/install.sh"
   setup_ai
 
   finish_phases || exit 1

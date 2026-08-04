@@ -39,3 +39,7 @@ __pycache__/
 # ...except host-specific state, which stays local. (Also covered by the global
 # ignore; repeated here so this repo is self-explanatory.)
 projects/*/.claude/settings.local.json
+
+# Machine-local workspace overrides for the dev platform (host paths, env, and
+# anything that must not follow the repo to another machine).
+projects/*/workspace.local.yaml

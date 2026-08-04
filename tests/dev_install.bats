@@ -222,3 +222,213 @@ dev_hook_env() {
   run grep -c 'tools/dev/dev.tmux.conf' "$REPO_ROOT/tools/tmux/tmux.conf.symlink"
   [ "$output" = "1" ]
 }
+
+@test "install.sh writes the autostart unit with DOTFILES_ROOT substituted" {
+  setup_dev_test
+  export XDG_CONFIG_HOME="$TEST_ROOT/config"
+  export DEV_SKIP_SERVICE=1
+
+  run bash "$REPO_ROOT/tools/dev/install.sh"
+  [ "$status" -eq 0 ]
+
+  local unit="$XDG_CONFIG_HOME/systemd/user/dev-autostart.service"
+  [ -f "$unit" ]
+  run grep -c "@DOTFILES_ROOT@" "$unit"
+  [ "$status" -ne 0 ]
+  grep -qF "ExecStart=$REPO_ROOT/tools/dev/dev-autostart" "$unit"
+  grep -q "^Type=oneshot$" "$unit"
+  grep -q "^WantedBy=default.target$" "$unit"
+  grep -q "^Environment=PATH=" "$unit"
+  grep -q "^ExecStartPre=" "$unit"
+}
+
+@test "install.sh creates the state directories" {
+  setup_dev_test
+  export XDG_CONFIG_HOME="$TEST_ROOT/config"
+  export DEV_SKIP_SERVICE=1
+  export DEV_STATE_ROOT="$TEST_ROOT/fresh-state"
+
+  run bash "$REPO_ROOT/tools/dev/install.sh"
+  [ "$status" -eq 0 ]
+  [ -d "$DEV_STATE_ROOT/workspaces" ]
+  [ -d "$DEV_STATE_ROOT/events" ]
+  [ -d "$DEV_STATE_ROOT/locks" ]
+}
+
+@test "install.sh is idempotent" {
+  setup_dev_test
+  export XDG_CONFIG_HOME="$TEST_ROOT/config"
+  export DEV_SKIP_SERVICE=1
+
+  run bash "$REPO_ROOT/tools/dev/install.sh"
+  [ "$status" -eq 0 ]
+  local unit="$XDG_CONFIG_HOME/systemd/user/dev-autostart.service"
+  cp "$unit" "$TEST_ROOT/unit.first"
+
+  run bash "$REPO_ROOT/tools/dev/install.sh"
+  [ "$status" -eq 0 ]
+  cmp "$TEST_ROOT/unit.first" "$unit"
+  # No stray staging files left behind.
+  run bash -c "ls -A '$XDG_CONFIG_HOME/systemd/user' | grep -c '^\\.'"
+  [ "$output" = "0" ]
+}
+
+@test "install.sh verifies the committed tmux marker block" {
+  setup_dev_test
+  export XDG_CONFIG_HOME="$TEST_ROOT/config"
+  export DEV_SKIP_SERVICE=1
+
+  grep -qF "# dev-workspace-config-start" "$REPO_ROOT/tools/tmux/tmux.conf.symlink"
+  grep -qF "# dev-workspace-config-end" "$REPO_ROOT/tools/tmux/tmux.conf.symlink"
+
+  run bash "$REPO_ROOT/tools/dev/install.sh"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"tmux marker block"* ]]
+}
+
+@test "workspace.local.yaml is gitignored" {
+  run git -C "$REPO_ROOT" check-ignore projects/x/workspace.local.yaml
+  [ "$status" -eq 0 ]
+  [ "$output" = "projects/x/workspace.local.yaml" ]
+}
+
+# Creates a git repo under DEV_REPO_ROOT, an overlay workspace.yaml, and a
+# workspace record. Echoes the workspace_id.
+dev_autostart_fixture() {
+  local slug="$1" autostart="$2"
+  local worktree="$DEV_REPO_ROOT/$slug"
+  mkdir -p "$worktree/.devcontainer"
+  printf '%s\n' '{"image":"alpine"}' >"$worktree/.devcontainer/devcontainer.json"
+  git -C "$worktree" init -q
+  git -C "$worktree" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
+
+  mkdir -p "$DEV_OVERLAY_ROOT/$slug"
+  printf 'autostart: %s\n' "$autostart" >"$DEV_OVERLAY_ROOT/$slug/workspace.yaml"
+
+  source "$REPO_ROOT/tools/dev/lib/resolve.sh"
+  source "$REPO_ROOT/tools/dev/lib/state.sh"
+  local id
+  id=$(dev_resolve_workspace_id "$worktree")
+  dev_state_new "$id" "$slug" "$slug" "$worktree" >"$DEV_STATE_ROOT/workspaces/$id.json"
+  printf '%s\n' "$id"
+}
+
+# Stubs docker/mise/devcontainer so `devcontainer up` appends one line to
+# $DEV_UP_MARKER and reports a plausible container.
+dev_autostart_stubs() {
+  export DEV_UP_MARKER="$TEST_ROOT/up.log"
+  : >"$DEV_UP_MARKER"
+  stub_command docker 'exit 0'
+  stub_command mise 'if [[ "${1:-}" == "exec" ]]; then
+  shift 2
+  [[ "${1:-}" == "--" ]] && shift
+  exec "$@"
+fi
+exit 0'
+  stub_command devcontainer 'case "${1:-}" in
+  --version)
+    echo "0.86.1"
+    ;;
+  up)
+    printf "up\n" >>"$DEV_UP_MARKER"
+    printf "%s\n" "{\"outcome\":\"success\",\"containerId\":\"cid-abc\",\"remoteUser\":\"node\",\"remoteWorkspaceFolder\":\"/workspaces/app\"}"
+    ;;
+  *)
+    exit 0
+    ;;
+esac'
+}
+
+@test "dev-autostart runs devcontainer up exactly once for an eligible workspace" {
+  setup_dev_test
+  dev_autostart_stubs
+  dev_autostart_fixture app true >/dev/null
+
+  run "$REPO_ROOT/tools/dev/dev-autostart"
+  [ "$status" -eq 0 ]
+  run wc -l <"$DEV_UP_MARKER"
+  [ "$(tr -d ' ' <<<"$output")" = "1" ]
+}
+
+@test "dev-autostart skips a workspace without autostart" {
+  setup_dev_test
+  dev_autostart_stubs
+  dev_autostart_fixture app false >/dev/null
+
+  run "$REPO_ROOT/tools/dev/dev-autostart"
+  [ "$status" -eq 0 ]
+  [ ! -s "$DEV_UP_MARKER" ]
+}
+
+@test "dev-autostart skips a linked worktree" {
+  setup_dev_test
+  dev_autostart_stubs
+  dev_autostart_fixture app true >/dev/null
+  rm -f "$DEV_STATE_ROOT"/workspaces/*.json
+
+  local linked="$DEV_REPO_ROOT/app-pr5"
+  git -C "$DEV_REPO_ROOT/app" worktree add -q -b pr5 "$linked"
+  source "$REPO_ROOT/tools/dev/lib/resolve.sh"
+  source "$REPO_ROOT/tools/dev/lib/state.sh"
+  local id
+  id=$(dev_resolve_workspace_id "$linked")
+  dev_state_new "$id" app "app--app-pr5" "$linked" >"$DEV_STATE_ROOT/workspaces/$id.json"
+
+  run "$REPO_ROOT/tools/dev/dev-autostart"
+  [ "$status" -eq 0 ]
+  [ ! -s "$DEV_UP_MARKER" ]
+  [[ "$output" == *"linked worktree"* ]]
+}
+
+@test "dev-autostart skips a record whose worktree is gone" {
+  setup_dev_test
+  dev_autostart_stubs
+  dev_autostart_fixture app true >/dev/null
+  rm -rf "$DEV_REPO_ROOT/app"
+
+  run "$REPO_ROOT/tools/dev/dev-autostart"
+  [ "$status" -eq 0 ]
+  [ ! -s "$DEV_UP_MARKER" ]
+  [[ "$output" == *"worktree is gone"* ]]
+}
+
+@test "dev-autostart skips a workspace whose operation lock is held" {
+  setup_dev_test
+  dev_autostart_stubs
+  local id
+  id=$(dev_autostart_fixture app true)
+
+  local op_lock="$DEV_STATE_ROOT/locks/$id.op"
+  : >"$op_lock"
+  flock "$op_lock" sleep 30 &
+  local holder=$!
+  # Wait until the background flock genuinely owns the lock.
+  local i
+  for i in $(seq 1 50); do
+    flock -n "$op_lock" true || break
+    sleep 0.1
+  done
+
+  run "$REPO_ROOT/tools/dev/dev-autostart"
+  kill "$holder" 2>/dev/null || true
+  wait "$holder" 2>/dev/null || true
+
+  [ "$status" -eq 0 ]
+  [ ! -s "$DEV_UP_MARKER" ]
+  [[ "$output" == *"operation lock held"* ]]
+}
+
+@test "dev-autostart creates no tmux session" {
+  setup_dev_test
+  dev_autostart_stubs
+  dev_autostart_fixture app true >/dev/null
+
+  run "$REPO_ROOT/tools/dev/dev-autostart"
+  [ "$status" -eq 0 ]
+  [ -s "$DEV_UP_MARKER" ]
+
+  # The real test socket must have no server at all: autostart starts containers,
+  # not sessions (ADR-5).
+  run tmux -L "$DEV_TMUX_SOCKET" list-sessions
+  [ "$status" -ne 0 ]
+}

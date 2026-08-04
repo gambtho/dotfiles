@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+# dev-autostart -- start containers for opted-in workspaces at boot (ADR-5).
+#
+# Runs `devcontainer up` and nothing else: no tmux session, no layout, no
+# startup commands. Discovery is from existing records only, never a scan of
+# DEV_REPO_ROOT, so a repository that has never been opened is never started.
+
+set -euo pipefail
+
+DEV_DOTFILES_ROOT="${DEV_DOTFILES_ROOT:-$HOME/.dotfiles}"
+DEV_STATE_ROOT="${DEV_STATE_ROOT:-$HOME/.local/state/dev}"
+DEV_REPO_ROOT="${DEV_REPO_ROOT:-$HOME/workspace}"
+DEV_OVERLAY_ROOT="${DEV_OVERLAY_ROOT:-$DEV_DOTFILES_ROOT/projects}"
+DEV_TMUX_SOCKET="${DEV_TMUX_SOCKET:-}"
+export DEV_DOTFILES_ROOT DEV_STATE_ROOT DEV_REPO_ROOT DEV_OVERLAY_ROOT DEV_TMUX_SOCKET
+
+DEV_LIB="$DEV_DOTFILES_ROOT/tools/dev/lib"
+# shellcheck source=tools/dev/lib/resolve.sh
+source "$DEV_LIB/resolve.sh"
+# shellcheck source=tools/dev/lib/config.sh
+source "$DEV_LIB/config.sh"
+# shellcheck source=tools/dev/lib/state.sh
+source "$DEV_LIB/state.sh"
+# shellcheck source=tools/dev/lib/runtime.sh
+source "$DEV_LIB/runtime.sh"
+# shellcheck source=tools/dev/lib/container.sh
+source "$DEV_LIB/container.sh"
+
+autostart_log() {
+  printf 'dev-autostart: %s\n' "$*" >&2
+}
+
+# Applies the two ADR-5 eligibility rules to one record, then starts its
+# container under the operation lock.
+autostart_one() {
+  local record="$1"
+  local workspace_id slug worktree config
+
+  workspace_id=$(jq -r '.workspace_id // empty' <<<"$record")
+  slug=$(jq -r '.slug // empty' <<<"$record")
+  worktree=$(jq -r '.worktree // empty' <<<"$record")
+  [[ -n "$workspace_id" && -n "$slug" && -n "$worktree" ]] || {
+    autostart_log "skip: record is missing identity fields"
+    return 0
+  }
+
+  if [[ ! -d "$worktree" ]]; then
+    autostart_log "skip $slug: worktree is gone ($worktree)"
+    return 0
+  fi
+  if ! dev_resolve_is_primary "$worktree"; then
+    autostart_log "skip $slug: linked worktree"
+    return 0
+  fi
+
+  if ! config=$(dev_config_merged "$slug" "$worktree"); then
+    autostart_log "skip $slug: merged config is unreadable"
+    return 0
+  fi
+  [[ "$(jq -r '.autostart // false' <<<"$config")" == "true" ]] || return 0
+
+  if ! dev_container_enabled "$config" "$worktree"; then
+    autostart_log "skip $slug: no devcontainer applies"
+    return 0
+  fi
+
+  # Subshell so fd 9 and the lock are released the moment this workspace is done.
+  (
+    exec 9>"$DEV_STATE_ROOT/locks/$workspace_id.op"
+    if ! flock -n 9; then
+      autostart_log "skip $slug: operation lock held by another dev"
+      exit 0
+    fi
+    autostart_log "starting container for $slug"
+    if ! dev_container_up "$worktree" "$config" >/dev/null; then
+      autostart_log "$slug: devcontainer up failed"
+    fi
+  )
+}
+
+main() {
+  mkdir -p "$DEV_STATE_ROOT/workspaces" "$DEV_STATE_ROOT/events" "$DEV_STATE_ROOT/locks" "$DEV_STATE_ROOT/sessions"
+
+  if ! dev_runtime_docker_ok; then
+    autostart_log "docker daemon unavailable; nothing started"
+    return 0
+  fi
+  if ! dev_runtime_devcontainer_cli >/dev/null; then
+    autostart_log "devcontainer CLI absent or unrunnable; nothing started"
+    return 0
+  fi
+
+  local record_path record
+  while IFS= read -r record_path; do
+    [[ -n "$record_path" && -f "$record_path" ]] || continue
+    record=$(cat "$record_path")
+    if ! jq -e . >/dev/null 2>&1 <<<"$record"; then
+      autostart_log "skip $record_path: unreadable record"
+      continue
+    fi
+    autostart_one "$record"
+  done < <(dev_state_list)
+}
+
+main "$@"
