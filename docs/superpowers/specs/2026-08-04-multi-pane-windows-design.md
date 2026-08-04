@@ -74,16 +74,21 @@ its process is replaced), so identity survives respawns. Only kill+recreate
 restamps. tmux pane ids (`%N`) and indexes are never used as identity — only
 as concrete targets resolved fresh from a query.
 
-Stamping does not need the remain-on-exit atomic chain: `remain-on-exit` is
-window-scoped and set atomically with window creation (the existing chained
-invocation), so by the time any `split-window` runs it is already on, and a
-fast-exiting split command leaves a *dead, held, still-targetable* pane — the
-window-destruction race that motivated the original chain cannot occur for
-splits. Mechanics:
+Stamping MUST be chained atomically into the same tmux invocation as the
+split. The window-destruction race cannot occur for splits (`remain-on-exit`
+is window-scoped and already on from window creation, so a fast-exiting split
+command leaves a *dead, held, still-targetable* pane) — but a second race
+can: the `pane-died` hook can fire before a separate second invocation stamps
+`@dev_pane`, producing an identity-less death event for a declared pane that
+the fold could not route. Mechanics:
 
-- `split-window -P -F '#{pane_id}'` captures the concrete new pane id.
-- `set-option -p -t "%id" @dev_pane <name>` stamps it (a dead pane still
-  accepts options).
+- `split-window` (without `-d`, so the new pane becomes the window's active
+  pane) chained via tmux's `';'` separator with
+  `set-option -p -t "=session:=window" @dev_pane <name>` — the window target
+  resolves to the active pane, i.e. the pane just created, inside one atomic
+  server request, exactly the pattern the shipped remain-on-exit chain proved.
+- The active-pane side effect is corrected by the focus pass at the end of
+  layout application.
 
 Single-pane windows are never stamped, keeping their event stream
 byte-identical to today's.
@@ -192,7 +197,17 @@ splittable, with a `#{?…}` placeholder for the unset case.
 
 Panes merge across layers **by name within their window**, using the window
 algorithm verbatim (patch same names, append new ones, `IN()` not
-`inside()`). New validation, all loud (exit 5):
+`inside()`).
+
+**Per-layer duplicate detection:** by-name merging collapses duplicate names
+before any post-merge validation can see them (a layer that defines an
+inherited pane twice would silently keep only the last patch), so each YAML
+layer is checked for duplicate window names and duplicate pane names *while
+it is still a layer*, and `dev config`/`dev open` fail with exit 5 naming the
+offending file. The post-merge duplicate checks below remain as defense in
+depth.
+
+New validation, all loud (exit 5):
 
 - a merged window sets `panes` together with any **non-null** single-pane key
   (`agent`, `command`, `cwd`, `location`, `environment`) — names the window;

@@ -50,14 +50,13 @@ EOF
   [ "$(jq 'has("environment")' <<<"$win")" = "false" ]
 }
 
-@test "config: panes normalize with per-pane defaults and window environment is kept" {
+@test "config: panes normalize with per-pane defaults; window environment survives on single-pane windows" {
   mkdir -p "$DEV_OVERLAY_ROOT/proj"
   cat >"$DEV_OVERLAY_ROOT/proj/workspace.yaml" <<'EOF'
 version: 1
 windows:
   - name: main
     layout: tiled
-    environment: {WIN: "1"}
     panes:
       - name: agent-1
         agent: claude
@@ -65,14 +64,42 @@ windows:
       - name: shell
         command: null
         environment: {PANE: "2"}
+  - name: solo
+    command: null
+    environment: {WIN: "1"}
 EOF
   run dev_config_merged "proj" "$TEST_ROOT/workspace/proj"
   [ "$status" -eq 0 ]
   win=$(jq -c '.windows[] | select(.name == "main")' <<<"$output")
   [ "$(jq -r '.layout' <<<"$win")" = "tiled" ]
-  [ "$(jq -r '.environment.WIN' <<<"$win")" = "1" ]
   [ "$(jq -c '.panes[0]' <<<"$win")" = '{"agent":"claude","command":null,"cwd":null,"focus":true,"location":null,"name":"agent-1"}' ]
   [ "$(jq -r '.panes[1].environment.PANE' <<<"$win")" = "2" ]
+  # the spec §7.1 fix: window-level environment is kept for single-pane windows
+  [ "$(jq -r '.windows[] | select(.name == "solo") | .environment.WIN' <<<"$output")" = "1" ]
+}
+
+@test "config: a layer defining an inherited pane twice fails loudly, never silently collapses" {
+  mkdir -p "$DEV_OVERLAY_ROOT/proj"
+  cat >"$DEV_OVERLAY_ROOT/proj/workspace.yaml" <<'EOF'
+version: 1
+windows:
+  - name: main
+    panes:
+      - name: shell
+        command: null
+EOF
+  cat >"$DEV_OVERLAY_ROOT/proj/workspace.local.yaml" <<'EOF'
+windows:
+  - name: main
+    panes:
+      - name: shell
+        cwd: a
+      - name: shell
+        cwd: b
+EOF
+  run dev_config_merged "proj" "$TEST_ROOT/workspace/proj"
+  [ "$status" -eq 5 ]
+  [[ "$output" == *"shell"* ]]   # bats `run` folds stderr into $output
 }
 
 @test "config: panes merge by name across layers, never by index" {
@@ -171,6 +198,9 @@ EOF
   [ "$status" -eq 5 ]
   run dev_config_validate "$(bad '{"name":"m","agent":null,"command":null,"cwd":null,"location":null,"focus":false,"panes":[{"name":"bad name","agent":null,"command":null,"cwd":null,"location":null,"focus":false}]}')"
   [ "$status" -eq 5 ]
+  # exclusive schema: window-level environment is a single-pane key (spec §5)
+  run dev_config_validate "$(bad '{"name":"m","agent":null,"command":null,"cwd":null,"location":null,"focus":false,"environment":{"A":"1"},"panes":[{"name":"a","agent":null,"command":null,"cwd":null,"location":null,"focus":false}]}')"
+  [ "$status" -eq 5 ]
 }
 ```
 
@@ -180,6 +210,39 @@ Run: `bats tests/dev_config_merge.bats`
 Expected: the new tests FAIL (panes dropped by normalization, validation exits 0).
 
 - [ ] **Step 3: Implement in `tools/dev/lib/config.sh`**
+
+Add a per-layer duplicate check and call it from `dev_config_merged`'s loop
+right after `layer=$(dev_config_layer_json "$file")`. This must run on the
+LAYER, not the merged result: by-name merging keeps only the last duplicate,
+so post-merge validation can never see one (spec §5):
+
+```bash
+# By-name merging collapses duplicate names before post-merge validation can
+# see them: a layer that defines an inherited pane twice would silently keep
+# only the last patch. So duplicates are detected per layer, while the layer
+# is still a layer. The post-merge duplicate checks in dev_config_validate
+# stay as defense in depth for hand-fed JSON.
+dev_config_layer_dup_check() {
+  local file="$1" layer="$2" problem
+  problem=$(jq -r '
+    ([(.windows // []) | group_by(.name)[] | select(length > 1)
+       | "window \(.[0].name) is defined more than once"]
+     + [(.windows // [])[] | .name as $w
+        | ((.panes // []) | group_by(.name)[] | select(length > 1))
+        | "pane \($w)/\(.[0].name) is defined more than once"])
+    | first // ""' <<<"$layer") || return 1
+  [[ -z "$problem" ]] && return 0
+  printf 'invalid workspace config in %s: %s\n' "$file" "$problem" >&2
+  return 5
+}
+```
+
+and in `dev_config_merged`:
+
+```bash
+    layer="$(dev_config_layer_json "$file")" || return 1
+    dev_config_layer_dup_check "$file" "$layer" || return $?
+```
 
 Replace `DEV_CONFIG_MERGE_JQ`'s `merge_windows` with pane-aware merging (jq `*` replaces arrays wholesale, so `panes` needs the same by-name treatment windows get):
 
@@ -482,6 +545,24 @@ set-hook -gw pane-died "run-shell -b \"~/.dotfiles/tools/dev/dev-event '#{@dev_w
   line=$(grep '"event":"pane.died"' "$DEV_STATE_ROOT/events/events.jsonl" | tail -n 1)
   [ "$(jq -r '.data | has("pane")' <<<"$line")" = "false" ]
 }
+
+@test "pane-died from a fast-exiting split still carries the pane name (atomic stamp)" {
+  setup_hook_session
+  dev_tmux source-file "$REPO_ROOT/tools/dev/dev.tmux.conf"
+  dev_tmux new-window -d -t "=proj:" -n w2 "sleep 30" \
+    ';' set-window-option -t "=proj:=w2" remain-on-exit on
+  # the command exits immediately: if the stamp were a second invocation, the
+  # hook could fire first and emit an identity-less pane.died (spec §2)
+  dev_tmux split-window -t "=proj:=w2" 'exit 1' \
+    ';' set-option -p -t "=proj:=w2" @dev_pane fast
+  for _ in $(seq 1 50); do
+    grep -q '"pane":"fast"' "$DEV_STATE_ROOT/events/events.jsonl" 2>/dev/null && break
+    sleep 0.1
+  done
+  line=$(grep '"pane":"fast"' "$DEV_STATE_ROOT/events/events.jsonl" | tail -n 1)
+  [ "$(jq -r '.event' <<<"$line")" = "pane.died" ]
+  [ "$(jq -r '.data.window' <<<"$line")" = "w2" ]
+}
 ```
 
 (Adapt the session bootstrap to whatever the neighboring hook tests in `dev_install.bats` actually do — reuse their helper if one exists, including the `~/.dotfiles` symlink they set up so `run-shell` finds `dev-event`. If `#{@dev_pane}` turns out NOT to interpolate in the hook context on tmux 3.4, STOP and flag it: the fallback design is interpolating `#{pane_id}` and resolving it in `dev-event`, which is a spec change requiring user sign-off.)
@@ -508,7 +589,7 @@ git commit -m "feat(dev): pane discriminator on pane.died, omitted when unstampe
 - Test: `tests/dev_backend_tmux.bats`
 
 **Interfaces:**
-- Produces: `dev_backend_query` window objects become `{name, panes: [{alive, pane, id}]}` — `pane` is the `@dev_pane` logical name or null; `id` is the opaque backend pane handle (tmux `%id`), valid only while the pane exists, never persisted. Existing consumers reading `.panes[].alive` are untouched.
+- Produces: `dev_backend_query` window objects become `{name, panes: [{alive, pane, pane_id}]}` — `pane` is the `@dev_pane` logical name or null; `pane_id` is the opaque backend pane handle (tmux `%id`, the spec §4 name), valid only while the pane exists, never persisted. Existing consumers reading `.panes[].alive` are untouched.
 
 - [ ] **Step 1: Write the failing test** — append to `tests/dev_backend_tmux.bats`:
 
@@ -527,7 +608,7 @@ git commit -m "feat(dev): pane discriminator on pane.died, omitted when unstampe
   win=$(jq -c '.windows[] | select(.name == "w1")' <<<"$output")
   [ "$(jq -r '.panes | length' <<<"$win")" -eq 3 ]
   [ "$(jq -r '[.panes[].pane] | sort | join(",")' <<<"$win")" = ",agent-1,shell" ]
-  [ "$(jq -r '[.panes[] | select(.pane == "shell") | .id] | first' <<<"$win")" = "$pid" ]
+  [ "$(jq -r '[.panes[] | select(.pane == "shell") | .pane_id] | first' <<<"$win")" = "$pid" ]
   [ "$(jq -r '[.panes[] | select(.pane == null)] | length' <<<"$win")" -eq 1 ]
 }
 ```
@@ -537,7 +618,7 @@ git commit -m "feat(dev): pane discriminator on pane.died, omitted when unstampe
 - [ ] **Step 2: Run to verify failure**
 
 Run: `bats tests/dev_backend_tmux.bats`
-Expected: new test FAILS (`pane`/`id` fields absent).
+Expected: new test FAILS (`pane`/`pane_id` fields absent).
 
 - [ ] **Step 3: Implement** — in `dev_backend_query`, change the format and the jq. `window_name` stays last to absorb spaces; `@dev_pane`'s validated charset (`[A-Za-z0-9._-]`) keeps the middle fields splittable, with `-` as the unset placeholder:
 
@@ -554,10 +635,10 @@ Expected: new test FAILS (`pane`/`id` fields absent).
     | map({name: .[0].name,
            panes: map({alive: (.dead == "0"),
                        pane: (if .pn == "-" then null else .pn end),
-                       id: .pid})})
+                       pane_id: .pid})})
 ```
 
-Add to the function comment: `id` is an opaque, ephemeral backend handle for targeting a live pane (respawn, select); it is never written to events or records — logical identity is `pane`.
+Add to the function comment: `pane_id` is an opaque, ephemeral backend handle for targeting a live pane (respawn, select); it is never written to events or records — logical identity is `pane`.
 
 - [ ] **Step 4: Run the tests**
 
@@ -582,7 +663,7 @@ git commit -m "feat(dev): backend query exposes pane logical names and handles"
 
 **Interfaces:**
 - Consumes: Task 1's normalized `panes`/`layout`/`environment`; Task 4's query shape; `dev_window_location` / `dev_container_exec_prefix` / `dev_window_workdir` / `dev_window_inner_command` from `container.sh` — a pane object has exactly the fields those functions read from a window object, so pane JSON is passed where window JSON goes today.
-- Produces: panes-form windows built and repaired; events `window.created {window, panes: [names]}` (no `location`/`command` — spec's §4.4 amendment), `pane.created {window, pane, location, command}` (declared command), `agent.started {window, pane, command}`. Effective environment is `global * window.environment * pane.environment` (single-pane windows: `global * window.environment` — the spec §7.1 fix).
+- Produces: panes-form windows built and repaired; events `window.created {window, panes: [names]}` (no `location`/`command` — spec's §4.4 amendment), `pane.created {window, pane, location, command}` (declared command), `agent.started {window, pane, command}`. Effective environment: panes-form panes get `global * pane.environment` (the exclusive schema forbids window-level `environment` beside `panes` — Task 1 validates that); single-pane windows get `global * window.environment` (the spec §7.1 fix).
 
 - [ ] **Step 1: Write the failing tests** — append to `tests/dev_backend_tmux.bats`:
 
@@ -662,6 +743,19 @@ fixture_pane_config() {
   [ "$(jq -r '[.panes[] | select(.pane == "shell")] | length' <<<"$win")" -eq 1 ]
 }
 
+@test "apply_layout survives fast-exiting pane commands: dead, held, and stamped" {
+  dev_backend_create "proj" "aa11" "proj" "$TEST_WT"
+  cfg=$(jq -c '.windows[0].panes[2].command = "exit 5"' <<<"$(fixture_pane_config)")
+  dev_backend_apply_layout "proj" "$cfg" "$(fixture_record)"
+  run dev_backend_query "proj"
+  [ "$status" -eq 0 ]
+  win=$(jq -c '.windows[] | select(.name == "main")' <<<"$output")
+  # the window survives and all four panes exist; the fast-exiting one is dead
+  [ "$(jq -r '.panes | length' <<<"$win")" -eq 4 ]
+  dead=$(jq -c '.panes[] | select(.alive | not)' <<<"$win")
+  [ "$(jq -r '.pane' <<<"$dead")" = "shell" ]
+}
+
 @test "apply_layout leaves undeclared panes alone and single-pane window env includes window environment" {
   dev_backend_create "proj" "aa11" "proj" "$TEST_WT"
   cfg=$(jq -c '.windows[0].panes |= .[0:2]' <<<"$(fixture_pane_config)")
@@ -709,17 +803,21 @@ Add a helper above `dev_backend_apply_layout`:
 # panes — unstamped, or stamped with a name the config no longer declares —
 # are invisible here: never matched, never split into, never killed (§1.2).
 #
-# The first pane's stamp is chained into the new-window invocation: the window
-# target resolves to its active (sole) pane, and the chain keeps the
-# remain-on-exit guarantee atomic exactly as the single-pane path does. Later
-# splits need no such chain: remain-on-exit is already on for the window, so a
-# fast-exiting command leaves a dead, held, still-targetable pane — the
-# capture-then-stamp two-step cannot lose the pane, only stamp a dead one,
-# which is precisely what repair wants to find.
+# EVERY stamp is chained into the same tmux invocation as the pane's creation.
+# For the first pane the chain rides new-window (the window target resolves to
+# its active — sole — pane) alongside remain-on-exit, exactly like the
+# single-pane path. For splits the window cannot be destroyed (remain-on-exit
+# is already on, so a fast-exiting command leaves a dead, held pane), but a
+# SECOND race remains: the pane-died hook can fire before a separate second
+# invocation stamps @dev_pane, and an unstamped death event has no pane
+# identity for the fold to route. So split-window runs WITHOUT -d — the new
+# pane becomes the window's active pane — and the chained set-option's window
+# target resolves to it inside one atomic server request. The active-pane
+# side effect is corrected by the focus pass at the end of apply_layout.
 dev_backend_ensure_pane_window() {
   local session_name="$1" window_json="$2" record_json="$3" global_env="$4" exists="$5"
-  local workspace_id slug worktree wname layout window_env stamped
-  local pane_json pname pane_env location workdir inner pane_cmd pid created=0
+  local workspace_id slug worktree wname layout stamped
+  local pane_json pname pane_env location workdir inner pane_cmd created=0
   local -a prefix
   local ev_id ev_ts data line
 
@@ -728,7 +826,6 @@ dev_backend_ensure_pane_window() {
   worktree=$(jq -r '.worktree' <<<"$record_json")
   wname=$(jq -r '.name' <<<"$window_json")
   layout=$(jq -r '.layout // "main-vertical"' <<<"$window_json")
-  window_env=$(jq -c --argjson g "$global_env" '$g * (.environment // {})' <<<"$window_json")
 
   if [[ "$exists" -eq 1 ]]; then
     stamped=$(dev_tmux list-panes -t "=$session_name:=$wname" \
@@ -743,7 +840,10 @@ dev_backend_ensure_pane_window() {
     if [[ -n "$stamped" ]] && printf '%s\n' "$stamped" | grep -Fxq -- "$pname"; then
       continue
     fi
-    pane_env=$(jq -c --argjson w "$window_env" '$w * (.environment // {})' <<<"$pane_json")
+    # global * pane.environment only: the exclusive schema forbids window-level
+    # environment beside panes (validated in config), so there is no window
+    # layer to merge here.
+    pane_env=$(jq -c --argjson g "$global_env" '$g * (.environment // {})' <<<"$pane_json")
     location=$(dev_window_location "$record_json" "$pane_json") || return 1
     mapfile -t prefix < <(dev_container_exec_prefix "$record_json" "$pane_json") || return 1
     [[ ${#prefix[@]} -gt 0 ]] || return 1
@@ -771,9 +871,8 @@ dev_backend_ensure_pane_window() {
         "$workspace_id" "$slug" "$session_name" "$worktree" "$data")
       dev_event_append "$line"
     else
-      pid=$(dev_tmux split-window -d -P -F '#{pane_id}' \
-        -t "=$session_name:=$wname" -c "$workdir" "$pane_cmd") || return 1
-      dev_tmux set-option -p -t "$pid" @dev_pane "$pname" || return 1
+      dev_tmux split-window -t "=$session_name:=$wname" -c "$workdir" "$pane_cmd" \
+        ';' set-option -p -t "=$session_name:=$wname" @dev_pane "$pname" || return 1
     fi
     created=$((created + 1))
 
@@ -872,7 +971,7 @@ git commit -m "feat(dev): build and repair panes-form windows with stamped ident
 - Test: `tests/dev_backend_tmux.bats`
 
 **Interfaces:**
-- Consumes: Task 4's `id` handle; the `fixture_pane_config` bats helper Task 5 added to `tests/dev_backend_tmux.bats`.
+- Consumes: Task 4's `pane_id` handle; the `fixture_pane_config` bats helper Task 5 added to `tests/dev_backend_tmux.bats`.
 - Produces: `dev_backend_respawn_pane <session> <window> <command> [container_id] [pane_handle] [pane_name]` — with a handle it respawns exactly that pane; `pane_name` (when non-empty) is added to the `pane.respawned` event data. Still the SOLE emitter of `pane.respawned`.
 
 - [ ] **Step 1: Write the failing test** — append to `tests/dev_backend_tmux.bats`:
@@ -974,7 +1073,7 @@ git commit -m "feat(dev): pane-handle targeting for respawn, pane on the event"
 - Test: `tests/dev_commands.bats`
 
 **Interfaces:**
-- Consumes: Task 4 query (`pane`, `id`), Task 6 respawn signature, Task 1 config shape.
+- Consumes: Task 4 query (`pane`, `pane_id`), Task 6 respawn signature, Task 1 config shape.
 - Produces: dead declared panes respawn on EVERY `dev open` (gate removed); env parity `global * window.environment * pane.environment` with creation.
 
 - [ ] **Step 1: Write the failing test** — append to `tests/dev_commands.bats`, reusing its scenario scaffolding (fake `DEV_DOTFILES_ROOT` root, stubbed agent commands, real tmux). The exact bootstrap must copy what the existing "open after a container loss … respawns dead panes" test does, minus the container parts:
@@ -996,7 +1095,45 @@ git commit -m "feat(dev): pane-handle targeting for respawn, pane on the event"
   [ "$(dev_tmux list-panes -t '=demo:=shell' -F '#{pane_dead}')" = "0" ]
   grep -q '"event":"pane.respawned"' "$DEV_STATE_ROOT/events/events.jsonl"
 }
+
+@test "re-open respawns one dead agent pane of two and leaves the other agent untouched" {
+  scenario_setup_demo_workspace
+  mkdir -p "$DEV_OVERLAY_ROOT/demo"
+  cat >"$DEV_OVERLAY_ROOT/demo/workspace.yaml" <<'EOF'
+version: 1
+windows:
+  - name: dash
+    layout: tiled
+    panes:
+      - name: agent-1
+        agent: sleep 30
+      - name: agent-2
+        agent: sleep 30
+EOF
+  run dev open demo --no-attach
+  [ "$status" -eq 0 ]
+
+  victim=$(dev_tmux list-panes -t '=demo:=dash' -F '#{pane_id} #{?#{@dev_pane},#{@dev_pane},-}' |
+    awk '$2 == "agent-2" {print $1; exit}')
+  dev_tmux respawn-pane -k -t "$victim" 'exit 1'
+  for _ in $(seq 1 50); do
+    [ "$(dev_tmux display-message -p -t "$victim" '#{pane_dead}')" = "1" ] && break
+    sleep 0.1
+  done
+
+  run dev open demo --no-attach
+  [ "$status" -eq 0 ]
+  [ "$(dev_tmux display-message -p -t "$victim" '#{pane_dead}')" = "0" ]
+
+  record=$(cat "$DEV_STATE_ROOT"/workspaces/*.json)
+  [ "$(jq -r '.agents[] | select(.pane == "agent-2") | .state' <<<"$record")" = "started" ]
+  # agent-1 never died: exactly one lifecycle event for it, the start
+  [ "$(jq -r '.agents[] | select(.pane == "agent-1") | .state' <<<"$record")" = "started" ]
+  [ "$(grep -c '"pane":"agent-1"' "$DEV_STATE_ROOT/events/events.jsonl")" -eq 2 ]  # pane.created + agent.started only
+}
 ```
+
+(The last assertion counts `pane.created` + `agent.started` for agent-1 — if the pane-died hook is active in this scenario's tmux server and fires for agent-2's kill, that adds agent-2 events, not agent-1's. Adjust the exact count only if `scenario_setup_demo_workspace` sources the hook conf; the invariant under test is that agent-1 gained no death/respawn events.)
 
 (If no shared bootstrap function exists, extract one from the container-loss test rather than duplicating the ~15 setup lines; name it `scenario_setup_demo_workspace` and have both tests call it.)
 
@@ -1057,7 +1194,7 @@ dev_open_respawn_dead() {
     fi
   done < <(jq -r '.windows[] | .name as $w | (.panes | length) as $n
     | .panes[] | select(.alive | not)
-    | [$w, (.pane // "-"), .id, ($n | tostring)] | @tsv' <<<"$query")
+    | [$w, (.pane // "-"), .pane_id, ($n | tostring)] | @tsv' <<<"$query")
 }
 ```
 
