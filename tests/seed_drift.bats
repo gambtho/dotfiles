@@ -468,6 +468,54 @@ norm() {
   [ "$output" = "curl -fsSL -o out url" ]
 }
 
+@test "sd_normalize canonicalizes [ X ] onto test X" {
+  scan_line 1 1 C '[ -L "$GITIGNORE" ] && rm -f "$GITIGNORE"'
+  norm
+  [ "$status" -eq 0 ]
+  [ "$output" = 'test -L "$GITIGNORE" && rm -f "$GITIGNORE"' ]
+}
+
+@test "sd_normalize reattaches the separator when the closer is ];" {
+  # `if [ -x "$f" ]; then` tokenizes the closer as `];`. Dropping the bracket
+  # without carrying the `;` back onto the operand leaves `test -x "$f" ; then`,
+  # which neither matches the template's spelling nor parses as the same window.
+  scan_line 1 1 C 'if [ -x "$f" ]; then'
+  norm
+  [ "$status" -eq 0 ]
+  [ "$output" = 'if test -x "$f"; then' ]
+}
+
+@test "sd_normalize hoists a trailing negation so [ ! -f x ] equals ! test -f x" {
+  scan_line 1 1 C 'if [ ! -f "$GITIGNORE" ]; then'
+  scan_line 3 1 C 'if ! test -f "$GITIGNORE"; then'
+  norm
+  [ "$status" -eq 0 ]
+  [ "$output" = 'if ! test -f "$GITIGNORE"; then
+if ! test -f "$GITIGNORE"; then' ]
+}
+
+@test "sd_normalize leaves array subscripts and glob brackets alone" {
+  # The rewrite fires on a STANDALONE `[` word only. Neither of these forms is
+  # its own word, so neither can be mistaken for a test opener.
+  scan_line 1 1 C 'echo "${arr[0]} and [Yy] glob"'
+  scan_line 3 1 C 'case $x in [Yy]*) ok ;; esac'
+  norm
+  [ "$status" -eq 0 ]
+  [ "$output" = 'echo "${arr[0]} and [Yy] glob"
+case $x in [Yy]*) ok ;; esac' ]
+}
+
+@test "sd_normalize strips a privilege word nested in command substitution" {
+  # sd_drop_priv_prefix matched `if as_user foo` but not `x="$(as_user foo)"`,
+  # because `$(` is followed by the word with no space between them.
+  scan_line 1 1 C 'ex="$(as_user git config --global --get core.excludesFile)"'
+  scan_line 3 1 C 'ex="$(git config --global --get core.excludesFile)"'
+  norm
+  [ "$status" -eq 0 ]
+  [ "$output" = 'ex="$(git config --global --get core.excludesFile)"
+ex="$(git config --global --get core.excludesFile)"' ]
+}
+
 @test "sd_normalize drops privilege prefixes" {
   scan_line 1 1 C 'as_user mkdir -p a'
   scan_line 1 2 C '$SUDO mkdir -p b'
@@ -574,7 +622,7 @@ echo ANCHOR two" ]
   make_scan "$FIX/f.sh"
   sd_source sd_extract "$FIX/f.sh" "$FIX/f.sh.scan" ANCHOR
   [ "$status" -eq 0 ]
-  [ "$output" = 'if [ -n "$ANCHOR" ]; then
+  [ "$output" = 'if test -n "$ANCHOR"; then
 echo ANCHOR body
 fi' ]
 }
@@ -2168,6 +2216,72 @@ SEEDEOF
   t7_run "$SEED"
   [ "$status" -eq 0 ]
   [[ "$output" == *ok* ]]
+}
+
+@test "false-positive guard: test -f vs [ -f ] spelling" {
+  # The root-seed template and the same-user seeds split on this constantly;
+  # they are one builtin spelled two ways and must not read as drift.
+  t7_setup
+  t7_doc "core.hooksPath" core.hooksPath
+  cat >"$TPL" <<'TPLEOF'
+#!/usr/bin/env bash
+
+if test -d "$HOME/.dotfiles"; then
+  git config --global core.hooksPath "$HOME/.dotfiles/git/hooks"
+fi
+TPLEOF
+  cat >"$SEED" <<'SEEDEOF'
+#!/usr/bin/env bash
+
+if [ -d "$HOME/.dotfiles" ]; then
+  git config --global core.hooksPath "$HOME/.dotfiles/git/hooks"
+fi
+SEEDEOF
+  t7_run "$SEED"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *ok* ]]
+}
+
+@test "false-positive guard: as_user nested in command substitution" {
+  t7_setup
+  t7_doc "core.excludesFile" core.excludesFile
+  cat >"$TPL" <<'TPLEOF'
+#!/usr/bin/env bash
+
+ex_raw="$(as_user git config --global --get core.excludesFile 2>/dev/null || true)"
+TPLEOF
+  cat >"$SEED" <<'SEEDEOF'
+#!/usr/bin/env bash
+
+ex_raw="$(git config --global --get core.excludesFile 2>/dev/null || true)"
+SEEDEOF
+  t7_run "$SEED"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *ok* ]]
+}
+
+@test "true-positive guard: canonicalizing [ ] does not hide a changed operator" {
+  # The rewrite must collapse SPELLING only. A seed that tests a different
+  # predicate is real drift and has to survive normalization.
+  t7_setup
+  t7_doc "core.hooksPath" core.hooksPath
+  cat >"$TPL" <<'TPLEOF'
+#!/usr/bin/env bash
+
+if test -d "$HOME/.dotfiles"; then
+  git config --global core.hooksPath "$HOME/.dotfiles/git/hooks"
+fi
+TPLEOF
+  cat >"$SEED" <<'SEEDEOF'
+#!/usr/bin/env bash
+
+if [ -L "$HOME/.dotfiles" ]; then
+  git config --global core.hooksPath "$HOME/.dotfiles/git/hooks"
+fi
+SEEDEOF
+  t7_run "$SEED"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *DIVERGED* ]]
 }
 
 @test "false-positive guard: DOTFILES_HOME vs HOME/.dotfiles" {
