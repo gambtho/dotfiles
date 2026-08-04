@@ -20,6 +20,30 @@ sd_source() {
   ' _ "$SEED_DRIFT" "$@"
 }
 
+# BSD sed takes a MANDATORY backup-suffix argument to -i, so `sed -i EXPR f` on
+# macOS consumes EXPR as the suffix and then reads the file path as the script -
+# the edit silently does not happen and the test asserts against an unmodified
+# fixture. Edit through a temp instead, which behaves the same on both seds.
+# Written back with `cat >`, not `mv`, so the file keeps its mode: some of these
+# fixtures are executable copies of the tool itself.
+sed_inplace() {
+  local expr="$1" f="$2" tmp
+  tmp="$BATS_TEST_TMPDIR/sed_inplace.$$"
+  sed "$expr" "$f" >"$tmp"
+  cat "$tmp" >"$f"
+  rm -f "$tmp"
+}
+
+# `sed '/pat/a text'` is a GNU extension; BSD sed requires `a\` followed by the
+# text on its own line. The two-expression form is the one both accept.
+sed_append_after() {
+  local pat="$1" text="$2" f="$3" tmp
+  tmp="$BATS_TEST_TMPDIR/sed_append.$$"
+  sed -e "/$pat/a\\" -e "$text" "$f" >"$tmp"
+  cat "$tmp" >"$f"
+  rm -f "$tmp"
+}
+
 write_fixture_doc() {
   cat >"$1" <<'DOC'
 | Block | Anchor in template | Why it matters |
@@ -740,7 +764,7 @@ sd_drift() { run "$SEED_DRIFT" --template "$FIXTURE_TEMPLATE" --doc "$FIXTURE_DO
 @test "a behind seed exits 1 and the finding names project, block and direction" {
   setup_drift_fixtures
   seed_from_template behindp
-  sed -i '/tree-sitter ready/d' "$(seed_path behindp)"
+  sed_inplace '/tree-sitter ready/d' "$(seed_path behindp)"
 
   sd_drift
 
@@ -755,7 +779,8 @@ sd_drift() { run "$SEED_DRIFT" --template "$FIXTURE_TEMPLATE" --doc "$FIXTURE_DO
 @test "an ahead seed is a promotion candidate and never suggests overwriting" {
   setup_drift_fixtures
   seed_from_template aheadp
-  sed -i '/tree-sitter ready/a echo "seed: project extra"' "$(seed_path aheadp)"
+  sed_append_after 'tree-sitter ready' 'echo "seed: project extra"' \
+    "$(seed_path aheadp)"
 
   sd_drift
 
@@ -768,8 +793,8 @@ sd_drift() { run "$SEED_DRIFT" --template "$FIXTURE_TEMPLATE" --doc "$FIXTURE_DO
 @test "a reordered seed is DIVERGED and told to inspect by hand" {
   setup_drift_fixtures
   seed_from_template reorder
-  sed -i '5d' "$(seed_path reorder)"
-  sed -i '/tree-sitter ready/a install_tree_sitter "$TREE_SITTER_VERSION"' \
+  sed_inplace '5d' "$(seed_path reorder)"
+  sed_append_after 'tree-sitter ready' 'install_tree_sitter "$TREE_SITTER_VERSION"' \
     "$(seed_path reorder)"
 
   sd_drift
@@ -782,7 +807,7 @@ sd_drift() { run "$SEED_DRIFT" --template "$FIXTURE_TEMPLATE" --doc "$FIXTURE_DO
 @test "an anchor absent from the seed is MISSING" {
   setup_drift_fixtures
   seed_from_template gone
-  sed -i '/core.excludesFile/d' "$(seed_path gone)"
+  sed_inplace '/core.excludesFile/d' "$(seed_path gone)"
 
   sd_drift
 
@@ -823,7 +848,7 @@ sd_drift() { run "$SEED_DRIFT" --template "$FIXTURE_TEMPLATE" --doc "$FIXTURE_DO
   seed_from_template aaa-broken
   printf 'if true; then\nTREE_SITTER_VERSION=1\n' >"$(seed_path aaa-broken)"
   seed_from_template zzz-behind
-  sed -i '/tree-sitter ready/d' "$(seed_path zzz-behind)"
+  sed_inplace '/tree-sitter ready/d' "$(seed_path zzz-behind)"
 
   sd_drift
 
@@ -854,7 +879,7 @@ sd_drift() { run "$SEED_DRIFT" --template "$FIXTURE_TEMPLATE" --doc "$FIXTURE_DO
   # and hand-owned with no revert path, so this is the guarantee that matters.
   setup_drift_fixtures
   seed_from_template behindp
-  sed -i '/tree-sitter ready/d' "$(seed_path behindp)"
+  sed_inplace '/tree-sitter ready/d' "$(seed_path behindp)"
   local seed_before seed_after doc_before doc_after tpl_before tpl_after
   local seed_mtime_before seed_mtime_after doc_mtime_before doc_mtime_after
   local tpl_mtime_before tpl_mtime_after
@@ -1700,13 +1725,7 @@ SEEDEOF
   # is the whole argument for the check being mandatory rather than a nicety:
   # without it the drop rule trades a false positive for a false NEGATIVE on the
   # documented fatal case.
-  # Not `sed -i`: BSD sed takes a MANDATORY backup-suffix argument to -i, so on
-  # macOS the range expression is consumed as the suffix and the tool path is
-  # then read as the script. Write to a temp and mv it back instead.
-  sed '/^  problems=\$(sd_templated_var_problems/,/^  fi$/d' \
-    "$T7_TOOL" >"$BATS_TEST_TMPDIR/sabotaged"
-  mv "$BATS_TEST_TMPDIR/sabotaged" "$T7_TOOL"
-  chmod +x "$T7_TOOL"
+  sed_inplace '/^  problems=\$(sd_templated_var_problems/,/^  fi$/d' "$T7_TOOL"
   # The excision must actually have happened, or this test passes vacuously.
   ! grep -q 'sd_templated_var_problems "\$sscan"' "$T7_TOOL"
   cat >"$TPL" <<'TPLEOF'
@@ -2411,7 +2430,7 @@ PYEOF
   [ "$status" -eq 0 ]
   [[ "$output" == *"seed window is only 1 lines"* ]]
 
-  sed -i 's/^SD_THIN_WINDOW=5$/SD_THIN_WINDOW=1/' "$T7_TOOL"
+  sed_inplace 's/^SD_THIN_WINDOW=5$/SD_THIN_WINDOW=1/' "$T7_TOOL"
   t7_run_tool "$T7_TOOL"
   [ "$status" -eq 0 ]
   [[ "$output" != *"window is only"* ]]
