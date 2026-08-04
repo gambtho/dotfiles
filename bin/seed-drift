@@ -477,6 +477,15 @@ sd_verdict_from_counts() {
   fi
 }
 
+# TEST-ONLY. Nothing in the production path calls this: sd_check_seed runs the
+# same four steps inline, because capturing this function's output with
+# `verdict=$(sd_verdict ...)` would swallow a diff failure's non-zero status
+# and, under `set -e`, abort the whole run outside the public 0/1/2 contract
+# (see the comment above that call site). Do NOT "remove the duplication" by
+# wiring this in — the duplication is the fix, not the defect. It survives
+# because the tests exercise the composition of sd_diff_lines, sd_count_lines,
+# and sd_verdict_from_counts in one place; keep it in sync with sd_check_seed
+# if either changes.
 sd_verdict() {
   # Files, not nested command substitutions: substitution both loses blank
   # differing lines and swallows a non-zero status from sd_diff_lines, so a
