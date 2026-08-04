@@ -497,8 +497,15 @@ SD_BEHIND=0 SD_AHEAD=0 SD_DIVERGED=0 SD_MISSING=0
 SD_WORST=0
 
 sd_worst() {
-  [ "$1" -gt "$SD_WORST" ] && SD_WORST="$1"
-  return 0
+  # `if`, not `[ … ] && …`: the bare-`&&` form leaves the function's status at
+  # 1 on every not-worse call, so it is correct only while a `return 0` stays
+  # the immediately-following statement. All three call sites invoke this as a
+  # bare statement under `set -e`, so a later insert between the two lines
+  # would abort the run on every clean project. An `if` with no else exits 0
+  # whether or not the branch is taken, which removes the dependency.
+  if [ "$1" -gt "$SD_WORST" ]; then
+    SD_WORST="$1"
+  fi
 }
 
 sd_report_block() {
