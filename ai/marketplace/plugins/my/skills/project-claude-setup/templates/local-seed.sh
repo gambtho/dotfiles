@@ -279,13 +279,36 @@ else
   # damage shows up later as overlay files appearing in `git status`, with no
   # error anywhere. rename(2) within the same directory is atomic: readers see
   # either the old file or the new one.
-  {
+  #
+  # mktemp rather than a fixed "$GITIGNORE.tmp", for the same reason the plugin
+  # registry repair below uses one: `tee` opens by path with no O_EXCL, so two
+  # seeds sharing this home land on the SAME inode, and the first rename hands
+  # the second an open descriptor pointing at the live ~/.gitignore — which it
+  # then writes through, corrupting the file this block just published. That
+  # would make the atomicity claim above false in exactly the case it is meant
+  # to cover. An exclusive create per run cannot collide.
+  gi_tmp="$(as_user mktemp "$GITIGNORE.seed.XXXXXX")"
+  # Remove the temp on either failure: `set -e` aborts the seed on the very next
+  # line, so without these each failed start would strand one in the home dir
+  # for good — the fixed path at least got overwritten by the following run.
+  if ! {
     printf '%s\n' "$new_gitignore"
     printf '%s\n' "$GI_MARK_BEGIN"
     [ -n "$overlay_links" ] && printf '%s\n' "$overlay_links"
     printf '%s\n' "$GI_MARK_END"
-  } | as_user tee "$GITIGNORE.tmp" >/dev/null
-  as_user mv -f "$GITIGNORE.tmp" "$GITIGNORE"
+  } | as_user tee "$gi_tmp" >/dev/null; then
+    as_user rm -f "$gi_tmp"
+    echo "⚠️  seed: could not write ~/.gitignore overlay list — leaving original"
+    exit 1
+  fi
+  # mktemp creates 0600, so carry the live file's mode across rather than let
+  # the rename silently tighten it.
+  as_user chmod --reference="$GITIGNORE" "$gi_tmp" 2>/dev/null || true
+  if ! as_user mv -f "$gi_tmp" "$GITIGNORE"; then
+    as_user rm -f "$gi_tmp"
+    echo "⚠️  seed: could not replace ~/.gitignore — leaving original"
+    exit 1
+  fi
   n="$(printf '%s' "$overlay_links" | grep -c . || true)"
   echo "🌱 seed: refreshed ~/.gitignore overlay-symlink list ($n entries)"
 fi
