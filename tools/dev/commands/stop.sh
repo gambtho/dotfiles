@@ -1,6 +1,15 @@
 # shellcheck shell=bash
 # dev stop — the only destructive verb in Phase 1.
 
+# The dispatcher sources exactly one command file per verb (bin/dev), but
+# removing the session index before the kill delegates to open.sh's
+# dev_open_session_index_path. Guarded so a double-source (the test helper
+# sources both files) stays harmless -- open.sh only defines functions.
+if ! declare -F dev_open_session_index_path >/dev/null 2>&1; then
+  # shellcheck source=/dev/null
+  source "$DEV_DOTFILES_ROOT/tools/dev/commands/open.sh"
+fi
+
 dev_stop_emit() {
   local event="$1" data="$2"
   local id ts line

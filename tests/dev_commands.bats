@@ -775,3 +775,25 @@ exit 0
   [ "$(dev_open_events 'select(.event == "workspace.stopped") | .id' | wc -l)" -eq 1 ]
   dev_tmux kill-server || true
 }
+
+@test "the real dispatcher resolves dev_open_session_index_path when stopping a live session" {
+  # bin/dev sources exactly one command file per verb (bin/dev:74-79), so a
+  # real `dev stop` never gets open.sh's functions for free the way
+  # dev_open_load_libs does. Only invoking the staged dispatcher end to end --
+  # not dev_cmd_stop in-process -- can catch stop.sh calling a function
+  # open.sh defines.
+  setup_dev_test
+  dev_open_load_libs
+  dev_open_stub_attach
+  dev_open_fixture demo >/dev/null
+
+  run dev_cmd_open demo
+  [ "$status" -eq 0 ]
+
+  run "$TEST_ROOT/root/bin/dev" stop demo
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"command not found"* ]]
+  [ ! -e "$(dev_open_session_index_path demo)" ]
+
+  dev_tmux kill-server || true
+}
