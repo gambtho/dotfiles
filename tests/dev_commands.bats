@@ -22,7 +22,27 @@ stage_dev_root() {
   cp -r "$REPO_ROOT/bin" "$TEST_ROOT/root/bin"
   cp -r "$REPO_ROOT/tools/dev/lib" "$TEST_ROOT/root/tools/dev/lib"
   cp -r "$REPO_ROOT/tools/dev/commands" "$TEST_ROOT/root/tools/dev/commands"
-  cp "$REPO_ROOT/tools/dev/default-workspace.yaml" "$TEST_ROOT/root/tools/dev/default-workspace.yaml"
+  # Pinned to the LEGACY four-window layout (not a cp of the shipped default):
+  # these dispatcher-pattern scenarios exercise the single-pane window paths
+  # and must keep doing so regardless of what the shipped default becomes.
+  cat >"$TEST_ROOT/root/tools/dev/default-workspace.yaml" <<'EOF'
+version: 1
+autostart: false
+devcontainer:
+  enabled: auto
+  start_timeout: 300
+windows:
+  - name: agent-1
+    agent: claude
+    focus: true
+  - name: agent-2
+    agent: claude
+  - name: shell
+    command: null
+  - name: scratch
+    command: null
+    location: host
+EOF
   export DEV_DOTFILES_ROOT="$TEST_ROOT/root"
 }
 
@@ -284,6 +304,41 @@ dev_open_load_libs() {
   source "$REPO_ROOT/tools/dev/commands/status.sh"
 }
 
+# dev_open_load_libs sources the real repo directly and setup_dev_test points
+# DEV_DOTFILES_ROOT at $REPO_ROOT, so these sourced-function scenarios read
+# the actual shipped default-workspace.yaml -- not a copy under stage_dev_root
+# (that fixture only feeds the dispatcher-pattern tests above). Scenarios that
+# assert the legacy single-pane *window* shape (agent-1/agent-2/shell/scratch
+# as windows, not panes of one dashboard window) call this to pin that shape
+# regardless of what the shipped default becomes. config/ is symlinked so
+# devcontainer-CLI-pin lookups still resolve against the real repo.
+dev_open_pin_legacy_default() {
+  local root="$TEST_ROOT/legacy-dotfiles-root"
+  if [ ! -e "$root" ]; then
+    mkdir -p "$root/tools/dev"
+    ln -s "$REPO_ROOT/config" "$root/config"
+    cat >"$root/tools/dev/default-workspace.yaml" <<'EOF'
+version: 1
+autostart: false
+devcontainer:
+  enabled: auto
+  start_timeout: 300
+windows:
+  - name: agent-1
+    agent: claude
+    focus: true
+  - name: agent-2
+    agent: claude
+  - name: shell
+    command: null
+  - name: scratch
+    command: null
+    location: host
+EOF
+  fi
+  export DEV_DOTFILES_ROOT="$root"
+}
+
 dev_open_fixture() {
   local dir="$DEV_REPO_ROOT/$1"
   mkdir -p "$dir"
@@ -306,6 +361,7 @@ dev_open_events() {
 @test "open creates the session with the four default windows and emits workspace.opened" {
   setup_dev_test
   dev_open_load_libs
+  dev_open_pin_legacy_default
   dev_open_stub_attach
   dev_open_fixture demo >/dev/null
 
@@ -334,6 +390,7 @@ dev_open_events() {
 @test "a second open creates nothing, re-runs nothing, and leaves scratch untouched" {
   setup_dev_test
   dev_open_load_libs
+  dev_open_pin_legacy_default
   dev_open_stub_attach
   dev_open_fixture demo >/dev/null
 
@@ -429,6 +486,7 @@ scenario_setup_demo_workspace() {
 
 @test "open after a container loss emits container.replaced then container.ready and respawns dead panes" {
   scenario_setup_demo_workspace
+  dev_open_pin_legacy_default
   local dir ws_id
   dir="$DEV_REPO_ROOT/demo"
   mkdir -p "$dir/.devcontainer"
@@ -507,6 +565,7 @@ esac
 
 @test "plain re-open respawns a dead pane in a host-only workspace (no container loss required)" {
   scenario_setup_demo_workspace
+  dev_open_pin_legacy_default
 
   run dev_cmd_open demo --no-attach
   [ "$status" -eq 0 ]
@@ -527,6 +586,7 @@ esac
 
 @test "re-open respawns one dead agent pane of two and leaves the other agent untouched" {
   scenario_setup_demo_workspace
+  dev_open_pin_legacy_default
   mkdir -p "$DEV_OVERLAY_ROOT/demo"
   cat >"$DEV_OVERLAY_ROOT/demo/workspace.yaml" <<'EOF'
 version: 1
@@ -886,6 +946,7 @@ exit 0
 
 @test "status reports undeclared windows and undeclared panes as drift" {
   scenario_setup_demo_workspace
+  dev_open_pin_legacy_default
 
   run dev_cmd_open demo --no-attach
   [ "$status" -eq 0 ]
