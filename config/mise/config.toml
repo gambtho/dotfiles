@@ -10,6 +10,11 @@ neovim = "0.12.4"
 # npm_args is load-bearing: without --ignore-scripts=false the postinstall never
 # runs, so tree-sitter-cli installs but its native binary is missing.
 "npm:tree-sitter-cli" = { version = "0.26.11", npm_args = "--ignore-scripts=false" }
+# The CLI is invoked only as `mise exec npm:@devcontainers/cli@<ver> -- devcontainer`.
+# Its shim resolves against whichever node is global: it was installed under
+# node@25.9.0 and the global is node@26.5.0, so the shim is executable and fails
+# on every call. Pinning here makes `bin/versions list_mise` report it for free.
+"npm:@devcontainers/cli" = "0.86.1"
 git-lfs = "3.7.1"
 
 [settings.npm]
