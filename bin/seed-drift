@@ -508,6 +508,13 @@ sd_verdict() {
 }
 
 SD_TEMPLATE="" SD_DOC="" SD_TEMPLATE_SCAN=""
+# Pre-declared for the same reason as SD_TEMPLATE_SCAN above: only sd_main
+# assigns these, but sd_visit_candidates reads the count, and a sourced caller
+# reaching that function without going through sd_main would abort on `unbound
+# variable` under `set -u`. The empty array is safe to declare on bash 3.2 —
+# only expanding it is not, and the count guard already covers that.
+SD_CANDIDATES=()
+SD_CANDIDATE_COUNT=0
 SD_CHECKED=0 SD_SKIPPED=0
 SD_BEHIND=0 SD_AHEAD=0 SD_DIVERGED=0 SD_MISSING=0
 SD_WORST=0

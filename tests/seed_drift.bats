@@ -906,6 +906,25 @@ sd_drift() { run "$SEED_DRIFT" --template "$FIXTURE_TEMPLATE" --doc "$FIXTURE_DO
   [[ "$output" != *"unbound variable"* ]]
 }
 
+@test "sd_visit_candidates can be called directly without sd_main having run" {
+  # Same contract as the test above, on the other pair of sd_main-assigned
+  # globals: sd_visit_candidates reads SD_CANDIDATE_COUNT to decide between
+  # discovery and the explicit list. Undeclared, a bare `source` plus a direct
+  # call dies with "unbound variable" (exit 1) before discovery runs at all,
+  # which the public contract would read as drift. Declared empty, the empty
+  # workspace correctly reports the zero-projects error at exit 2.
+  setup_drift_fixtures
+
+  run env SEED_DRIFT_SOURCE_ONLY=1 bash -c '
+    source "$1"
+    sd_visit_candidates
+  ' _ "$SEED_DRIFT"
+
+  [ "$status" -eq 2 ]
+  [[ "$output" != *"unbound variable"* ]]
+  [[ "$output" == *"no projects found under"* ]]
+}
+
 @test "an explicit candidate directory with no .devcontainer is named and skipped, exit 0" {
   setup_drift_fixtures
   mkdir -p "$SEED_DRIFT_ROOT/nodev"
