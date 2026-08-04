@@ -268,7 +268,10 @@ windows:
   - name: docs
     command: two
 YAML
-  run dev_config_validate "$(dev_config_merged slabledger "$WORKTREE")"
+  # Caught by dev_config_merged's per-layer duplicate check now, not by
+  # post-merge validation: a layer that duplicates a name the merge would
+  # otherwise silently collapse must fail before that collapse happens.
+  run dev_config_merged slabledger "$WORKTREE"
   [ "$status" -eq 5 ]
   [[ "$output" == *"docs"* ]]
   [[ "$output" == *"more than once"* ]]
@@ -294,4 +297,173 @@ YAML
   run dev_config_validate "$(dev_config_merged slabledger "$WORKTREE")"
   [ "$status" -eq 5 ]
   [[ "$output" == *"version must be 1"* ]]
+}
+
+@test "config: panes-less window normalizes without panes/layout/environment keys (digest stability)" {
+  mkdir -p "$DEV_OVERLAY_ROOT/proj"
+  cat >"$DEV_OVERLAY_ROOT/proj/workspace.yaml" <<'EOF'
+version: 1
+windows:
+  - name: solo
+    command: null
+EOF
+  run dev_config_merged "proj" "$TEST_ROOT/workspace/proj"
+  [ "$status" -eq 0 ]
+  win=$(jq -c '.windows[] | select(.name == "solo")' <<<"$output")
+  [ "$(jq 'has("panes")' <<<"$win")" = "false" ]
+  [ "$(jq 'has("layout")' <<<"$win")" = "false" ]
+  [ "$(jq 'has("environment")' <<<"$win")" = "false" ]
+}
+
+@test "config: panes normalize with per-pane defaults; window environment survives on single-pane windows" {
+  mkdir -p "$DEV_OVERLAY_ROOT/proj"
+  cat >"$DEV_OVERLAY_ROOT/proj/workspace.yaml" <<'EOF'
+version: 1
+windows:
+  - name: main
+    layout: tiled
+    panes:
+      - name: agent-1
+        agent: claude
+        focus: true
+      - name: shell
+        command: null
+        environment: {PANE: "2"}
+  - name: solo
+    command: null
+    environment: {WIN: "1"}
+EOF
+  run dev_config_merged "proj" "$TEST_ROOT/workspace/proj"
+  [ "$status" -eq 0 ]
+  win=$(jq -c '.windows[] | select(.name == "main")' <<<"$output")
+  [ "$(jq -r '.layout' <<<"$win")" = "tiled" ]
+  [ "$(jq -c '.panes[0]' <<<"$win")" = '{"agent":"claude","command":null,"cwd":null,"focus":true,"location":null,"name":"agent-1"}' ]
+  [ "$(jq -r '.panes[1].environment.PANE' <<<"$win")" = "2" ]
+  # the spec §7.1 fix: window-level environment is kept for single-pane windows
+  [ "$(jq -r '.windows[] | select(.name == "solo") | .environment.WIN' <<<"$output")" = "1" ]
+}
+
+@test "config: a layer defining an inherited pane twice fails loudly, never silently collapses" {
+  mkdir -p "$DEV_OVERLAY_ROOT/proj"
+  cat >"$DEV_OVERLAY_ROOT/proj/workspace.yaml" <<'EOF'
+version: 1
+windows:
+  - name: main
+    panes:
+      - name: shell
+        command: null
+EOF
+  cat >"$DEV_OVERLAY_ROOT/proj/workspace.local.yaml" <<'EOF'
+windows:
+  - name: main
+    panes:
+      - name: shell
+        cwd: a
+      - name: shell
+        cwd: b
+EOF
+  run dev_config_merged "proj" "$TEST_ROOT/workspace/proj"
+  [ "$status" -eq 5 ]
+  [[ "$output" == *"shell"* ]] # bats `run` folds stderr into $output
+}
+
+@test "config: panes merge by name across layers, never by index" {
+  mkdir -p "$DEV_OVERLAY_ROOT/proj"
+  cat >"$DEV_OVERLAY_ROOT/proj/workspace.yaml" <<'EOF'
+version: 1
+windows:
+  - name: main
+    panes:
+      - name: agent-1
+        agent: claude
+      - name: shell
+        command: null
+EOF
+  cat >"$DEV_OVERLAY_ROOT/proj/workspace.local.yaml" <<'EOF'
+windows:
+  - name: main
+    panes:
+      - name: shell
+        cwd: sub
+      - name: extra
+        command: htop
+EOF
+  run dev_config_merged "proj" "$TEST_ROOT/workspace/proj"
+  [ "$status" -eq 0 ]
+  win=$(jq -c '.windows[] | select(.name == "main")' <<<"$output")
+  [ "$(jq -r '.panes | length' <<<"$win")" -eq 3 ]
+  [ "$(jq -r '.panes[] | select(.name == "shell") | .cwd' <<<"$win")" = "sub" ]
+  [ "$(jq -r '.panes[] | select(.name == "agent-1") | .agent' <<<"$win")" = "claude" ]
+  [ "$(jq -r '.panes[] | select(.name == "extra") | .command' <<<"$win")" = "htop" ]
+}
+
+@test "config: converting an agent window to panes without nulling agent fails loudly" {
+  mkdir -p "$DEV_OVERLAY_ROOT/proj"
+  cat >"$DEV_OVERLAY_ROOT/proj/workspace.yaml" <<'EOF'
+version: 1
+windows:
+  - name: agent-1
+    agent: claude
+EOF
+  cat >"$DEV_OVERLAY_ROOT/proj/workspace.local.yaml" <<'EOF'
+windows:
+  - name: agent-1
+    panes:
+      - name: a
+        agent: claude
+EOF
+  config=$(dev_config_merged "proj" "$TEST_ROOT/workspace/proj")
+  run dev_config_validate "$config"
+  [ "$status" -eq 5 ]
+  [[ "$output" == *"agent-1"* && "$output" == *"panes"* ]]
+}
+
+@test "config: agent: null alongside panes converts cleanly; a shell window converts silently" {
+  mkdir -p "$DEV_OVERLAY_ROOT/proj"
+  cat >"$DEV_OVERLAY_ROOT/proj/workspace.yaml" <<'EOF'
+version: 1
+windows:
+  - name: agent-1
+    agent: claude
+  - name: shell
+    command: null
+EOF
+  cat >"$DEV_OVERLAY_ROOT/proj/workspace.local.yaml" <<'EOF'
+windows:
+  - name: agent-1
+    agent: null
+    panes:
+      - name: a
+        agent: claude
+  - name: shell
+    panes:
+      - name: s
+        command: null
+EOF
+  config=$(dev_config_merged "proj" "$TEST_ROOT/workspace/proj")
+  run dev_config_validate "$config"
+  [ "$status" -eq 0 ]
+}
+
+@test "config: multi-pane validation failures are loud and name the offender" {
+  bad() {
+    jq -nc --argjson w "$1" '{version: 1, windows: [$w]}'
+  }
+  run dev_config_validate "$(bad '{"name":"m","agent":null,"command":null,"cwd":null,"location":null,"focus":false,"panes":[]}')"
+  [ "$status" -eq 5 ]
+  run dev_config_validate "$(bad '{"name":"m","agent":null,"command":null,"cwd":null,"location":null,"focus":false,"layout":"tiled"}')"
+  [ "$status" -eq 5 ]
+  run dev_config_validate "$(bad '{"name":"m","agent":null,"command":null,"cwd":null,"location":null,"focus":false,"layout":"mosaic","panes":[{"name":"a","agent":null,"command":null,"cwd":null,"location":null,"focus":false}]}')"
+  [ "$status" -eq 5 ]
+  run dev_config_validate "$(bad '{"name":"m","agent":null,"command":null,"cwd":null,"location":null,"focus":false,"panes":[{"name":"a","agent":"x","command":"y","cwd":null,"location":null,"focus":false}]}')"
+  [ "$status" -eq 5 ]
+  run dev_config_validate "$(bad '{"name":"m","agent":null,"command":null,"cwd":null,"location":null,"focus":false,"panes":[{"name":"a","agent":null,"command":null,"cwd":null,"location":null,"focus":false},{"name":"a","agent":null,"command":null,"cwd":null,"location":null,"focus":false}]}')"
+  [ "$status" -eq 5 ]
+  run dev_config_validate "$(bad '{"name":"m","agent":null,"command":null,"cwd":null,"location":null,"focus":false,"panes":[{"name":"a","agent":null,"command":null,"cwd":null,"location":null,"focus":true},{"name":"b","agent":null,"command":null,"cwd":null,"location":null,"focus":true}]}')"
+  [ "$status" -eq 5 ]
+  run dev_config_validate "$(bad '{"name":"m","agent":null,"command":null,"cwd":null,"location":null,"focus":false,"panes":[{"name":"bad name","agent":null,"command":null,"cwd":null,"location":null,"focus":false}]}')"
+  [ "$status" -eq 5 ]
+  # exclusive schema: window-level environment is a single-pane key (spec §5)
+  run dev_config_validate "$(bad '{"name":"m","agent":null,"command":null,"cwd":null,"location":null,"focus":false,"environment":{"A":"1"},"panes":[{"name":"a","agent":null,"command":null,"cwd":null,"location":null,"focus":false}]}')"
+  [ "$status" -eq 5 ]
 }
