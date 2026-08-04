@@ -227,16 +227,21 @@ FIX
 }
 
 @test "sd_scan puts the real template core.excludesFile block in one paragraph" {
+  # Two paragraphs carry the anchor: the config-writing block near the top, and
+  # self_check's check (f), which reads the same key back. Take the FIRST — this
+  # test guards the config block against being split by sd_scan mis-reading the
+  # `<<<` in GI_MARK_END as a heredoc (see the test two above), and `head -1`
+  # keeps that guard pointed at the block it was written for.
   run env SEED_DRIFT_SOURCE_ONLY=1 bash -c '
     source "$1"
     scan=$(sd_scan "$2")
-    para=$(printf "%s\n" "$scan" | awk -F"\t" "\$3 == \"C\" && index(\$4, \"core.excludesFile\") { print \$1 }")
+    para=$(printf "%s\n" "$scan" | awk -F"\t" "\$3 == \"C\" && index(\$4, \"core.excludesFile\") { print \$1 }" | head -1)
     printf "%s\n" "$scan" | awk -F"\t" -v p="$para" "\$1 == p { print \$2 }" |
       awk "NR == 1 { first = \$0 } { last = \$0 } END { print first, last }"
   ' _ "$SEED_DRIFT" "$REAL_TEMPLATE"
 
   [ "$status" -eq 0 ]
-  [ "$output" = "204 236" ]
+  [ "$output" = "204 247" ]
 }
 
 @test "sd_scan excludes herestrings and recognizes every delimiter form" {
