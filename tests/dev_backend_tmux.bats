@@ -282,3 +282,47 @@ fixture_config() {
   printf '%s' "$output" | jq -e '.clients | type == "number"' >/dev/null
   [ "$(printf '%s' "$output" | jq -r 'has("clients")')" = "true" ]
 }
+
+# Task 14 / M9: closes the gap the test above documents. `script -qc` allocates a
+# real pty and runs `tmux attach-session` inside it, so this is a genuine attached
+# client -- not a stub -- and `clients` must reflect it exactly, then drop back to
+# 0 once the client detaches. A hardcoded `clients:0` would have passed the M8
+# test above; it cannot pass this one.
+@test "query reports a nonzero clients count for a real attached client, and 0 again after detach" {
+  dev_backend_create "proj" "aa11" "proj" "$TEST_WT"
+  dev_backend_apply_layout "proj" "$(fixture_config)" "$(fixture_record)"
+
+  run dev_backend_query "proj"
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | jq -r '.clients')" = "0" ]
+
+  # SHELL=/bin/bash: `script -qc` runs its command via `$SHELL -c`, and under
+  # the invoking user's zsh, a bare `=proj` word is zsh's named-directory/
+  # command-path expansion syntax, not a literal string -- it fails with
+  # "proj not found" before tmux ever sees it. Forcing bash for this one
+  # subprocess keeps the exact-match `=name` target intact.
+  SHELL=/bin/bash script -qc "tmux -L $DEV_TMUX_SOCKET attach-session -t =proj" /dev/null >/dev/null 2>&1 &
+  local client_pid=$!
+
+  local tries=0 clients=0
+  while [ "$tries" -lt 50 ]; do
+    clients=$(dev_backend_query "proj" | jq -r '.clients')
+    [ "$clients" != "0" ] && break
+    sleep 0.1
+    tries=$((tries + 1))
+  done
+  [ "$clients" = "1" ]
+
+  dev_tmux detach-client -a -s proj 2>/dev/null || true
+  kill "$client_pid" 2>/dev/null || true
+  wait "$client_pid" 2>/dev/null || true
+
+  tries=0
+  while [ "$tries" -lt 50 ]; do
+    clients=$(dev_backend_query "proj" | jq -r '.clients')
+    [ "$clients" = "0" ] && break
+    sleep 0.1
+    tries=$((tries + 1))
+  done
+  [ "$clients" = "0" ]
+}

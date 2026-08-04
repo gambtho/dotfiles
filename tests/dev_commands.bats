@@ -264,3 +264,333 @@ workspace_id_for() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"were not recorded"* ]]
 }
+
+dev_open_load_libs() {
+  source "$REPO_ROOT/bin/common.sh"
+  source "$REPO_ROOT/tools/dev/lib/resolve.sh"
+  source "$REPO_ROOT/tools/dev/lib/config.sh"
+  source "$REPO_ROOT/tools/dev/lib/events.sh"
+  source "$REPO_ROOT/tools/dev/lib/state.sh"
+  source "$REPO_ROOT/tools/dev/lib/fold.sh"
+  source "$REPO_ROOT/tools/dev/lib/reconcile.sh"
+  source "$REPO_ROOT/tools/dev/lib/runtime.sh"
+  source "$REPO_ROOT/tools/dev/lib/container.sh"
+  source "$REPO_ROOT/tools/dev/lib/backend-tmux.sh"
+  source "$REPO_ROOT/tools/dev/commands/open.sh"
+  source "$REPO_ROOT/tools/dev/commands/attach.sh"
+}
+
+dev_open_fixture() {
+  local dir="$DEV_REPO_ROOT/$1"
+  mkdir -p "$dir"
+  git -C "$dir" init -q
+  git -C "$dir" config user.email test@example.com
+  git -C "$dir" config user.name Test
+  printf '%s\n' "$dir"
+}
+
+dev_open_stub_attach() {
+  dev_open_attach() {
+    printf 'ATTACH %s\n' "$1" >>"$TEST_ROOT/attached"
+  }
+}
+
+dev_open_events() {
+  jq -r "$1" "$DEV_STATE_ROOT/events/events.jsonl"
+}
+
+@test "open creates the session with the four default windows and emits workspace.opened" {
+  setup_dev_test
+  dev_open_load_libs
+  dev_open_stub_attach
+  dev_open_fixture demo >/dev/null
+
+  run dev_cmd_open demo
+  [ "$status" -eq 0 ]
+
+  run dev_tmux list-windows -t '=demo' -F '#{window_name}'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *agent-1* ]]
+  [[ "$output" == *agent-2* ]]
+  [[ "$output" == *shell* ]]
+  [[ "$output" == *scratch* ]]
+  [[ "$output" != *dev-holder* ]]
+
+  [ "$(dev_open_events 'select(.event == "workspace.opened") | .id' | wc -l)" -eq 1 ]
+  local opened
+  opened=$(dev_open_events 'select(.event == "workspace.opened") | .data | [.boot_id, .config_digest, .session_name_actual] | @tsv')
+  [[ "$opened" == *"sha256:"* ]]
+  [[ "$opened" == *demo* ]]
+  [ -n "${opened%%	*}" ]
+
+  [ "$(cat "$TEST_ROOT/attached")" = "ATTACH demo" ]
+  dev_tmux kill-server || true
+}
+
+@test "a second open creates nothing, re-runs nothing, and leaves scratch untouched" {
+  setup_dev_test
+  dev_open_load_libs
+  dev_open_stub_attach
+  dev_open_fixture demo >/dev/null
+
+  run dev_cmd_open demo
+  [ "$status" -eq 0 ]
+
+  dev_tmux send-keys -t '=demo:=scratch' 'MARKER-SCENARIO-2' Enter
+  sleep 0.3
+
+  local before
+  before=$(dev_tmux list-panes -a -F '#{pane_id}' | sort | tr '\n' ' ')
+
+  run dev_cmd_open demo
+  [ "$status" -eq 0 ]
+
+  local after
+  after=$(dev_tmux list-panes -a -F '#{pane_id}' | sort | tr '\n' ' ')
+  [ "$before" = "$after" ]
+
+  run dev_tmux capture-pane -p -t '=demo:=scratch'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *MARKER-SCENARIO-2* ]]
+
+  [ "$(dev_open_events 'select(.event == "workspace.opened") | .id' | wc -l)" -eq 1 ]
+  dev_tmux kill-server || true
+}
+
+@test "open --no-attach does the work, prints the session name, and never attaches" {
+  setup_dev_test
+  dev_open_load_libs
+  dev_open_stub_attach
+  dev_open_fixture demo >/dev/null
+
+  run dev_cmd_open demo --no-attach
+  [ "$status" -eq 0 ]
+  [ "$output" = "demo" ]
+  [ ! -e "$TEST_ROOT/attached" ]
+
+  run dev_tmux has-session -t '=demo'
+  [ "$status" -eq 0 ]
+  [ "$(dev_open_events 'select(.event == "workspace.opened") | .id' | wc -l)" -eq 1 ]
+
+  run dev_cmd_open --help
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"--no-attach"* ]]
+  dev_tmux kill-server || true
+}
+
+@test "open exits 7 when the operation lock is already held" {
+  setup_dev_test
+  dev_open_load_libs
+  dev_open_stub_attach
+  local dir ws_id
+  dir=$(dev_open_fixture demo)
+  ws_id=$(dev_resolve_workspace_id "$dir")
+
+  flock -x "$DEV_STATE_ROOT/locks/$ws_id.op" sleep 5 &
+  local holder=$!
+  sleep 0.4
+
+  run dev_cmd_open demo
+  [ "$status" -eq 7 ]
+  [[ "$output" == *"another dev is working on this workspace"* ]]
+
+  kill "$holder" 2>/dev/null || true
+  wait "$holder" 2>/dev/null || true
+  dev_tmux kill-server || true
+}
+
+@test "open after a container loss emits container.replaced then container.ready and respawns dead panes" {
+  setup_dev_test
+  dev_open_load_libs
+  dev_open_stub_attach
+  local dir ws_id
+  dir=$(dev_open_fixture demo)
+  mkdir -p "$dir/.devcontainer"
+  printf '{"image":"alpine:3"}\n' >"$dir/.devcontainer/devcontainer.json"
+
+  # remoteWorkspaceFolder is host-real (the fixture worktree), not the usual
+  # "/workspace" container-only path: the `exec` branch below genuinely execs
+  # its trailing command on this host (there is no real container), and that
+  # command `cd`s into container.workdir before running the agent. A
+  # container-only path can't exist here, so the exec-forwarding fix needs a
+  # directory that actually does.
+  stub_command devcontainer '
+case "$1" in
+  --version) echo 0.86.1; exit 0 ;;
+  exec) shift; while [ "${1#-}" != "$1" ]; do shift 2; done; exec "$@" ;;
+  *) echo "{\"outcome\":\"success\",\"containerId\":\"newcid\",\"remoteUser\":\"vscode\",\"remoteWorkspaceFolder\":\"'"$dir"'\"}" ;;
+esac
+'
+  stub_command mise 'shift 2; shift; exec "$@"'
+  stub_command docker '
+case "$1" in
+  info) exit 0 ;;
+  inspect)
+    for a in "$@"; do
+      if [ "$a" = "oldcid" ]; then exit 1; fi
+    done
+    echo true; exit 0 ;;
+  exec) shift; while [ "${1#-}" != "$1" ]; do shift 2; done; shift; exec "$@" ;;
+  *) exit 0 ;;
+esac
+'
+  # The default config's agent windows run the real "claude" binary, which is
+  # not on PATH here. As tests/dev_backend_tmux.bats:29-37 documents, a command
+  # that exits races dev_backend_apply_layout setting remain-on-exit -- the
+  # window can vanish before the very next tmux call touches it. Stubbed as a
+  # long-lived placeholder so agent panes survive both this test's own setup
+  # (which calls apply_layout directly) and the `dev_cmd_open` under test.
+  stub_command claude 'exec sleep 30'
+
+  # Seed a record bound to a container that no longer exists.
+  local session record
+  session=demo
+  record=$(dev_state_new "$(dev_resolve_workspace_id "$dir")" demo demo "$dir")
+  record=$(jq --arg wd "$dir" '.status = "running"
+    | .container.status = "ready"
+    | .container.id = "oldcid"
+    | .container.kind = "single"
+    | .container.user = "vscode"
+    | .container.workdir = $wd' <<<"$record")
+  ws_id=$(dev_resolve_workspace_id "$dir")
+  printf '%s\n' "$record" >"$(dev_state_path "$ws_id")"
+
+  # A live session with one dead pane.
+  dev_backend_create "$session" "$ws_id" demo "$dir"
+  dev_backend_apply_layout "$session" "$(dev_config_merged demo "$dir")" "$record"
+  dev_tmux set-window-option -t '=demo:=shell' remain-on-exit on
+  dev_tmux respawn-pane -k -t '=demo:=shell' 'exit 3'
+  sleep 0.6
+  [ "$(dev_tmux list-panes -t '=demo:=shell' -F '#{pane_dead}')" = "1" ]
+
+  run dev_cmd_open demo
+  [ "$status" -eq 0 ]
+
+  local order
+  order=$(dev_open_events 'select(.event == "container.replaced" or .event == "container.ready") | .event' | tr '\n' ' ')
+  [ "$order" = "container.replaced container.ready " ]
+
+  [ "$(dev_open_events 'select(.event == "container.replaced") | .data.old_id')" = "oldcid" ]
+  [ "$(dev_open_events 'select(.event == "container.replaced") | .data.new_id')" = "newcid" ]
+  [ "$(dev_open_events 'select(.event == "pane.respawned") | .data.window')" = "shell" ]
+  # Exactly one event for one respawn: `dev_backend_respawn_pane` is the sole
+  # emitter and `dev_open_respawn_dead` must not emit a second. A double event
+  # folds twice and reports every recovery as two restarts.
+  [ "$(dev_open_events 'select(.event == "pane.respawned") | .id' | wc -l)" = "1" ]
+  [ "$(dev_open_events 'select(.event == "pane.respawned") | .data.container_id')" = "newcid" ]
+  [ "$(dev_tmux list-panes -t '=demo:=shell' -F '#{pane_dead}')" = "0" ]
+  dev_tmux kill-server || true
+}
+
+@test "a respawned window comes back as the window it was, not as a bare shell" {
+  # The respawn path used to re-derive `.command` itself, which meant an agent
+  # window came back running $SHELL in the worktree with no environment -- the
+  # pane was alive and silently not what the config declared. It now goes through
+  # dev_window_inner_command, the same function creation uses. Asserted by
+  # running the produced string rather than by matching its text: the string is
+  # `sh -c <quoted inner>`, so a substring match would be testing the quoting
+  # rather than the behaviour.
+  setup_dev_test
+  dev_open_load_libs
+  local dir ws_id record wjson env_json cmd
+  dir=$(dev_open_fixture demo)
+  mkdir -p "$dir/sub dir"
+  ws_id=$(dev_resolve_workspace_id "$dir")
+  record=$(dev_state_new "$ws_id" demo demo "$dir")
+
+  stub_command my-agent "printf '%s|%s|%s\n' \"\$PWD\" \"\$FOO\" \"\$1\" >'$TEST_ROOT/agent-ran'"
+
+  wjson='{"name":"agent-1","agent":"my-agent --flag","cwd":"sub dir","location":"host"}'
+  env_json='{"FOO":"a b"}'
+  cmd=$(dev_open_window_command "$record" "$wjson" "$env_json")
+
+  bash -c "$cmd"
+  [ "$(cat "$TEST_ROOT/agent-ran")" = "$dir/sub dir|a b|--flag" ]
+}
+
+@test "attach on an absent session exits 4 and creates nothing" {
+  setup_dev_test
+  dev_open_load_libs
+  dev_open_stub_attach
+  dev_open_fixture demo >/dev/null
+
+  run dev_cmd_attach demo
+  [ "$status" -eq 4 ]
+  [[ "$output" == *"no live session"* ]]
+  [ ! -e "$TEST_ROOT/attached" ]
+
+  run dev_tmux has-session -t '=demo'
+  [ "$status" -ne 0 ]
+  dev_tmux kill-server || true
+}
+
+@test "the attach guard picks the hashed name when an existing session holds a different worktree" {
+  setup_dev_test
+  dev_open_load_libs
+  dev_open_stub_attach
+  local dir other ws_id
+  dir=$(dev_open_fixture demo)
+  other=$(dev_open_fixture impostor)
+
+  # A squatter session already owns the name "demo" but points elsewhere.
+  dev_backend_create demo "$(dev_resolve_workspace_id "$other")" demo "$other"
+
+  run dev_cmd_open demo
+  [ "$status" -eq 0 ]
+
+  ws_id=$(dev_resolve_workspace_id "$dir")
+  local expected="demo--$(basename "$dir")--${ws_id:0:6}"
+  run dev_tmux has-session -t "=$expected"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$TEST_ROOT/attached")" = "ATTACH $expected" ]
+  [ "$(dev_open_events 'select(.event == "workspace.opened") | .data.session_name_actual')" = "$expected" ]
+  [ "$(dev_tmux show-options -t "=$expected:" -qv @dev_worktree)" = "$dir" ]
+  dev_tmux kill-server || true
+}
+
+@test "a collision-hashed name survives the conflicting session going away" {
+  # The durability half of ADR-7's guard, and the regression this pins: every
+  # later command used to re-derive the resolver's PROPOSAL rather than read the
+  # record. Once the squatter left, `dev attach demo` looked up the plain name,
+  # found nothing, and reported no live session -- while the hashed session was
+  # still running with the user's work in it. `dev demo` would then have built a
+  # second session for the same working tree.
+  setup_dev_test
+  dev_open_load_libs
+  dev_open_stub_attach
+  local dir other ws_id expected
+  dir=$(dev_open_fixture demo)
+  other=$(dev_open_fixture impostor)
+
+  dev_backend_create demo "$(dev_resolve_workspace_id "$other")" demo "$other"
+  run dev_cmd_open demo --no-attach
+  [ "$status" -eq 0 ]
+
+  ws_id=$(dev_resolve_workspace_id "$dir")
+  expected="demo--$(basename "$dir")--${ws_id:0:6}"
+  [ "$(jq -r '.session_name' "$(dev_state_path "$ws_id")")" = "$expected" ]
+
+  # The squatter leaves. The plain name is now free.
+  dev_tmux kill-session -t '=demo'
+  run dev_tmux has-session -t '=demo'
+  [ "$status" -ne 0 ]
+
+  # attach must still find the hashed session.
+  rm -f "$TEST_ROOT/attached"
+  run dev_cmd_attach demo
+  [ "$status" -eq 0 ]
+  [ "$(cat "$TEST_ROOT/attached")" = "ATTACH $expected" ]
+
+  # open must reuse it rather than create a second session on the free name.
+  run dev_cmd_open demo --no-attach
+  [ "$status" -eq 0 ]
+  [ "$output" = "$expected" ]
+  run dev_tmux has-session -t '=demo'
+  [ "$status" -ne 0 ]
+  [ "$(dev_tmux list-sessions -F '#{session_name}' | wc -l)" = "1" ]
+
+  # And reconcile never called it vanished: it queried the recorded name.
+  [ "$(jq -r '.status' "$(dev_state_path "$ws_id")")" = "running" ]
+  [ -z "$(dev_open_events 'select(.event == "workspace.vanished") | .id')" ]
+  dev_tmux kill-server || true
+}
