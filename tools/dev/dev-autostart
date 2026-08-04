@@ -93,7 +93,10 @@ main() {
   local record_path record
   while IFS= read -r record_path; do
     [[ -n "$record_path" && -f "$record_path" ]] || continue
-    record=$(cat "$record_path")
+    record=$(cat "$record_path" 2>/dev/null) || {
+      autostart_log "skip $record_path: unreadable record"
+      continue
+    }
     if ! jq -e . >/dev/null 2>&1 <<<"$record"; then
       autostart_log "skip $record_path: unreadable record"
       continue
