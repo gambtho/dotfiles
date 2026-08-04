@@ -71,6 +71,16 @@ Each entry gives the grep anchor to find it in the template. All of these live
 in the **always-run block, above the sentinel gate** — keep them there. Moving
 one below the gate means a container that is already stamped will never run it.
 
+> **This table is executable input, not just prose.** `bin/seed-drift` parses it
+> to decide which blocks to compare, so editing it changes what the detector
+> checks for **every** project. A row must be a four-cell Markdown table row —
+> `| Block name | ` + backticked anchor + ` | why |` — with the anchor wrapped in
+> backticks; a row whose anchor is not backticked is silently skipped, and a row
+> whose anchor does not appear in the template's **code** (a match inside a
+> comment does not count, and neither does a typo) aborts the whole run with
+> exit 2 for every project, not just a per-block error. Adding a row is how you
+> extend the detector; check `bin/seed-drift` still exits 0 or 1 afterwards.
+
 | Block | Anchor in template | Why it matters |
 |---|---|---|
 | Stable link root | `ensure_stable_link_root` | Publishes `/opt/dotfiles`. Without it every personal overlay symlink dangles in the container — `.claude/skills`, `agents`, `references`, **and `CLAUDE.md`**, so the project instructions never load either. |
