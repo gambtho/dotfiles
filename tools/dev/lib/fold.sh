@@ -7,20 +7,24 @@
 #   * only workspace.attached/detached write .last_seen in the fold
 #   * every transition is an absolute assignment, which is what makes replay idempotent
 #   * unknown event types fall through unchanged — ignored, never rejected
+#   * agent identity is (window, data.pane // null); legacy pane-less events
+#     and records fold identically with pane: null (spec §3)
 #
 # This file is sourced. It defines functions and does no work at source time.
 
 # The shared jq source. Internal to this file; no other task calls it.
 dev_fold_jq_program() {
   cat <<'JQ'
-def agent_has($w): any(.agents[]; .window == $w);
+def agent_matches($d): .window == $d.window and ((.pane // null) == ($d.pane // null));
+def agent_has($d): any(.agents[]; agent_matches($d));
 
-def agent_upsert($w; $patch):
-  if $w == null then .
-  elif agent_has($w) then
-    .agents = [.agents[] | if .window == $w then . + $patch else . end]
+def agent_upsert($d; $patch):
+  if ($d.window // null) == null then .
+  elif agent_has($d) then
+    .agents = [.agents[] | if agent_matches($d) then . + $patch else . end]
   else
-    .agents = (.agents + [{window: $w, command: null, state: null} + $patch])
+    .agents = (.agents
+      + [{window: $d.window, pane: ($d.pane // null), command: null, state: null} + $patch])
   end;
 
 def fold_event($ev):
@@ -47,9 +51,9 @@ def fold_event($ev):
       .status = "stopped" | .stopped_reason = $d.reason
     elif $ev.event == "window.created" then .
     elif $ev.event == "pane.died" then
-      if agent_has($d.window) then agent_upsert($d.window; {state: "exited"}) else . end
+      if agent_has($d) then agent_upsert($d; {state: "exited"}) else . end
     elif $ev.event == "pane.respawned" then
-      if agent_has($d.window) then agent_upsert($d.window; {state: "started"}) else . end
+      if agent_has($d) then agent_upsert($d; {state: "started"}) else . end
     elif $ev.event == "container.starting" then
       .container.status = "starting" | .container.verified = false
     elif $ev.event == "container.ready" then
@@ -74,11 +78,11 @@ def fold_event($ev):
       | .container.observed_at = $ts
     elif $ev.event == "container.replaced" then .
     elif $ev.event == "agent.started" then
-      agent_upsert($d.window; {command: $d.command, state: "started"})
+      agent_upsert($d; {command: $d.command, state: "started"})
     elif $ev.event == "agent.exited" then
-      agent_upsert($d.window; {state: "exited"})
+      agent_upsert($d; {state: "exited"})
     elif $ev.event == "agent.failed" then
-      agent_upsert($d.window; {state: "failed"})
+      agent_upsert($d; {state: "failed"})
     elif $ev.event == "config.changed" then
       .config_digest = $d.config_digest
     else .

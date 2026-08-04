@@ -174,7 +174,7 @@ mkevent() {
   rec=$(jq -c '.status = "running"' <<<"$REC")
   out=$(dev_fold_apply "$rec" "$(mkevent aaaa00000000000c 2026-08-03T14:07:00.000Z agent.started '{"window":"agent-1","command":"claude"}')")
   out=$(dev_fold_apply "$out" "$(mkevent aaaa00000000000d 2026-08-03T14:07:01.000Z agent.started '{"window":"agent-2","command":"claude"}')")
-  [ "$(jq -c .agents <<<"$out")" = '[{"window":"agent-1","command":"claude","state":"started"},{"window":"agent-2","command":"claude","state":"started"}]' ]
+  [ "$(jq -c .agents <<<"$out")" = '[{"window":"agent-1","pane":null,"command":"claude","state":"started"},{"window":"agent-2","pane":null,"command":"claude","state":"started"}]' ]
 
   out=$(dev_fold_apply "$out" "$(mkevent aaaa00000000000e 2026-08-03T14:08:00.000Z agent.exited '{"window":"agent-2","exit_status":0}')")
   [ "$(jq -r '.agents[] | select(.window == "agent-2") | .state' <<<"$out")" = exited ]
@@ -313,4 +313,33 @@ mkevent() {
   local out
   out=$(dev_fold_stream "$REC" </dev/null)
   [ "$(jq -S -c . <<<"$out")" = "$(jq -S -c . <<<"$REC")" ]
+}
+
+@test "fold: pane-qualified events route to the matching agent only" {
+  local rec out
+  rec=$(jq -c '.status = "running"' <<<"$REC")
+  out=$(dev_fold_apply "$rec" "$(mkevent aaaa000000000023 2026-08-03T15:00:00.000Z agent.started '{"window":"main","pane":"agent-1","command":"claude"}')")
+  out=$(dev_fold_apply "$out" "$(mkevent aaaa000000000024 2026-08-03T15:01:00.000Z agent.started '{"window":"main","pane":"agent-2","command":"claude"}')")
+  [ "$(jq -r '.agents | length' <<<"$out")" -eq 2 ]
+  # the helper shell dying in the same window must not touch either agent
+  out=$(dev_fold_apply "$out" "$(mkevent aaaa000000000025 2026-08-03T15:02:00.000Z pane.died '{"window":"main","pane":"shell"}')")
+  [ "$(jq -r '[.agents[].state] | unique | join(",")' <<<"$out")" = "started" ]
+  # the right agent pane dying flips only that agent
+  out=$(dev_fold_apply "$out" "$(mkevent aaaa000000000026 2026-08-03T15:03:00.000Z pane.died '{"window":"main","pane":"agent-2"}')")
+  [ "$(jq -r '.agents[] | select(.pane == "agent-2") | .state' <<<"$out")" = "exited" ]
+  [ "$(jq -r '.agents[] | select(.pane == "agent-1") | .state' <<<"$out")" = "started" ]
+  out=$(dev_fold_apply "$out" "$(mkevent aaaa000000000027 2026-08-03T15:04:00.000Z pane.respawned '{"window":"main","pane":"agent-2"}')")
+  [ "$(jq -r '.agents[] | select(.pane == "agent-2") | .state' <<<"$out")" = "started" ]
+  # agent.exited and agent.failed route by pane too
+  out=$(dev_fold_apply "$out" "$(mkevent aaaa000000000028 2026-08-03T15:05:00.000Z agent.failed '{"window":"main","pane":"agent-1","reason":"crash"}')")
+  [ "$(jq -r '.agents[] | select(.pane == "agent-1") | .state' <<<"$out")" = "failed" ]
+}
+
+@test "fold: legacy pane-less events still key by window with pane null" {
+  local rec out
+  rec=$(jq -c '.status = "running"' <<<"$REC")
+  out=$(dev_fold_apply "$rec" "$(mkevent aaaa000000000029 2026-08-03T15:10:00.000Z agent.started '{"window":"agent-1","command":"claude"}')")
+  [ "$(jq -c '.agents[0] | {window, pane, state}' <<<"$out")" = '{"window":"agent-1","pane":null,"state":"started"}' ]
+  out=$(dev_fold_apply "$out" "$(mkevent aaaa00000000002a 2026-08-03T15:11:00.000Z pane.died '{"window":"agent-1","exit_status":1}')")
+  [ "$(jq -r '.agents[0].state' <<<"$out")" = "exited" ]
 }
