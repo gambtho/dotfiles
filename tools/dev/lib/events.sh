@@ -1,0 +1,264 @@
+#!/usr/bin/env bash
+# Event stream: one append-only JSONL file per host, rotated by size.
+#
+# Locking (spec §4.4, ADR-1): appends take `flock -s` on locks/events.lock, the
+# fold's reader takes `flock -s` across BOTH listing and reading the segments,
+# rotation takes `flock -x`. flock is per open-file-description, so taking the
+# exclusive lock while this process still holds the shared one deadlocks: call
+# dev_events_rotate_if_needed only after the fold has released.
+#
+# This file is sourced. It defines functions and does no work at source time.
+
+DEV_EVENT_MAX_BYTES=4096
+DEV_EVENTS_ROTATE_BYTES=8388608
+DEV_EVENTS_KEEP_SEGMENTS=5
+
+dev_now() {
+  date -u +%Y-%m-%dT%H:%M:%S.%3NZ
+}
+
+dev_event_id_random() {
+  openssl rand -hex 8
+}
+
+# Discovery events (workspace.vanished, container.lost, config.changed) derive
+# their id from what was discovered, so a CAS retry recomputes the same id and
+# the append is skipped instead of duplicated (ADR-1).
+dev_event_id_deterministic() {
+  printf '%s' "${1}${2}${3}" | sha256sum | cut -c1-16
+}
+
+dev_event_build() {
+  local id=$1 ts=$2 event=$3 workspace_id=$4 slug=$5 session_name=$6 worktree=$7
+  local data=${8:-}
+  [[ -n "$data" ]] || data='{}'
+  jq -c -n \
+    --arg id "$id" \
+    --arg ts "$ts" \
+    --arg event "$event" \
+    --arg workspace_id "$workspace_id" \
+    --arg slug "$slug" \
+    --arg session_name "$session_name" \
+    --arg worktree "$worktree" \
+    --argjson data "$data" \
+    '{
+      v: 1,
+      id: $id,
+      ts: $ts,
+      event: $event,
+      workspace_id: $workspace_id,
+      slug: $slug,
+      session_name: $session_name,
+      worktree: $worktree,
+      data: $data
+    }'
+}
+
+# Appends one composed line. The whole line is emitted by a single printf whose
+# redirection is outside it, so the kernel sees exactly one write(2) against an
+# O_APPEND descriptor; two syscalls could interleave with another appender's.
+# Enforce the size cap on one composed event line, WITHOUT taking any lock or
+# writing anything: prints the (possibly truncated) line, or fails when even
+# an empty-data envelope cannot fit. Split out of dev_event_append so
+# dev_events_append_if_absent can cap under its own exclusive lock.
+dev_event_cap_line() {
+  local line=$1
+  local size
+  size=$(printf '%s' "$line" | wc -c)
+  # The trailing newline printf'd below makes the actual write size+1 bytes.
+  # The single-write invariant this cap exists to protect needs THAT to fit
+  # in DEV_EVENT_MAX_BYTES, so a line already at the cap is one write too many
+  # (measured: a 4096-byte line plus its newline is emitted as two write(2)
+  # calls, which two `flock -s` holders can interleave between).
+  if ((size + 1 > DEV_EVENT_MAX_BYTES)); then
+    # First tier: drop only the KNOWN-BULKY optional fields (a container.ready
+    # or container.failed can carry a large up_result / stderr_tail). This
+    # preserves the required fields the fold depends on — replacing the whole
+    # data object would fold an oversized container.ready into a ready status
+    # with a null id, user, and workdir.
+    local tier1
+    tier1=$(printf '%s' "$line" |
+      jq -c '.data |= (del(.up_result, .stderr_tail) + {truncated: true})')
+    if (($(printf '%s' "$tier1" | wc -c) + 1 <= DEV_EVENT_MAX_BYTES)); then
+      printf '%s\n' "$tier1"
+      return 0
+    fi
+    # Replace free-form data with a truncated rendering and mark it. The budget
+    # is an estimate (JSON escaping of the truncated prefix can still shift it
+    # slightly), so the loop re-measures and halves until the composed line
+    # fits. budget itself is measured in BYTES (not characters): `size` comes
+    # from `wc -c`, so mixing in a character count here would under-count
+    # multi-byte UTF-8 payloads and could overshoot the halving loop to zero,
+    # discarding the diagnostic content entirely instead of truncating it.
+    local raw raw_bytes budget candidate
+    raw=$(printf '%s' "$line" | jq -c '.data')
+    raw_bytes=$(printf '%s' "$raw" | wc -c)
+    budget=$((DEV_EVENT_MAX_BYTES - (size - raw_bytes) - 64))
+    ((budget > 0)) || budget=0
+    while :; do
+      candidate=$(printf '%s' "$line" |
+        jq -c --arg raw "${raw:0:budget}" '.data = {truncated: true, raw: $raw}')
+      size=$(printf '%s' "$candidate" | wc -c)
+      if ((size + 1 <= DEV_EVENT_MAX_BYTES)); then
+        line=$candidate
+        break
+      fi
+      if ((budget == 0)); then
+        # The ENVELOPE alone exceeds the cap (a pathological worktree path or
+        # session name). Appending it would break the single-write atomicity
+        # invariant the cap exists for; refuse loudly instead.
+        printf 'dev: refusing to append event larger than %s bytes even with empty data\n' \
+          "$DEV_EVENT_MAX_BYTES" >&2
+        return 1
+      fi
+      budget=$((budget / 2))
+    done
+  fi
+  printf '%s\n' "$line"
+}
+
+dev_event_append() {
+  local line=$1
+  local file="$DEV_STATE_ROOT/events/events.jsonl"
+  local lock="$DEV_STATE_ROOT/locks/events.lock"
+  mkdir -p "$DEV_STATE_ROOT/events" "$DEV_STATE_ROOT/locks"
+  line=$(dev_event_cap_line "$line") || return 1
+  { flock -s 9 && printf '%s\n' "$line" >>"$file"; } 9>"$lock"
+}
+
+# Check-and-append as ONE exclusive-lock operation. The separate
+# has-id-then-append pair is racy: two concurrent reconciles can both observe
+# a deterministic discovery id as absent and both append it, and duplicate ids
+# downstream stall the fold cursor. Exclusive beats shared here because the
+# check and the write must be indivisible against other appenders.
+dev_events_append_if_absent() {
+  local id=$1 line=$2
+  local file="$DEV_STATE_ROOT/events/events.jsonl"
+  local lock="$DEV_STATE_ROOT/locks/events.lock"
+  mkdir -p "$DEV_STATE_ROOT/events" "$DEV_STATE_ROOT/locks"
+  line=$(dev_event_cap_line "$line") || return 1
+  {
+    flock -x 9
+    local -a segs=()
+    mapfile -t segs < <(dev_events_segments)
+    # Same grep-prefilter-then-exact-jq shape as dev_events_has_id; inlined
+    # because calling it here would try to take a second lock on this file.
+    if ((${#segs[@]} > 0)) && grep -qF -- "$id" "${segs[@]}" &&
+      cat "${segs[@]}" | jq -e -s --arg id "$id" 'any(.[]; .id == $id)' >/dev/null; then
+      return 0
+    fi
+    printf '%s\n' "$line" >>"$file"
+  } 9>"$lock"
+}
+
+# Rotated segments carry an RFC 3339 basic stamp, so glob order (lexicographic)
+# is chronological. The live file sorts last because it is printed last.
+dev_events_segments() {
+  local dir="$DEV_STATE_ROOT/events"
+  local seg
+  for seg in "$dir"/events-*.jsonl; do
+    if [[ -f "$seg" ]]; then
+      printf '%s\n' "$seg"
+    fi
+  done
+  if [[ -f "$dir/events.jsonl" ]]; then
+    printf '%s\n' "$dir/events.jsonl"
+  fi
+  return 0
+}
+
+# Holds the shared lock across both listing the segments and reading them.
+# Releasing between the two lets rotation delete an enumerated segment, and the
+# resulting short read is indistinguishable from an unreachable cursor — a
+# fold_gap manufactured by the reader itself (ADR-1).
+dev_events_read_all() {
+  local lock="$DEV_STATE_ROOT/locks/events.lock"
+  mkdir -p "$DEV_STATE_ROOT/locks"
+  {
+    flock -s 9
+    local -a segs=()
+    mapfile -t segs < <(dev_events_segments)
+    if ((${#segs[@]} > 0)); then
+      cat "${segs[@]}"
+    fi
+  } 9>"$lock"
+  return 0
+}
+
+# Holds the shared lock across listing, the grep prefilter, and the jq check,
+# for the same reason dev_events_read_all does: releasing between steps lets
+# rotation delete an enumerated segment out from under a later step.
+#
+# The grep is a cheap prefilter, not the answer: if the id string does not
+# appear anywhere in the stream, it cannot be present as an event's `.id`, so
+# we return not-found without ever materializing the stream with `jq -s`.
+# Measured on a 52k-event stream, the jq -s slurp this replaces cost 602ms and
+# 105MB RSS while holding this same shared lock, which blocks log rotation
+# (`flock -x`) for the duration -- and reconcile calls this once per discovery
+# event, making it a hot path. When the id string DOES appear (a true hit, or
+# only as a substring of some other field -- e.g. inside `data` or a longer
+# id), grep cannot tell those apart, so it falls through to the same exact
+# `.id == $id` jq check as before; the prefilter only ever skips the jq call
+# when a hit is impossible, so it cannot change the result.
+dev_events_has_id() {
+  local id=$1
+  local lock="$DEV_STATE_ROOT/locks/events.lock"
+  mkdir -p "$DEV_STATE_ROOT/locks"
+  {
+    flock -s 9
+    local -a segs=()
+    mapfile -t segs < <(dev_events_segments)
+    ((${#segs[@]} > 0)) || return 1
+    grep -qF -- "$id" "${segs[@]}" || return 1
+    cat "${segs[@]}" | jq -e -s --arg id "$id" 'any(.[]; .id == $id)' >/dev/null
+  } 9>"$lock"
+}
+
+dev_events_rotate_if_needed() {
+  local dir="$DEV_STATE_ROOT/events"
+  local live="$dir/events.jsonl"
+  local lock="$DEV_STATE_ROOT/locks/events.lock"
+  mkdir -p "$dir" "$DEV_STATE_ROOT/locks"
+  {
+    flock -x 9
+    [[ -f "$live" ]] || return 0
+    local size
+    size=$(wc -c <"$live")
+    ((size > DEV_EVENTS_ROTATE_BYTES)) || return 0
+
+    # Sub-second precision plus a collision counter. A bare second-resolution
+    # stamp and a bare `mv` silently destroyed a segment when two rotations
+    # landed in the same second -- possible here because the threshold is a size,
+    # so a burst of appends can cross it twice in quick succession.
+    #
+    # The counter is present in EVERY name, not only on collision, and both parts
+    # are fixed-width. Segment order is lexical (the glob below and
+    # `dev_events_segments` both rely on it), and `-00` sorting against a bare
+    # `.jsonl` would put the newer file first: `-` is 0x2D, `.` is 0x2E. Uniform
+    # names remove that trap. Zero-padded %N sorts correctly for the same reason.
+    local stamp target n=0
+    stamp=$(date -u +%Y%m%dT%H%M%S.%NZ)
+    printf -v target '%s/events-%s-%02d.jsonl' "$dir" "$stamp" "$n"
+    while [[ -e "$target" ]]; do
+      n=$((n + 1))
+      # Bounded: something is badly wrong if this many segments share a
+      # nanosecond, and rotating is never worth spinning forever over.
+      ((n < 100)) || return 0
+      printf -v target '%s/events-%s-%02d.jsonl' "$dir" "$stamp" "$n"
+    done
+    mv "$live" "$target"
+    : >"$live"
+    local -a rotated=()
+    local seg
+    for seg in "$dir"/events-*.jsonl; do
+      if [[ -f "$seg" ]]; then
+        rotated+=("$seg")
+      fi
+    done
+    local excess=$((${#rotated[@]} - DEV_EVENTS_KEEP_SEGMENTS))
+    if ((excess > 0)); then
+      rm -f "${rotated[@]:0:excess}"
+    fi
+  } 9>"$lock"
+  return 0
+}

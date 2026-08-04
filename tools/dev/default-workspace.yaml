@@ -1,0 +1,16 @@
+version: 1
+autostart: false
+devcontainer:
+  enabled: auto
+  start_timeout: 300
+windows:
+  - name: agent-1
+    agent: claude
+    focus: true
+  - name: agent-2
+    agent: claude
+  - name: shell
+    command: null
+  - name: scratch
+    command: null
+    location: host

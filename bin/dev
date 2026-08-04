@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+#
+# dev - dispatcher for the workspace platform.
+#
+# Resolves `dev <word>` to tools/dev/commands/<word>.sh when that file exists,
+# and otherwise to `open <word>`. One file per subcommand is what makes new
+# verbs additive rather than structural (§1.1).
+
+set -euo pipefail
+
+DEV_DOTFILES_ROOT="${DEV_DOTFILES_ROOT:-$HOME/.dotfiles}"
+DEV_CONTAINER_MARKER="${DEV_CONTAINER_MARKER:-/.dockerenv}"
+# The libs reference these under `set -u`; without defaults a bare invocation
+# dies with an unbound-variable error mid-command (and `dev list --json` then
+# misleadingly printed an empty snapshot with exit 0). Same defaults as
+# tools/dev/dev-autostart.
+DEV_STATE_ROOT="${DEV_STATE_ROOT:-$HOME/.local/state/dev}"
+DEV_REPO_ROOT="${DEV_REPO_ROOT:-$HOME/workspace}"
+DEV_OVERLAY_ROOT="${DEV_OVERLAY_ROOT:-$DEV_DOTFILES_ROOT/projects}"
+DEV_TMUX_SOCKET="${DEV_TMUX_SOCKET:-}"
+export DEV_STATE_ROOT DEV_REPO_ROOT DEV_OVERLAY_ROOT DEV_TMUX_SOCKET
+
+dev_usage() {
+  cat <<'USAGE'
+usage: dev [<workspace>] | dev <command> [args]
+
+  open <workspace>     Reconcile, ensure, and attach. The default verb; a bare
+                       `dev <workspace>` means `dev open <workspace>`.
+  attach <workspace>   Attach only; fails if the session is absent.
+  list [--json]        Reconciled listing of every known workspace.
+                       --json is the supported snapshot contract.
+  status [<workspace>] Detail for one workspace, including configuration drift.
+  stop [<workspace>]   End the session. The only destructive verb.
+  config [<workspace>] Print the merged configuration JSON.
+
+With no arguments, resolves the workspace from the current directory.
+USAGE
+}
+
+dev_refuse_in_container() {
+  # /run/.containerenv is podman's marker; DEV_CONTAINER_MARKER (default
+  # /.dockerenv) covers docker and the tests' override.
+  if [[ -e "$DEV_CONTAINER_MARKER" || -e /run/.containerenv ]]; then
+    # The container's ~/.dotfiles is a stale seed-copy, and the tmux server that
+    # owns every session lives on the host and is not reachable from in here, so
+    # this invocation cannot be made correct. Delegating to the host would need a
+    # host channel that does not exist (§1.3).
+    printf 'dev: refusing to run inside a container.\n' >&2
+    printf 'dev: sessions are owned by the tmux server on the WSL host; run dev there.\n' >&2
+    exit 10
+  fi
+}
+
+dev_main() {
+  dev_refuse_in_container
+
+  local verb cmd_file lib
+  verb="${1:-open}"
+
+  case "$verb" in
+    -h | --help)
+      dev_usage
+      exit 0
+      ;;
+    -*)
+      printf 'dev: unknown option: %s\n' "$verb" >&2
+      dev_usage >&2
+      exit 2
+      ;;
+  esac
+
+  if [[ ! "$verb" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+    printf 'dev: invalid workspace or command name: %s\n' "$verb" >&2
+    exit 2
+  fi
+
+  cmd_file="$DEV_DOTFILES_ROOT/tools/dev/commands/${verb}.sh"
+  if [[ -f "$cmd_file" ]]; then
+    if [[ $# -gt 0 ]]; then shift; fi
+  else
+    verb="open"
+    cmd_file="$DEV_DOTFILES_ROOT/tools/dev/commands/open.sh"
+  fi
+
+  for lib in resolve config events state fold reconcile runtime container backend-tmux; do
+    # shellcheck source=/dev/null
+    source "$DEV_DOTFILES_ROOT/tools/dev/lib/${lib}.sh"
+  done
+  # shellcheck source=/dev/null
+  source "$cmd_file"
+
+  "dev_cmd_${verb}" "$@"
+}
+
+dev_main "$@"

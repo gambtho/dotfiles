@@ -36,4 +36,6 @@ __pycache__/
 # This repo is public: nothing under projects/ may be tracked again. The
 # assertion in tests/repository_hygiene.bats enforces that; see
 # docs/guides/project-overlays.md for the workflow.
+# (The dev platform's machine-local projects/*/workspace.local.yaml is covered
+# by this rule too.)
 projects/

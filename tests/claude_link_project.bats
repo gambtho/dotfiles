@@ -542,3 +542,37 @@ run_unlinker() {
   [ -f "$PROJECT/AGENTS.local.md" ]
   [[ "$output" == *"not a generated import shim"* ]]
 }
+
+@test "dev_slug_for_path resolves primary checkouts and linked worktrees" {
+  source "$REPO_ROOT/bin/common.sh"
+
+  local primary="$TEST_ROOT/slug-demo"
+  mkdir -p "$primary"
+  git -C "$primary" init -q -b main .
+  git -C "$primary" -c user.email=t@example.com -c user.name=T \
+    commit -q --allow-empty -m init
+
+  run dev_slug_for_path "$primary"
+  [ "$status" -eq 0 ]
+  [ "$output" = "slug-demo" ]
+
+  # A linked worktree's directory is named after the branch; the slug must
+  # still be the primary working tree's name so both resolve to one overlay.
+  local linked="$TEST_ROOT/feature-branch"
+  git -C "$primary" worktree add -q -b feature "$linked"
+
+  run dev_slug_for_path "$linked"
+  [ "$status" -eq 0 ]
+  [ "$output" = "slug-demo" ]
+
+  # Outside git, the directory's own basename is the slug.
+  local plain="$TEST_ROOT/plain-dir"
+  mkdir -p "$plain"
+  run dev_slug_for_path "$plain"
+  [ "$status" -eq 0 ]
+  [ "$output" = "plain-dir" ]
+
+  run dev_slug_for_path "$TEST_ROOT/does-not-exist"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"no such directory"* ]]
+}

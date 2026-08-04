@@ -115,16 +115,11 @@ PROJECT_DIR="$(cd "$PROJECT_DIR" && pwd -P)" || {
 # The overlay is normally keyed on the project directory's name. That breaks
 # for a linked git worktree, whose directory is named after the branch, so
 # --slug lets the caller name the overlay explicitly. When it isn't given,
-# fall back to the primary working tree's name (git lists it first), which
-# makes worktrees resolve correctly without the caller having to care.
+# dev_slug_for_path (bin/common.sh) applies the shared worktree-aware rule.
 if [[ -n "$SLUG" ]]; then
   NAME="$SLUG"
 else
-  NAME="$(basename "$PROJECT_DIR")"
-  if main_root="$(git -C "$PROJECT_DIR" worktree list --porcelain 2>/dev/null |
-    awk '/^worktree /{print substr($0, 10); exit}')" && [[ -d "$main_root" ]]; then
-    NAME="$(basename "$main_root")"
-  fi
+  NAME="$(dev_slug_for_path "$PROJECT_DIR")" || exit 1
 fi
 OVERLAY="$OVERLAY_ROOT/$NAME"
 
