@@ -324,7 +324,14 @@ sd_drop_priv_prefix() {
   # operator arm gets the same `*` for symmetry — no seed nests it inside `$(`
   # today, but the gap is identical and an asymmetric fix would only invite the
   # question later.
-  local line="$1" prev=""
+  # `$((` opens ARITHMETIC, not a command. In `x=$((sudo + 1))` the word `sudo`
+  # is an arithmetic variable, and the operator arm — which deliberately
+  # requires no space after its opener — would happily strip it to
+  # `x=$((+ 1))`. sed has no lookbehind, so shield the token for the duration of
+  # the loop and restore it after. \001 is used as the shield because it cannot
+  # occur in a shell script these seeds are written in.
+  local line="$1" prev="" arith=$'\001'
+  line=${line//'$(('/"$arith"}
   while [ "$line" != "$prev" ]; do
     prev="$line"
     line=$(printf '%s\n' "$line" | sed -E \
@@ -335,6 +342,7 @@ sd_drop_priv_prefix() {
       -e 's/(^|[[:space:]])(if|then|while|until|do|elif)([[:space:]]+)runuser -u [^[:space:]]+ --[[:space:]]+/\1\2\3/g' \
       -e 's/^runuser -u [^[:space:]]+ --[[:space:]]+//')
   done
+  line=${line//"$arith"/'$(('}
   printf '%s' "$line"
 }
 
@@ -522,6 +530,16 @@ sd_canon_test() {
   #
   # Only a STANDALONE `[` token is rewritten, never `${a[0]}` or a `[Yy]` glob,
   # because those carry no surrounding spaces and so never form their own word.
+  #
+  # BAIL-OUT RULE: a token walk cannot parse shell, so where the pairing of an
+  # opener to its closer is not unambiguous this returns the line UNCHANGED
+  # rather than guessing. Three shapes bail: a bracket inside a quoted string
+  # (`[ "$x" = "a ] b" ]`), a `[` appearing while a predicate is already open
+  # (`[ -z "$(cmd [ x ] arg)" ]` — the inner one is not in command position but
+  # its closer is still a bare `]`), and a closer with no opener. An
+  # un-canonicalized line at worst reports drift a human then reads; a
+  # mis-paired rewrite silently corrupts the comparison. Prefer visible drift
+  # over a false clean.
   local line="$1"
   case "$line" in
     *'[ '*) ;;
@@ -531,60 +549,107 @@ sd_canon_test() {
       ;;
   esac
 
-  local -a toks out
+  local -a toks out mk
   read -r -a toks <<<"$line"
-  local i n=${#toks[@]} t cmdpos=1 depth=0
-  out=()
+  local i n=${#toks[@]} t cmdpos=1 open=0 inq="" k len c
+  out=() mk=()
   for ((i = 0; i < n; i++)); do
     t="${toks[i]}"
-    if [ "$cmdpos" = 1 ] && [ "$t" = "[" ]; then
-      # Rewrite the opener and remember we owe a `]` removal. Nesting is
-      # counted so `[ -z "$(... [ x ] ...)" ]` cannot drop the wrong one.
-      out+=("test")
-      depth=$((depth + 1))
-      cmdpos=0
-      continue
-    fi
-    if [ "$depth" -gt 0 ] && { [ "$t" = "]" ] || [ "$t" = "];" ]; }; then
-      # The closer arrives as its own word, but `if [ -x "$f" ]; then` collapses
-      # the separator onto it — so `];` must drop the bracket and KEEP the `;`,
-      # or every `if [ ... ]; then` in the tree loses its command separator and
-      # the window stops parsing under `bash -n`.
-      depth=$((depth - 1))
-      if [ "$t" = "];" ]; then
-        # Reattach, not `out+=(";")`: the template writes `if test -x "$f"; then`
-        # with the separator flush against the operand, so emitting a standalone
-        # `;` would leave a stray space and the two spellings would still not
-        # compare equal — which is the entire point of this function.
-        if [ "${#out[@]}" -gt 0 ]; then
-          out[${#out[@]} - 1]="${out[${#out[@]} - 1]};"
-        else
-          out+=(";")
+
+    # Structural brackets are only structural outside quotes.
+    if [ -z "$inq" ]; then
+      if [ "$t" = "[" ]; then
+        # Nesting is not supported, only rejected: a second opener while one is
+        # live means the closers cannot be paired by position alone.
+        if [ "$open" = 1 ] || [ "$cmdpos" != 1 ]; then
+          printf '%s' "$line"
+          return 0
         fi
-        cmdpos=1
+        out+=("test")
+        mk+=($((${#out[@]} - 1)))
+        open=1
+        cmdpos=0
+        continue
       fi
-      continue
+      if [ "$t" = "]" ] || [ "$t" = "];" ]; then
+        if [ "$open" != 1 ]; then
+          printf '%s' "$line"
+          return 0
+        fi
+        open=0
+        # The closer arrives as its own word, but `if [ -x "$f" ]; then`
+        # collapses the separator onto it — so `];` must drop the bracket and
+        # KEEP the `;`, or every `if [ ... ]; then` in the tree loses its
+        # command separator and the window stops parsing under `bash -n`.
+        if [ "$t" = "];" ]; then
+          # Reattach, not `out+=(";")`: the template writes `if test -x "$f";
+          # then` with the separator flush against the operand, so a standalone
+          # `;` would leave a stray space and the two spellings would still not
+          # compare equal — which is the entire point of this function.
+          if [ "${#out[@]}" -gt 0 ]; then
+            out[${#out[@]} - 1]="${out[${#out[@]} - 1]};"
+          else
+            out+=(";")
+          fi
+          cmdpos=1
+        fi
+        continue
+      fi
     fi
+
     out+=("$t")
+
+    # Quote tracking, charwise but only for tokens that actually contain a
+    # quote — the overwhelming majority do not, so the fast path stays a single
+    # pattern match. An escaped quote is not modelled; miscounting one only
+    # costs a bail-out, which is safe by construction.
+    case "$t" in
+      *[\"\']*)
+        len=${#t}
+        for ((k = 0; k < len; k++)); do
+          c="${t:k:1}"
+          if [ -z "$inq" ]; then
+            case "$c" in '"' | "'") inq="$c" ;; esac
+          elif [ "$c" = "$inq" ]; then
+            inq=""
+          fi
+        done
+        ;;
+    esac
+
     # A command starts at line start or after a separator/keyword. `;`-suffixed
     # words (`then`, `fi;`) count via the trailing-`;` test.
-    case "$t" in
-      '&&' | '||' | '|' | '{' | '(' | '!' | 'if' | 'then' | 'elif' | 'while' | 'until' | 'do') cmdpos=1 ;;
-      *';') cmdpos=1 ;;
-      *) cmdpos=0 ;;
-    esac
+    if [ -z "$inq" ]; then
+      case "$t" in
+        '&&' | '||' | '|' | '{' | '(' | '!' | 'if' | 'then' | 'elif' | 'while' | 'until' | 'do') cmdpos=1 ;;
+        *';') cmdpos=1 ;;
+        *) cmdpos=0 ;;
+      esac
+    fi
   done
+
+  # An opener with no closer, or a string left open, means the walk lost track.
+  if [ "$open" != 0 ] || [ -n "$inq" ]; then
+    printf '%s' "$line"
+    return 0
+  fi
 
   # `test ! -f x` and `! test -f x` are the same predicate; the seeds write
   # both (`[ ! -f "$G" ]` normalizes to the former, the template writes the
-  # latter). Hoist the negation so they agree.
-  local j m=${#out[@]}
-  for ((j = 0; j + 1 < m; j++)); do
-    if [ "${out[j]}" = "test" ] && [ "${out[j + 1]}" = "!" ]; then
-      out[j]="!"
-      out[j + 1]="test"
-    fi
-  done
+  # latter). Hoist the negation so they agree — but ONLY for a `test` this
+  # function itself created, tracked in `mk`. Swapping any adjacent `test !`
+  # pair would rewrite unrelated arguments, turning `echo test ! value` into
+  # `echo ! test value`.
+  local j idx m=${#out[@]}
+  if [ "${#mk[@]}" -gt 0 ]; then
+    for j in "${mk[@]}"; do
+      idx=$((j + 1))
+      if [ "$idx" -lt "$m" ] && [ "${out[idx]}" = "!" ]; then
+        out[j]="!"
+        out[idx]="test"
+      fi
+    done
+  fi
 
   printf '%s' "${out[*]}"
 }

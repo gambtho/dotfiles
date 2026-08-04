@@ -2785,3 +2785,82 @@ PYEOF
   [[ "$output" == *"the doc table could not be parsed"* ]]
   [[ "$output" != *"ok  "* ]]
 }
+
+# --- CodeRabbit PR #53 review: three latent normalizer bugs -------------------
+# None of these shapes occurs in the fleet today. They are pinned because each
+# one silently CORRUPTS a line rather than failing loudly, and a corrupted line
+# can only ever make two different lines compare equal — a false clean, which is
+# the one failure mode this tool must not have.
+
+@test "sd_normalize does not strip an arithmetic operand after \$((" {
+  # `sudo` here names an arithmetic variable, not a privilege prefix. The
+  # operator arm deliberately requires no space after its opener, so without a
+  # shield it rewrote this to `x=$((+ 1))`.
+  scan_line 1 1 C 'x=$((sudo + 1))'
+  norm
+  [ "$status" -eq 0 ]
+  [ "$output" = 'x=$((sudo + 1))' ]
+}
+
+@test "sd_normalize does not strip an arithmetic operand after \$(( with spaces" {
+  scan_line 1 1 C 'x=$(( sudo + 1 ))'
+  norm
+  [ "$status" -eq 0 ]
+  [ "$output" = 'x=$(( sudo + 1 ))' ]
+}
+
+@test "sd_normalize still strips a privilege word in real command substitution" {
+  # The \$(( shield must not disturb the single-paren case it was added beside.
+  scan_line 1 1 C 'x="$(as_user foo)"'
+  norm
+  [ "$status" -eq 0 ]
+  [ "$output" = 'x="$(foo)"' ]
+}
+
+@test "sd_normalize treats a bracket inside a quoted string as literal" {
+  # `read -a` does not parse quotes, so a bare `]` inside a string used to close
+  # the tracked predicate, dropping the wrong token.
+  scan_line 1 1 C '[ "$x" = "a ] b" ]'
+  norm
+  [ "$status" -eq 0 ]
+  [ "$output" = 'test "$x" = "a ] b"' ]
+}
+
+@test "sd_normalize pairs the outer closer when a quoted substitution nests brackets" {
+  scan_line 1 1 C '[ -z "$(cmd [ x ] arg)" ]'
+  norm
+  [ "$status" -eq 0 ]
+  [ "$output" = 'test -z "$(cmd [ x ] arg)"' ]
+}
+
+@test "sd_normalize leaves the line alone when brackets cannot be paired" {
+  # Unquoted nesting: the inner `[` is not in command position but its closer is
+  # a bare `]`, so position alone cannot pair them. Bail rather than guess.
+  scan_line 1 1 C '[ -z $(cmd [ x ] arg) ]'
+  norm
+  [ "$status" -eq 0 ]
+  [ "$output" = '[ -z $(cmd [ x ] arg) ]' ]
+}
+
+@test "sd_normalize leaves the line alone when a closer has no opener" {
+  scan_line 1 1 C 'foo ] bar [ x'
+  norm
+  [ "$status" -eq 0 ]
+  [ "$output" = 'foo ] bar [ x' ]
+}
+
+@test "sd_normalize leaves the line alone when an opener is never closed" {
+  scan_line 1 1 C '[ -f x'
+  norm
+  [ "$status" -eq 0 ]
+  [ "$output" = '[ -f x' ]
+}
+
+@test "sd_normalize hoists negation only for a test it created" {
+  # The hoist used to swap ANY adjacent `test !` pair, rewriting the unrelated
+  # `echo test ! value` into `echo ! test value`.
+  scan_line 1 1 C '[ -f x ] && echo test ! value'
+  norm
+  [ "$status" -eq 0 ]
+  [ "$output" = 'test -f x && echo test ! value' ]
+}
