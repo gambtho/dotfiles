@@ -250,7 +250,8 @@ bin/seed-drift ~/workspace/myproject # named candidates only
 ```
 
 It is strictly read-only with respect to the seeds it inspects. Exit codes:
-`0` clean, `1` drift found, `2` usage / template / doc / extraction error.
+`0` clean, `1` drift found, `2` usage / template / doc / extraction error, or no
+projects discovered.
 
 `AHEAD` is a **promotion candidate**, not an error — the seed has something the
 template does not, and the seed is the hand-owned file, so the fix direction is

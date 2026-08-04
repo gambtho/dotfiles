@@ -554,9 +554,16 @@ stale silently, which is the same failure class as the bug being fixed.
 not exist, are both reported with a note and do not affect the exit code.
 
 **Exit codes.** `0` clean (skips included); `1` any drift, in any direction; `2`
-usage error, unreadable template, doc/template disagreement, or a block that
+usage error, unreadable template, doc/template disagreement, auto-discovery
+finding no candidate directory under `$SEED_DRIFT_ROOT`, or a block that
 cannot be extracted — a window that never parses, or unrecognized heredoc
 syntax.
+
+Zero discovered projects is an error rather than a clean run because the
+detector could not do its job at all; a `0 checked` report would read as a clean
+bill of health. This is scoped to discovery only — an *explicitly named* project
+that is absent on this machine remains a skip at exit `0`, so one project list
+works on every machine.
 
 A run does not abort on the first bad seed. It reports every candidate, then
 exits with the highest severity encountered (`2` outranks `1` outranks `0`), so
@@ -664,14 +671,21 @@ Required cases:
 
 - `bin/seed-drift`, executable. Auto-discovered by both linter targets via
   `is_direct_bin_shell` in `bin/list-check-files` — verified against a stub, so
-  **no `list-check-files` change is required**.
+  the tool itself needs no discovery change.
 - Must be `shfmt -i 2 -ci` and `shellcheck -x -S warning` clean.
 
-### Deliberate exclusion
+### Bats suites under shfmt
 
-`bin/list-check-files` does not emit `.bats` files for either linter, so
-`tests/seed_drift.bats` will be unlinted. This is consistent with all 20 existing
-suites and is left as-is. Closing the gap would surface roughly 6 shellcheck
-findings and shfmt reformatting requests across files unrelated to this change;
-it deserves its own evaluation against all 20 suites rather than being smuggled
-in here.
+**Superseded during implementation.** This section originally recorded that
+`bin/list-check-files` emits no `.bats` files for any linter, that
+`tests/seed_drift.bats` would therefore be unlinted, and that closing the gap
+deserved its own evaluation rather than being smuggled in here.
+
+That was reversed. `bin/list-check-files` now emits `tests/*.bats` for the
+**shfmt** class; `bash`, `shellcheck`, and `zsh` continue to exclude them,
+because neither `bash -n` nor shellcheck can parse the `@test "name" { ... }`
+form. The deciding evidence was that two suites had already drifted unformatted
+under the old exclusion — the gap was not theoretical. Scope stayed contained
+because shfmt alone does not surface the shellcheck findings that made the
+original evaluation look expensive. `tests/check_file_discovery.bats` pins both
+halves: `.bats` present for shfmt, absent for the other three classes.

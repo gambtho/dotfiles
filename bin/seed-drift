@@ -420,6 +420,13 @@ SD_TMPDIR=""
 # `rm -rf`s the directory before the caller can write a single byte. The
 # directory and its trap have to be established in the shell that will
 # actually use them, so the path comes back through `printf -v`, not stdout.
+#
+# The EXIT trap REPLACES any the caller already had. That is an accepted side
+# effect of sourcing, not an oversight: chaining would mean parsing `trap -p`
+# output and re-evaluating the recovered handler string, which is a quoting and
+# injection hazard well out of proportion to the exposure. Sourcing this script
+# already sets `e`, `u`, and pipefail in the caller unconditionally, so a caller
+# that sources it is already accepting that its shell state is not preserved.
 sd_tmp() {
   local __sd_new
   if [ -z "$SD_TMPDIR" ]; then
@@ -569,7 +576,21 @@ sd_check_seed() {
   fi
   sd_tmp tnorm || return 2
   sd_tmp snorm || return 2
+  # Allocated once per seed, not once per block: the diff output is consumed
+  # before the next iteration overwrites it, so nine blocks do not need
+  # eighteen files. Same reuse as tnorm/snorm/sscan above.
+  sd_tmp behind || return 2
+  sd_tmp ahead || return 2
+  # sd_main already fails closed when the doc yields no rows, so this counter
+  # guards a case that cannot happen today. It is here because the loop reads
+  # through a process substitution, whose failure is invisible to both `set -e`
+  # and pipefail: were the doc to become unreadable between sd_main's parse and
+  # this one, the body would never run, rc would stay 0, and the seed would be
+  # reported clean having compared nothing. Same invariant, same reasoning as
+  # the empty-template guard below.
+  local rows=0
   while IFS=$'\t' read -r block anchor; do
+    rows=$((rows + 1))
     # Branch on the ORIGINAL status. sd_extract returns 4 for "anchor absent"
     # and 3 for "the block would not parse"; `if ! sd_extract` flattens both
     # into one branch, so a seed whose block is unextractable would be
@@ -619,8 +640,6 @@ sd_check_seed() {
     esac
     # Same file-not-substitution rule as sd_verdict: a removed blank line must
     # survive into the count and the samples.
-    sd_tmp behind || return 2
-    sd_tmp ahead || return 2
     if ! sd_diff_lines "$tnorm" "$snorm" '<' >"$behind" ||
       ! sd_diff_lines "$tnorm" "$snorm" '>' >"$ahead"; then
       sd_report_block ERROR "$block" 'diff failed'
@@ -676,6 +695,11 @@ sd_check_seed() {
       sd_report_thin seed "$esize"
     fi
   done < <(sd_parse_doc "$SD_DOC")
+  if [ "$rows" -eq 0 ]; then
+    sd_report_block ERROR '(whole file)' 'no blocks read from the doc table'
+    sd_report_action 'check the Step 1 table in catch-up-local-seed.md'
+    return 2
+  fi
   return "$rc"
 }
 

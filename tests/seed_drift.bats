@@ -2137,3 +2137,28 @@ PYEOF
   [[ "$output" != *"ok  "* ]]
   [[ "$output" != *"window is only"* ]]
 }
+
+@test "a seed whose doc table yields no blocks is an ERROR at exit 2, never clean" {
+  # The block loop reads through a process substitution, whose failure is
+  # invisible to both `set -e` and pipefail: with no rows the body never runs,
+  # rc stays 0, and the seed reports clean having compared nothing. sd_main's
+  # own parse check makes that unreachable through the CLI, so this calls
+  # sd_check_seed directly with an sd_parse_doc that succeeds and emits
+  # nothing — the shape the guard exists to catch.
+  setup_drift_fixtures
+  seed_from_template clean
+
+  run env SEED_DRIFT_SOURCE_ONLY=1 bash -c '
+    source "$1"
+    SD_TEMPLATE="$2"
+    SD_DOC="$3"
+    sd_tmp SD_TEMPLATE_SCAN
+    sd_scan "$SD_TEMPLATE" >"$SD_TEMPLATE_SCAN"
+    sd_parse_doc() { return 0; }
+    sd_check_seed "$4"
+  ' _ "$SEED_DRIFT" "$FIXTURE_TEMPLATE" "$FIXTURE_DOC" "$(seed_path clean)"
+
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"no blocks read from the doc table"* ]]
+  [[ "$output" != *"ok  "* ]]
+}

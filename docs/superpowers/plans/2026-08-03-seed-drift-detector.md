@@ -1,7 +1,7 @@
 # Seed Drift Detector Implementation Plan
 
 > **Historical record — superseded in part. Not a description of the shipped tool.**
-> This plan is kept as written so the design history stays legible. Two things
+> This plan is kept as written so the design history stays legible. Three things
 > it specifies were changed during implementation, on evidence gathered after it
 > was written:
 >
@@ -11,6 +11,11 @@
 >    per-file asymmetry, blindness to a seed that *replaces* rather than omits
 >    the idiom, and `diff` hunk adjacency.
 > 2. **A thin-window warning was added**, which this plan does not mention.
+> 3. **`bin/list-check-files` was changed after all.** The two constraints below
+>    stating that no `bin/list-check-files` change is required and that `.bats`
+>    files are emitted for neither linter are both superseded: the shfmt class
+>    now emits `tests/*.bats`. `bash`, `shellcheck`, and `zsh` still exclude
+>    them — neither `bash -n` nor shellcheck parses `@test` syntax.
 >
 > For what the tool actually does, read
 > `docs/superpowers/specs/2026-08-03-seed-drift-detector-design.md` — that spec
