@@ -19,8 +19,8 @@ repairs them; everything else about the platform keeps working.
 3. **Named layouts only** — tmux's five named layouts; no per-split DSL.
 4. **Repair = create missing + respawn dead + report undeclared** — never kill.
 5. **Strict merge** — converting an inherited single-pane window to panes-form
-   requires an explicit `agent: null` (or `command: null` removal); the mixed
-   shape fails validation loudly.
+   requires explicitly nulling every information-carrying single-pane key; the
+   mixed shape fails validation loudly (precise rule in §5).
 6. **Pane focus** — at most one `focus: true` pane per window, re-applied on
    every open like window focus.
 7. **The shipped default becomes a one-window dashboard** — this deliberately
@@ -97,21 +97,47 @@ Pane-resolving tmux commands keep the exact-match discipline: `%pane_id`
 targets are unambiguous by construction; window-level targets stay
 `=session:=window`, session-level stay `=session:`.
 
-## 3. Events and fold (§4.4 changes — all additive)
+## 3. Events and fold (§4.4 changes)
 
 - `pane.died` and `pane.respawned` gain an optional `pane` field. The
-  `pane-died` hook line adds `pane=#{@dev_pane}`; `dev-event` omits the field
-  when the value is empty, so single-pane windows emit today's exact bytes.
+  `pane-died` hook line adds `pane=#{@dev_pane}` unconditionally; `dev-event`
+  is changed to **skip a `pane=` pair whose value is empty** — a targeted
+  rule, not a blanket empty-value filter, because other keys (`client`,
+  `exit_status`) must keep today's record-everything behavior. A regression
+  test asserts a single-pane `pane.died` event is byte-identical to today's.
+- **`window.created` contract amendment:** `location` (currently required)
+  becomes optional. Single-pane windows keep emitting `{window, location,
+  command}` exactly as today. A panes-form window emits `{window,
+  panes: [<pane names>]}` and **omits** `location` and `command` — a
+  dashboard can mix host and container panes, so a window-level location
+  would be a lie; the §4.4 convention "an absent optional field means not
+  known" carries the meaning. Per-pane locations live in `pane.created`. No
+  existing workspace's events change; the amended row applies only to the new
+  config form.
 - New event `pane.created` `{window, pane, location, command}` — the
   **declared** command only, same secrets rule as `window.created` (a rendered
   command embeds `environment` values from `workspace.local.yaml`). The fold
   ignores unknown event types, so old and new events coexist in one log.
-- `agent.started` gains `pane` when emitted for a panes-form window.
+- **All agent lifecycle events** — `agent.started`, `agent.exited`,
+  `agent.failed` — gain optional `pane`, emitted for panes-form windows.
+  Identity is `(window, pane)` everywhere, so exited/failed must route the
+  same way started does.
 - Record schema: `agents[]` entries become `{window, pane, command, state}`
-  with `pane: null` for single-pane windows. The fold matches events to
-  entries on `(window, event.data.pane // null)`. Replaying an existing event
-  log (which has no pane fields anywhere) folds to today's records plus the
-  constant `pane: null` — an added field, allowed by ADR-2.
+  with `pane: null` for single-pane windows. The fold matches every `pane.*`
+  and `agent.*` event to entries on `(window, event.data.pane // null)`.
+  Replaying an existing event log (which has no pane fields anywhere) folds to
+  today's records plus the constant `pane: null` — an added field, allowed by
+  ADR-2.
+- **`applied_digest` decision:** it continues to advance only via
+  `workspace.opened`, i.e. when a session is built. Additive pane/window
+  repair does NOT advance it, even when it happens to fully converge the
+  session: `open` cannot verify that the commands running in *live* panes
+  match a changed config (declared vs. running are not comparable), so an
+  event claiming the digest was applied would overstate what was verified.
+  Consequence, accepted: after a purely-additive config change is repaired
+  into place, `dev status` still reports drift until a stop/reopen.
+  Rejected alternative: a `layout.applied` event advancing the digest — it
+  would trade honest over-reporting for occasional false convergence.
 - `dev list --json`: existing fields untouched; `agents[].pane` added.
   `dev status` gains pane-level drift reporting (see §5).
 
@@ -123,8 +149,18 @@ passed where the window object is passed today (the shapes are identical).
 The vekil agent-env overlay and the secrets rule ride along untouched — there
 is no second quoting/env path.
 
-Per declared window, the single-pane path is completely unchanged. For a
-panes-form window:
+**Repair runs on every open.** Today `dev_open_respawn_dead` is gated behind
+`repair && !created` — it only runs after a *container* was lost, so a normal
+re-open of a host-only workspace never repairs a dead pane. That gate is
+removed: the (generalized) pane-repair pass runs unconditionally after
+`apply_layout` on every open. This is safe because repair is idempotent and
+only ever touches declared panes that are missing or dead; live panes are
+never touched. (This is a deliberate behavior improvement for existing
+single-pane workspaces too: a dead agent window now respawns on plain
+`dev <name>`, not only after container loss.)
+
+Per declared window, the single-pane creation path is completely unchanged.
+For a panes-form window:
 
 - **Window missing** → `new-window` chained with
   `set-window-option remain-on-exit on` exactly as today (one atomic tmux
@@ -158,9 +194,17 @@ Panes merge across layers **by name within their window**, using the window
 algorithm verbatim (patch same names, append new ones, `IN()` not
 `inside()`). New validation, all loud (exit 5):
 
-- a merged window sets `panes` together with any single-pane key
-  (`agent`, `command`, `cwd`, `location`) — names the window; the fix is an
-  explicit `agent: null` / `command: null` in the overlay;
+- a merged window sets `panes` together with any **non-null** single-pane key
+  (`agent`, `command`, `cwd`, `location`, `environment`) — names the window;
+  the fix is explicitly nulling that key in the overlay (`agent: null`, etc.).
+  The check must be value-based, not key-presence-based: normalization gives
+  every window all keys, and jq's merge cannot distinguish an explicit null
+  from an inherited one. The deliberate consequence: a base window that is a
+  plain shell (`command: null`, nothing else set) converts to panes-form with
+  no acknowledgment — `command: null` carries no information beyond the
+  default, so nothing can be silently lost. Any non-null value (an agent, a
+  real command, a `cwd`, a `location`, an `environment`) still fails loudly
+  until the overlay nulls it;
 - duplicate pane names within one window;
 - a pane sets both `agent` and `command`;
 - invalid pane `name` charset or `location` value;
@@ -177,7 +221,11 @@ algorithm verbatim (patch same names, append new ones, `IN()` not
 - **Constraint revision (explicit user choice):** the original constraint was
   "every existing workspace.yaml behaves byte-identically". The machinery
   honors that — any config without `panes` produces identical commands,
-  events, and digests — but the shipped default itself changes.
+  events, and digests — with two named exceptions: (a) the shipped default
+  itself changes, and (b) a panes-less config that declares window-level
+  `environment` gets a one-time digest change and starts actually receiving
+  that environment, because fixing the normalization drop (§7.1) is a
+  behavior fix by definition. No config on this machine hits (b) today.
 - A **running** workspace's next `dev open` creates `main` beside the old four
   windows (open never destroys). The old windows become window-level drift in
   `dev status` until the user runs `dev stop` + `dev <name>`, which is the
@@ -198,8 +246,10 @@ algorithm verbatim (patch same names, append new ones, `IN()` not
    but `DEV_CONFIG_NORMALIZE_JQ` omits `environment` from the window map, so a
    window-level `environment` never reaches `dev_window_inner_command` (only
    the top-level `environment` does). Panes must support `environment`
-   correctly; the window-level fix should ride along in the same change (it is
-   the same jq map) — flagged so it is a decision, not an accident.
+   correctly; the window-level fix rides along in the same change (it is the
+   same jq map). Decided, not accidental — and its compatibility cost is the
+   named exception (b) in §6: affected panes-less configs (none exist on this
+   machine) see a one-time digest change plus the intended behavior fix.
 2. **Active-pane respawn targeting** (§4): `dev_backend_respawn_pane` targets
    the window, i.e. its active pane. Harmless while windows have one pane;
    must become pane-id targeting as part of this work.
@@ -215,9 +265,14 @@ algorithm verbatim (patch same names, append new ones, `IN()` not
 ## Verification strategy (for the implementation plan)
 
 - bats: config normalization byte-identity for panes-less configs (digest
-  unchanged); merge/validation matrix incl. the strict-conversion error;
-  fold replay of a legacy log producing `pane: null` entries; fold routing of
-  pane-qualified `pane.died`/`pane.respawned` to the right agent.
+  unchanged — except the window-`environment` case, asserted separately as a
+  deliberate change); merge/validation matrix incl. the value-based
+  strict-conversion error and the shell-window no-acknowledgment case; fold
+  replay of a legacy log producing `pane: null` entries; fold routing of
+  pane-qualified `pane.died`/`pane.respawned`/`agent.exited`/`agent.failed`
+  to the right agent; `dev-event` drops an empty `pane=` pair and a
+  single-pane `pane.died` line is byte-identical to today's; dead-pane repair
+  runs on a plain re-open with no container loss (gate removal).
 - tmux-integration: dashboard creation with fast-exiting commands (dead held
   panes, window survives); pane repair after killing one agent pane of two;
   undeclared-pane drift; layout not re-applied on no-op open; `@dev_pane`
