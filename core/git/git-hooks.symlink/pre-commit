@@ -1,0 +1,105 @@
+#!/bin/sh
+# Formatter gate. The dotfiles point core.hooksPath here for EVERY repo, so this
+# hook runs in repos that have never heard of Prettier — it must no-op quietly
+# there rather than block the commit. Same fail-open posture as the LFS hooks
+# alongside it: when a prerequisite is missing, warn at most and step aside.
+#
+# Why a hook and not a review checklist: an unformatted code block copied out of
+# a plan gets transcribed into every task that references it, and CI's
+# format:check sits at the last gate — so five reviewers read five diffs and
+# none of them ran the one command that would have caught it. Reading a diff
+# cannot substitute for running a formatter. This catches it at commit one.
+#
+# Checks the WORKING TREE copy of staged files, not the staged blobs. Partially
+# staged files (`git add -p`) are therefore judged on content that isn't being
+# committed. Accepted: lint-staged's stash dance costs more than it's worth for
+# a whole-file workflow. `git commit --no-verify` bypasses this entirely.
+
+set -eu
+
+# No Prettier config at the repo root means this repo doesn't use Prettier.
+# Checked before anything more expensive so unrelated repos pay ~nothing.
+repository_root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+has_configuration=0
+for candidate in \
+  "$repository_root/.prettierrc" \
+  "$repository_root/.prettierrc.json" \
+  "$repository_root/.prettierrc.yml" \
+  "$repository_root/.prettierrc.yaml" \
+  "$repository_root/.prettierrc.json5" \
+  "$repository_root/.prettierrc.js" \
+  "$repository_root/.prettierrc.cjs" \
+  "$repository_root/.prettierrc.mjs" \
+  "$repository_root/.prettierrc.toml" \
+  "$repository_root/prettier.config.js" \
+  "$repository_root/prettier.config.cjs" \
+  "$repository_root/prettier.config.mjs"; do
+  if [ -f "$candidate" ]; then
+    has_configuration=1
+    break
+  fi
+done
+if [ "$has_configuration" -eq 0 ] &&
+  [ -f "$repository_root/package.json" ] &&
+  grep -q '"prettier"[[:space:]]*:' "$repository_root/package.json"; then
+  has_configuration=1
+fi
+[ "$has_configuration" -eq 1 ] || exit 0
+
+# Local install only. `npx prettier` would reach for the network mid-commit on a
+# repo whose dependencies aren't installed, which is a worse failure than the
+# unformatted commit this prevents.
+prettier_binary="$repository_root/node_modules/.bin/prettier"
+if [ ! -x "$prettier_binary" ]; then
+  printf >&2 '%s\n' "pre-commit: Prettier configured but not installed - skipping format check (run 'npm install')."
+  exit 0
+fi
+
+# ACMR: added, copied, modified, renamed. Deleted paths would fail to open.
+#
+# Symlinks are dropped: Prettier hard-errors on one named explicitly ("is a
+# symbolic link", exit 2) rather than skipping it, and repos that symlink a
+# tracked CLAUDE.md or AGENTS.md into a dotfiles checkout would otherwise be
+# unable to commit that file at all. Whatever the link points at gets formatted
+# in the repo that actually owns it.
+#
+# The list is built in the current shell via a heredoc, not a pipe: a piped
+# `while` runs in a subshell and the accumulated "$@" would not survive it.
+cd "$repository_root" || exit 0
+set --
+while IFS= read -r staged_path; do
+  # git quotes paths containing newlines or quotes; such a path cannot survive
+  # a line-oriented loop, so skip it rather than mangle it into a wrong file.
+  case "$staged_path" in
+  '"'*) continue ;;
+  esac
+  if [ -L "$staged_path" ] || [ ! -f "$staged_path" ]; then
+    continue
+  fi
+  set -- "$@" "$staged_path"
+done <<STAGED
+$(git diff --cached --name-only --diff-filter=ACMR)
+STAGED
+[ "$#" -gt 0 ] || exit 0
+
+# --ignore-unknown skips paths Prettier has no parser for (images, lockfiles,
+# .env), which would otherwise exit 2 and block the commit. .prettierignore is
+# honored automatically.
+status=0
+"$prettier_binary" --check --ignore-unknown -- "$@" || status=$?
+
+case "$status" in
+0) ;;
+1)
+  printf >&2 '\n%s\n' "pre-commit: staged files are not formatted. Fix and re-stage:"
+  printf >&2 '%s\n' "  npm run format   # or: node_modules/.bin/prettier --write ."
+  printf >&2 '%s\n\n' "Bypass with 'git commit --no-verify' if you know why."
+  exit 1
+  ;;
+*)
+  # Prettier itself errored (bad config, unreadable file) - the check did not
+  # run, which is different from running and failing. Don't hold the commit
+  # hostage to a broken checker; CI's format:check is the backstop.
+  printf >&2 '%s\n' "pre-commit: Prettier exited $status - skipping format check."
+  ;;
+esac
