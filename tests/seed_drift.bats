@@ -77,12 +77,13 @@ DOC
   [ "${#lines[@]}" -eq 2 ]
 }
 
-@test "sd_parse_doc reads all nine blocks from the real catch-up doc" {
+@test "sd_parse_doc reads all ten blocks from the real catch-up doc" {
   sd_source sd_parse_doc "$REAL_DOC"
 
   [ "$status" -eq 0 ]
-  [ "${#lines[@]}" -eq 9 ]
+  [ "${#lines[@]}" -eq 10 ]
   [[ "$output" == *"TREE_SITTER_VERSION"* ]]
+  [[ "$output" == *"SEED_PATH"* ]]
   [[ "$output" == *"lname '*dotfiles/projects/*'"* ]]
 }
 

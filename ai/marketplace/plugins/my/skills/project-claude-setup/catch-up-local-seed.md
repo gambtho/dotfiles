@@ -91,7 +91,7 @@ The table above is prose, unlike the one in Step 2: the parser only takes a row
 whose **second** cell is a backticked anchor, and these rows backtick the first.
 Do not add a backticked second cell here — the parser would read the row as a
 block and abort every project at exit 2 when the "anchor" turned up missing from
-the template. `tests/seed_drift.bats` pins the count at nine and would catch it.
+the template. `tests/seed_drift.bats` pins the count at ten and would catch it.
 
 The blocks it compares are the rows of the Step 2 table below, so the two stay
 in step by construction.
@@ -115,9 +115,18 @@ SEED_BASELINE="$(git rev-parse --git-dir)/seed-baseline.status"
 git status --porcelain >"$SEED_BASELINE"
 ```
 
-Each entry gives the grep anchor to find it in the template. All of these live
-in the **always-run block, above the sentinel gate** — keep them there. Moving
-one below the gate means a container that is already stamped will never run it.
+Each entry gives the grep anchor to find it in the template. All of them except
+the last live in the **always-run block, above the sentinel gate** — keep them
+there. Moving one below the gate means a container that is already stamped will
+never run it.
+
+The `SEED_PATH` row is the deliberate exception: it belongs to the marketplace
+block, which is *correctly* gated (its target persists in the `claude-local-home`
+volume and its source is the template, so it satisfies both clauses of the
+gating rule in SKILL.md item 15). Porting it **above** the gate would be the
+error there. The gate position is not something the detector checks — it
+compares block contents wherever it finds the anchor — so this stays a rule you
+apply by hand.
 
 > **This table is executable input, not just prose.** `bin/seed-drift` parses it
 > to decide which blocks to compare, so editing it changes what the detector
@@ -140,6 +149,7 @@ one below the gate means a container that is already stamped will never run it.
 | tree-sitter CLI | `TREE_SITTER_VERSION` | `config/nvim` pins nvim-treesitter to `main`, whose installer shells out to `tree-sitter build` per parser with no fallback to a bare `cc`. A container with gcc but no CLI still fails every parser at first launch (`ENOENT ... (cmd): 'tree-sitter'`). On a host it comes from mise, which the seed never runs. Pinned and sha256-verified from `config/versions.env`; non-fatal. |
 | `load-custom.zsh` loader | `DOTFILES_LOAD_HOOK` | The supported entry point for the shell tree. Append it **before** the Vekil hook — `ai/vekil/env.zsh` exports `ANTHROPIC_MODEL`, which outranks `settings.json`, so it has to get the last word. |
 | codex guard | `local/bin/codex` | Guard the reinstall on the **binary**, not `~/.codex/config.toml`. The installer writes config even when it fails to produce a binary, so a config-based guard latches shut and codex never reinstalls. |
+| marketplace PATH | `SEED_PATH` | The seed's own `claude` calls run through `as_user` (`runuser -u node --`), which is non-interactive and so never sources `~/.zshrc` — the only place `~/.local/bin` joins `PATH`. Without `SEED_PATH` the seed cannot see the `claude` binary it just installed: the probe answers "no", marketplaces go unregistered, and `MARKETPLACE_OK=0` leaves the sentinel unstamped, so **every** launch re-runs the block and exits 1. The one row that lives below the gate. |
 
 ## Vocabulary differs per seed — do not paste blindly
 
