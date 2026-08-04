@@ -1,5 +1,21 @@
 # Seed Drift Detector Implementation Plan
 
+> **Historical record — superseded in part. Not a description of the shipped tool.**
+> This plan is kept as written so the design history stays legible. Two things
+> it specifies were changed during implementation, on evidence gathered after it
+> was written:
+>
+> 1. **The ownership-verification special case (`SD_OWNERSHIP_DROP` and friends,
+>    described around lines 1531 and 1899-1919) was removed entirely.** It was
+>    measured to change no verdict on the real corpus, and it failed three ways:
+>    per-file asymmetry, blindness to a seed that *replaces* rather than omits
+>    the idiom, and `diff` hunk adjacency.
+> 2. **A thin-window warning was added**, which this plan does not mention.
+>
+> For what the tool actually does, read
+> `docs/superpowers/specs/2026-08-03-seed-drift-detector-design.md` — that spec
+> is the live document and was amended as these decisions were taken.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build `bin/seed-drift`, which compares each project's gitignored `.devcontainer/local-seed.sh` against the `project-claude-setup` template at block granularity and exits non-zero when any block has drifted.
