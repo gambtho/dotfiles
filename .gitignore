@@ -8,6 +8,8 @@ cache/
 docs/
 !docs/
 docs/*
+!docs/guides/
+!docs/guides/*.md
 !docs/superpowers/
 docs/superpowers/*
 !docs/superpowers/plans/
@@ -28,18 +30,12 @@ __pycache__/
 # Our repo-managed global CLAUDE.md is an intentional tracked exception.
 !ai/claude/CLAUDE.md
 
-# The global ~/.gitignore also hides `.claude/` and `CLAUDE.md` so that personal
-# Claude config stays out of the project repos it is symlinked into. Inside THIS
-# repo those files are the payload, not noise, so re-include them. The parent
-# directory has to be re-included first — git will not descend into an excluded
-# directory to reach a negated file inside it.
-!projects/*/.claude/
-!projects/*/CLAUDE.md
-
-# ...except host-specific state, which stays local. (Also covered by the global
-# ignore; repeated here so this repo is self-explanatory.)
-projects/*/.claude/settings.local.json
-
-# Machine-local workspace overrides for the dev platform (host paths, env, and
-# anything that must not follow the repo to another machine).
-projects/*/workspace.local.yaml
+# Per-project Claude overlays used to be tracked here. They described the
+# architecture and security boundaries of non-public codebases, so they now live
+# in a separate private repository that bootstrap clones to ~/.dotfiles/projects.
+# This repo is public: nothing under projects/ may be tracked again. The
+# assertion in tests/repository_hygiene.bats enforces that; see
+# docs/guides/project-overlays.md for the workflow.
+# (The dev platform's machine-local projects/*/workspace.local.yaml is covered
+# by this rule too.)
+projects/

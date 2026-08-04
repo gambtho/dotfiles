@@ -215,6 +215,17 @@ fi
 # `git status` and `git add`. The host can afford the broad patterns because its
 # overlay files are personal symlinks; the container cannot.
 GITIGNORE="$SEED_HOME/.gitignore"
+# `test -f` FOLLOWS symlinks, so a ~/.gitignore that arrived as a link — a stale
+# overlay shim, or an image that points the remoteUser's home dotfiles at a
+# baked-in copy — satisfies the guard below and is then written THROUGH by the
+# rewrite further down, editing whatever it targets instead of this file. That
+# target sits outside the container-local home and may be read-only, in which
+# case the tee fails and takes the whole seed with it under `set -e`. Drop the
+# link so the seed always owns a real file here.
+if as_user test -L "$GITIGNORE"; then
+  as_user rm -f "$GITIGNORE"
+  echo "🌱 seed: replaced symlinked ~/.gitignore with a container-local file"
+fi
 if ! as_user test -f "$GITIGNORE"; then
   as_user tee "$GITIGNORE" >/dev/null <<'GITEOF'
 .DS_Store
@@ -261,12 +272,43 @@ else
     -not -path './node_modules/*' 2>/dev/null | sed 's#^\./##' | sort)"
   # Rewrite the marked block: strip any existing one, then append the current set.
   new_gitignore="$(as_user sed "/^${GI_MARK_BEGIN}$/,/^${GI_MARK_END}$/d" "$GITIGNORE")"
-  {
+  # Write to a sibling temp and rename, rather than tee-ing over the live file.
+  # `tee` TRUNCATES before it writes, so an interrupted or short write (a killed
+  # start, a full overlay layer) leaves ~/.gitignore empty or half-written — and
+  # git treats a truncated excludes file as simply having fewer patterns, so the
+  # damage shows up later as overlay files appearing in `git status`, with no
+  # error anywhere. rename(2) within the same directory is atomic: readers see
+  # either the old file or the new one.
+  #
+  # mktemp rather than a fixed "$GITIGNORE.tmp", for the same reason the plugin
+  # registry repair below uses one: `tee` opens by path with no O_EXCL, so two
+  # seeds sharing this home land on the SAME inode, and the first rename hands
+  # the second an open descriptor pointing at the live ~/.gitignore — which it
+  # then writes through, corrupting the file this block just published. That
+  # would make the atomicity claim above false in exactly the case it is meant
+  # to cover. An exclusive create per run cannot collide.
+  gi_tmp="$(as_user mktemp "$GITIGNORE.seed.XXXXXX")"
+  # Remove the temp on either failure: `set -e` aborts the seed on the very next
+  # line, so without these each failed start would strand one in the home dir
+  # for good — the fixed path at least got overwritten by the following run.
+  if ! {
     printf '%s\n' "$new_gitignore"
     printf '%s\n' "$GI_MARK_BEGIN"
     [ -n "$overlay_links" ] && printf '%s\n' "$overlay_links"
     printf '%s\n' "$GI_MARK_END"
-  } | as_user tee "$GITIGNORE" >/dev/null
+  } | as_user tee "$gi_tmp" >/dev/null; then
+    as_user rm -f "$gi_tmp"
+    echo "⚠️  seed: could not write ~/.gitignore overlay list — leaving original"
+    exit 1
+  fi
+  # mktemp creates 0600, so carry the live file's mode across rather than let
+  # the rename silently tighten it.
+  as_user chmod --reference="$GITIGNORE" "$gi_tmp" 2>/dev/null || true
+  if ! as_user mv -f "$gi_tmp" "$GITIGNORE"; then
+    as_user rm -f "$gi_tmp"
+    echo "⚠️  seed: could not replace ~/.gitignore — leaving original"
+    exit 1
+  fi
   n="$(printf '%s' "$overlay_links" | grep -c . || true)"
   echo "🌱 seed: refreshed ~/.gitignore overlay-symlink list ($n entries)"
 fi
@@ -288,22 +330,54 @@ fi
 # named volume persists across rebuilds, so without --delete a deleted path
 # lingers until a manual wipe). Fall back to cp -a where rsync is absent.
 if [ -d "$SEED_DOTFILES" ]; then
+  # Status is captured rather than left to `set -e` so the prune below still runs
+  # when the transfer fails: a partial rsync/cp can already have written
+  # projects/.git into the volume, and the volume outlives this container. The
+  # original status is re-raised after the prune, so a failed seed still fails.
+  sync_status=0
   if command -v rsync >/dev/null 2>&1; then
     # -c checksums instead of the default size+mtime quick check. The quick
     # check compares mtime at 1-second resolution, so a same-size edit made
     # within a second of the previous sync is skipped -- silently, and this
     # tree decides the model. 40M of unchanged files hashes fast enough that
     # correctness is the better trade here.
-    as_user rsync -ac --delete "$SEED_DOTFILES/" "$DOTFILES_HOME/"
-    echo "🌱 seed: mirrored ~/.dotfiles via rsync ($(du -sh "$DOTFILES_HOME" | cut -f1))"
+    #
+    # projects/ is a nested PRIVATE repository. Its overlay files are payload and
+    # must mirror; its .git is history plus a remote URL naming the repo, in a
+    # named volume that outlives the container and ships with any image built
+    # from it. The pattern is anchored (leading /) so it means the mirror root
+    # and not some other projects/.git deeper in the tree, and carries no
+    # trailing / so it matches whether .git is a directory or a gitfile.
+    if as_user rsync -ac --delete --exclude='/projects/.git' \
+      "$SEED_DOTFILES/" "$DOTFILES_HOME/"; then
+      echo "🌱 seed: mirrored ~/.dotfiles via rsync ($(du -sh "$DOTFILES_HOME" | cut -f1))"
+    else
+      sync_status=$?
+    fi
   else
     # No non-pruning fallback. DOTFILES_HOME persists across rebuilds and the
     # always-run installers below EXECUTE files from it, so a stale installer
     # deleted upstream would keep running. Wipe-then-copy prunes equivalently.
-    as_user find "$DOTFILES_HOME" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-    as_user cp -a "$SEED_DOTFILES/." "$DOTFILES_HOME/"
-    echo "🌱 seed: rebuilt ~/.dotfiles via wipe+cp (no rsync) ($(du -sh "$DOTFILES_HOME" | cut -f1))"
+    if as_user find "$DOTFILES_HOME" -mindepth 1 -maxdepth 1 -exec rm -rf {} + &&
+      as_user cp -a "$SEED_DOTFILES/." "$DOTFILES_HOME/"; then
+      echo "🌱 seed: rebuilt ~/.dotfiles via wipe+cp (no rsync) ($(du -sh "$DOTFILES_HOME" | cut -f1))"
+    else
+      sync_status=$?
+    fi
   fi
+  # Unconditional, and not folded into the rsync exclude alone, for two reasons:
+  # cp -a has no exclusion mechanism, and rsync PROTECTS an excluded path on the
+  # receiver from --delete, so a volume seeded by a template predating the
+  # exclusion would keep its copy forever. Losing it costs nothing -- this tree
+  # is a copy, and container writes never reach the host, so committing here was
+  # never a way to save overlay edits.
+  #
+  # rm -rf on an absent path succeeds, so this is idempotent. A failure here is
+  # reported but not fatal: it must not mask the sync status re-raised below.
+  if ! as_user rm -rf "$DOTFILES_HOME/projects/.git"; then
+    echo "⚠️  seed: could not remove $DOTFILES_HOME/projects/.git" >&2
+  fi
+  [ "$sync_status" -eq 0 ] || exit "$sync_status"
 fi
 
 # Stable link root: /opt/dotfiles -> this container's dotfiles checkout.
@@ -388,7 +462,13 @@ fi
 # remote installer is then never invoked. Note `ai/claude/install.sh` itself has
 # no version/checksum support — the pinned artifact must come from the project.
 if as_user test -x "$SEED_HOME/.local/bin/claude" || as_user bash -lc 'command -v claude >/dev/null 2>&1'; then
-  echo "🌱 seed: claude already installed for $SEED_USER — skipping CLI install"
+  # Report the version, not just presence. "already installed" alone cannot
+  # distinguish a current CLI from one a stale volume has been pinning for
+  # months — the usual first question when a container behaves unlike the host.
+  # Non-fatal by construction: stderr is discarded and `|| echo '?'` fires on the
+  # non-zero exit from `as_user bash -lc`, so a stale or broken CLI degrades to
+  # `(?)` rather than taking the seed down under `set -e`.
+  echo "🌱 seed: claude already installed for $SEED_USER ($(as_user bash -lc 'claude --version 2>/dev/null' || echo '?')) — skipping CLI install"
 elif [ -n "${CLAUDE_CLI_INSTALL_CMD:-}" ]; then
   echo "🌱 seed: installing Claude Code CLI via pinned CLAUDE_CLI_INSTALL_CMD"
   as_user bash -lc "$CLAUDE_CLI_INSTALL_CMD" ||
@@ -406,7 +486,7 @@ fi
 # Testing config.toml therefore latches: config present, `codex` missing, and
 # the installer skipped on every subsequent start.
 if as_user test -x "$SEED_HOME/.local/bin/codex"; then
-  echo "🌱 seed: codex already present"
+  echo "🌱 seed: codex already present ($(as_user "$SEED_HOME/.local/bin/codex" --version 2>/dev/null || echo '?'))"
 elif [ -x "$DOTFILES_HOME/ai/codex/install.sh" ]; then
   echo "🌱 seed: linking Codex config"
   as_user bash "$DOTFILES_HOME/ai/codex/install.sh" || echo "⚠️  seed: codex install failed (non-fatal)"
@@ -429,7 +509,10 @@ fi
 # nvim-dist/bin/nvim) still passes, while a directory — which `-x` alone reports
 # as executable — no longer counts as "already installed" and silently skips.
 if as_user test -f "$SEED_HOME/.local/bin/nvim" && as_user test -x "$SEED_HOME/.local/bin/nvim"; then
-  echo "🌱 seed: nvim already present"
+  # Same `(?)` fallback as the claude guard above, but here it rests on pipefail:
+  # without it `head -1` would report success and mask nvim's own failure, and the
+  # parens would come out empty instead. Applies to the "neovim ready" line too.
+  echo "🌱 seed: nvim already present ($(as_user "$SEED_HOME/.local/bin/nvim" --version 2>/dev/null | head -1 || echo '?'))"
 elif [ -r "$DOTFILES_HOME/config/versions.env" ]; then
   # shellcheck source=/dev/null
   . "$DOTFILES_HOME/config/versions.env"
@@ -495,7 +578,7 @@ elif [ -r "$DOTFILES_HOME/config/versions.env" ]; then
       mv "$NVIM_DIST.new" "$NVIM_DIST" &&
       as_user ln -sf "$NVIM_DIST/bin/nvim" "$SEED_HOME/.local/bin/nvim" &&
       as_user test -x "$SEED_HOME/.local/bin/nvim"; then
-      echo "🌱 seed: neovim ready"
+      echo "🌱 seed: neovim ready ($(as_user "$SEED_HOME/.local/bin/nvim" --version 2>/dev/null | head -1 || echo '?'))"
     else
       echo "⚠️  seed: neovim install failed (non-fatal; EDITOR falls back to vim)"
     fi
@@ -788,14 +871,32 @@ plugin_home_repair() {
 plugin_home_repair
 
 # ---------------------------------------------------------------------------
-# DRIFT CHECK — runs on BOTH the gated-skip and reseed paths.
-# Compares CONTENT against the host mount rather than trusting the sentinel, so
-# it reports staleness no matter the cause — including a seed still running the
-# old layout where this copy sat below the gate. This is the check that turns
-# "why is my model wrong" from a debugging session into a line in the log.
-# Advisory only: never exits nonzero, so a false positive cannot block startup.
+# SELF-CHECK — runs on BOTH the gated-skip and reseed paths.
+# Reports what a human would otherwise verify by hand after a rebuild. A
+# persisted volume can drift from the mounts without the sentinel ever changing,
+# so every check compares OBSERVED STATE against the host mount or the live
+# filesystem rather than trusting the sentinel. Advisory only: never exits
+# nonzero, so a false positive cannot block startup. Read it in the start log.
+#
+# Deliberately NOT checked here: the Vekil endpoint variables and the `codex`
+# function. Those only materialize in an INTERACTIVE LOGIN shell, which this
+# script is not — asserting them here would fail even when the hook is correct.
+# Verify those with: docker compose exec app zsh -lic 'print $ANTHROPIC_BASE_URL'
+#
+# Everything asserted below is established by the ALWAYS-RUN block above, which
+# is why the single invocation after this definition — above the gate — is
+# sufficient. Do not move checks here for anything installed below the gate:
+# on the gated-skip path those steps never ran this launch.
 # ---------------------------------------------------------------------------
-config_drift_check() {
+self_check() {
+  local fails=0
+  echo "🔎 seed self-check:"
+
+  # a0) Authored config actually matches the host mount. This is the check that
+  # turns "why is my model wrong" from a debugging session into a line in the
+  # log: it compares CONTENT against $SEED_CLAUDE rather than trusting the
+  # sentinel, so it reports staleness no matter the cause — including a seed
+  # still running the old layout where the copy sat below the gate.
   local drift=""
   # The SAME five seed-owned paths the copy above manages. Comparing a subset
   # would pass while commands/ or skills/ were stale.
@@ -824,16 +925,192 @@ config_drift_check() {
     echo "   FAIL  ~/.claude differs from host mount:$drift"
     echo "         seed may predate the always-run config copy — re-copy"
     echo "         local-seed.sh from the project-claude-setup skill"
+    fails=$((fails + 1))
   else
     echo "   PASS  authored ~/.claude matches host mount"
+  fi
+
+  # a1) ~/.dotfiles actually converged on the host copy. env.zsh exports
+  # ANTHROPIC_MODEL, which OUTRANKS settings.json, so drift here silently
+  # overrides every other piece of config the seed gets right — including the
+  # a0 check immediately above, which would still say PASS.
+  if [ -d "$SEED_DOTFILES" ]; then
+    if cmp -s "$SEED_DOTFILES/ai/vekil/env.zsh" "$DOTFILES_HOME/ai/vekil/env.zsh"; then
+      echo "   PASS  ~/.dotfiles/ai/vekil/env.zsh matches host"
+    else
+      echo "   FAIL  ~/.dotfiles/ai/vekil/env.zsh differs from host"
+      echo "         seed may predate the rsync converge — re-copy local-seed.sh"
+      echo "         from the project-claude-setup skill"
+      fails=$((fails + 1))
+    fi
+  fi
+
+  # a) The zshrc hook landed (written by the always-run block above).
+  if grep -Fq 'ai/vekil/env.zsh' "$ZSHRC" 2>/dev/null; then
+    echo "   PASS  ~/.zshrc contains the vekil hook"
+  else
+    echo "   FAIL  ~/.zshrc missing the vekil hook"
+    fails=$((fails + 1))
+  fi
+
+  # b) The hook TARGET exists and parses. `zsh -n` parses without executing, so
+  # this says nothing about proxy readiness — it separates "hook well-formed"
+  # from "Vekil answering", which otherwise present as the same empty variable.
+  if [ -f "$DOTFILES_HOME/ai/vekil/env.zsh" ] &&
+    zsh -n "$DOTFILES_HOME/ai/vekil/env.zsh" 2>/dev/null; then
+    echo "   PASS  ~/.dotfiles/ai/vekil/env.zsh exists and parses"
+  else
+    echo "   FAIL  ~/.dotfiles/ai/vekil/env.zsh missing or malformed"
+    fails=$((fails + 1))
+  fi
+
+  # c) The host-seed mount exposes ONLY the allowlist. This is the SECURITY
+  # assertion: anything unexpected here means the compose override regressed to
+  # a whole-directory mount, and host credentials and session transcripts are
+  # readable from inside the container.
+  if [ -d "$SEED_CLAUDE" ]; then
+    local expected="CLAUDE.md commands config settings.json skills"
+    local actual
+    actual="$(ls -A "$SEED_CLAUDE" 2>/dev/null | sort | tr '\n' ' ' | sed 's/ $//')"
+    if [ "$actual" = "$expected" ]; then
+      echo "   PASS  $SEED_CLAUDE exposes exactly the allowlist"
+    else
+      echo "   FAIL  $SEED_CLAUDE contents unexpected"
+      echo "         expected: $expected"
+      echo "         actual:   $actual"
+      fails=$((fails + 1))
+    fi
+    # Belt-and-braces: name the files that must never be reachable, so a future
+    # allowlist edit that adds one of them is caught by name and not just by the
+    # set comparison above.
+    local leaked=""
+    for bad in .credentials.json history.jsonl projects; do
+      [ -e "$SEED_CLAUDE/$bad" ] && leaked="$leaked $bad"
+    done
+    if [ -n "$leaked" ]; then
+      echo "   FAIL  host runtime state reachable in container:$leaked"
+      fails=$((fails + 1))
+    fi
+  else
+    echo "   WARN  no $SEED_CLAUDE mount present"
+  fi
+
+  # d) The container-local home is writable BY THE SEED USER, not stranded as
+  # root:root. Tested through as_user on purpose: this script may be running as
+  # root, for whom a root-owned ~/.claude is writable and the check would pass
+  # while every later `claude` invocation fails.
+  if as_user test -w "$CLAUDE_HOME"; then
+    echo "   PASS  ~/.claude writable by $SEED_USER"
+  else
+    echo "   FAIL  ~/.claude not writable by $SEED_USER"
+    fails=$((fails + 1))
+  fi
+
+  # e) The claude CLI binary actually resolves. This is the check that catches
+  # the ephemeral-vs-persisted split: the binary lives in the writable layer and
+  # is wiped on rebuild, so a regression that moves its install back under the
+  # version gate shows up here as a FAIL on the second start, not the first.
+  #
+  # PATH is pinned inline rather than reusing the marketplace PATH variable:
+  # that one is assigned below the gate, where the marketplace block needs it,
+  # and does not exist yet here — hoisting it would abort the seed under
+  # `set -u`. as_user is non-interactive and never sources ~/.zshrc, the only
+  # place ~/.local/bin joins PATH, so without this the check reports a false
+  # FAIL. (Named indirectly on purpose: spelling the variable here would make
+  # the catch-up audit's anchor for that row match this paragraph too.)
+  local claude_bin
+  if claude_bin="$(as_user env PATH="$SEED_HOME/.local/bin:$PATH" \
+    sh -c 'command -v claude' 2>/dev/null)"; then
+    echo "   PASS  claude CLI on PATH ($claude_bin)"
+  else
+    echo "   FAIL  claude CLI not on PATH"
+    fails=$((fails + 1))
+  fi
+
+  # f) The global gitignore that ~/.gitconfig points at is actually READABLE.
+  # Git silently treats a dangling excludesfile as empty, so the failure mode is
+  # invisible: personal overlay files (CLAUDE.local.md, .claude/) quietly appear
+  # as untracked in every repo. Resolve the configured path and read it.
+  # --global, not a plain --get: the seed's own write is global, and this script
+  # runs from an arbitrary cwd that need not be a repo at all.
+  local ex_raw ex_path
+  ex_raw="$(as_user git config --global --get core.excludesFile 2>/dev/null || true)"
+  if [ -z "$ex_raw" ]; then
+    echo "   WARN  git core.excludesFile unset (no global gitignore configured)"
+  else
+    ex_path="${ex_raw/#\~/$SEED_HOME}"
+    if [ -r "$ex_path" ] && grep -q 'CLAUDE.local.md' "$ex_path" 2>/dev/null; then
+      echo "   PASS  global gitignore readable at $ex_path"
+    else
+      echo "   FAIL  core.excludesFile=$ex_raw not readable — overlay files will show as untracked"
+      fails=$((fails + 1))
+    fi
+  fi
+
+  # g) The stable link root resolves to THIS container's dotfiles checkout. This
+  # is the check that catches the dangling-overlay-link bug directly: without it
+  # .claude/skills and CLAUDE.md are broken symlinks and Claude Code silently
+  # loses the project's skills and instructions.
+  if [ -L "$STABLE_LINK_ROOT" ] && [ -d "$STABLE_LINK_ROOT" ]; then
+    echo "   PASS  $STABLE_LINK_ROOT -> $(readlink "$STABLE_LINK_ROOT")"
+  else
+    echo "   FAIL  $STABLE_LINK_ROOT missing or not a directory symlink"
+    fails=$((fails + 1))
+  fi
+
+  # h) No overlay symlink in the workspace dangles. Matches on -xtype l (BROKEN
+  # links) rather than testing which ones resolve: the inverted form prints the
+  # HEALTHY links, so a real break prints nothing — which reads as success to
+  # anyone scanning for empty output.
+  if [ -d "$WORKSPACE" ]; then
+    local broken
+    broken="$(cd "$WORKSPACE" &&
+      find . -maxdepth 3 -lname '*dotfiles/projects/*' -xtype l 2>/dev/null)"
+    if [ -z "$broken" ]; then
+      echo "   PASS  no dangling overlay symlinks in $WORKSPACE"
+    else
+      echo "   FAIL  dangling overlay symlinks in $WORKSPACE:"
+      # Unquoted on purpose: split the newline-separated list into one line each.
+      # shellcheck disable=SC2086
+      printf '         %s\n' $broken
+      fails=$((fails + 1))
+    fi
+  fi
+
+  # i) Managed git hooks. Advisory (WARN, not FAIL): a missing commit-msg hook
+  # costs a stripped trailer, not a broken container.
+  local hooks_cfg
+  hooks_cfg="$(as_user git config --global --get core.hooksPath 2>/dev/null || true)"
+  if [ -n "$hooks_cfg" ] && [ -x "$hooks_cfg/commit-msg" ]; then
+    echo "   PASS  core.hooksPath -> $hooks_cfg"
+  else
+    echo "   WARN  core.hooksPath unset or commit-msg not executable"
+  fi
+
+  # j) EDITOR's target. WARN, not FAIL: core/env.zsh falls back to vim, so a
+  # missing nvim degrades rather than breaks — but a DANGLING ~/.local/bin/nvim
+  # does break `git commit`, and only this distinguishes the two.
+  if [ -f "$SEED_HOME/.local/bin/nvim" ] && [ -x "$SEED_HOME/.local/bin/nvim" ]; then
+    echo "   PASS  nvim installed ($("$SEED_HOME/.local/bin/nvim" --version 2>/dev/null | head -1))"
+  elif [ -e "$SEED_HOME/.local/bin/nvim" ] || [ -L "$SEED_HOME/.local/bin/nvim" ]; then
+    echo "   FAIL  ~/.local/bin/nvim exists but is not executable — EDITOR=nvim breaks git commit"
+    fails=$((fails + 1))
+  else
+    echo "   WARN  nvim not installed (EDITOR falls back to vim)"
+  fi
+
+  if [ "$fails" -eq 0 ]; then
+    echo "   → all checks passed"
+  else
+    echo "   → $fails check(s) FAILED (advisory; container still starting)"
   fi
   return 0
 }
 
 # Invoked here, ABOVE the gate, so it runs on BOTH paths — the gated-skip branch
-# below and the reseed path. Placed after the copy so it verifies the result of
-# this run rather than the previous one.
-config_drift_check
+# below and the reseed path. Placed after the copy and the installs so it
+# verifies the result of this run rather than the previous one.
+self_check
 
 # --- Versioned gate --------------------------------------------------------
 # Skip the gated INSTALL steps only when the sentinel already records this
@@ -869,10 +1146,18 @@ if [ "$SEED_ALREADY_CURRENT" -eq 0 ]; then
   # A failed install must NOT be stamped: the sentinel is the only thing standing
   # between a half-populated ~/.claude/plugins and a permanent skip on every later
   # launch. Record the failure and leave the sentinel alone so the next run retries.
+  # Every claude invocation below goes through as_user, which is non-interactive
+  # and so never sources ~/.zshrc — the only place ~/.local/bin joins PATH. Without
+  # this the seed cannot see the claude binary the always-run block just installed:
+  # the probe below answers "no", marketplaces go unregistered, and MARKETPLACE_OK=0
+  # leaves the sentinel unstamped, so EVERY launch re-runs this block and exits 1.
+  # Export it to the child rather than the seed's own PATH, so only the calls that
+  # need the CLI are affected.
+  SEED_PATH="$SEED_HOME/.local/bin:$PATH"
   MARKETPLACE_OK=1
   if [ -x "$DOTFILES_HOME/ai/marketplace/install.sh" ]; then
     echo "🌱 seed: installing my@guarzo marketplace + plugin"
-    as_user bash "$DOTFILES_HOME/ai/marketplace/install.sh" || {
+    as_user env PATH="$SEED_PATH" bash "$DOTFILES_HOME/ai/marketplace/install.sh" || {
       MARKETPLACE_OK=0
       echo "⚠️  seed: marketplace install failed — NOT stamping sentinel; next launch retries"
     }
@@ -894,7 +1179,7 @@ if [ "$SEED_ALREADY_CURRENT" -eq 0 ]; then
   # `command -v claude` gets "no" while the user's shell finds it fine. And an
   # unavailable CLI clears MARKETPLACE_OK rather than silently skipping — skipping
   # stamps the sentinel, and the gated block then never retries the registration.
-  if as_user sh -c 'command -v claude >/dev/null 2>&1'; then
+  if as_user env PATH="$SEED_PATH" sh -c 'command -v claude >/dev/null 2>&1'; then
     mp_registry="$CLAUDE_HOME/plugins/known_marketplaces.json"
     while read -r mp_name mp_repo; do
       [ -n "$mp_name" ] || continue
@@ -909,7 +1194,7 @@ if [ "$SEED_ALREADY_CURRENT" -eq 0 ]; then
         continue
       fi
       echo "🌱 seed: registering marketplace $mp_name ($mp_repo)"
-      as_user claude plugin marketplace add "$mp_repo" >/dev/null 2>&1 || {
+      as_user env PATH="$SEED_PATH" claude plugin marketplace add "$mp_repo" >/dev/null 2>&1 || {
         MARKETPLACE_OK=0
         echo "⚠️  seed: could not register $mp_repo (needs network) — NOT stamping sentinel"
       }

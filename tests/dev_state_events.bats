@@ -14,7 +14,7 @@ setup() {
 # 50000 lines is ~9.5 MiB, comfortably past the 8 MiB rotation threshold.
 fill_events() {
   head -n "$1" < <(yes '{"v":1,"id":"filler","ts":"2026-08-03T00:00:00.000Z","event":"window.created","workspace_id":"filler","slug":"f","session_name":"f","worktree":"/f","data":{"window":"w","location":"host"}}') \
-    >"$DEV_STATE_ROOT/events/events.jsonl"
+  >"$DEV_STATE_ROOT/events/events.jsonl"
 }
 
 @test "events: dev_now is RFC 3339 UTC with milliseconds" {
@@ -274,8 +274,8 @@ fill_events() {
   [ "$(grep -c '}{' "$TEST_ROOT/read-all.jsonl")" -eq 0 ]
 
   # Every emitted id appears exactly once across the live file and all segments.
-  jq -r 'select(.id | startswith("ev")) | .id' "$TEST_ROOT/all.jsonl" \
-    | sort >"$TEST_ROOT/got.txt"
+  jq -r 'select(.id | startswith("ev")) | .id' "$TEST_ROOT/all.jsonl" |
+    sort >"$TEST_ROOT/got.txt"
   for i in $(seq 1 20); do
     for j in $(seq 1 25); do
       printf 'ev%03d%03d\n' "$i" "$j"

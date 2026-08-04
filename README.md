@@ -44,7 +44,10 @@ After bootstrap, run `bin/install` (or `bin/dot-update`) to install packages and
   ai/             # AI tools: claude/, codex/, marketplace/, vekil/
   profiles/       # Machine profiles: personal.zsh, work.zsh
   config/         # XDG config files, symlinked to ~/.config/<name>
+  docs/guides/    # Long-form guides for the tooling in bin/
   archived/       # Dead code — never sourced, kept for reference
+  projects/       # NOT tracked here — a separate private repo, cloned by
+                  # bin/bootstrap. See docs/guides/project-overlays.md
 ```
 
 ## Profile System
@@ -178,6 +181,10 @@ compatible minor in `config/versions.env` by hand.
 - Machine-local files use a `.local` suffix and remain ignored.
 - Generated backups and binaries larger than 5 MiB are not tracked.
 - Historical artifacts belong in release storage or a dedicated archive repository.
+- `projects/` is never tracked here. Per-project Claude overlays describe
+  non-public codebases and live in a separate private repository that
+  `bin/bootstrap` clones to `~/.dotfiles/projects`; a test asserts the boundary.
+  See [docs/guides/project-overlays.md](docs/guides/project-overlays.md).
 
 ## AI Coding Assistants
 
@@ -230,6 +237,29 @@ The personal plugin is the single source of truth for commands and skills. See
 - **Skills:** `improve`, `overnight-improve`, `polish-core`, `project-claude-setup`,
   and the deliberately-invoked `blindspot-pass`, `implementation-plan`,
   `change-explainer`.
+
+### Devcontainer seed drift
+
+`bin/seed-drift` reports, per project and per documented block, whether a
+project's `.devcontainer/local-seed.sh` has fallen behind the
+`project-claude-setup` template, run ahead of it, or diverged from it.
+
+```bash
+bin/seed-drift                       # every project under ~/workspace
+bin/seed-drift ~/workspace/myproject # named candidates only
+```
+
+It is strictly read-only with respect to the seeds it inspects. Exit codes:
+`0` clean, `1` drift found, `2` usage / template / doc / extraction error, or no
+projects discovered.
+
+`AHEAD` is a **promotion candidate**, not an error — the seed has something the
+template does not, and the seed is the hand-owned file, so the fix direction is
+to port it up rather than overwrite it.
+
+The blocks it compares come from the Step 1 table in
+`ai/marketplace/plugins/my/skills/project-claude-setup/catch-up-local-seed.md`;
+that table is the tool's input, so adding a row there extends the detector.
 
 ### Global working agreement
 

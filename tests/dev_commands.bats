@@ -27,7 +27,7 @@ stage_dev_root() {
 }
 
 stub_open_command() {
-  cat > "$TEST_ROOT/root/tools/dev/commands/open.sh" <<'EOF'
+  cat >"$TEST_ROOT/root/tools/dev/commands/open.sh" <<'EOF'
 dev_cmd_open() { printf 'OPEN:%s\n' "$*"; }
 EOF
 }
@@ -64,7 +64,7 @@ make_fixture_repo() {
 @test "dev config prints valid JSON with the four default windows" {
   run "$TEST_ROOT/root/bin/dev" config proj
   [ "$status" -eq 0 ]
-  printf '%s' "$output" | jq -e . > /dev/null
+  printf '%s' "$output" | jq -e . >/dev/null
   [ "$(printf '%s' "$output" | jq -r '[.windows[].name] | sort | join(",")')" = "agent-1,agent-2,scratch,shell" ]
   [ "$(printf '%s' "$output" | jq -r '.version')" -eq 1 ]
 }
@@ -77,7 +77,7 @@ make_fixture_repo() {
 
 @test "dev config exits 5 on a config that fails validation" {
   mkdir -p "$DEV_OVERLAY_ROOT/proj"
-  cat > "$DEV_OVERLAY_ROOT/proj/workspace.yaml" <<'EOF'
+  cat >"$DEV_OVERLAY_ROOT/proj/workspace.yaml" <<'EOF'
 version: 1
 windows:
   - name: shell
@@ -94,7 +94,7 @@ EOF
   run "$TEST_ROOT/root/bin/dev" config --compact proj
   [ "$status" -eq 0 ]
   [[ "$output" != OPEN:* ]]
-  printf '%s' "$output" | jq -e . > /dev/null
+  printf '%s' "$output" | jq -e . >/dev/null
 }
 
 @test "a word matching no command file dispatches to open with the word intact" {
@@ -140,7 +140,7 @@ write_record() {
                   verified: false, up_exit_status: null, up_result: null, observed_at: null},
       agents: [], opened_at: null, last_seen: "2026-08-03T10:00:00.000Z",
       scanned_through: {id: null, ts: null}, fold_gap: $fg, stopped_reason: null
-    }' > "$DEV_STATE_ROOT/workspaces/${id}.json"
+    }' >"$DEV_STATE_ROOT/workspaces/${id}.json"
 }
 
 @test "dev list --json emits v:1 and every workspace, and parses as JSON" {
@@ -151,7 +151,7 @@ write_record() {
 
   run "$TEST_ROOT/root/bin/dev" list --json
   [ "$status" -eq 0 ]
-  printf '%s' "$output" | jq -e . > /dev/null
+  printf '%s' "$output" | jq -e . >/dev/null
   [ "$(printf '%s' "$output" | jq -r '.v')" -eq 1 ]
   [ "$(printf '%s' "$output" | jq -r '[.workspaces[].session_name] | sort | join(",")')" = "alpha,beta" ]
   [ "$(printf '%s' "$output" | jq -r '.workspaces[0] | has("container")')" = "true" ]

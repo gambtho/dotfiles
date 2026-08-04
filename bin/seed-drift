@@ -1,0 +1,1344 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+SD_SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+SD_REPO_ROOT="${SD_SELF_DIR%/bin}"
+SD_SKILL_DIR="$SD_REPO_ROOT/ai/marketplace/plugins/my/skills/project-claude-setup"
+SD_TEMPLATE_DEFAULT="$SD_SKILL_DIR/templates/local-seed.sh"
+SD_DOC_DEFAULT="$SD_SKILL_DIR/catch-up-local-seed.md"
+
+sd_usage() {
+  cat <<'SDUSAGE'
+Usage: bin/seed-drift [--template PATH] [--doc PATH] [--help] [CANDIDATE...]
+
+Reports, per project and per documented block, whether a project's
+.devcontainer/local-seed.sh is behind, ahead of, or diverged from the
+project-claude-setup template.
+
+  --template PATH  template to compare against
+  --doc PATH       catch-up doc holding the block table
+  --help           show this message
+
+With no CANDIDATE, candidates are ${SEED_DRIFT_ROOT:-$HOME/workspace}/*/.
+Exit: 0 clean, 1 drift, 2 usage/template/doc/extraction error.
+SDUSAGE
+}
+
+SD_DOC_AWK=$(
+  cat <<'SDAWK'
+BEGIN { FS = "|" }
+/^\|/ && NF >= 4 {
+  name = $2
+  anchor = $3
+  gsub(/^[ \t]+|[ \t]+$/, "", name)
+  gsub(/^[ \t]+|[ \t]+$/, "", anchor)
+  if (name == "Block" || name ~ /^-+$/) next
+  if (anchor !~ /^`.*`$/) next
+  gsub(/`/, "", name)
+  sub(/^`/, "", anchor)
+  sub(/`$/, "", anchor)
+  printf("%s\t%s\n", name, anchor)
+  rows++
+}
+END { if (rows == 0) exit 1 }
+SDAWK
+)
+
+sd_parse_doc() {
+  local doc="$1"
+  if [ ! -r "$doc" ]; then
+    printf 'seed-drift: cannot read doc %s\n' "$doc" >&2
+    return 3
+  fi
+  awk "$SD_DOC_AWK" <"$doc"
+}
+
+SD_SCAN_AWK=$(
+  cat <<'SDAWK'
+function fail(msg) {
+  printf("seed-drift: %s (line %d)\n", msg, NR) >"/dev/stderr"
+  failed = 1
+  exit 3
+}
+function emit(tag, text) {
+  if (para == 0 || brk) {
+    para++
+    brk = 0
+  }
+  printf("%d\t%d\t%s\t%s\n", para, NR, tag, text)
+}
+function push(delim, quoted, dash) {
+  nq++
+  qd[nq] = delim
+  qq[nq] = quoted
+  qs[nq] = dash
+}
+function popq() {
+  hdelim = qd[1]
+  hquot = qq[1]
+  hdash = qs[1]
+  hd = 1
+  for (k = 1; k < nq; k++) {
+    qd[k] = qd[k + 1]
+    qq[k] = qq[k + 1]
+    qs[k] = qs[k + 1]
+  }
+  nq--
+}
+function delimword(line, i, n,   w, c) {
+  w = ""
+  while (i <= n) {
+    c = substr(line, i, 1)
+    if (c !~ /[A-Za-z0-9_.-]/) break
+    w = w c
+    i++
+  }
+  wend = i
+  return w
+}
+function scan(line,   n, i, c, j, d, w) {
+  n = length(line)
+  i = 1
+  while (i <= n) {
+    c = substr(line, i, 1)
+    if (inq == "'") {
+      if (c == "'") inq = ""
+      i++
+      continue
+    }
+    if (inq == "\"") {
+      if (c == "\\") { i += 2; continue }
+      if (c == "\"") inq = ""
+      i++
+      continue
+    }
+    if (c == "\\") { i += 2; continue }
+    if (c == "'") { inq = "'"; i++; continue }
+    if (c == "\"") { inq = "\""; i++; continue }
+    if (c == "#" && (i == 1 || substr(line, i - 1, 1) ~ /[ \t]/)) return substr(line, 1, i - 1)
+    if (c != "<") { i++; continue }
+    if (substr(line, i, 3) == "<<<") { i += 3; continue }
+    if (substr(line, i, 2) != "<<") { i++; continue }
+    i += 2
+    d = 0
+    if (substr(line, i, 1) == "-") { d = 1; i++ }
+    while (substr(line, i, 1) == " " || substr(line, i, 1) == "\t") i++
+    c = substr(line, i, 1)
+    if (c == "'" || c == "\"") {
+      j = index(substr(line, i + 1), c)
+      if (j == 0) fail("unterminated heredoc delimiter quote")
+      push(substr(line, i + 1, j - 1), 1, d)
+      i = i + j + 1
+      continue
+    }
+    if (c == "\\") {
+      w = delimword(line, i + 1, n)
+      if (w == "") fail("unrecognized heredoc delimiter after <<")
+      push(w, 1, d)
+      i = wend
+      continue
+    }
+    w = delimword(line, i, n)
+    if (w == "") fail("unrecognized heredoc delimiter after <<")
+    push(w, 0, d)
+    i = wend
+  }
+  return line
+}
+{
+  if (hd) {
+    closer = $0
+    if (hdash) sub(/^\t+/, "", closer)
+    if (closer == hdelim) {
+      emit("C", $0)
+      hd = 0
+      if (nq > 0) popq()
+    } else {
+      emit(hquot ? "Hq" : "Hu", $0)
+    }
+    next
+  }
+  if ($0 ~ /^[ \t]*$/ && inq == "") {
+    brk = 1
+    next
+  }
+  nq = 0
+  emit("C", scan($0))
+  if (nq > 0) popq()
+}
+END {
+  if (failed) exit 3
+  if (hd) {
+    printf("seed-drift: unterminated heredoc %s\n", hdelim) >"/dev/stderr"
+    exit 3
+  }
+}
+SDAWK
+)
+
+sd_scan() {
+  local file="$1"
+  if [ ! -r "$file" ]; then
+    printf 'seed-drift: cannot read %s\n' "$file" >&2
+    return 3
+  fi
+  awk "$SD_SCAN_AWK" <"$file"
+}
+
+sd_paras_with_anchor() {
+  # $4 would stop at the next tab; take everything after the third tab so a
+  # tab-bearing line is matched in full.
+  awk -F'\t' -v a="$2" '
+    $3 == "C" {
+      t = $0
+      sub(/^[^\t]*\t[^\t]*\t[^\t]*\t/, "", t)
+      if (index(t, a) && !seen[$1]++) print $1
+    }' "$1"
+}
+
+sd_para_range() {
+  awk -F'\t' -v p="$2" '$1 == p { if (!s) s = $2; e = $2 } END { if (s) print s, e }' "$1"
+}
+
+# Bounds the ERROR path, not the success path. A window that parses exits on
+# its first successful parse, and on the real corpus every window but one
+# parses at the very first pair the search tries — so this cap costs a passing
+# anchor nothing. It is only ever reached by an anchor whose block never
+# parses at all, where the search is O(paragraphs^2) `bash -n` invocations
+# rather than O(paragraphs).
+#
+# 2000 is deliberate headroom, not a measurement. The worst plausible real
+# shape was measured at ~280 attempts (the largest real window is 109 lines
+# inside a 961-line template), so this sits roughly 7x above it. The margin is
+# that wide on purpose, for two reasons:
+#
+#   1. The failure mode is asymmetric. Exceeding the cap turns a legitimate
+#      block into a hard exit-2 ERROR — a false alarm on good input. Going
+#      over costs only ~2000 `bash -n` invocations on a block that was going
+#      to fail anyway.
+#   2. The sweep below is NOT strictly smallest-window-first: the inner loop
+#      always runs `hi` to `last`, so (para, last) is tried before
+#      (para-1, para), and a backward-only case burns a full forward sweep per
+#      step. The attempt count therefore does not track window size, which is
+#      why the margin is set this wide rather than at a tight multiple of the
+#      ~280 measurement.
+#
+# Do not "tune" this down to hug the measurement. The ordering it compensates
+# for is deliberate — it was verified against the real corpus by exhaustive
+# old-vs-new window comparison, and reordering the search would change which
+# window an ambiguous anchor resolves to.
+SD_MAX_PARSE_ATTEMPTS=2000
+
+# Grows the window until the extracted fragment parses. The search is
+# two-dimensional — every (lo, hi) paragraph pair, `lo` walking down from the
+# anchor's paragraph and `hi` up from it — because the common real case is an
+# anchor inside a multi-paragraph function body, which needs the window grown
+# BACK to `funcname() {` and FORWARD to the closing `}` at the same time.
+#
+# A one-dimensional walk cannot express that pair. Worse, the previous
+# forward-to-EOF-then-backward form left `end` pinned at EOF once forward
+# growth exhausted, so ANY block needing backward growth extracted
+# `[lo's start .. EOF]` and was diffed as if the whole tail of the file
+# belonged to it — reporting other blocks' drift under this block's name.
+#
+# (para, para) is tried first, so a paragraph that already parses standalone
+# costs exactly one `bash -n`, exactly as before. The fragment is read
+# straight from FILE by line number, because the scan text is comment-stripped
+# and would not parse the same way.
+sd_window() {
+  local file="$1" scan="$2" para="$3"
+  local first last lo hi start end range tries=0
+
+  first=$(awk -F'\t' 'NR == 1 { print $1; exit }' "$scan")
+  last=$(awk -F'\t' 'END { print $1 }' "$scan")
+  range=$(sd_para_range "$scan" "$para")
+  [ -n "$range" ] || return 3
+
+  lo="$para"
+  while [ "$lo" -ge "$first" ]; do
+    range=$(sd_para_range "$scan" "$lo")
+    start="${range% *}"
+    hi="$para"
+    while [ "$hi" -le "$last" ]; do
+      range=$(sd_para_range "$scan" "$hi")
+      end="${range#* }"
+      tries=$((tries + 1))
+      # Same status the exhaustion path below returns: sd_extract and
+      # sd_check_seed already route 3 to "block could not be extracted".
+      [ "$tries" -le "$SD_MAX_PARSE_ATTEMPTS" ] || return 3
+      if sed -n "${start},${end}p" "$file" | bash -n 2>/dev/null; then
+        printf '%s %s\n' "$start" "$end"
+        return 0
+      fi
+      hi=$((hi + 1))
+    done
+    lo=$((lo - 1))
+  done
+  return 3
+}
+
+# Below this many raw (pre-normalization) lines, a window has proven too
+# little to trust a verdict on. Calibrated against the real five-seed corpus
+# (Task 8 brief): the smallest window measured there is 9 lines, so 5 leaves
+# headroom against ordinary variation while still catching a genuinely
+# degenerate window. Do not raise this without re-measuring the corpus.
+SD_THIN_WINDOW=5
+
+sd_neutralize_paths() {
+  # Deliberately unanchored on the right: `$HOME` also rewrites inside
+  # `$HOMEBREW_PREFIX`, and a right boundary is genuinely awkward in
+  # BSD-portable sed. It cannot flip a verdict, because the identical rule is
+  # applied to both sides before they are diffed; the cost is confined to
+  # mangled text in the sample lines printed for a drifted block.
+  sed -e 's/\${SEED_HOME}/«HOME»/g' -e 's/\$SEED_HOME/«HOME»/g' \
+    -e 's/\${DOTFILES_HOME}/«HOME»\/.dotfiles/g' \
+    -e 's/\$DOTFILES_HOME/«HOME»\/.dotfiles/g' \
+    -e 's/\${WORKSPACE}/«WS»/g' -e 's/\$WORKSPACE/«WS»/g' \
+    -e 's/\${HOME}/«HOME»/g' -e 's/\$HOME/«HOME»/g'
+}
+
+sd_drop_priv_prefix() {
+  # Privilege words are dropped in COMMAND POSITION only: at line start, or
+  # right after an operator/keyword that begins a new command. `as_user` sits
+  # mid-line 8 times in the template (`if as_user test -x ...`,
+  # `... || as_user bash -lc ...`) and the live seeds split on it —
+  # wanderer-kills writes `if ! as_user test -f "$GITIGNORE"; then` where
+  # wanderer writes `if [ ! -f "$GITIGNORE" ]; then` — so a line-start-only
+  # rule would report every one of those shapes as drift.
+  #
+  # No word-boundary escape: that construct is a GNU sed extension and this
+  # script must also run under the BSD sed macOS ships. Operators are
+  # self-delimiting, so they need no boundary; the keywords take an explicit
+  # `(^|[[:space:]])` left boundary instead, which is why they are a separate
+  # expression. `sd_normalize_code_line` has already collapsed runs of
+  # whitespace to single spaces before we get here.
+  #
+  # The operator arm takes `[[:space:]]*`, not `+`: command substitution opens
+  # with `$(` and the privilege word follows with NO space, so `+` matched
+  # every `if as_user foo` in the template while missing every
+  # `x="$(as_user foo)"` — and the seeds, which drop the wrapper entirely,
+  # were reported as drifted on lines that differ by exactly that one word.
+  # The keyword arm keeps `+` because a keyword must be space-separated from
+  # its command; `[[:space:]]*` there would let `ifas_user` match. The runuser
+  # operator arm gets the same `*` for symmetry — no seed nests it inside `$(`
+  # today, but the gap is identical and an asymmetric fix would only invite the
+  # question later.
+  # `((` opens ARITHMETIC, not a command — both as `$((x))` and as the bare
+  # `((x))` command. In `x=$((sudo + 1))` and `if ((sudo + 1)); then` the word
+  # `sudo` is an arithmetic variable, and the operator arm — which deliberately
+  # requires no space after its opener — would strip it to `+ 1`. sed has no
+  # lookbehind, so shield the token for the duration of the loop and restore it
+  # after. Shielding `((` covers `$((` too: it leaves a bare `$` in front of the
+  # shield, and `$` is not in the operator class. A single `(` is deliberately
+  # NOT shielded, so a real subshell like `(sudo foo)` still strips. \001 is used
+  # because it cannot occur in a shell script these seeds are written in.
+  local line="$1" prev="" arith=$'\001'
+  line=${line//'(('/"$arith"}
+  while [ "$line" != "$prev" ]; do
+    prev="$line"
+    line=$(printf '%s\n' "$line" | sed -E \
+      -e 's/(^|[{(|;!]|&&|\|\|)([[:space:]]*)(as_user|\$SUDO|sudo -n|sudo)[[:space:]]+/\1\2/g' \
+      -e 's/(^|[[:space:]])(if|then|while|until|do|elif)([[:space:]]+)(as_user|\$SUDO|sudo -n|sudo)[[:space:]]+/\1\2\3/g' \
+      -e 's/^(as_user|\$SUDO|sudo -n|sudo)[[:space:]]+//' \
+      -e 's/(^|[{(|;!]|&&|\|\|)([[:space:]]*)runuser -u [^[:space:]]+ --[[:space:]]+/\1\2/g' \
+      -e 's/(^|[[:space:]])(if|then|while|until|do|elif)([[:space:]]+)runuser -u [^[:space:]]+ --[[:space:]]+/\1\2\3/g' \
+      -e 's/^runuser -u [^[:space:]]+ --[[:space:]]+//')
+  done
+  line=${line//"$arith"/'(('}
+  printf '%s' "$line"
+}
+
+# Per-project assignments the template carries as `{USER}` / `{WORKSPACE}`
+# placeholders, for which every rendered seed necessarily holds a different
+# literal. Dropping them from BOTH sides is what makes the two shapes the fleet
+# actually uses compare equal:
+#
+#   inline  - the seed keeps `WORKSPACE="/workspaces/x"` where the template has
+#             `WORKSPACE="{WORKSPACE}"`, inside a compared window. A value
+#             mismatch: 1 line behind AND 1 ahead, reported as DIVERGED.
+#   hoisted - the seed lifts the assignment into its variable block, far above
+#             every anchor. A placement mismatch: the template's line has no
+#             counterpart in the window at all, reported as BEHIND.
+#
+# Neutralizing the placeholder to its value would only fix the first shape.
+# Dropping the line fixes both, because a window that no longer contains it on
+# either side compares equal whether the seed hoisted it or not.
+#
+# LITERAL RHS ONLY. catch-up-local-seed.md is explicit that WORKSPACE must not
+# be derived - the seed is mounted at an arbitrary container path that need not
+# sit inside the checkout, so `git rev-parse` from there resolves to the wrong
+# tree. A seed that regressed to `WORKSPACE="$(git rev-parse --show-toplevel)"`
+# must still be flagged, so anything containing `$`, a backtick or `$(` is kept
+# and drifts against the template's dropped literal.
+#
+# The definedness check in sd_check_seed is the compensating guard: block
+# comparison no longer notices a seed that never assigns these at all.
+# The single grammar for a per-project templated declaration, shared by the drop
+# rule in sd_normalize_code_line and the whole-file check in
+# sd_templated_var_problems. Exactly one place decides what one of these
+# declarations IS and whether its RHS is a plain literal: two copies of that
+# question drifting apart is precisely how a line gets dropped from the diff by
+# one rule and then missed by the other.
+#
+#   0 - a declaration with a plain literal RHS   => dropped from comparison
+#   2 - a declaration with any other RHS         => kept, and reported
+#   1 - not one of these declarations at all
+# Splits a declaration into its individual words, one per line, honouring one
+# level of quoting so `export WORKSPACE="/my path" OTHER=1` yields two words and
+# not three. Deliberately not `eval` or `set --`: the input is seed content, and
+# word-splitting it through the shell would execute the substitutions inside it.
+sd_split_words() {
+  local s="$1" out="" q="" c i n=${#1}
+  for ((i = 0; i < n; i++)); do
+    c="${s:i:1}"
+    if [ -n "$q" ]; then
+      out="$out$c"
+      [ "$c" = "$q" ] && q=""
+      continue
+    fi
+    case "$c" in
+      \" | \')
+        q="$c"
+        out="$out$c"
+        ;;
+      ' ' | $'\t') out="$out"$'\n' ;;
+      *) out="$out$c" ;;
+    esac
+  done
+  printf '%s\n' "$out"
+}
+
+# The single grammar for a per-project templated declaration, shared by the drop
+# rule in sd_normalize_code_line and the whole-file check in
+# sd_templated_var_problems. Exactly one place decides what one of these
+# declarations IS and whether its RHS is a plain literal: two copies of that
+# question drifting apart is precisely how a line gets dropped from the diff by
+# one rule and then missed by the other.
+#
+# With no $2 the question is "is this line, as a whole, a lone literal
+# declaration?" - the drop rule's question. With $2 it is "does this line
+# declare THAT variable, and how?" - the whole-file check's question.
+#
+#   0 - a declaration with a plain literal RHS   => dropped from comparison
+#   2 - a declaration with any other RHS         => kept, and reported
+#   1 - not one of these declarations at all
+sd_classify_templated_assignment() {
+  local line="$1" want="${2:-}" rhs inner word name kw=0 found=1
+  local words=() w
+  line="${line#"${line%%[![:space:]]*}"}"
+  # Declaration prefixes, kept identical on both sides of the shared grammar.
+  # `export` matters: a seed that exports WORKSPACE has declared it just as much
+  # as a bare assignment does, and rejecting the form here while accepting it in
+  # the definedness check is the inconsistency this function exists to prevent.
+  case "$line" in
+    export\ * | declare\ * | readonly\ * | typeset\ * | local\ *)
+      kw=1
+      # `local` does NOT declare a whole-file variable: bash refuses it outside
+      # a function outright, and inside one the binding dies with the call, so a
+      # top-level read afterwards still aborts under `set -u`. Treating it as an
+      # assignment would silence exactly the failure this check exists to catch.
+      # It stays a declaration for the DROP rule, where the question is only
+      # whether the line is a per-project value the diff should ignore.
+      case "$line" in
+        local\ *) [ -z "$want" ] || return 1 ;;
+      esac
+      line="${line#* }"
+      line="${line#"${line%%[![:space:]]*}"}"
+      # EVERY option word, not just the first: `declare -x -r WORKSPACE=...` and
+      # `local -r WORKSPACE=...` are declarations too, and stopping after one
+      # leaves the option looking like the variable name - which reports a
+      # perfectly well-defined WORKSPACE as never assigned.
+      while :; do
+        case "$line" in
+          -*)
+            case "$line" in
+              *' '*)
+                line="${line#* }"
+                line="${line#"${line%%[![:space:]]*}"}"
+                ;;
+              # Options and nothing else.
+              *) return 1 ;;
+            esac
+            ;;
+          *) break ;;
+        esac
+      done
+      ;;
+  esac
+  while IFS= read -r w; do
+    [ -n "$w" ] || continue
+    words+=("$w")
+  done <<<"$(sd_split_words "$line")"
+  [ "${#words[@]}" -gt 0 ] || return 1
+  # Without a declaration keyword, only a LONE `NAME=VALUE` line declares
+  # anything: `WORKSPACE=/w cmd` is a prefix assignment scoped to that one
+  # command, so it must not count as defining WORKSPACE for the rest of the
+  # seed. With a keyword, every word is a declaration.
+  if [ "$kw" -eq 0 ] && [ "${#words[@]}" -ne 1 ]; then
+    return 1
+  fi
+  # The drop rule never removes a line that does more than one thing: whatever
+  # else it assigns is information the diff still needs.
+  if [ -z "$want" ] && [ "${#words[@]}" -ne 1 ]; then
+    return 1
+  fi
+  for word in "${words[@]}"; do
+    case "$word" in *=*) ;; *) continue ;; esac
+    name="${word%%=*}"
+    case "$name" in
+      SEED_USER | WORKSPACE) ;;
+      *) continue ;;
+    esac
+    [ -z "$want" ] || [ "$name" = "$want" ] || continue
+    rhs="${word#*=}"
+    case "$rhs" in
+      # Single quotes suppress every expansion, so the content is literal
+      # whatever it holds - but the closing quote must be the LAST character, or
+      # what looks like a quoted value is a quoted value followed by more.
+      \'*\')
+        inner="${rhs%\'}" inner="${inner#\'}"
+        case "$inner" in *\'*) return 2 ;; esac
+        ;;
+      \"*\")
+        inner="${rhs%\"}" inner="${inner#\"}"
+        case "$inner" in *'$'* | *'`'* | *'"'*) return 2 ;; esac
+        ;;
+      # Unquoted: an allowlist of characters a literal path can contain, so
+      # every form carrying shell syntax - `WORKSPACE=/w;true`,
+      # `WORKSPACE=<(pwd)`, `WORKSPACE=~`, a glob - is rejected rather than
+      # silently dropped. Rejecting is the safe direction: a rejected line is
+      # kept and shows up as drift.
+      *)
+        case "$rhs" in
+          *[!A-Za-z0-9_/.:@%+,-]*) return 2 ;;
+        esac
+        ;;
+    esac
+    found=0
+  done
+  return "$found"
+}
+
+sd_canon_test() {
+  # `[ X ]` and `test X` are one builtin spelled two ways, and the seeds split
+  # on it constantly: the template writes `if test -L "$GITIGNORE"` where
+  # slabledger writes `[ -L "$GITIGNORE" ] &&`. Canonicalize onto `test`.
+  #
+  # A token walk rather than a sed fixpoint loop like sd_drop_priv_prefix's:
+  # this runs on every code line of every block of every seed, and a second
+  # per-line subshell measured ~30% onto a full audit. sd_normalize_code_line
+  # has already collapsed whitespace to single spaces, so splitting on space
+  # is exact here and needs no IFS games.
+  #
+  # Only a STANDALONE `[` token is rewritten, never `${a[0]}` or a `[Yy]` glob,
+  # because those carry no surrounding spaces and so never form their own word.
+  #
+  # BAIL-OUT RULE: a token walk cannot parse shell, so where the pairing of an
+  # opener to its closer is not unambiguous this returns the line UNCHANGED
+  # rather than guessing. Three shapes bail: a bracket inside a quoted string
+  # (`[ "$x" = "a ] b" ]`), a `[` appearing while a predicate is already open
+  # (`[ -z "$(cmd [ x ] arg)" ]` — the inner one is not in command position but
+  # its closer is still a bare `]`), and a closer with no opener. An
+  # un-canonicalized line at worst reports drift a human then reads; a
+  # mis-paired rewrite silently corrupts the comparison. Prefer visible drift
+  # over a false clean.
+  local line="$1"
+  case "$line" in
+    *'[ '*) ;;
+    *) # nothing to do; skip the split entirely for the common case
+      printf '%s' "$line"
+      return 0
+      ;;
+  esac
+
+  local -a toks out mk
+  read -r -a toks <<<"$line"
+  local i n=${#toks[@]} t cmdpos=1 open=0 inq="" k len c
+  out=() mk=()
+  for ((i = 0; i < n; i++)); do
+    t="${toks[i]}"
+
+    # Structural brackets are only structural outside quotes.
+    if [ -z "$inq" ]; then
+      if [ "$t" = "[" ]; then
+        # Nesting is not supported, only rejected: a second opener while one is
+        # live means the closers cannot be paired by position alone.
+        if [ "$open" = 1 ] || [ "$cmdpos" != 1 ]; then
+          printf '%s' "$line"
+          return 0
+        fi
+        out+=("test")
+        mk+=($((${#out[@]} - 1)))
+        open=1
+        cmdpos=0
+        continue
+      fi
+      if [ "$t" = "]" ] || [ "$t" = "];" ]; then
+        if [ "$open" != 1 ]; then
+          printf '%s' "$line"
+          return 0
+        fi
+        open=0
+        # The closer arrives as its own word, but `if [ -x "$f" ]; then`
+        # collapses the separator onto it — so `];` must drop the bracket and
+        # KEEP the `;`, or every `if [ ... ]; then` in the tree loses its
+        # command separator and the window stops parsing under `bash -n`.
+        if [ "$t" = "];" ]; then
+          # Reattach, not `out+=(";")`: the template writes `if test -x "$f";
+          # then` with the separator flush against the operand, so a standalone
+          # `;` would leave a stray space and the two spellings would still not
+          # compare equal — which is the entire point of this function.
+          if [ "${#out[@]}" -gt 0 ]; then
+            out[${#out[@]} - 1]="${out[${#out[@]} - 1]};"
+          else
+            out+=(";")
+          fi
+          cmdpos=1
+        fi
+        continue
+      fi
+    fi
+
+    out+=("$t")
+
+    # Quote tracking, charwise but only for tokens that actually contain a
+    # quote — the overwhelming majority do not, so the fast path stays a single
+    # pattern match. An escaped quote is not modelled; miscounting one only
+    # costs a bail-out, which is safe by construction.
+    case "$t" in
+      *[\"\']*)
+        len=${#t}
+        for ((k = 0; k < len; k++)); do
+          c="${t:k:1}"
+          if [ -z "$inq" ]; then
+            case "$c" in '"' | "'") inq="$c" ;; esac
+          elif [ "$c" = "$inq" ]; then
+            inq=""
+          fi
+        done
+        ;;
+    esac
+
+    # A command starts at line start or after a separator/keyword. `;`-suffixed
+    # words (`then`, `fi;`) count via the trailing-`;` test.
+    if [ -z "$inq" ]; then
+      case "$t" in
+        '&&' | '||' | '|' | '{' | '(' | '!' | 'if' | 'then' | 'elif' | 'while' | 'until' | 'do') cmdpos=1 ;;
+        *';') cmdpos=1 ;;
+        *) cmdpos=0 ;;
+      esac
+    fi
+  done
+
+  # An opener with no closer, or a string left open, means the walk lost track.
+  if [ "$open" != 0 ] || [ -n "$inq" ]; then
+    printf '%s' "$line"
+    return 0
+  fi
+
+  # `test ! -f x` and `! test -f x` are the same predicate; the seeds write
+  # both (`[ ! -f "$G" ]` normalizes to the former, the template writes the
+  # latter). Hoist the negation so they agree — but ONLY for a `test` this
+  # function itself created, tracked in `mk`. Swapping any adjacent `test !`
+  # pair would rewrite unrelated arguments, turning `echo test ! value` into
+  # `echo ! test value`.
+  local j idx m=${#out[@]}
+  if [ "${#mk[@]}" -gt 0 ]; then
+    for j in "${mk[@]}"; do
+      idx=$((j + 1))
+      if [ "$idx" -lt "$m" ] && [ "${out[idx]}" = "!" ]; then
+        out[j]="!"
+        out[idx]="test"
+      fi
+    done
+  fi
+
+  printf '%s' "${out[*]}"
+}
+
+sd_normalize_code_line() {
+  local line="$1" cls=0
+  line="${line//$'\t'/ }"
+  while [ "$line" != "${line//  / }" ]; do line="${line//  / }"; done
+  line="${line#"${line%%[![:space:]]*}"}"
+  line="${line%"${line##*[![:space:]]}"}"
+  [ -n "$line" ] || return 0
+  # Only a LITERAL declaration is dropped. A derived one stays in the diff and
+  # is reported by the whole-file check as well, so that it is caught wherever
+  # the seed happens to put it.
+  sd_classify_templated_assignment "$line" || cls=$?
+  [ "$cls" -ne 0 ] || return 0
+  line=$(sd_drop_priv_prefix "$line")
+  line=$(sd_canon_test "$line")
+  [ -n "$line" ] || return 0
+  printf '%s\n' "$line" | sd_neutralize_paths
+}
+
+sd_normalize() {
+  local rec tag text rest pending="" joining=0
+  # Positional split, not `IFS=$'\t' read`: that form strips leading tabs from
+  # `text`, which would corrupt every `<<-` heredoc body. `para` and `lineno`
+  # are skipped rather than bound — binding them trips SC2034 under
+  # `shellcheck -S warning`, which this repo gates on.
+  while IFS= read -r rec; do
+    rest="${rec#*$'\t'}"
+    rest="${rest#*$'\t'}"
+    tag="${rest%%$'\t'*}"
+    text="${rest#*$'\t'}"
+    if [ "$tag" = C ]; then
+      if [ "$joining" = 1 ]; then
+        pending="$pending ${text#"${text%%[![:space:]]*}"}"
+      else
+        pending="$text"
+      fi
+      if [ "${pending%\\}" != "$pending" ]; then
+        pending="${pending%\\}"
+        joining=1
+        continue
+      fi
+      sd_normalize_code_line "$pending"
+      pending="" joining=0
+      continue
+    fi
+    # A heredoc body ends any pending continuation: a payload line is data and
+    # must never be folded into the shell line above it.
+    if [ "$joining" = 1 ]; then
+      sd_normalize_code_line "$pending"
+      pending="" joining=0
+    fi
+    if [ "$tag" = Hu ]; then
+      printf '%s\n' "$text" | sd_neutralize_paths
+    else
+      printf '%s\n' "$text"
+    fi
+  done
+  [ "$joining" = 0 ] || sd_normalize_code_line "$pending"
+}
+
+sd_extract() {
+  local file="$1" scan="$2" anchor="$3" paras para window ranges="" keep
+
+  paras=$(sd_paras_with_anchor "$scan" "$anchor")
+  [ -n "$paras" ] || return 4
+
+  for para in $paras; do
+    window=$(sd_window "$file" "$scan" "$para") || return 3
+    ranges+="$window"$'\n'
+  done
+
+  # Union the windows by source line number: `sort -n -u` puts them in file
+  # order and collapses lines two overlapping windows both claim.
+  keep=$(printf '%s' "$ranges" | awk '{ for (i = $1; i <= $2; i++) print i }' | sort -n -u)
+
+  # SD_LAST_WINDOW_SIZE is deliberately a global, not local: both call sites in
+  # sd_check_seed invoke sd_extract with a plain redirect (`sd_extract ... >"$f"`),
+  # not a command substitution, so sd_extract runs in the caller's own shell and
+  # this assignment survives the call — it does not need `printf -v` or a
+  # separate accessor. It is the raw (pre-normalization) line count of the
+  # unioned window, matching END-START+1 in the common single-paragraph case and
+  # generalizing correctly when an anchor matches more than one paragraph.
+  SD_LAST_WINDOW_SIZE=$(printf '%s\n' "$keep" | awk 'END { print NR }')
+
+  printf '%s\n' "$keep" |
+    awk -F'\t' 'NR == FNR { keep[$1] = 1; next } keep[$2]' - "$scan" |
+    sd_normalize
+}
+
+# One temp dir for the whole run, removed by a single trap. Callers never
+# clean up individually, so no early `return` can leak a file.
+SD_TMPDIR=""
+
+# sd_tmp VARNAME — assigns a fresh temp file path to VARNAME in the CALLER's
+# scope, and must never be called inside a command substitution. `$(sd_tmp)`
+# runs in a subshell: the subshell creates the directory, installs the EXIT
+# trap, prints the path, and then — on subshell exit — fires that trap and
+# `rm -rf`s the directory before the caller can write a single byte. The
+# directory and its trap have to be established in the shell that will
+# actually use them, so the path comes back through `printf -v`, not stdout.
+#
+# The EXIT trap REPLACES any the caller already had. That is an accepted side
+# effect of sourcing, not an oversight: chaining would mean parsing `trap -p`
+# output and re-evaluating the recovered handler string, which is a quoting and
+# injection hazard well out of proportion to the exposure. Sourcing this script
+# already sets `e`, `u`, and pipefail in the caller unconditionally, so a caller
+# that sources it is already accepting that its shell state is not preserved.
+sd_tmp() {
+  local __sd_new
+  if [ -z "$SD_TMPDIR" ]; then
+    SD_TMPDIR="$(mktemp -d)" || return 3
+    trap 'rm -rf -- "$SD_TMPDIR"' EXIT HUP INT TERM
+  fi
+  __sd_new="$(mktemp "$SD_TMPDIR/sd.XXXXXX")" || return 3
+  printf -v "$1" '%s' "$__sd_new"
+}
+
+sd_diff_lines() {
+  # TPL_NORM SEED_NORM MARKER; MARKER is '<' for template-only lines and '>'
+  # for seed-only lines. The diff is ordered, so a pure reordering yields lines
+  # under both markers rather than comparing equal.
+  #
+  # diff goes to a FILE, not a command substitution. A removed blank line is
+  # emitted by diff as the record `< ` (marker, space, empty text); command
+  # substitution would strip the trailing newline and sed, preserving the
+  # absent final newline, would then emit zero bytes — making a deleted blank
+  # line read as no difference at all. Via a file every record keeps its
+  # newline and the blank one survives.
+  local rc=0 raw
+  sd_tmp raw || return 3
+  diff -- "$1" "$2" >"$raw" || rc=$?
+  if [ "$rc" -gt 1 ]; then
+    printf 'seed-drift: diff failed comparing %s and %s\n' "$1" "$2" >&2
+    return 3
+  fi
+  sed -n "s/^$3 //p" "$raw"
+}
+
+# Takes a FILE, and counts every record including empty ones. `grep -c .`
+# would skip exactly the blank lines this tool has to notice.
+sd_count_lines() {
+  local n
+  n=$(wc -l <"$1")
+  printf '%s' "${n//[[:space:]]/}"
+}
+
+# Pure classifier: given the two difference counts, name the direction. Split
+# out from sd_verdict so a caller that already holds the counts can name the
+# verdict without re-running diff — and, more importantly, without the
+# `verdict=$(sd_verdict ...)` form, whose non-zero status aborts the whole
+# program under `set -e` and skips every project after it.
+sd_verdict_from_counts() {
+  # BEHIND_COUNT AHEAD_COUNT
+  if [ "$1" -eq 0 ] && [ "$2" -eq 0 ]; then
+    printf 'ok\n'
+  elif [ "$2" -eq 0 ]; then
+    printf 'BEHIND\n'
+  elif [ "$1" -eq 0 ]; then
+    printf 'AHEAD\n'
+  else
+    printf 'DIVERGED\n'
+  fi
+}
+
+# TEST-ONLY. Nothing in the production path calls this: sd_check_seed runs the
+# same four steps inline, because capturing this function's output with
+# `verdict=$(sd_verdict ...)` would swallow a diff failure's non-zero status
+# and, under `set -e`, abort the whole run outside the public 0/1/2 contract
+# (see the comment above that call site). Do NOT "remove the duplication" by
+# wiring this in — the duplication is the fix, not the defect. It survives
+# because the tests exercise the composition of sd_diff_lines, sd_count_lines,
+# and sd_verdict_from_counts in one place; keep it in sync with sd_check_seed
+# if either changes.
+sd_verdict() {
+  # Files, not nested command substitutions: substitution both loses blank
+  # differing lines and swallows a non-zero status from sd_diff_lines, so a
+  # broken diff would silently read as `ok`.
+  local bf af behind ahead
+  sd_tmp bf || return 3
+  sd_tmp af || return 3
+  sd_diff_lines "$1" "$2" '<' >"$bf" || return 3
+  sd_diff_lines "$1" "$2" '>' >"$af" || return 3
+  behind=$(sd_count_lines "$bf")
+  ahead=$(sd_count_lines "$af")
+  sd_verdict_from_counts "$behind" "$ahead"
+}
+
+SD_TEMPLATE="" SD_DOC="" SD_TEMPLATE_SCAN=""
+# Pre-declared for the same reason as SD_TEMPLATE_SCAN above: only sd_main
+# assigns these, but sd_visit_candidates reads the count, and a sourced caller
+# reaching that function without going through sd_main would abort on `unbound
+# variable` under `set -u`. The empty array is safe to declare on bash 3.2 —
+# only expanding it is not, and the count guard already covers that.
+SD_CANDIDATES=()
+SD_CANDIDATE_COUNT=0
+SD_CHECKED=0 SD_SKIPPED=0
+SD_BEHIND=0 SD_AHEAD=0 SD_DIVERGED=0 SD_MISSING=0
+SD_WORST=0
+
+sd_worst() {
+  # `if`, not `[ … ] && …`: the bare-`&&` form leaves the function's status at
+  # 1 on every not-worse call, so it is correct only while a `return 0` stays
+  # the immediately-following statement. All three call sites invoke this as a
+  # bare statement under `set -e`, so a later insert between the two lines
+  # would abort the run on every clean project. An `if` with no else exits 0
+  # whether or not the branch is taken, which removes the dependency.
+  if [ "$1" -gt "$SD_WORST" ]; then
+    SD_WORST="$1"
+  fi
+}
+
+sd_report_block() {
+  if [ -n "$3" ]; then
+    printf '  %-8s %-20s %s\n' "$1" "$2" "$3"
+  else
+    printf '  %-8s %s\n' "$1" "$2"
+  fi
+}
+
+sd_report_samples() {
+  local shown=0 line
+  while IFS= read -r line; do
+    [ "$shown" -lt 2 ] || break
+    [ "${#line}" -le 56 ] || line="${line:0:53}..."
+    printf '             - %s\n' "$line"
+    shown=$((shown + 1))
+  done
+}
+
+sd_report_action() {
+  printf '             -> %s\n' "$1"
+}
+
+# Informational only: a thin window proves little either way and must never
+# affect the verdict or the exit code. $1 names the side ("template" or
+# "seed"); $2 is the raw window size in lines.
+sd_report_thin() {
+  printf '             note: %s window is only %d lines (< %d) - check covers little\n' \
+    "$1" "$2" "$SD_THIN_WINDOW"
+}
+
+# Names every per-project templated variable this seed gets WRONG, as
+# `VAR<TAB>KIND` with KIND one of `undefined` or `derived`. Both are whole-file
+# questions on purpose: block comparison cannot answer either one, and must not
+# be relied on to.
+#
+#   undefined - the seed reads the variable but never declares it. This is the
+#               compensating guard for the drop rule: once those declarations
+#               are excluded from comparison, "hoisted into the variable block"
+#               and "never defined at all" look identical to the diff. The
+#               second is the failure mode catch-up-local-seed.md calls the main
+#               way the task goes wrong - under `set -euo pipefail` the first
+#               expansion aborts the whole seed and surfaces as an
+#               unrelated-looking container start error.
+#   derived   - the declaration exists but is computed. The doc forbids this for
+#               WORKSPACE: the seed is mounted at an arbitrary container path
+#               that need not sit inside the checkout, so `git rev-parse` from
+#               there resolves to the wrong tree. Checked here rather than left
+#               to a block verdict because a derived declaration hoisted into
+#               the variable block never lands in a compared window at all - the
+#               same placement blindness the drop rule was written to remove.
+#
+# Reads the scan, not the file: `C` records have already had trailing comments
+# stripped, so a `$WORKSPACE` mentioned only in a comment is not a reference.
+sd_templated_var_problems() {
+  local scan="$1" var tag text cls assigned derived
+  for var in WORKSPACE SEED_USER; do
+    assigned=0
+    derived=0
+    # The declaration side goes through the shared grammar, in bash, so the
+    # answer here cannot disagree with what sd_normalize_code_line dropped.
+    while IFS=$'\t' read -r _ _ tag text; do
+      [ "$tag" = C ] || continue
+      cls=0
+      sd_classify_templated_assignment "$text" "$var" || cls=$?
+      case "$cls" in
+        0) assigned=1 ;;
+        2) assigned=1 derived=1 ;;
+      esac
+    done <"$scan"
+    if [ "$derived" = 1 ]; then
+      printf '%s\tderived\n' "$var"
+    elif [ "$assigned" = 0 ] &&
+      # The read side stays in awk, which is where the regex work belongs.
+      # A braced expansion counts as a read unless its operator TOLERATES an
+      # unset parameter - `:-` `:=` `:+` and their colonless forms substitute a
+      # default and survive `set -u`. Everything else (`${v}`, `${v%...}`,
+      # `${v#...}`, `${v/...}`, `${v:?...}`, `${v:0:3}`, `${#v}`) aborts, so it
+      # is a read. The trailing word-character exclusions keep `${WORKSPACE_X}`
+      # and `$WORKSPACE_X` from counting as uses of WORKSPACE.
+      #
+      # The text is reconstructed from $0 rather than read out of $4: a scan
+      # record is para/lineno/tag/text, and a seed line containing its own tab
+      # (an indented one, most of them) splits that text across $4, $5, ... so
+      # matching $4 alone silently misses the reference and lets an undefined
+      # variable through.
+      awk -F'\t' -v v="$var" '
+        $3 != "C" { next }
+        {
+          t = $0
+          if (sub(/^[^\t]*\t[^\t]*\t[^\t]*\t/, "", t) == 0) next
+        }
+        t ~ ("\\$" v "([^A-Za-z0-9_]|$)") { used = 1 }
+        t ~ ("\\$\\{" v "\\}") { used = 1 }
+        t ~ ("\\$\\{" v ":[^-=+]") { used = 1 }
+        t ~ ("\\$\\{" v "[^:=+}A-Za-z0-9_-]") { used = 1 }
+        t ~ ("\\$\\{#" v "[^A-Za-z0-9_]") { used = 1 }
+        END { exit used ? 0 : 1 }
+      ' "$scan"; then
+      printf '%s\tundefined\n' "$var"
+    fi
+  done
+  return 0
+}
+
+sd_check_seed() {
+  local seed="$1" name rc=0 block anchor verdict tnorm snorm sscan
+  local behind ahead nb na est tst tsize esize docrows problems pvar pkind
+  name=$(basename -- "$(dirname -- "$(dirname -- "$seed")")")
+  printf '%s  %s\n' "$name" "$seed"
+  if ! bash -n "$seed" 2>/dev/null; then
+    sd_report_block ERROR "$name" 'does not parse (bash -n)'
+    return 2
+  fi
+  # Each file is scanned exactly once. The template scan is built by sd_main
+  # and reused across every seed; the seed scan is built here, once, and
+  # reused across every block. sd_extract needs a scan path — passing "" would
+  # make awk fail to open its input on every call. `sd_tmp NAME`, never
+  # `$(sd_tmp)`: the subshell form deletes the temp dir on subshell exit.
+  sd_tmp sscan || return 2
+  if ! sd_scan "$seed" >"$sscan"; then
+    sd_report_block ERROR '(whole file)' 'seed could not be scanned'
+    sd_report_action 'check the seed parses; see catch-up-local-seed.md Step 3'
+    return 2
+  fi
+  # rc, not `return 2`: the block verdicts are still worth printing, and this
+  # is a whole-file finding that none of them depends on.
+  problems=$(sd_templated_var_problems "$sscan")
+  if [ -n "$problems" ]; then
+    while IFS=$'\t' read -r pvar pkind; do
+      [ -n "$pvar" ] || continue
+      case "$pkind" in
+        undefined)
+          sd_report_block ERROR '(whole file)' "seed reads \$$pvar but never assigns it"
+          sd_report_action 'define it in the seed variable block; see catch-up-local-seed.md'
+          ;;
+        derived)
+          sd_report_block ERROR '(whole file)' "seed derives $pvar instead of assigning a literal"
+          sd_report_action 'the container path need not sit inside the checkout; use a literal'
+          ;;
+      esac
+    done <<<"$problems"
+    rc=2
+  fi
+  sd_tmp tnorm || return 2
+  sd_tmp snorm || return 2
+  # Allocated once per seed, not once per block: the diff output is consumed
+  # before the next iteration overwrites it, so N blocks do not need 2N
+  # files. Same reuse as tnorm/snorm/sscan above.
+  sd_tmp behind || return 2
+  sd_tmp ahead || return 2
+  # Parsed to a file, not piped into the loop through `< <(sd_parse_doc …)`: a
+  # process substitution discards its command's exit status, which is invisible
+  # to both `set -e` and pipefail. Were the doc to become unreadable — or awk to
+  # die partway through it — between sd_main's parse and this one, the loop would
+  # run over however many rows had already been emitted and report the seed on a
+  # truncated block list, or report it clean having compared nothing. Capturing
+  # the status separately from the rows is what sd_main already does with
+  # `if ! blocks=$(sd_parse_doc "$doc")`; this is the same check on the same
+  # input, at the point where the rows are actually consumed.
+  sd_tmp docrows || return 2
+  if ! sd_parse_doc "$SD_DOC" >"$docrows"; then
+    sd_report_block ERROR '(whole file)' 'the doc table could not be parsed'
+    sd_report_action 'check the Step 1 table in catch-up-local-seed.md'
+    return 2
+  fi
+  # A successful parse emitting nothing is a separate case: sd_parse_doc's awk
+  # already exits non-zero on zero rows, so this counter guards a shape that
+  # cannot arise today. It stays because "compared nothing" must never read as
+  # "clean" — same invariant, same reasoning as the empty-template guard below.
+  local rows=0
+  while IFS=$'\t' read -r block anchor; do
+    rows=$((rows + 1))
+    # Branch on the ORIGINAL status. sd_extract returns 4 for "anchor absent"
+    # and 3 for "the block would not parse"; `if ! sd_extract` flattens both
+    # into one branch, so a seed whose block is unextractable would be
+    # reported as MISSING and exit 1 — a wrong verdict at the wrong severity.
+    tst=0
+    sd_extract "$SD_TEMPLATE" "$SD_TEMPLATE_SCAN" "$anchor" >"$tnorm" || tst=$?
+    case "$tst" in
+      0) tsize="$SD_LAST_WINDOW_SIZE" ;;
+      4)
+        sd_report_block ERROR "$block" 'anchor absent from template'
+        rc=2
+        continue
+        ;;
+      *)
+        sd_report_block ERROR "$block" 'template block could not be extracted'
+        rc=2
+        continue
+        ;;
+    esac
+    # An empty template side must never reach the comparison:
+    # sd_verdict_from_counts 0 0 is `ok`, so it would report a clean block
+    # having compared nothing at all. sd_main's anchor validation makes this
+    # unreachable today — the anchor must appear in a `C` record — but that
+    # guarantee lives two functions away, and this is the invariant that
+    # matters here, so it is enforced where it is relied on.
+    if [ ! -s "$tnorm" ]; then
+      sd_report_block ERROR "$block" 'template block extracted to nothing'
+      rc=2
+      continue
+    fi
+    est=0
+    sd_extract "$seed" "$sscan" "$anchor" >"$snorm" || est=$?
+    case "$est" in
+      0) esize="$SD_LAST_WINDOW_SIZE" ;;
+      4)
+        sd_report_block MISSING "$block" 'anchor absent from seed'
+        sd_report_action 'port the block; see catch-up-local-seed.md Step 2'
+        SD_MISSING=$((SD_MISSING + 1))
+        [ "$rc" -ge 1 ] || rc=1
+        continue
+        ;;
+      *)
+        sd_report_block ERROR "$block" 'seed block could not be extracted'
+        rc=2
+        continue
+        ;;
+    esac
+    # Same file-not-substitution rule as sd_verdict: a removed blank line must
+    # survive into the count and the samples.
+    if ! sd_diff_lines "$tnorm" "$snorm" '<' >"$behind" ||
+      ! sd_diff_lines "$tnorm" "$snorm" '>' >"$ahead"; then
+      sd_report_block ERROR "$block" 'diff failed'
+      rc=2
+      continue
+    fi
+    nb=$(sd_count_lines "$behind")
+    na=$(sd_count_lines "$ahead")
+    # From the counts just computed, not `verdict=$(sd_verdict ...)`: that
+    # form re-runs the same two diffs, and its non-zero status on a diff
+    # failure would abort the program under `set -e` — exiting 3 outside the
+    # public 0/1/2 contract and skipping every remaining project.
+    verdict=$(sd_verdict_from_counts "$nb" "$na")
+    case "$verdict" in
+      ok)
+        sd_report_block ok "$block" ''
+        ;;
+      BEHIND)
+        sd_report_block BEHIND "$block" "$nb template lines absent from seed"
+        sd_report_samples <"$behind"
+        sd_report_action 'port from template; see catch-up-local-seed.md Step 2'
+        SD_BEHIND=$((SD_BEHIND + 1))
+        [ "$rc" -ge 1 ] || rc=1
+        ;;
+      AHEAD)
+        sd_report_block AHEAD "$block" "$na seed lines absent from template"
+        sd_report_samples <"$ahead"
+        sd_report_action 'promotion candidate; do NOT overwrite the seed'
+        SD_AHEAD=$((SD_AHEAD + 1))
+        [ "$rc" -ge 1 ] || rc=1
+        ;;
+      DIVERGED)
+        sd_report_block DIVERGED "$block" \
+          "$nb template lines absent from seed, $na seed lines absent from template"
+        sd_report_action 'inspect by hand; do NOT overwrite the seed'
+        SD_DIVERGED=$((SD_DIVERGED + 1))
+        [ "$rc" -ge 1 ] || rc=1
+        ;;
+    esac
+    # Informational only, fires regardless of verdict (including ok) and never
+    # touches rc or the drift tallies above — a thin window means the check
+    # covered too little to trust, not that the block itself is wrong.
+    #
+    # `if`, not `[ … ] && …`: the bare-`&&` form leaves the loop body's status
+    # at 1 whenever the window is thick, so it is safe only while the explicit
+    # `return "$rc"` below stays the very next statement. Appending a line
+    # after it would make a clean seed return 1 — inventing drift inside the
+    # public 0/1/2 contract.
+    if [ "$tsize" -lt "$SD_THIN_WINDOW" ]; then
+      sd_report_thin template "$tsize"
+    fi
+    if [ "$esize" -lt "$SD_THIN_WINDOW" ]; then
+      sd_report_thin seed "$esize"
+    fi
+  done <"$docrows"
+  if [ "$rows" -eq 0 ]; then
+    sd_report_block ERROR '(whole file)' 'no blocks read from the doc table'
+    sd_report_action 'check the Step 1 table in catch-up-local-seed.md'
+    return 2
+  fi
+  return "$rc"
+}
+
+sd_summary() {
+  local drifted=$((SD_BEHIND + SD_AHEAD + SD_DIVERGED + SD_MISSING)) parts="" pair
+  for pair in "behind:$SD_BEHIND" "ahead:$SD_AHEAD" \
+    "diverged:$SD_DIVERGED" "missing:$SD_MISSING"; do
+    [ "${pair#*:}" -gt 0 ] || continue
+    parts="${parts:+$parts, }${pair#*:} ${pair%%:*}"
+  done
+  printf '\n%d checked, %d skipped, %d blocks drifted%s\n' \
+    "$SD_CHECKED" "$SD_SKIPPED" "$drifted" "${parts:+ ($parts)}"
+}
+
+sd_visit_dir() {
+  local dir="$1" seed="$1/.devcontainer/local-seed.sh" rc=0
+  if [ ! -f "$seed" ]; then
+    printf '%s  .devcontainer/ present, no local-seed.sh - skipped\n' \
+      "$(basename -- "$dir")"
+    SD_SKIPPED=$((SD_SKIPPED + 1))
+    return 0
+  fi
+  SD_CHECKED=$((SD_CHECKED + 1))
+  sd_check_seed "$seed" || rc=$?
+  sd_worst "$rc"
+}
+
+sd_visit_candidates() {
+  local root="${SEED_DRIFT_ROOT:-$HOME/workspace}" cand rc=0 visited=0
+  # The scalar, not `${#SD_CANDIDATES[@]}`: expanding an empty array under
+  # `set -u` errors on bash 3.2, still the system bash on macOS
+  # (bin/common.sh:392). The `"${SD_CANDIDATES[@]}"` below is reached only
+  # when the count is non-zero, so it is safe.
+  if [ "$SD_CANDIDATE_COUNT" -eq 0 ]; then
+    # Saved and restored around discovery only. The script is designed to be
+    # sourced (SEED_DRIFT_SOURCE_ONLY=1 — the whole test suite depends on it),
+    # so setting nullglob and walking away would silently change globbing in
+    # the caller's shell. The restore sits after the loop, ahead of both
+    # returns below, so no exit path from here leaks it.
+    #
+    # Not a trap. A `set -e` abort from inside the loop would still leak, and
+    # an ERR trap would not catch it without `set -E` — a larger change than
+    # this justifies. More to the point, sourcing this script already sets
+    # `e`, `u`, and pipefail in the caller unconditionally, on the success
+    # path, so an abort-only nullglob edge is not the marginal exposure here.
+    local had_nullglob=0
+    shopt -q nullglob && had_nullglob=1
+    shopt -s nullglob
+    for cand in "$root"/*/; do
+      cand="${cand%/}"
+      # A directory without .devcontainer/ is not a candidate: silent, not skipped.
+      [ -d "$cand/.devcontainer" ] || continue
+      sd_visit_dir "$cand"
+      visited=$((visited + 1))
+    done
+    if [ "$had_nullglob" -eq 0 ]; then
+      shopt -u nullglob
+    fi
+    if [ "$visited" -eq 0 ]; then
+      # Scoped to discovery only: an explicitly-named absent project is
+      # still a skip at exit 0 (the brief states this outright). But
+      # discovery finding zero projects means the detector could not do its
+      # job at all — 0 checked here is a broken gate, not a clean bill of
+      # health, so this fails closed rather than reporting a quiet "clean".
+      printf 'seed-drift: no projects found under %s\n' "$root" >&2
+      return 2
+    fi
+    return 0
+  fi
+  for cand in "${SD_CANDIDATES[@]}"; do
+    if [ -d "$cand" ]; then
+      if [ ! -d "$cand/.devcontainer" ]; then
+        # An explicitly-named project is a promise, not a glob match: a
+        # renamed or removed .devcontainer/ must be visible in the count, not
+        # silently absorbed the way an unrelated discovery-mode directory is.
+        printf '%s  no .devcontainer/ - skipped\n' "$(basename -- "$cand")"
+        SD_SKIPPED=$((SD_SKIPPED + 1))
+        continue
+      fi
+      sd_visit_dir "$cand"
+    elif [ -e "$cand" ]; then
+      # An existing file is a direct local-seed.sh path.
+      SD_CHECKED=$((SD_CHECKED + 1))
+      rc=0
+      sd_check_seed "$cand" || rc=$?
+      sd_worst "$rc"
+    else
+      # Not checked out here. A skip, so the same project list works on every
+      # machine; it names the path and is counted, so a typo stays visible.
+      printf '%s - not present on this machine - skipped\n' "$cand"
+      SD_SKIPPED=$((SD_SKIPPED + 1))
+    fi
+  done
+}
+
+sd_main() {
+  local template="$SD_TEMPLATE_DEFAULT" doc="$SD_DOC_DEFAULT"
+  SD_CANDIDATES=()
+  # Counted alongside the array because Task 6 must ask "were any candidates
+  # given?" without expanding an empty array under `set -u` — the bash 3.2
+  # pitfall bin/common.sh:392 calls out. macOS ships bash 3.2.
+  SD_CANDIDATE_COUNT=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --template | --doc)
+        if [ $# -lt 2 ]; then
+          printf 'seed-drift: %s needs a PATH\n' "$1" >&2
+          sd_usage >&2
+          return 2
+        fi
+        if [ "$1" = --template ]; then template="$2"; else doc="$2"; fi
+        shift 2
+        ;;
+      --help | -h)
+        sd_usage
+        return 0
+        ;;
+      --)
+        shift
+        SD_CANDIDATES+=("$@")
+        SD_CANDIDATE_COUNT=$((SD_CANDIDATE_COUNT + $#))
+        break
+        ;;
+      -*)
+        printf 'seed-drift: unknown option %s\n' "$1" >&2
+        sd_usage >&2
+        return 2
+        ;;
+      *)
+        SD_CANDIDATES+=("$1")
+        SD_CANDIDATE_COUNT=$((SD_CANDIDATE_COUNT + 1))
+        shift
+        ;;
+    esac
+  done
+
+  if [ ! -r "$template" ]; then
+    printf 'seed-drift: cannot read template %s\n' "$template" >&2
+    return 2
+  fi
+  if [ ! -r "$doc" ]; then
+    printf 'seed-drift: cannot read doc %s\n' "$doc" >&2
+    return 2
+  fi
+
+  if ! bash -n "$template" 2>/dev/null; then
+    printf 'seed-drift: template does not parse: %s\n' "$template" >&2
+    return 2
+  fi
+
+  local blocks name anchor absent=0
+  SD_TEMPLATE="$template"
+  SD_DOC="$doc"
+  SD_TEMPLATE_SCAN=""
+  if ! sd_tmp SD_TEMPLATE_SCAN; then
+    printf 'seed-drift: cannot create a temporary file\n' >&2
+    return 2
+  fi
+  if ! sd_scan "$template" >"$SD_TEMPLATE_SCAN"; then
+    printf 'seed-drift: cannot scan template %s\n' "$template" >&2
+    return 2
+  fi
+  if ! blocks=$(sd_parse_doc "$doc"); then
+    printf 'seed-drift: no block table found in %s\n' "$doc" >&2
+    return 2
+  fi
+  while IFS=$'\t' read -r name anchor; do
+    # Against the scan, not `grep -qF "$anchor" "$template"`. Anchors name
+    # code, and the scan's C records are comment-stripped — so an anchor that
+    # survives only inside a comment now fails validation instead of passing
+    # and then extracting nothing.
+    if [ -z "$(sd_paras_with_anchor "$SD_TEMPLATE_SCAN" "$anchor")" ]; then
+      printf 'seed-drift: anchor %s (block: %s) is absent from %s\n' \
+        "$anchor" "$name" "$template" >&2
+      absent=1
+    fi
+  done <<<"$blocks"
+  if [ "$absent" -ne 0 ]; then
+    return 2
+  fi
+  local vrc=0
+  # `|| vrc=$?`, not a bare call: sd_visit_candidates now returns 2 when
+  # discovery finds nothing, and an uncaptured non-zero status here would
+  # trip `set -e` and exit before sd_summary ever runs — silently dropping
+  # the summary line the "discovery finds nothing" report depends on.
+  sd_visit_candidates || vrc=$?
+  sd_worst "$vrc"
+  sd_summary
+  return "$SD_WORST"
+}
+
+if [ "${SEED_DRIFT_SOURCE_ONLY:-0}" != 1 ]; then
+  sd_main "$@"
+fi

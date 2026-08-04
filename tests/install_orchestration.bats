@@ -267,3 +267,142 @@ CASES
   [ "$status" -eq 0 ]
   [ "${#lines[@]}" -eq 2 ]
 }
+
+# --- work profile Krew bootstrap --------------------------------------------
+#
+# The ctx/ns plugins are installed through Krew, and Linux/WSL has no package
+# for Krew itself, so the work profile installs the pinned tarball first. These
+# cover the artifact selection and the "already present" and "no artifact"
+# paths without touching the network.
+
+@test "work profile installs the reviewed Krew artifact for each Linux architecture" {
+  local arch expected_asset expected_digest
+  while read -r arch expected_asset expected_digest; do
+    run env WORK_INSTALL_SOURCE_ONLY=1 ARTIFACT_ARCH="$arch" OS=WSL bash -c '
+      source "$1/work/install.sh"
+      kubectl() { return 1; }
+      download_verified_artifact() { printf "%s|%s\n" "$1" "$2"; }
+      # Stand in for the real extraction: place a fake krew where the installer
+      # expects the unpacked binary, so the self-install step can run.
+      tar() {
+        local extracted="$4/${5#./}"
+        printf "%s\n" "#!/usr/bin/env bash" "echo krew-self-install \$*" >"$extracted"
+        chmod +x "$extracted"
+      }
+      install_krew
+    ' _ "$REPO_ROOT"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"/$expected_asset.tar.gz|$expected_digest"* ]]
+    [[ "$output" == *"krew-self-install install krew"* ]]
+  done <<CASES
+x86_64 krew-linux_amd64 $KREW_LINUX_AMD64_SHA256
+aarch64 krew-linux_arm64 $KREW_LINUX_ARM64_SHA256
+CASES
+}
+
+@test "work profile leaves an existing Krew install alone" {
+  run env WORK_INSTALL_SOURCE_ONLY=1 OS=WSL bash -c '
+    source "$1/work/install.sh"
+    kubectl() { return 0; }
+    download_verified_artifact() { printf "downloaded\n"; }
+    install_krew
+  ' _ "$REPO_ROOT"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"downloaded"* ]]
+}
+
+@test "work profile warns instead of downloading a Krew artifact it has not reviewed" {
+  run env WORK_INSTALL_SOURCE_ONLY=1 ARTIFACT_ARCH=ppc64le OS=WSL bash -c '
+    source "$1/work/install.sh"
+    kubectl() { return 1; }
+    download_verified_artifact() { printf "downloaded\n"; }
+    install_krew
+  ' _ "$REPO_ROOT"
+  [ "$status" -ne 0 ]
+  [[ "$output" != *"downloaded"* ]]
+  [[ "$output" == *"No reviewed Krew artifact for ppc64le"* ]]
+}
+
+@test "work profile puts the Krew bin directory on PATH for interactive shells" {
+  run rg -n 'KREW_ROOT:-\$HOME/\.krew' "$REPO_ROOT/work/path.zsh"
+  [ "$status" -eq 0 ]
+}
+
+#
+# setup_projects_overlay clones the private overlay repo to ~/.dotfiles/projects.
+# It must never be fatal: a machine without overlays is a working machine, so
+# every failure path logs and returns 0 rather than aborting `set -e` bootstrap.
+
+run_setup_projects_overlay() {
+  run env BOOTSTRAP_SOURCE_ONLY=1 HOME="$HOME" bash -c \
+    'source "$1/bin/bootstrap"; setup_projects_overlay' _ "$REPO_ROOT"
+}
+
+@test "overlay attach skips when no remote is configured" {
+  run_setup_projects_overlay
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"No project overlay repo configured"* ]]
+  [ ! -e "$HOME/.dotfiles/projects" ]
+}
+
+@test "overlay attach clones the configured remote to the canonical path" {
+  local source_repo="$TEST_ROOT/overlay-source"
+  mkdir -p "$source_repo/myrepo"
+  printf '%s\n' "# myrepo" >"$source_repo/myrepo/CLAUDE.md"
+  git -C "$source_repo" init -q
+  git -C "$source_repo" -c user.name=T -c user.email=t@e add -A
+  git -C "$source_repo" -c user.name=T -c user.email=t@e commit -q -m seed
+  printf '%s\n' "$source_repo" >"$HOME/.dotfiles-projects-remote"
+
+  # Stand in for bootstrap being run out of a disposable linked worktree:
+  # DOTFILES_ROOT is that worktree, but the overlays must land in the canonical
+  # checkout, where bin/claude-link-project and the stable link root look.
+  local worktree="$TEST_ROOT/worktrees/some-feature"
+  mkdir -p "$worktree"
+
+  run env BOOTSTRAP_SOURCE_ONLY=1 HOME="$HOME" bash -c \
+    'source "$1/bin/bootstrap"; DOTFILES_ROOT="$2"; setup_projects_overlay' \
+    _ "$REPO_ROOT" "$worktree"
+
+  [ "$status" -eq 0 ]
+  [ -d "$HOME/.dotfiles/projects/.git" ]
+  [ "$(cat "$HOME/.dotfiles/projects/myrepo/CLAUDE.md")" = "# myrepo" ]
+  [ ! -e "$worktree/projects" ]
+}
+
+@test "overlay attach leaves an already-attached repo alone" {
+  mkdir -p "$HOME/.dotfiles/projects/.git"
+  printf '%s\n' "/nonexistent/remote.git" >"$HOME/.dotfiles-projects-remote"
+
+  run_setup_projects_overlay
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"already attached"* ]]
+}
+
+@test "overlay attach refuses to touch a non-empty non-repo directory" {
+  mkdir -p "$HOME/.dotfiles/projects/myrepo"
+  printf '%s\n' "local work" >"$HOME/.dotfiles/projects/myrepo/CLAUDE.md"
+  printf '%s\n' "/nonexistent/remote.git" >"$HOME/.dotfiles-projects-remote"
+
+  run_setup_projects_overlay
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"leaving it alone"* ]]
+  [ "$(cat "$HOME/.dotfiles/projects/myrepo/CLAUDE.md")" = "local work" ]
+}
+
+@test "overlay attach survives a failing clone" {
+  printf '%s\n' "$TEST_ROOT/does-not-exist.git" >"$HOME/.dotfiles-projects-remote"
+
+  run_setup_projects_overlay
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"continuing without overlays"* ]]
+}
+
+@test "overlay attach ignores an empty remote pointer" {
+  printf '\n' >"$HOME/.dotfiles-projects-remote"
+
+  run_setup_projects_overlay
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"is empty"* ]]
+  [ ! -e "$HOME/.dotfiles/projects" ]
+}

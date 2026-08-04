@@ -87,6 +87,25 @@ list_files() {
   [[ "$output" == *"ai/claude/install.sh"* ]]
 }
 
+@test "shfmt discovery covers Bats suites" {
+  # The suites were format-checked by nothing for either linter, so they drifted
+  # silently: two of them were already unformatted when this gate was added.
+  # shfmt only — bash -n and shellcheck cannot parse @test block syntax, so the
+  # other classes deliberately still exclude .bats.
+  list_files shfmt
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"tests/check_file_discovery.bats"* ]]
+  [[ "$output" == *"tests/seed_drift.bats"* ]]
+
+  local class
+  for class in bash shellcheck zsh; do
+    list_files "$class"
+    [ "$status" -eq 0 ]
+    [[ "$output" != *".bats"* ]]
+  done
+}
+
 @test "project seed template is covered by every bash source gate" {
   local expected="ai/marketplace/plugins/my/skills/project-claude-setup/templates/local-seed.sh"
   local class

@@ -17,5 +17,12 @@ docker-compose.override.yaml
 # Other AI assistant scratch / config
 .aider*
 .cursor/
+# Superpowers subagent-driven-development scratch: per-plan ledgers, briefs and
+# review packages. Regenerable, and never part of a PR diff.
+.superpowers/
+
+# Throwaway Playwright config used to pin a worktree's e2e run to a private
+# port with reuseExistingServer:false. Must never reach a commit.
+playwright.local.config.ts
 
 **/.claude/settings.local.json
