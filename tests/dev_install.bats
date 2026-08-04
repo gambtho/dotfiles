@@ -234,6 +234,74 @@ dev_wait_for_event() {
   dev_tmux kill-server || true
 }
 
+# Bootstraps a real tmux server with a holder session (so killing/respawning
+# panes in `proj` never tears the server down before a backgrounded run-shell
+# completes) and a `proj` session stamped with the envelope user options that
+# every hook reads. Callers still source-file dev.tmux.conf themselves, same
+# as the neighboring hook tests above.
+setup_hook_session() {
+  setup_dev_test
+  dev_hook_env
+  source "$REPO_ROOT/tools/dev/lib/backend-tmux.sh"
+
+  dev_tmux new-session -d -s holder
+  dev_tmux new-session -d -s proj
+  dev_tmux set-option -t '=proj:' @dev_workspace_id wsid10
+  dev_tmux set-option -t '=proj:' @dev_slug proj
+  dev_tmux set-option -t '=proj:' @dev_worktree /home/t/proj
+}
+
+@test "pane-died hook reports the dying pane's @dev_pane and omits it when unstamped" {
+  setup_hook_session
+  dev_tmux source-file "$REPO_ROOT/tools/dev/dev.tmux.conf"
+
+  # window w1: one stamped pane, one unstamped
+  dev_tmux new-window -d -t "=proj:" -n w1 "sleep 30" \
+    ';' set-window-option -t "=proj:=w1" remain-on-exit on
+  pid=$(dev_tmux split-window -d -P -F '#{pane_id}' -t "=proj:=w1" "sleep 30")
+  dev_tmux set-option -p -t "$pid" @dev_pane helper
+
+  dev_tmux respawn-pane -k -t "$pid" 'exit 1'
+  for _ in $(seq 1 50); do
+    grep -q '"pane":"helper"' "$DEV_STATE_ROOT/events/events.jsonl" 2>/dev/null && break
+    sleep 0.1
+  done
+  line=$(grep '"pane":"helper"' "$DEV_STATE_ROOT/events/events.jsonl" | tail -n 1)
+  [ "$(jq -r '.event' <<<"$line")" = "pane.died" ]
+  [ "$(jq -r '.data.window' <<<"$line")" = "w1" ]
+
+  # the unstamped pane dies -> event has window only, no pane key
+  upid=$(dev_tmux list-panes -t "=proj:=w1" -F '#{pane_id} #{?#{@dev_pane},s,-}' | awk '$2 == "-" {print $1; exit}')
+  dev_tmux respawn-pane -k -t "$upid" 'exit 1'
+  for _ in $(seq 1 50); do
+    n=$(grep -c '"event":"pane.died"' "$DEV_STATE_ROOT/events/events.jsonl" 2>/dev/null || echo 0)
+    [ "$n" -ge 2 ] && break
+    sleep 0.1
+  done
+  line=$(grep '"event":"pane.died"' "$DEV_STATE_ROOT/events/events.jsonl" | tail -n 1)
+  [ "$(jq -r '.data | has("pane")' <<<"$line")" = "false" ]
+  dev_tmux kill-server || true
+}
+
+@test "pane-died from a fast-exiting split still carries the pane name (atomic stamp)" {
+  setup_hook_session
+  dev_tmux source-file "$REPO_ROOT/tools/dev/dev.tmux.conf"
+  dev_tmux new-window -d -t "=proj:" -n w2 "sleep 30" \
+    ';' set-window-option -t "=proj:=w2" remain-on-exit on
+  # the command exits immediately: if the stamp were a second invocation, the
+  # hook could fire first and emit an identity-less pane.died (spec §2)
+  dev_tmux split-window -t "=proj:=w2" 'exit 1' \
+    ';' set-option -p -t "=proj:=w2" @dev_pane fast
+  for _ in $(seq 1 50); do
+    grep -q '"pane":"fast"' "$DEV_STATE_ROOT/events/events.jsonl" 2>/dev/null && break
+    sleep 0.1
+  done
+  line=$(grep '"pane":"fast"' "$DEV_STATE_ROOT/events/events.jsonl" | tail -n 1)
+  [ "$(jq -r '.event' <<<"$line")" = "pane.died" ]
+  [ "$(jq -r '.data.window' <<<"$line")" = "w2" ]
+  dev_tmux kill-server || true
+}
+
 @test "tmux.conf.symlink sources dev.tmux.conf between idempotency markers" {
   setup_dotfiles_test
   run grep -c '# dev-workspace-config-start' "$REPO_ROOT/tools/tmux/tmux.conf.symlink"
