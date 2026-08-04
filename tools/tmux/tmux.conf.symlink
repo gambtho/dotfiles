@@ -40,3 +40,9 @@ bind l select-pane -R
 if-shell 'command -v win32yank >/dev/null 2>&1' \
     'source-file ~/.dotfiles/tools/tmux/agent-teams-extras.conf'
 # claude-code-agent-teams-config-end
+
+# dev-workspace-config-start
+# Event hooks for the dev workspace platform (tools/dev).
+if-shell '[ -x ~/.dotfiles/tools/dev/dev-event ]' \
+    'source-file ~/.dotfiles/tools/dev/dev.tmux.conf'
+# dev-workspace-config-end
