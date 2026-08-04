@@ -1572,6 +1572,103 @@ SEEDEOF
   [[ "$output" == *"never assigns it"* ]]
 }
 
+@test "a \$WORKSPACE read on a TAB-INDENTED line is still a reference" {
+  t7_setup
+  t7_doc "Overlay-link gitignore" "lname '*dotfiles/projects/*'"
+  cat >"$TPL" <<'TPLEOF'
+#!/usr/bin/env bash
+
+WORKSPACE="{WORKSPACE}"
+if true; then
+	overlay_links="$(cd "$WORKSPACE" && find . -type l -lname '*dotfiles/projects/*' -print)"
+	echo "$overlay_links"
+fi
+TPLEOF
+  # A scan record is para/lineno/tag/text, tab-delimited. A seed line carrying
+  # its own tab — an indented one, which is most of them — splits that text
+  # across $4, $5, ... so a check that matches $4 alone sees `overlay_links="$(cd`
+  # and misses the reference entirely. That is a false NEGATIVE on the
+  # documented fatal case, which is the one direction this must never fail in.
+  printf '%s\n' \
+    '#!/usr/bin/env bash' \
+    '' \
+    'if true; then' \
+    $'\toverlay_links="$(cd "$WORKSPACE" && find . -type l -lname '"'"'*dotfiles/projects/*'"'"' -print)"' \
+    $'\techo "$overlay_links"' \
+    'fi' >"$SEED"
+  grep -q $'\toverlay_links' "$SEED"
+  t7_run "$SEED"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *ERROR* ]]
+  [[ "$output" == *"never assigns it"* ]]
+}
+
+@test "declare/local/export forms count as assigning WORKSPACE" {
+  t7_setup
+  t7_doc "Overlay-link gitignore" "lname '*dotfiles/projects/*'"
+  cat >"$TPL" <<'TPLEOF'
+#!/usr/bin/env bash
+
+WORKSPACE="{WORKSPACE}"
+overlay_links="$(cd "$WORKSPACE" && find . -type l -lname '*dotfiles/projects/*' -print)"
+echo "$overlay_links"
+TPLEOF
+  # Every one of these declares WORKSPACE for the rest of the seed. Stopping
+  # after the FIRST word past the keyword leaves `-x` looking like the variable
+  # name, and the seed is then reported as never assigning a variable it plainly
+  # assigns — a false ERROR that sends the reader to fix a non-problem.
+  local decl
+  for decl in \
+    'declare -x WORKSPACE="/w"' \
+    'declare -x -r WORKSPACE="/w"' \
+    'local -r WORKSPACE="/w"' \
+    'export FOO=1 WORKSPACE="/w"'; do
+    cat >"$SEED" <<SEEDEOF
+#!/usr/bin/env bash
+
+$decl
+overlay_links="\$(cd "\$WORKSPACE" && find . -type l -lname '*dotfiles/projects/*' -print)"
+echo "\$overlay_links"
+SEEDEOF
+    t7_run "$SEED"
+    [[ "$output" != *"never assigns it"* ]] || {
+      echo "false undefined ERROR for: $decl"
+      echo "$output"
+      return 1
+    }
+    [[ "$output" != *"derives WORKSPACE"* ]] || {
+      echo "false derived ERROR for: $decl"
+      echo "$output"
+      return 1
+    }
+  done
+}
+
+@test "a prefix assignment does not count as defining WORKSPACE" {
+  t7_setup
+  t7_doc "Overlay-link gitignore" "lname '*dotfiles/projects/*'"
+  cat >"$TPL" <<'TPLEOF'
+#!/usr/bin/env bash
+
+WORKSPACE="{WORKSPACE}"
+overlay_links="$(cd "$WORKSPACE" && find . -type l -lname '*dotfiles/projects/*' -print)"
+echo "$overlay_links"
+TPLEOF
+  # `WORKSPACE=/w env` is scoped to that one command and does NOT define
+  # WORKSPACE for the line below it, so the seed still aborts under `set -u`.
+  # Splitting a declaration into words must not turn this into an assignment.
+  cat >"$SEED" <<'SEEDEOF'
+#!/usr/bin/env bash
+
+WORKSPACE=/w env >/dev/null
+overlay_links="$(cd "$WORKSPACE" && find . -type l -lname '*dotfiles/projects/*' -print)"
+echo "$overlay_links"
+SEEDEOF
+  t7_run "$SEED"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"never assigns it"* ]]
+}
+
 @test "a \$WORKSPACE mentioned only in a comment is not a reference" {
   t7_setup
   t7_doc "Overlay-link gitignore" "lname '*dotfiles/projects/*'"
@@ -1713,7 +1810,8 @@ SEEDEOF
   local good bad other
   for good in 'WORKSPACE="/app"' "WORKSPACE='/app'" 'WORKSPACE=/app' \
     'SEED_USER="vscode"' 'export WORKSPACE="/app"' 'readonly SEED_USER="node"' \
-    'WORKSPACE="{WORKSPACE}"'; do
+    'WORKSPACE="{WORKSPACE}"' 'declare -x WORKSPACE="/app"' \
+    'declare -x -r WORKSPACE="/app"' 'local -r SEED_USER="node"'; do
     sd_source sd_classify_templated_assignment "$good"
     [ "$status" -eq 0 ] || {
       echo "expected literal (0), got $status for: $good"
@@ -1724,14 +1822,21 @@ SEEDEOF
   # was silently dropped from the comparison.
   for bad in 'WORKSPACE=/w;true' 'WORKSPACE=~' 'WORKSPACE=<(pwd)' \
     'WORKSPACE="$(git rev-parse --show-toplevel)"' 'WORKSPACE=`pwd`' \
-    'WORKSPACE=/w cmd' 'WORKSPACE="/w" "x"' 'WORKSPACE=/w*'; do
+    'WORKSPACE=/w*'; do
     sd_source sd_classify_templated_assignment "$bad"
     [ "$status" -eq 2 ] || {
       echo "expected non-literal (2), got $status for: $bad"
       false
     }
   done
-  for other in 'PATH=/usr/bin' 'echo "$WORKSPACE"' 'WORKSPACES="/x"'; do
+  # Not declarations at all. The prefix forms are scoped to the one command they
+  # precede, so calling them declarations would let a seed that still aborts
+  # under `set -u` read as having defined the variable; `export FOO=1 WS=...`
+  # does declare it, but does more than one thing and so is not a line the drop
+  # rule may remove. Either way the line is KEPT, which is the safe direction.
+  for other in 'PATH=/usr/bin' 'echo "$WORKSPACE"' 'WORKSPACES="/x"' \
+    'WORKSPACE=/w cmd' 'WORKSPACE="/w" "x"' 'export FOO=1 WORKSPACE="/app"' \
+    'declare -x -r'; do
     sd_source sd_classify_templated_assignment "$other"
     [ "$status" -eq 1 ] || {
       echo "expected not-a-declaration (1), got $status for: $other"

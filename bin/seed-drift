@@ -362,8 +362,48 @@ sd_drop_priv_prefix() {
 #   0 - a declaration with a plain literal RHS   => dropped from comparison
 #   2 - a declaration with any other RHS         => kept, and reported
 #   1 - not one of these declarations at all
+# Splits a declaration into its individual words, one per line, honouring one
+# level of quoting so `export WORKSPACE="/my path" OTHER=1` yields two words and
+# not three. Deliberately not `eval` or `set --`: the input is seed content, and
+# word-splitting it through the shell would execute the substitutions inside it.
+sd_split_words() {
+  local s="$1" out="" q="" c i n=${#1}
+  for ((i = 0; i < n; i++)); do
+    c="${s:i:1}"
+    if [ -n "$q" ]; then
+      out="$out$c"
+      [ "$c" = "$q" ] && q=""
+      continue
+    fi
+    case "$c" in
+      \" | \')
+        q="$c"
+        out="$out$c"
+        ;;
+      ' ' | $'\t') out="$out"$'\n' ;;
+      *) out="$out$c" ;;
+    esac
+  done
+  printf '%s\n' "$out"
+}
+
+# The single grammar for a per-project templated declaration, shared by the drop
+# rule in sd_normalize_code_line and the whole-file check in
+# sd_templated_var_problems. Exactly one place decides what one of these
+# declarations IS and whether its RHS is a plain literal: two copies of that
+# question drifting apart is precisely how a line gets dropped from the diff by
+# one rule and then missed by the other.
+#
+# With no $2 the question is "is this line, as a whole, a lone literal
+# declaration?" - the drop rule's question. With $2 it is "does this line
+# declare THAT variable, and how?" - the whole-file check's question.
+#
+#   0 - a declaration with a plain literal RHS   => dropped from comparison
+#   2 - a declaration with any other RHS         => kept, and reported
+#   1 - not one of these declarations at all
 sd_classify_templated_assignment() {
-  local line="$1" rhs inner
+  local line="$1" want="${2:-}" rhs inner word name kw=0 found=1
+  local words=() w
   line="${line#"${line%%[![:space:]]*}"}"
   # Declaration prefixes, kept identical on both sides of the shared grammar.
   # `export` matters: a seed that exports WORKSPACE has declared it just as much
@@ -371,41 +411,82 @@ sd_classify_templated_assignment() {
   # the definedness check is the inconsistency this function exists to prevent.
   case "$line" in
     export\ * | declare\ * | readonly\ * | typeset\ * | local\ *)
+      kw=1
       line="${line#* }"
       line="${line#"${line%%[![:space:]]*}"}"
+      # EVERY option word, not just the first: `declare -x -r WORKSPACE=...` and
+      # `local -r WORKSPACE=...` are declarations too, and stopping after one
+      # leaves the option looking like the variable name - which reports a
+      # perfectly well-defined WORKSPACE as never assigned.
+      while :; do
+        case "$line" in
+          -*)
+            case "$line" in
+              *' '*)
+                line="${line#* }"
+                line="${line#"${line%%[![:space:]]*}"}"
+                ;;
+              # Options and nothing else.
+              *) return 1 ;;
+            esac
+            ;;
+          *) break ;;
+        esac
+      done
       ;;
   esac
-  case "$line" in
-    SEED_USER=* | WORKSPACE=*) ;;
-    *) return 1 ;;
-  esac
-  rhs="${line#*=}"
-  case "$rhs" in
-    # Single quotes suppress every expansion, so the content is literal whatever
-    # it holds - but the closing quote must be the LAST character, or what looks
-    # like a quoted value is really a quoted value followed by more command.
-    \'*\')
-      inner="${rhs%\'}" inner="${inner#\'}"
-      case "$inner" in *\'*) return 2 ;; esac
-      return 0
-      ;;
-    \"*\")
-      inner="${rhs%\"}" inner="${inner#\"}"
-      case "$inner" in *'$'* | *'`'* | *'"'*) return 2 ;; esac
-      return 0
-      ;;
-    # Unquoted: an allowlist of characters a literal path can contain, so every
-    # form carrying shell syntax - `WORKSPACE=/w;true`, `WORKSPACE=<(pwd)`,
-    # `WORKSPACE=~`, a glob, a prefix assignment with a trailing command - is
-    # rejected rather than silently dropped from the comparison. Rejecting is
-    # the safe direction: a rejected line is kept and shows up as drift.
-    *)
-      case "$rhs" in
-        *[!A-Za-z0-9_/.:@%+,-]*) return 2 ;;
-      esac
-      return 0
-      ;;
-  esac
+  while IFS= read -r w; do
+    [ -n "$w" ] || continue
+    words+=("$w")
+  done <<<"$(sd_split_words "$line")"
+  [ "${#words[@]}" -gt 0 ] || return 1
+  # Without a declaration keyword, only a LONE `NAME=VALUE` line declares
+  # anything: `WORKSPACE=/w cmd` is a prefix assignment scoped to that one
+  # command, so it must not count as defining WORKSPACE for the rest of the
+  # seed. With a keyword, every word is a declaration.
+  if [ "$kw" -eq 0 ] && [ "${#words[@]}" -ne 1 ]; then
+    return 1
+  fi
+  # The drop rule never removes a line that does more than one thing: whatever
+  # else it assigns is information the diff still needs.
+  if [ -z "$want" ] && [ "${#words[@]}" -ne 1 ]; then
+    return 1
+  fi
+  for word in "${words[@]}"; do
+    case "$word" in *=*) ;; *) continue ;; esac
+    name="${word%%=*}"
+    case "$name" in
+      SEED_USER | WORKSPACE) ;;
+      *) continue ;;
+    esac
+    [ -z "$want" ] || [ "$name" = "$want" ] || continue
+    rhs="${word#*=}"
+    case "$rhs" in
+      # Single quotes suppress every expansion, so the content is literal
+      # whatever it holds - but the closing quote must be the LAST character, or
+      # what looks like a quoted value is a quoted value followed by more.
+      \'*\')
+        inner="${rhs%\'}" inner="${inner#\'}"
+        case "$inner" in *\'*) return 2 ;; esac
+        ;;
+      \"*\")
+        inner="${rhs%\"}" inner="${inner#\"}"
+        case "$inner" in *'$'* | *'`'* | *'"'*) return 2 ;; esac
+        ;;
+      # Unquoted: an allowlist of characters a literal path can contain, so
+      # every form carrying shell syntax - `WORKSPACE=/w;true`,
+      # `WORKSPACE=<(pwd)`, `WORKSPACE=~`, a glob - is rejected rather than
+      # silently dropped. Rejecting is the safe direction: a rejected line is
+      # kept and shows up as drift.
+      *)
+        case "$rhs" in
+          *[!A-Za-z0-9_/.:@%+,-]*) return 2 ;;
+        esac
+        ;;
+    esac
+    found=0
+  done
+  return "$found"
 }
 
 sd_normalize_code_line() {
@@ -680,10 +761,10 @@ sd_templated_var_problems() {
     while IFS=$'\t' read -r _ _ tag text; do
       [ "$tag" = C ] || continue
       cls=0
-      sd_classify_templated_assignment "$text" || cls=$?
+      sd_classify_templated_assignment "$text" "$var" || cls=$?
       case "$cls" in
-        0) case "$text" in *"$var"=*) assigned=1 ;; esac ;;
-        2) case "$text" in *"$var"=*) assigned=1 derived=1 ;; esac ;;
+        0) assigned=1 ;;
+        2) assigned=1 derived=1 ;;
       esac
     done <"$scan"
     if [ "$derived" = 1 ]; then
@@ -696,13 +777,23 @@ sd_templated_var_problems() {
       # `${v#...}`, `${v/...}`, `${v:?...}`, `${v:0:3}`, `${#v}`) aborts, so it
       # is a read. The trailing word-character exclusions keep `${WORKSPACE_X}`
       # and `$WORKSPACE_X` from counting as uses of WORKSPACE.
+      #
+      # The text is reconstructed from $0 rather than read out of $4: a scan
+      # record is para/lineno/tag/text, and a seed line containing its own tab
+      # (an indented one, most of them) splits that text across $4, $5, ... so
+      # matching $4 alone silently misses the reference and lets an undefined
+      # variable through.
       awk -F'\t' -v v="$var" '
         $3 != "C" { next }
-        $4 ~ ("\\$" v "([^A-Za-z0-9_]|$)") { used = 1 }
-        $4 ~ ("\\$\\{" v "\\}") { used = 1 }
-        $4 ~ ("\\$\\{" v ":[^-=+]") { used = 1 }
-        $4 ~ ("\\$\\{" v "[^:=+}A-Za-z0-9_-]") { used = 1 }
-        $4 ~ ("\\$\\{#" v "[^A-Za-z0-9_]") { used = 1 }
+        {
+          t = $0
+          if (sub(/^[^\t]*\t[^\t]*\t[^\t]*\t/, "", t) == 0) next
+        }
+        t ~ ("\\$" v "([^A-Za-z0-9_]|$)") { used = 1 }
+        t ~ ("\\$\\{" v "\\}") { used = 1 }
+        t ~ ("\\$\\{" v ":[^-=+]") { used = 1 }
+        t ~ ("\\$\\{" v "[^:=+}A-Za-z0-9_-]") { used = 1 }
+        t ~ ("\\$\\{#" v "[^A-Za-z0-9_]") { used = 1 }
         END { exit used ? 0 : 1 }
       ' "$scan"; then
       printf '%s\tundefined\n' "$var"
