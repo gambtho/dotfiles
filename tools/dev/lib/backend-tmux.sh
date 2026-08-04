@@ -328,7 +328,15 @@ dev_backend_query() {
   '
 }
 
-# dev_backend_respawn_pane <session_name> <window> <command> [container_id]
+# dev_backend_respawn_pane <session_name> <window> <command> [container_id] \
+#   [pane_handle] [pane_name]
+#
+# With a pane_handle (an id from dev_backend_query) the respawn targets exactly
+# that pane; without one it falls back to the window target, which tmux
+# resolves to the window's ACTIVE pane — correct only for single-pane windows,
+# which is the only caller that omits it. pane_name, when non-empty, is the
+# logical @dev_pane identity and is recorded on the event; the stamp itself
+# survives respawn because the pane object does.
 #
 # The envelope identity is read back from the session's user options rather
 # than passed in, which is the same path the tmux hooks take.
@@ -338,15 +346,23 @@ dev_backend_query() {
 # `restarts` counter would report double every recovery.
 dev_backend_respawn_pane() {
   local session_name="$1" window="$2" pane_command="$3" container_id="${4:-}"
-  local workspace_id slug worktree ev_id ev_ts data line
-  dev_tmux respawn-pane -k -t "=$session_name:=$window" "$pane_command" || return 1
+  local pane_handle="${5:-}" pane_name="${6:-}"
+  local target workspace_id slug worktree ev_id ev_ts data line
+  if [[ -n "$pane_handle" ]]; then
+    target="$pane_handle"
+  else
+    target="=$session_name:=$window"
+  fi
+  dev_tmux respawn-pane -k -t "$target" "$pane_command" || return 1
   workspace_id=$(dev_tmux show-options -qv -t "=$session_name:" @dev_workspace_id 2>/dev/null || true)
   slug=$(dev_tmux show-options -qv -t "=$session_name:" @dev_slug 2>/dev/null || true)
   worktree=$(dev_tmux show-options -qv -t "=$session_name:" @dev_worktree 2>/dev/null || true)
   ev_id=$(dev_event_id_random)
   ev_ts=$(dev_now)
-  data=$(jq -nc --arg w "$window" --arg c "$container_id" \
-    '{window: $w} + (if $c == "" then {} else {container_id: $c} end)')
+  data=$(jq -nc --arg w "$window" --arg p "$pane_name" --arg c "$container_id" \
+    '{window: $w}
+     + (if $p == "" then {} else {pane: $p} end)
+     + (if $c == "" then {} else {container_id: $c} end)')
   line=$(dev_event_build "$ev_id" "$ev_ts" "pane.respawned" \
     "$workspace_id" "$slug" "$session_name" "$worktree" "$data")
   dev_event_append "$line"

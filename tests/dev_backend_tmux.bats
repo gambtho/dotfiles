@@ -465,3 +465,38 @@ fixture_pane_config() {
   done
   [ "$(cat "$TEST_WT/probe.txt")" = "from-window" ]
 }
+
+@test "respawn_pane with a handle revives exactly that pane and stamps survive" {
+  dev_backend_create "proj" "aa11" "proj" "$TEST_WT"
+  dev_backend_apply_layout "proj" "$(fixture_pane_config)" "$(fixture_record)"
+
+  target=$(dev_tmux list-panes -t "=proj:=main" -F '#{pane_id} #{?#{@dev_pane},#{@dev_pane},-}' |
+    awk '$2 == "agent-2" {print $1; exit}')
+  dev_tmux respawn-pane -k -t "$target" 'exit 7'
+  for _ in $(seq 1 50); do
+    [ "$(dev_tmux display-message -p -t "$target" '#{pane_dead}')" = "1" ] && break
+    sleep 0.1
+  done
+  # make a DIFFERENT pane the window's active pane, to prove targeting is by
+  # handle and not by the old window-target (= active pane) bug
+  other=$(dev_tmux list-panes -t "=proj:=main" -F '#{pane_id} #{?#{@dev_pane},#{@dev_pane},-}' |
+    awk '$2 == "shell" {print $1; exit}')
+  dev_tmux select-pane -t "$other"
+
+  dev_backend_respawn_pane "proj" "main" "sleep 30" "" "$target" "agent-2"
+  [ "$(dev_tmux display-message -p -t "$target" '#{pane_dead}')" = "0" ]
+  [ "$(dev_tmux display-message -p -t "$target" '#{@dev_pane}')" = "agent-2" ]
+
+  line=$(grep '"event":"pane.respawned"' "$DEV_STATE_ROOT/events/events.jsonl" | tail -n 1)
+  [ "$(jq -r '.data.window' <<<"$line")" = "main" ]
+  [ "$(jq -r '.data.pane' <<<"$line")" = "agent-2" ]
+}
+
+@test "respawn_pane without a handle keeps the single-pane event bytes" {
+  dev_backend_create "proj" "aa11" "proj" "$TEST_WT"
+  dev_backend_apply_layout "proj" "$(fixture_config)" "$(fixture_record)"
+  dev_backend_respawn_pane "proj" "shell" "sleep 30" "cid-1"
+  line=$(grep '"event":"pane.respawned"' "$DEV_STATE_ROOT/events/events.jsonl" | tail -n 1)
+  [ "$(jq -r '.data | has("pane")' <<<"$line")" = "false" ]
+  [ "$(jq -r '.data.container_id' <<<"$line")" = "cid-1" ]
+}
