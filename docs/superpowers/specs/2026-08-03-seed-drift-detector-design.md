@@ -158,11 +158,52 @@ A window starts as one blank-line-delimited paragraph — heredoc-aware, so a bl
 line inside a heredoc body does not end a paragraph — and is then **grown until
 the extracted text parses on its own**:
 
-1. Take the paragraph whose non-comment text contains the anchor.
-2. While `bash -n` on the extracted fragment fails, append the next paragraph;
-   if that reaches end of file, prepend the preceding paragraph instead.
-3. If both directions are exhausted without parsing, the block is an
+1. Take the paragraph whose non-comment text contains the anchor; call it `para`.
+2. Search **paragraph pairs** `(lo, hi)`, with `lo` walking down from `para` to
+   the first paragraph and, for each `lo`, `hi` walking up from `para` to the
+   last. Extract lines `[start of lo .. end of hi]` and test it with `bash -n`.
+   The first pair that parses is the window. `(para, para)` is tried first, so a
+   paragraph that already parses standalone is returned unchanged.
+3. The search is capped at **400 parse attempts** per anchor. If no pair parses
+   before the cap, or the pairs are exhausted first, the block is an
    **extraction error** (exit 2), never `ok`.
+
+### The search is two-dimensional; the original one-dimensional rule was wrong (amended)
+
+Step 2 originally read: "while `bash -n` fails, append the next paragraph; if
+that reaches end of file, prepend the preceding paragraph instead." That rule is
+wrong in two ways, and the implementation faithfully reproduced both.
+
+**It cannot express the common case.** An anchor in the middle of a
+multi-paragraph function body needs the window grown *back* to `funcname() {`
+**and** *forward* to the closing `}` at the same time. A walk that only ever
+moves one edge, and only moves the second edge after the first has run out of
+file, never visits that pair.
+
+**It leaves the window end at EOF.** Once forward growth reached the last
+paragraph, nothing restored `end` before backward growth began — so *any* block
+needing upward growth extracted `[lo's start .. end of file]`. The whole tail of
+the file was then normalized and diffed as if it belonged to that block,
+reporting other blocks' drift, and drift in undocumented code, under the wrong
+block's name.
+
+This was not hypothetical. On the real five-seed corpus it fired once, on
+`wanderer-notifier`'s `DOTFILES_LOAD_HOOK` anchor: the window ran 582–719
+(to EOF) instead of 582–649 (the enclosing `seed_self_check()` function),
+inflating that block's `AHEAD` count from 41 to 87 seed lines. The
+138-line maximum in the original window measurement was this bug, not a real
+block. Correcting it leaves 58 of 59 corpus windows byte-identical and the
+summary line unchanged.
+
+The pair search fixes both: it visits every `(lo, hi)` combination, and each
+candidate's `end` is derived from `hi` rather than left over from a previous
+iteration.
+
+**Why the cap.** The failing path is now O(paragraphs²) `bash -n` invocations
+rather than O(paragraphs). The cap bounds the *error* path only — a window that
+parses exits on its first success, and 58 of 59 corpus windows parse at the very
+first pair — so it costs a passing anchor nothing. It reports the same status
+the exhaustion path already did, so it needs no new handling downstream.
 
 ### Blank lines are formatting; the parse check is what makes extraction sound
 
@@ -294,6 +335,11 @@ warning whenever the growth loop did not iterate; that was rejected because it
 would fire on 94 of the 95 windows — including a 109-line one — training the
 reader to ignore it. The concern (a window that proves too little) is real; the
 proxy (did it grow) was not measuring that. Warn on **size**, directly.
+
+Re-measured after the pair-search correction above: the 138-line maximum was the
+runaway-to-EOF window, and the true maximum is 109. The **minimum is unchanged
+at 9**, which is the number `SD_THIN_WINDOW` is calibrated against, so the
+threshold is unaffected.
 
 The tool now emits a note whenever an extracted window — template or seed,
 independently — is fewer than **`SD_THIN_WINDOW` (5) raw, pre-normalization
@@ -554,7 +600,10 @@ Required cases:
   must still be reported when the anchor is in the condition.
 - **a window that never parses -> exit 2**, and a block requiring *upward*
   growth (anchor in the body, `if` header in the preceding paragraph) is
-  extracted whole.
+  extracted whole — including when paragraphs follow the enclosing statement,
+  which is the case the pair search exists for and the case the original
+  one-dimensional rule got wrong. A block needing growth in *both* directions
+  at once, and the parse-attempt cap, are covered too.
 - **heredoc payload is compared verbatim**, three cases: a changed `#` line
   inside the `GITEOF` body is drift (not stripped as a comment); a changed blank
   line or leading whitespace inside a body is drift; a trailing `\` in a body is

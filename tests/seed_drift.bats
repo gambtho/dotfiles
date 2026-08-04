@@ -329,6 +329,71 @@ make_scan() {
   [ "$output" = "1 4" ]
 }
 
+@test "sd_window stops at the enclosing statement when growing backward, not at EOF" {
+  # The test above cannot detect the bug this one is for: its anchor sits in
+  # the file's LAST paragraph, so the window end is already EOF and a correct
+  # implementation and one that never rolls the end back agree. Here there is
+  # a trailing paragraph after the enclosing `fi`, so the two disagree — the
+  # old forward-to-EOF-then-backward walk returned "1 6", swallowing
+  # UNRELATED=2 into a block that has nothing to do with it.
+  printf 'if [ -n "$x" ]; then\n\n  echo ANCHOR\nfi\n\nUNRELATED=2\n' >"$FIX/f.sh"
+  make_scan "$FIX/f.sh"
+  sd_source sd_window "$FIX/f.sh" "$FIX/f.sh.scan" 2
+  [ "$status" -eq 0 ]
+  [ "$output" = "1 4" ]
+}
+
+@test "sd_window grows in both directions at once for an anchor inside a function body" {
+  # The common real shape: the anchor's paragraph needs the window grown BACK
+  # to `setup() {` and FORWARD to its closing `}` simultaneously. No
+  # one-dimensional walk can reach this pair; only the (lo, hi) search can.
+  printf 'setup() {\n  local a=1\n\n  if [ -n "$x" ]; then\n    echo ANCHOR\n\n    echo more\n  fi\n}\n\nUNRELATED=2\n' \
+    >"$FIX/f.sh"
+  make_scan "$FIX/f.sh"
+  sd_source sd_window "$FIX/f.sh" "$FIX/f.sh.scan" 2
+  [ "$status" -eq 0 ]
+  [ "$output" = "1 9" ]
+}
+
+# sd_cap_fixture BEFORE AFTER — a file whose anchor paragraph is extractable
+# only at the very last (lo, hi) pair the search tries.
+#
+# The anchor's paragraph carries the closing `fi` of an `if` opened in
+# paragraph 1, so no pair starting below paragraph 1 can ever parse: the
+# stray `fi` is unmatched in every one of them. The search therefore walks
+# every `hi` for every `lo` down to 1 before it succeeds, which is
+# (BEFORE + 1) * (AFTER + 1) + 1 parse attempts — the knob these two tests
+# turn to sit either side of SD_MAX_PARSE_ATTEMPTS.
+sd_cap_fixture() {
+  local n
+  {
+    printf 'if true; then\n\n'
+    for n in $(seq "$1"); do printf '  echo p%s\n\n' "$n"; done
+    printf '  ANCHOR=1\nfi\n\n'
+    for n in $(seq "$2"); do printf '  echo q%s\n\n' "$n"; done
+  } >"$FIX/f.sh"
+  make_scan "$FIX/f.sh"
+}
+
+@test "sd_window finds a far window while the search stays under the parse-attempt cap" {
+  # 9 * 9 + 1 = 82 attempts, well under the cap: the window is found.
+  sd_cap_fixture 8 8
+  sd_source sd_window "$FIX/f.sh" "$FIX/f.sh.scan" 10
+  [ "$status" -eq 0 ]
+  [ "$output" = "1 20" ]
+}
+
+@test "sd_window gives up with status 3 once the parse-attempt cap is reached" {
+  # Identical shape, only bigger: 21 * 21 + 1 = 442 attempts, so the winning
+  # pair sits past SD_MAX_PARSE_ATTEMPTS=400 and is never reached. The cap —
+  # not exhaustion — is what ends this search, and it reports the same
+  # status 3 the exhaustion path already uses, so it needs no new handling in
+  # sd_extract or sd_check_seed.
+  sd_cap_fixture 20 20
+  sd_source sd_window "$FIX/f.sh" "$FIX/f.sh.scan" 22
+  [ "$status" -eq 3 ]
+}
+
 @test "sd_window returns a single paragraph unchanged when it already parses" {
   printf 'echo one\n\necho ANCHOR\n\necho three\n' >"$FIX/f.sh"
   make_scan "$FIX/f.sh"
@@ -1934,4 +1999,75 @@ PYEOF
   [[ "$output" != *"window is only"* ]]
 
   t7_assert_repo_tool_untouched
+}
+
+# ── Window-growth regressions, end to end (final review I-1) ─────────────────
+
+@test "a block needing backward growth is not merged with the paragraphs after it" {
+  # The final review's reproduction. Template and seed are identical inside the
+  # anchor's own `if` block and differ only in a trailing paragraph that has
+  # nothing to do with it. The old forward-to-EOF-then-backward walk left the
+  # window end pinned at EOF, so UNRELATED was extracted as part of the block
+  # and reported as a DIVERGED verdict under the wrong block's name. The
+  # correct window stops at `fi`, so this is `ok` at exit 0.
+  t7_setup
+  t7_doc "anchor block" ANCHOR_VAR
+  printf '#!/usr/bin/env bash\n\nif [ -n "$x" ]; then\n\n  # pad\n  # pad\n  ANCHOR_VAR=1\nfi\n\nUNRELATED=2\n' \
+    >"$TPL"
+  printf '#!/usr/bin/env bash\n\nif [ -n "$x" ]; then\n\n  # pad\n  # pad\n  ANCHOR_VAR=1\nfi\n\nUNRELATED=999\n' \
+    >"$SEED"
+
+  t7_run
+  [ "$status" -eq 0 ]
+  [[ "$output" != *DIVERGED* ]]
+  [[ "$output" != *UNRELATED* ]]
+  [[ "$output" != *"window is only"* ]]
+}
+
+@test "a block needing growth in both directions gets the verdict of that block alone" {
+  # The anchor sits mid-function with blank lines on both sides, so the window
+  # must reach back to `setup() {` and forward to its closing `}`. The seed is
+  # missing one line from inside the function and also differs in a trailing
+  # paragraph outside it. The correct verdict is BEHIND by exactly that one
+  # line; a window that ran to EOF would pull UNRELATED in on both sides and
+  # report DIVERGED instead.
+  t7_setup
+  t7_doc "anchor block" ANCHOR_VAR
+  printf '#!/usr/bin/env bash\n\nsetup() {\n  local a=1\n\n  if [ -n "$x" ]; then\n    ANCHOR_VAR=1\n\n    echo more\n  fi\n}\n\nUNRELATED=2\n' \
+    >"$TPL"
+  printf '#!/usr/bin/env bash\n\nsetup() {\n  local a=1\n\n  if [ -n "$x" ]; then\n    ANCHOR_VAR=1\n\n  fi\n}\n\nUNRELATED=999\n' \
+    >"$SEED"
+
+  t7_run
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"BEHIND"* ]]
+  [[ "$output" == *"1 template lines absent from seed"* ]]
+  [[ "$output" != *DIVERGED* ]]
+  [[ "$output" != *UNRELATED* ]]
+  [[ "$output" != *"window is only"* ]]
+}
+
+@test "a seed block whose search exceeds the parse-attempt cap is an ERROR at exit 2, never 3" {
+  # sd_window's new cap returns 3, the same status its exhaustion path already
+  # returned. 3 is internal: the public contract is 0/1/2 only. This pins that
+  # sd_extract -> sd_check_seed still converts it, on the error path I-1
+  # changed rather than on the one that existed before.
+  t7_setup
+  t7_doc "anchor block" ANCHOR
+  {
+    printf '#!/usr/bin/env bash\n\n'
+    t8_pad
+    printf 'ANCHOR=1\n'
+  } >"$TPL"
+  {
+    printf 'if true; then\n\n'
+    for n in $(seq 20); do printf '  echo p%s\n\n' "$n"; done
+    printf '  ANCHOR=1\nfi\n\n'
+    for n in $(seq 20); do printf '  echo q%s\n\n' "$n"; done
+  } >"$SEED"
+
+  t7_run
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"seed block could not be extracted"* ]]
+  [[ "$output" != *MISSING* ]]
 }
