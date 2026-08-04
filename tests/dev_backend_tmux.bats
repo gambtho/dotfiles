@@ -350,3 +350,118 @@ fixture_config() {
   [ "$(jq -r '[.panes[] | select(.pane == "shell") | .pane_id] | first' <<<"$win")" = "$pid" ]
   [ "$(jq -r '[.panes[] | select(.pane == null)] | length' <<<"$win")" -eq 1 ]
 }
+
+fixture_pane_config() {
+  jq -nc '{
+    version: 1, autostart: false,
+    devcontainer: {enabled: "auto", start_timeout: 300},
+    environment: {},
+    windows: [
+      {name: "main", agent: null, command: null, cwd: null, location: null,
+       focus: true, layout: "tiled",
+       panes: [
+         {name: "agent-1", agent: "sleep 30", command: null, cwd: null, location: null, focus: true},
+         {name: "agent-2", agent: "sleep 30", command: null, cwd: null, location: null, focus: false},
+         {name: "shell",   agent: null, command: null, cwd: null, location: null, focus: false},
+         {name: "scratch", agent: null, command: null, cwd: null, location: "host", focus: false}
+       ]}
+    ]}'
+}
+
+@test "apply_layout builds a panes-form window with stamped panes and applies the layout" {
+  dev_backend_create "proj" "aa11" "proj" "$TEST_WT"
+  dev_backend_apply_layout "proj" "$(fixture_pane_config)" "$(fixture_record)"
+
+  run dev_backend_query "proj"
+  [ "$status" -eq 0 ]
+  win=$(jq -c '.windows[] | select(.name == "main")' <<<"$output")
+  [ "$(jq -r '.panes | length' <<<"$win")" -eq 4 ]
+  [ "$(jq -r '[.panes[].pane] | sort | join(",")' <<<"$win")" = "agent-1,agent-2,scratch,shell" ]
+  [ "$(jq -r '[.panes[].alive] | unique | join(",")' <<<"$win")" = "true" ]
+  # remain-on-exit protects the whole window
+  run dev_tmux show-window-options -t "=proj:=main" remain-on-exit
+  [[ "$output" == *on* ]]
+  # the focused pane is the window's active pane
+  [ "$(dev_tmux display-message -p -t '=proj:=main' '#{@dev_pane}')" = "agent-1" ]
+}
+
+@test "apply_layout emits amended window.created, pane.created x4, agent.started with pane" {
+  dev_backend_create "proj" "aa11" "proj" "$TEST_WT"
+  dev_backend_apply_layout "proj" "$(fixture_pane_config)" "$(fixture_record)"
+  local log="$DEV_STATE_ROOT/events/events.jsonl"
+
+  wc_line=$(grep '"event":"window.created"' "$log")
+  [ "$(jq -r '.data.window' <<<"$wc_line")" = "main" ]
+  [ "$(jq -r '.data | has("location")' <<<"$wc_line")" = "false" ]
+  [ "$(jq -r '.data | has("command")' <<<"$wc_line")" = "false" ]
+  [ "$(jq -r '.data.panes | join(",")' <<<"$wc_line")" = "agent-1,agent-2,shell,scratch" ]
+
+  [ "$(grep -c '"event":"pane.created"' "$log")" -eq 4 ]
+  pc=$(grep '"event":"pane.created"' "$log" | head -n 1)
+  [ "$(jq -r '.data.pane' <<<"$pc")" = "agent-1" ]
+  [ "$(jq -r '.data.command' <<<"$pc")" = "sleep 30" ]
+
+  [ "$(grep -c '"event":"agent.started"' "$log")" -eq 2 ]
+  as_line=$(grep '"event":"agent.started"' "$log" | head -n 1)
+  [ "$(jq -r '.data.pane' <<<"$as_line")" = "agent-1" ]
+}
+
+@test "apply_layout is idempotent for panes-form windows and repairs a missing declared pane" {
+  dev_backend_create "proj" "aa11" "proj" "$TEST_WT"
+  dev_backend_apply_layout "proj" "$(fixture_pane_config)" "$(fixture_record)"
+
+  before=$(dev_tmux list-panes -t "=proj:=main" -F '#{pane_id}' | sort)
+  dev_backend_apply_layout "proj" "$(fixture_pane_config)" "$(fixture_record)"
+  after=$(dev_tmux list-panes -t "=proj:=main" -F '#{pane_id}' | sort)
+  [ "$before" = "$after" ]
+
+  # kill one pane outright (as a user would); re-apply recreates exactly it
+  victim=$(dev_tmux list-panes -t "=proj:=main" -F '#{pane_id} #{?#{@dev_pane},#{@dev_pane},-}' |
+    awk '$2 == "shell" {print $1; exit}')
+  dev_tmux kill-pane -t "$victim"
+  dev_backend_apply_layout "proj" "$(fixture_pane_config)" "$(fixture_record)"
+  run dev_backend_query "proj"
+  win=$(jq -c '.windows[] | select(.name == "main")' <<<"$output")
+  [ "$(jq -r '.panes | length' <<<"$win")" -eq 4 ]
+  [ "$(jq -r '[.panes[] | select(.pane == "shell")] | length' <<<"$win")" -eq 1 ]
+}
+
+@test "apply_layout survives fast-exiting pane commands: dead, held, and stamped" {
+  dev_backend_create "proj" "aa11" "proj" "$TEST_WT"
+  cfg=$(jq -c '.windows[0].panes[2].command = "exit 5"' <<<"$(fixture_pane_config)")
+  dev_backend_apply_layout "proj" "$cfg" "$(fixture_record)"
+  run dev_backend_query "proj"
+  [ "$status" -eq 0 ]
+  win=$(jq -c '.windows[] | select(.name == "main")' <<<"$output")
+  # the window survives and all four panes exist; the fast-exiting one is dead
+  [ "$(jq -r '.panes | length' <<<"$win")" -eq 4 ]
+  dead=$(jq -c '.panes[] | select(.alive | not)' <<<"$win")
+  [ "$(jq -r '.pane' <<<"$dead")" = "shell" ]
+}
+
+@test "apply_layout leaves undeclared panes alone and single-pane window env includes window environment" {
+  dev_backend_create "proj" "aa11" "proj" "$TEST_WT"
+  cfg=$(jq -c '.windows[0].panes |= .[0:2]' <<<"$(fixture_pane_config)")
+  dev_backend_apply_layout "proj" "$cfg" "$(fixture_record)"
+  # a manual, unstamped split survives a re-apply untouched
+  manual=$(dev_tmux split-window -d -P -F '#{pane_id}' -t "=proj:=main" "sleep 30")
+  dev_backend_apply_layout "proj" "$cfg" "$(fixture_record)"
+  run dev_tmux list-panes -t "=proj:=main" -F '#{pane_id}'
+  [[ "$output" == *"$manual"* ]]
+
+  # window-level environment reaches a single-pane window's process (spec §7.1 fix)
+  envcfg=$(jq -nc '{
+    version: 1, autostart: false,
+    devcontainer: {enabled: "auto", start_timeout: 300},
+    environment: {},
+    windows: [{name: "envwin", agent: null,
+               command: "printf %s \"$PROBE\" > probe.txt; sleep 30",
+               cwd: null, location: "host", focus: false,
+               environment: {PROBE: "from-window"}}]}')
+  dev_backend_apply_layout "proj" "$envcfg" "$(fixture_record)"
+  for _ in $(seq 1 50); do
+    [ -s "$TEST_WT/probe.txt" ] && break
+    sleep 0.1
+  done
+  [ "$(cat "$TEST_WT/probe.txt")" = "from-window" ]
+}

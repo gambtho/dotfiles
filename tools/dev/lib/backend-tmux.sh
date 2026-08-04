@@ -38,6 +38,116 @@ dev_backend_create() {
   dev_tmux set-option -t "=$session_name:" @dev_worktree "$worktree" || return 1
 }
 
+# dev_backend_ensure_pane_window <session_name> <window_json> <record_json> \
+#   <global_env_json> <exists 0|1>
+#
+# Creates a panes-form window (first pane rides new-window) and/or the declared
+# panes it is missing, stamps each with the pane-scoped @dev_pane user option,
+# and applies the window's named layout when anything was created. Undeclared
+# panes — unstamped, or stamped with a name the config no longer declares —
+# are invisible here: never matched, never split into, never killed (§1.2).
+#
+# EVERY stamp is chained into the same tmux invocation as the pane's creation.
+# For the first pane the chain rides new-window (the window target resolves to
+# its active — sole — pane) alongside remain-on-exit, exactly like the
+# single-pane path. For splits the window cannot be destroyed (remain-on-exit
+# is already on, so a fast-exiting command leaves a dead, held pane), but a
+# SECOND race remains: the pane-died hook can fire before a separate second
+# invocation stamps @dev_pane, and an unstamped death event has no pane
+# identity for the fold to route. So split-window runs WITHOUT -d — the new
+# pane becomes the window's active pane — and the chained set-option's window
+# target resolves to it inside one atomic server request. The active-pane
+# side effect is corrected by the focus pass at the end of apply_layout.
+dev_backend_ensure_pane_window() {
+  local session_name="$1" window_json="$2" record_json="$3" global_env="$4" exists="$5"
+  local workspace_id slug worktree wname layout stamped
+  local pane_json pname pane_env location workdir inner pane_cmd created=0
+  local -a prefix
+  local ev_id ev_ts data line
+
+  workspace_id=$(jq -r '.workspace_id' <<<"$record_json")
+  slug=$(jq -r '.slug' <<<"$record_json")
+  worktree=$(jq -r '.worktree' <<<"$record_json")
+  wname=$(jq -r '.name' <<<"$window_json")
+  layout=$(jq -r '.layout // "main-vertical"' <<<"$window_json")
+
+  if [[ "$exists" -eq 1 ]]; then
+    stamped=$(dev_tmux list-panes -t "=$session_name:=$wname" \
+      -F '#{?#{@dev_pane},#{@dev_pane},}' 2>/dev/null || true)
+  else
+    stamped=""
+  fi
+
+  while IFS= read -r pane_json; do
+    [[ -n "$pane_json" ]] || continue
+    pname=$(jq -r '.name' <<<"$pane_json")
+    if [[ -n "$stamped" ]] && printf '%s\n' "$stamped" | grep -Fxq -- "$pname"; then
+      continue
+    fi
+    # global * pane.environment only: the exclusive schema forbids window-level
+    # environment beside panes (validated in config), so there is no window
+    # layer to merge here.
+    pane_env=$(jq -c --argjson g "$global_env" '$g * (.environment // {})' <<<"$pane_json")
+    location=$(dev_window_location "$record_json" "$pane_json") || return 1
+    mapfile -t prefix < <(dev_container_exec_prefix "$record_json" "$pane_json") || return 1
+    [[ ${#prefix[@]} -gt 0 ]] || return 1
+    inner=$(dev_window_inner_command "$record_json" "$pane_json" "$pane_env") || return 1
+    printf -v pane_cmd '%q ' "${prefix[@]}"
+    printf -v pane_cmd '%s%q' "$pane_cmd" "$inner"
+    if [[ "$location" == host ]]; then
+      workdir=$(dev_window_workdir "$record_json" "$pane_json") || return 1
+    else
+      workdir="$worktree"
+    fi
+
+    if [[ "$exists" -eq 0 ]]; then
+      dev_tmux new-window -d -t "=$session_name:" -n "$wname" -c "$workdir" "$pane_cmd" \
+        ';' set-window-option -t "=$session_name:=$wname" remain-on-exit on \
+        ';' set-option -p -t "=$session_name:=$wname" @dev_pane "$pname" || return 1
+      exists=1
+      ev_id=$(dev_event_id_random)
+      ev_ts=$(dev_now)
+      # §4.4 amendment: a panes-form window.created carries the pane roster and
+      # neither location nor command — a mixed host/container window has no
+      # window-level truth for either (absent means "not known").
+      data=$(jq -c '{window: .name, panes: [.panes[].name]}' <<<"$window_json")
+      line=$(dev_event_build "$ev_id" "$ev_ts" "window.created" \
+        "$workspace_id" "$slug" "$session_name" "$worktree" "$data")
+      dev_event_append "$line"
+    else
+      dev_tmux split-window -t "=$session_name:=$wname" -c "$workdir" "$pane_cmd" \
+        ';' set-option -p -t "=$session_name:=$wname" @dev_pane "$pname" || return 1
+    fi
+    created=$((created + 1))
+
+    ev_id=$(dev_event_id_random)
+    ev_ts=$(dev_now)
+    # The DECLARED command, never the rendered one (secrets rule).
+    data=$(jq -c --arg w "$wname" --arg loc "$location" \
+      '{window: $w, pane: .name, location: $loc, command: (.command // .agent // null)}' \
+      <<<"$pane_json")
+    line=$(dev_event_build "$ev_id" "$ev_ts" "pane.created" \
+      "$workspace_id" "$slug" "$session_name" "$worktree" "$data")
+    dev_event_append "$line"
+
+    if [[ "$(jq -r '.agent // ""' <<<"$pane_json")" != "" ]]; then
+      ev_id=$(dev_event_id_random)
+      ev_ts=$(dev_now)
+      data=$(jq -c --arg w "$wname" '{window: $w, pane: .name, command: .agent}' <<<"$pane_json")
+      line=$(dev_event_build "$ev_id" "$ev_ts" "agent.started" \
+        "$workspace_id" "$slug" "$session_name" "$worktree" "$data")
+      dev_event_append "$line"
+    fi
+  done < <(jq -c '.panes[]' <<<"$window_json")
+
+  if [[ "$created" -gt 0 ]]; then
+    # Applied only when a pane was created: re-applying on a no-op open would
+    # stomp the user's manual resizes (spec §4).
+    dev_tmux select-layout -t "=$session_name:=$wname" "$layout" || return 1
+  fi
+  printf '%s\n' "$created"
+}
+
 # dev_backend_apply_layout <session_name> <config_json> <record_json>
 #
 # Creates only the windows that are missing, diffed by name. It never touches,
@@ -46,7 +156,8 @@ dev_backend_create() {
 dev_backend_apply_layout() {
   local session_name="$1" config_json="$2" record_json="$3"
   local workspace_id slug worktree existing created=0 env_json focus_window
-  local window_json name agent location workdir inner pane_cmd
+  local window_json name agent location workdir inner pane_cmd win_created win_env
+  local fw fp pid
   local -a prefix
   local ev_id ev_ts data line
 
@@ -59,6 +170,18 @@ dev_backend_apply_layout() {
   while IFS= read -r window_json; do
     [[ -n "$window_json" ]] || continue
     name=$(printf '%s' "$window_json" | jq -r '.name')
+    win_created=0
+    if [[ "$(jq -r '.panes != null' <<<"$window_json")" == true ]]; then
+      if printf '%s\n' "$existing" | grep -Fxq -- "$name"; then
+        win_created=$(dev_backend_ensure_pane_window "$session_name" "$window_json" \
+          "$record_json" "$env_json" 1) || return 1
+      else
+        win_created=$(dev_backend_ensure_pane_window "$session_name" "$window_json" \
+          "$record_json" "$env_json" 0) || return 1
+      fi
+      created=$((created + win_created))
+      continue
+    fi
     if printf '%s\n' "$existing" | grep -Fxq -- "$name"; then
       continue
     fi
@@ -74,7 +197,8 @@ dev_backend_apply_layout() {
     location=$(dev_window_location "$record_json" "$window_json") || return 1
     mapfile -t prefix < <(dev_container_exec_prefix "$record_json" "$window_json") || return 1
     [[ ${#prefix[@]} -gt 0 ]] || return 1
-    inner=$(dev_window_inner_command "$record_json" "$window_json" "$env_json") || return 1
+    win_env=$(jq -c --argjson g "$env_json" '$g * (.environment // {})' <<<"$window_json")
+    inner=$(dev_window_inner_command "$record_json" "$window_json" "$win_env") || return 1
     printf -v pane_cmd '%q ' "${prefix[@]}"
     printf -v pane_cmd '%s%q' "$pane_cmd" "$inner"
 
@@ -138,6 +262,20 @@ dev_backend_apply_layout() {
   if [[ -n "$focus_window" ]]; then
     dev_tmux select-window -t "=$session_name:=$focus_window" 2>/dev/null || true
   fi
+
+  # `panes[].focus: true` selects the pane the user lands on within its window,
+  # same rationale as focus_window above: re-applied every open (not only on
+  # creation), so drift self-heals. Validation guarantees at most one per window.
+  while IFS=$'\t' read -r fw fp; do
+    [[ -n "$fw" ]] || continue
+    pid=$(dev_tmux list-panes -t "=$session_name:=$fw" \
+      -F '#{pane_id} #{?#{@dev_pane},#{@dev_pane},-}' 2>/dev/null |
+      awk -v p="$fp" '$2 == p {print $1; exit}')
+    [[ -n "$pid" ]] || continue
+    dev_tmux select-pane -t "$pid" 2>/dev/null || true
+  done < <(printf '%s' "$config_json" | jq -r '
+    (.windows // [])[] | select(.panes != null) | .name as $w
+    | .panes[] | select(.focus == true) | [$w, .name] | @tsv')
 }
 
 # dev_backend_query <session_name>
