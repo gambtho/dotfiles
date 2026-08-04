@@ -301,7 +301,12 @@ fixture_config() {
   # command-path expansion syntax, not a literal string -- it fails with
   # "proj not found" before tmux ever sees it. Forcing bash for this one
   # subprocess keeps the exact-match `=name` target intact.
-  SHELL=/bin/bash script -qc "tmux -L $DEV_TMUX_SOCKET attach-session -t =proj" /dev/null >/dev/null 2>&1 &
+  # TERM=xterm-256color: CI runners export TERM=dumb (or nothing), and tmux
+  # then refuses the client with "open terminal failed: terminal does not
+  # support clear" -- the pty is real but the attach never happens and
+  # clients stays 0. Reproduced both ways; the forced TERM applies only
+  # inside this pty.
+  SHELL=/bin/bash script -qc "TERM=xterm-256color tmux -L $DEV_TMUX_SOCKET attach-session -t =proj" /dev/null >/dev/null 2>&1 &
   local client_pid=$!
 
   local tries=0 clients=0
