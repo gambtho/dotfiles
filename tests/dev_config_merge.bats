@@ -4,6 +4,12 @@ load test_helper
 
 setup() {
   setup_dev_test
+  # This file tests merge mechanics against the default layer as ambient
+  # fixture data (window/pane counts, field-by-field precedence), not the
+  # shape of the real shipped default -- pin it so these keep exercising the
+  # single-pane window baseline regardless of what tools/dev/default-
+  # workspace.yaml ships as (see test_helper.bash).
+  dev_pin_legacy_default_root
   source "$REPO_ROOT/tools/dev/lib/config.sh"
   WORKTREE="$DEV_REPO_ROOT/slabledger"
   mkdir -p "$WORKTREE" "$DEV_OVERLAY_ROOT/slabledger"

@@ -46,22 +46,62 @@ devcontainer:
   enabled: auto           # auto | true | false; auto = presence of .devcontainer/
   start_timeout: 300      # seconds for devcontainer up
 windows:
-  - name: agent-1
-    agent: claude         # a window sets agent: OR command:, never both
-    focus: true           # at most one focused window
-  - name: agent-2
-    agent: claude
-  - name: shell
-    command: null         # null command = interactive shell
-  - name: scratch
-    command: null
-    location: host        # host | container; unset = container when one exists
+  - name: main
+    focus: true            # at most one focused window
+    layout: tiled          # tmux layout name applied across the window's panes
+    panes:
+      - name: agent-1
+        agent: claude       # a pane sets agent: OR command:, never both
+        focus: true         # at most one focused pane per window
+      - name: agent-2
+        agent: claude
+      - name: shell
+        command: null       # null command = interactive shell
+      - name: scratch
+        command: null
+        location: host      # host | container; unset = container when one exists
 ```
 
-Windows also accept `cwd` (relative to the worktree) and `environment`
-(a string map, injected into the pane's process). Environment values are never
-written to the event log, so `workspace.local.yaml` is the place for tokens —
-it stays on the machine and out of git.
+This is the shipped default: one tiled window with four panes. A window sets
+`agent:` OR `command:` OR `panes:` — never more than one. The single-pane form
+(a window with `agent:`/`command:` directly, no `panes:` list) is still fully
+supported and is what an overlay typically adds for an extra top-level window.
+
+Panes accept the same fields as single-pane windows — `agent`, `command`,
+`cwd`, `environment`, `location` — plus a required, window-unique `name` and
+an optional `focus`. `layout:` takes any of tmux's five built-in layout names
+(`even-horizontal`, `even-vertical`, `main-horizontal`, `main-vertical`,
+`tiled`); unset defaults to `main-vertical`.
+
+An overlay that adds `panes:` to a window it inherits from a lower layer
+(e.g. adding a second pane to the default's `main` window) must also null out
+that window's single-pane fields — `agent: null` (or `command: null`) — since
+`agent`/`command` and `panes` are mutually exclusive and the merge is by
+field, not by form. This is the strict conversion idiom: without it, the
+merged window carries both an `agent`/`command` and a `panes:` list and fails
+validation.
+
+**Migrating a running workspace:** the shipped default changed from four
+top-level windows (`agent-1`, `agent-2`, `shell`, `scratch`) to one `main`
+window with those as panes. A workspace opened under the old default keeps
+running unchanged — `dev` never destroys — but the next `dev` on it creates
+the new `main` window *beside* the old windows, and `dev status` reports the
+old windows as drift (undeclared, since they're no longer in the merged
+config). `dev stop <name>` followed by `dev <name>` converts cleanly to the
+new layout. Overlays that patched the old default's window names directly
+(`agent-1`, `agent-2`, `shell`, `scratch` as window-level entries) need
+updating to target `main`'s panes instead.
+
+Re-running `dev` also respawns dead panes on every open now — previously this
+only happened after a container replacement; a pane that simply exited or was
+killed is now caught by the very next `dev`, no container loss required.
+
+Windows and panes both accept `cwd` (relative to the worktree) and
+`environment` (a string map, injected into the process). Window-level
+`environment` now actually applies to the window's process — it was
+previously parsed but silently dropped. Environment values are never written
+to the event log, so `workspace.local.yaml` is the place for tokens — it
+stays on the machine and out of git.
 
 `autostart: true` is honored by the `dev-autostart` unit at boot for the
 project's **primary** worktree only, and only after the workspace has been

@@ -27,6 +27,41 @@ assert_symlink_target() {
   [ "$(readlink "$1")" = "$2" ]
 }
 
+# dev_pin_legacy_default_root — points DEV_DOTFILES_ROOT at a fixture root
+# whose tools/dev/default-workspace.yaml is the pre-dashboard legacy layout
+# (four top-level windows: agent-1, agent-2, shell, scratch), regardless of
+# what the real shipped tools/dev/default-workspace.yaml becomes. config/ is
+# symlinked to the real repo so lookups like the devcontainer-CLI pin in
+# config/mise/config.toml still resolve. Tests that need the single-pane
+# window shape as a stable fixture (merge mechanics, single-window scenarios)
+# call this; tests proving what the real shipped default does must not.
+dev_pin_legacy_default_root() {
+  local root="$TEST_ROOT/legacy-dotfiles-root"
+  if [ ! -e "$root" ]; then
+    mkdir -p "$root/tools/dev"
+    ln -s "$REPO_ROOT/config" "$root/config"
+    cat >"$root/tools/dev/default-workspace.yaml" <<'EOF'
+version: 1
+autostart: false
+devcontainer:
+  enabled: auto
+  start_timeout: 300
+windows:
+  - name: agent-1
+    agent: claude
+    focus: true
+  - name: agent-2
+    agent: claude
+  - name: shell
+    command: null
+  - name: scratch
+    command: null
+    location: host
+EOF
+  fi
+  export DEV_DOTFILES_ROOT="$root"
+}
+
 setup_dev_test() {
   setup_dotfiles_test
   # yq lives in /usr/local/bin, which setup_dotfiles_test drops from PATH.

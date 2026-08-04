@@ -309,35 +309,10 @@ dev_open_load_libs() {
 # the actual shipped default-workspace.yaml -- not a copy under stage_dev_root
 # (that fixture only feeds the dispatcher-pattern tests above). Scenarios that
 # assert the legacy single-pane *window* shape (agent-1/agent-2/shell/scratch
-# as windows, not panes of one dashboard window) call this to pin that shape
-# regardless of what the shipped default becomes. config/ is symlinked so
-# devcontainer-CLI-pin lookups still resolve against the real repo.
-dev_open_pin_legacy_default() {
-  local root="$TEST_ROOT/legacy-dotfiles-root"
-  if [ ! -e "$root" ]; then
-    mkdir -p "$root/tools/dev"
-    ln -s "$REPO_ROOT/config" "$root/config"
-    cat >"$root/tools/dev/default-workspace.yaml" <<'EOF'
-version: 1
-autostart: false
-devcontainer:
-  enabled: auto
-  start_timeout: 300
-windows:
-  - name: agent-1
-    agent: claude
-    focus: true
-  - name: agent-2
-    agent: claude
-  - name: shell
-    command: null
-  - name: scratch
-    command: null
-    location: host
-EOF
-  fi
-  export DEV_DOTFILES_ROOT="$root"
-}
+# as windows, not panes of one dashboard window) call dev_pin_legacy_default_root
+# (test_helper.bash) to pin that shape regardless of what the shipped default
+# becomes.
+dev_open_pin_legacy_default() { dev_pin_legacy_default_root; }
 
 dev_open_fixture() {
   local dir="$DEV_REPO_ROOT/$1"
@@ -959,5 +934,24 @@ exit 0
   [[ "$output" == *"drift:"*"rogue"* ]]
   [[ "$output" == *"drift:"*"shell"*"undeclared pane"* ]]
 
+  dev_tmux kill-server || true
+}
+
+@test "shipped default opens as a one-window tiled dashboard with four stamped panes" {
+  # Unlike the scenarios above, this one deliberately does NOT pin the legacy
+  # layout: it exercises the real shipped tools/dev/default-workspace.yaml
+  # (scenario_setup_demo_workspace already stubs claude to stay alive).
+  scenario_setup_demo_workspace
+
+  run dev_cmd_open demo --no-attach
+  [ "$status" -eq 0 ]
+  run dev_tmux list-windows -t '=demo' -F '#{window_name}'
+  [ "$output" = "main" ]
+  run dev_tmux list-panes -t '=demo:=main' -F '#{?#{@dev_pane},#{@dev_pane},-}'
+  [ "$(printf '%s\n' "$output" | sort | tr '\n' ',')" = "agent-1,agent-2,scratch,shell," ]
+
+  record=$(cat "$DEV_STATE_ROOT"/workspaces/*.json)
+  [ "$(jq -r '[.agents[] | select(.window == "main")] | length' <<<"$record")" -eq 2 ]
+  [ "$(jq -r '[.agents[].pane] | sort | join(",")' <<<"$record")" = "agent-1,agent-2" ]
   dev_tmux kill-server || true
 }

@@ -4,13 +4,17 @@ devcontainer:
   enabled: auto
   start_timeout: 300
 windows:
-  - name: agent-1
-    agent: claude
+  - name: main
     focus: true
-  - name: agent-2
-    agent: claude
-  - name: shell
-    command: null
-  - name: scratch
-    command: null
-    location: host
+    layout: tiled
+    panes:
+      - name: agent-1
+        agent: claude
+        focus: true
+      - name: agent-2
+        agent: claude
+      - name: shell
+        command: null
+      - name: scratch
+        command: null
+        location: host
