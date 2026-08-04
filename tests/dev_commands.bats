@@ -411,12 +411,25 @@ dev_open_events() {
   dev_tmux kill-server || true
 }
 
-@test "open after a container loss emits container.replaced then container.ready and respawns dead panes" {
+# The common bootstrap for "plain re-open respawns a dead pane" scenarios:
+# stage a demo fixture with sourced libs, a stubbed attach, and a long-lived
+# stand-in for the "claude" binary the default config's agent-1/agent-2
+# windows run (not on PATH here). As tests/dev_backend_tmux.bats:29-37
+# documents, a command that exits races dev_backend_apply_layout setting
+# remain-on-exit -- the window can vanish before the very next tmux call
+# touches it, so the stub must stay alive rather than just exit 0.
+scenario_setup_demo_workspace() {
   setup_dev_test
   dev_open_load_libs
   dev_open_stub_attach
+  dev_open_fixture demo >/dev/null
+  stub_command claude 'exec sleep 30'
+}
+
+@test "open after a container loss emits container.replaced then container.ready and respawns dead panes" {
+  scenario_setup_demo_workspace
   local dir ws_id
-  dir=$(dev_open_fixture demo)
+  dir="$DEV_REPO_ROOT/demo"
   mkdir -p "$dir/.devcontainer"
   printf '{"image":"alpine:3"}\n' >"$dir/.devcontainer/devcontainer.json"
 
@@ -446,13 +459,6 @@ case "$1" in
   *) exit 0 ;;
 esac
 '
-  # The default config's agent windows run the real "claude" binary, which is
-  # not on PATH here. As tests/dev_backend_tmux.bats:29-37 documents, a command
-  # that exits races dev_backend_apply_layout setting remain-on-exit -- the
-  # window can vanish before the very next tmux call touches it. Stubbed as a
-  # long-lived placeholder so agent panes survive both this test's own setup
-  # (which calls apply_layout directly) and the `dev_cmd_open` under test.
-  stub_command claude 'exec sleep 30'
 
   # Seed a record bound to a container that no longer exists.
   local session record
@@ -495,6 +501,66 @@ esac
   [ "$(dev_open_events 'select(.event == "pane.respawned") | .id' | wc -l)" = "1" ]
   [ "$(dev_open_events 'select(.event == "pane.respawned") | .data.container_id')" = "newcid" ]
   [ "$(dev_tmux list-panes -t '=demo:=shell' -F '#{pane_dead}')" = "0" ]
+  dev_tmux kill-server || true
+}
+
+@test "plain re-open respawns a dead pane in a host-only workspace (no container loss required)" {
+  scenario_setup_demo_workspace
+
+  run dev_cmd_open demo --no-attach
+  [ "$status" -eq 0 ]
+
+  dev_tmux respawn-pane -k -t '=demo:=shell' 'exit 3'
+  local i
+  for i in $(seq 1 50); do
+    [ "$(dev_tmux list-panes -t '=demo:=shell' -F '#{pane_dead}')" = "1" ] && break
+    sleep 0.1
+  done
+
+  run dev_cmd_open demo --no-attach
+  [ "$status" -eq 0 ]
+  [ "$(dev_tmux list-panes -t '=demo:=shell' -F '#{pane_dead}')" = "0" ]
+  grep -q '"event":"pane.respawned"' "$DEV_STATE_ROOT/events/events.jsonl"
+  dev_tmux kill-server || true
+}
+
+@test "re-open respawns one dead agent pane of two and leaves the other agent untouched" {
+  scenario_setup_demo_workspace
+  mkdir -p "$DEV_OVERLAY_ROOT/demo"
+  cat >"$DEV_OVERLAY_ROOT/demo/workspace.yaml" <<'EOF'
+version: 1
+windows:
+  - name: dash
+    layout: tiled
+    panes:
+      - name: agent-1
+        agent: sleep 30
+      - name: agent-2
+        agent: sleep 30
+EOF
+  run dev_cmd_open demo --no-attach
+  [ "$status" -eq 0 ]
+
+  local victim
+  victim=$(dev_tmux list-panes -t '=demo:=dash' -F '#{pane_id} #{?#{@dev_pane},#{@dev_pane},-}' |
+    awk '$2 == "agent-2" {print $1; exit}')
+  dev_tmux respawn-pane -k -t "$victim" 'exit 1'
+  local i
+  for i in $(seq 1 50); do
+    [ "$(dev_tmux display-message -p -t "$victim" '#{pane_dead}')" = "1" ] && break
+    sleep 0.1
+  done
+
+  run dev_cmd_open demo --no-attach
+  [ "$status" -eq 0 ]
+  [ "$(dev_tmux display-message -p -t "$victim" '#{pane_dead}')" = "0" ]
+
+  local record
+  record=$(cat "$DEV_STATE_ROOT"/workspaces/*.json)
+  [ "$(jq -r '.agents[] | select(.pane == "agent-2") | .state' <<<"$record")" = "started" ]
+  # agent-1 never died: exactly one lifecycle event for it, the start
+  [ "$(jq -r '.agents[] | select(.pane == "agent-1") | .state' <<<"$record")" = "started" ]
+  [ "$(grep -c '"pane":"agent-1"' "$DEV_STATE_ROOT/events/events.jsonl")" -eq 2 ] # pane.created + agent.started only
   dev_tmux kill-server || true
 }
 
