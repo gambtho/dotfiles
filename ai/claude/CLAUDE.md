@@ -132,6 +132,12 @@ decisions and alternatives, ordered steps, verification strategy, assumptions
 that may change, and explicit exclusions. Do not follow a plan mechanically once
 repository evidence disproves its assumptions.
 
+Before saving a plan, run the project's formatter over every code block the
+plan embeds, and paste back the formatted result. Implementers transcribe plan
+blocks verbatim, so an unformatted block becomes an unformatted commit in every
+task that copies it — and the formatter check usually sits at the final gate,
+long after the last transcription.
+
 ## Implementation notes
 
 For substantial work, keep a temporary `implementation-notes.md` (unless repo
