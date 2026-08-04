@@ -432,3 +432,54 @@ exit 18'
   [ "$status" -ne 0 ]
   [[ "$output" == *"no live container binding"* ]]
 }
+
+# --- Task 10 fix round 1: additive coverage for review findings -------------
+
+@test "the compose branch chooses docker exec even when a working devcontainer CLI is available" {
+  # Distinguishes the compose rule from the accidental case where test 24
+  # merely reaches docker exec because the CLI happens to be unrunnable.
+  load_container
+  stub_mise 'echo 0.86.1'
+  rec='{"worktree":"/w","container":{"status":"ready","kind":"compose","id":"a710dead","user":"node","workdir":"/srv/app"}}'
+  run dev_container_exec_prefix "$rec" '{"name":"shell","location":"container"}'
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = docker ]
+  [ "${lines[1]}" = exec ]
+}
+
+@test "the exec prefix refuses a missing workdir even with a real container id" {
+  # Test "the exec prefix refuses to guess a missing user or workdir" uses a
+  # null id, so it exits at the earlier missing-id guard and never reaches
+  # this refusal at all. A real id is needed to prove ADR-1's no-defaults rule
+  # actually holds for workdir, rather than defaulting to "/workspace".
+  load_container
+  rec='{"worktree":"/w","container":{"status":"ready","kind":"compose","id":"a710dead","user":null,"workdir":null}}'
+  run dev_container_exec_prefix "$rec" '{"name":"shell","location":"container"}'
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"(workdir missing)"* ]]
+}
+
+@test "the exec prefix refuses a missing user even with a real workdir" {
+  # Same as above for the user default: ADR-1 forbids `// "root"` too.
+  load_container
+  rec='{"worktree":"/w","container":{"status":"ready","kind":"compose","id":"a710dead","user":null,"workdir":"/srv/app"}}'
+  run dev_container_exec_prefix "$rec" '{"name":"shell","location":"container"}'
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"(user missing)"* ]]
+}
+
+@test "enabled:true with no .devcontainer present is still enabled" {
+  # The mirror of the ruled defect: an explicit opt-in must not be silently
+  # treated as auto (and thus disabled when nothing is on disk).
+  load_container
+  run dev_container_enabled '{"devcontainer":{"enabled":true}}' "$WT"
+  [ "$status" -eq 0 ]
+}
+
+@test "the inner command's exec applies to the command branch too, not only the agent branch" {
+  load_container
+  rec='{"worktree":"/w","container":{"status":"none","id":null}}'
+  run dev_window_inner_command "$rec" '{"name":"shell","command":"make test","location":null}' '{}'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"; exec make test"* ]]
+}
