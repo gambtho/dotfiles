@@ -2071,3 +2071,66 @@ PYEOF
   [[ "$output" == *"seed block could not be extracted"* ]]
   [[ "$output" != *MISSING* ]]
 }
+
+# ── Minor-round guards (M-4, M-1) ────────────────────────────────────────────
+
+@test "discovery leaves the caller's nullglob setting exactly as it found it" {
+  # The script is designed to be sourced (SEED_DRIFT_SOURCE_ONLY=1), so
+  # `shopt -s nullglob` inside discovery is a write into somebody else's
+  # shell. All three paths are pinned: the loop that finds a project, the
+  # same loop with nullglob already on (which must stay on), and the
+  # early-return path where discovery finds nothing and returns 2.
+  setup_drift_fixtures
+  seed_from_template clean
+  mkdir -p "$BATS_TEST_TMPDIR/empty-root"
+
+  run env SEED_DRIFT_SOURCE_ONLY=1 SEED_DRIFT_ROOT="$SEED_DRIFT_ROOT" bash -c '
+    source "$1"
+    shopt -u nullglob
+    sd_main --template "$2" --doc "$3" >/dev/null
+    if shopt -q nullglob; then echo "off-case: LEAKED"; else echo "off-case: restored"; fi
+    shopt -s nullglob
+    sd_main --template "$2" --doc "$3" >/dev/null
+    if shopt -q nullglob; then echo "on-case: preserved"; else echo "on-case: CLOBBERED"; fi
+    shopt -u nullglob
+    SEED_DRIFT_ROOT="$4"
+    sd_main --template "$2" --doc "$3" >/dev/null 2>&1 || true
+    if shopt -q nullglob; then echo "empty-root: LEAKED"; else echo "empty-root: restored"; fi
+  ' _ "$SEED_DRIFT" "$FIXTURE_TEMPLATE" "$FIXTURE_DOC" "$BATS_TEST_TMPDIR/empty-root"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"off-case: restored"* ]]
+  [[ "$output" == *"on-case: preserved"* ]]
+  [[ "$output" == *"empty-root: restored"* ]]
+  [[ "$output" != *LEAKED* ]]
+  [[ "$output" != *CLOBBERED* ]]
+}
+
+@test "a template block that extracts to nothing is an ERROR at exit 2, never ok" {
+  # sd_verdict_from_counts 0 0 is `ok`, so an empty template side would report
+  # a clean block having compared nothing. sd_main's anchor validation makes
+  # that unreachable through the CLI, which is exactly why this calls
+  # sd_check_seed directly with an sd_extract that reports success and writes
+  # nothing — the shape the guard exists to catch if that validation is ever
+  # weakened.
+  setup_drift_fixtures
+  seed_from_template clean
+
+  run env SEED_DRIFT_SOURCE_ONLY=1 bash -c '
+    source "$1"
+    SD_TEMPLATE="$2"
+    SD_DOC="$3"
+    sd_tmp SD_TEMPLATE_SCAN
+    sd_scan "$SD_TEMPLATE" >"$SD_TEMPLATE_SCAN"
+    sd_extract() {
+      SD_LAST_WINDOW_SIZE=42
+      return 0
+    }
+    sd_check_seed "$4"
+  ' _ "$SEED_DRIFT" "$FIXTURE_TEMPLATE" "$FIXTURE_DOC" "$(seed_path clean)"
+
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"template block extracted to nothing"* ]]
+  [[ "$output" != *"ok  "* ]]
+  [[ "$output" != *"window is only"* ]]
+}

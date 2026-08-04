@@ -267,6 +267,11 @@ sd_window() {
 SD_THIN_WINDOW=5
 
 sd_neutralize_paths() {
+  # Deliberately unanchored on the right: `$HOME` also rewrites inside
+  # `$HOMEBREW_PREFIX`, and a right boundary is genuinely awkward in
+  # BSD-portable sed. It cannot flip a verdict, because the identical rule is
+  # applied to both sides before they are diffed; the cost is confined to
+  # mangled text in the sample lines printed for a drifted block.
   sed -e 's/\${SEED_HOME}/«HOME»/g' -e 's/\$SEED_HOME/«HOME»/g' \
     -e 's/\${DOTFILES_HOME}/«HOME»\/.dotfiles/g' \
     -e 's/\$DOTFILES_HOME/«HOME»\/.dotfiles/g' \
@@ -549,6 +554,17 @@ sd_check_seed() {
         continue
         ;;
     esac
+    # An empty template side must never reach the comparison:
+    # sd_verdict_from_counts 0 0 is `ok`, so it would report a clean block
+    # having compared nothing at all. sd_main's anchor validation makes this
+    # unreachable today — the anchor must appear in a `C` record — but that
+    # guarantee lives two functions away, and this is the invariant that
+    # matters here, so it is enforced where it is relied on.
+    if [ ! -s "$tnorm" ]; then
+      sd_report_block ERROR "$block" 'template block extracted to nothing'
+      rc=2
+      continue
+    fi
     est=0
     sd_extract "$seed" "$sscan" "$anchor" >"$snorm" || est=$?
     case "$est" in
@@ -612,8 +628,18 @@ sd_check_seed() {
     # Informational only, fires regardless of verdict (including ok) and never
     # touches rc or the drift tallies above — a thin window means the check
     # covered too little to trust, not that the block itself is wrong.
-    [ "$tsize" -lt "$SD_THIN_WINDOW" ] && sd_report_thin template "$tsize"
-    [ "$esize" -lt "$SD_THIN_WINDOW" ] && sd_report_thin seed "$esize"
+    #
+    # `if`, not `[ … ] && …`: the bare-`&&` form leaves the loop body's status
+    # at 1 whenever the window is thick, so it is safe only while the explicit
+    # `return "$rc"` below stays the very next statement. Appending a line
+    # after it would make a clean seed return 1 — inventing drift inside the
+    # public 0/1/2 contract.
+    if [ "$tsize" -lt "$SD_THIN_WINDOW" ]; then
+      sd_report_thin template "$tsize"
+    fi
+    if [ "$esize" -lt "$SD_THIN_WINDOW" ]; then
+      sd_report_thin seed "$esize"
+    fi
   done < <(sd_parse_doc "$SD_DOC")
   return "$rc"
 }
@@ -649,6 +675,13 @@ sd_visit_candidates() {
   # (bin/common.sh:392). The `"${SD_CANDIDATES[@]}"` below is reached only
   # when the count is non-zero, so it is safe.
   if [ "$SD_CANDIDATE_COUNT" -eq 0 ]; then
+    # Saved and restored around discovery only. The script is designed to be
+    # sourced (SEED_DRIFT_SOURCE_ONLY=1 — the whole test suite depends on it),
+    # so setting nullglob and walking away would silently change globbing in
+    # the caller's shell. The restore sits after the loop, ahead of both
+    # returns below, so no exit path from here leaks it.
+    local had_nullglob=0
+    shopt -q nullglob && had_nullglob=1
     shopt -s nullglob
     for cand in "$root"/*/; do
       cand="${cand%/}"
@@ -657,6 +690,9 @@ sd_visit_candidates() {
       sd_visit_dir "$cand"
       visited=$((visited + 1))
     done
+    if [ "$had_nullglob" -eq 0 ]; then
+      shopt -u nullglob
+    fi
     if [ "$visited" -eq 0 ]; then
       # Scoped to discovery only: an explicitly-named absent project is
       # still a skip at exit 0 (the brief states this outright). But
