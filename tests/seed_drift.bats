@@ -1515,7 +1515,7 @@ SEEDEOF
   [[ "$output" != *BEHIND* ]]
 }
 
-@test "a DERIVED WORKSPACE is still flagged, not dropped" {
+@test "an INLINE derived WORKSPACE is an ERROR, not merely drift" {
   t7_setup
   t7_doc "Overlay-link gitignore" "lname '*dotfiles/projects/*'"
   cat >"$TPL" <<'TPLEOF'
@@ -1528,7 +1528,9 @@ TPLEOF
   # catch-up-local-seed.md is explicit that WORKSPACE must not be derived: the
   # seed is mounted at an arbitrary container path that need not sit inside the
   # checkout, so `git rev-parse` from there resolves to the wrong tree. The drop
-  # rule is literal-RHS-only precisely so this regression still surfaces.
+  # rule is literal-RHS-only precisely so this regression still surfaces - and
+  # since it breaks the seed rather than merely dating it, it is an ERROR at
+  # exit 2 rather than a drift verdict at exit 1.
   cat >"$SEED" <<'SEEDEOF'
 #!/usr/bin/env bash
 
@@ -1537,9 +1539,9 @@ overlay_links="$(cd "$WORKSPACE" && find . -type l -lname '*dotfiles/projects/*'
 echo "$overlay_links"
 SEEDEOF
   t7_run "$SEED"
-  [ "$status" -eq 1 ]
-  [[ "$output" == *"Overlay-link gitignore"* ]]
-  [[ "$output" == *AHEAD* || "$output" == *DIVERGED* ]]
+  [ "$status" -eq 2 ]
+  [[ "$output" == *ERROR* ]]
+  [[ "$output" == *"derives WORKSPACE"* ]]
 }
 
 @test "a seed that READS \$WORKSPACE but never assigns it is an ERROR at exit 2" {
@@ -1601,7 +1603,15 @@ SEEDEOF
   # is the whole argument for the check being mandatory rather than a nicety:
   # without it the drop rule trades a false positive for a false NEGATIVE on the
   # documented fatal case.
-  sed -i '/^  undef=\$(sd_undefined_templated_vars/,/^  fi$/d' "$T7_TOOL"
+  # Not `sed -i`: BSD sed takes a MANDATORY backup-suffix argument to -i, so on
+  # macOS the range expression is consumed as the suffix and the tool path is
+  # then read as the script. Write to a temp and mv it back instead.
+  sed '/^  problems=\$(sd_templated_var_problems/,/^  fi$/d' \
+    "$T7_TOOL" >"$BATS_TEST_TMPDIR/sabotaged"
+  mv "$BATS_TEST_TMPDIR/sabotaged" "$T7_TOOL"
+  chmod +x "$T7_TOOL"
+  # The excision must actually have happened, or this test passes vacuously.
+  ! grep -q 'sd_templated_var_problems "\$sscan"' "$T7_TOOL"
   cat >"$TPL" <<'TPLEOF'
 #!/usr/bin/env bash
 
@@ -1618,6 +1628,116 @@ SEEDEOF
   t7_run_tool "$T7_TOOL" "$SEED"
   [ "$status" -eq 0 ]
   [[ "$output" != *ERROR* ]]
+}
+
+@test "a HOISTED derived declaration is an ERROR, not invisible" {
+  t7_setup
+  t7_doc "Overlay-link gitignore" "lname '*dotfiles/projects/*'"
+  cat >"$TPL" <<'TPLEOF'
+#!/usr/bin/env bash
+
+WORKSPACE="{WORKSPACE}"
+overlay_links="$(cd "$WORKSPACE" && find . -type l -lname '*dotfiles/projects/*' -print)"
+echo "$overlay_links"
+TPLEOF
+  # The inline case above is caught by the block diff, but only because the
+  # declaration happens to sit in the compared window. Hoisted into the variable
+  # block it lands in no window at all - so placement, not correctness, would
+  # decide whether the seed's most dangerous regression is reported. Checked
+  # whole-file for exactly that reason.
+  cat >"$SEED" <<'SEEDEOF'
+#!/usr/bin/env bash
+
+WORKSPACE="$(git rev-parse --show-toplevel)"
+
+overlay_links="$(cd "$WORKSPACE" && find . -type l -lname '*dotfiles/projects/*' -print)"
+echo "$overlay_links"
+SEEDEOF
+  t7_run "$SEED"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *ERROR* ]]
+  [[ "$output" == *"derives WORKSPACE"* ]]
+}
+
+@test "an unsafe braced read of an unassigned WORKSPACE is an ERROR" {
+  t7_setup
+  t7_doc "Overlay-link gitignore" "lname '*dotfiles/projects/*'"
+  cat >"$TPL" <<'TPLEOF'
+#!/usr/bin/env bash
+
+overlay_links="$(cd /w && find . -type l -lname '*dotfiles/projects/*' -print)"
+echo "$overlay_links"
+TPLEOF
+  # `${v%/}` aborts under `set -u` exactly as `$v` does, so it is a read. Only
+  # the operators that substitute a default survive an unset parameter.
+  cat >"$SEED" <<'SEEDEOF'
+#!/usr/bin/env bash
+
+overlay_links="$(cd "${WORKSPACE%/}" && find . -type l -lname '*dotfiles/projects/*' -print)"
+echo "$overlay_links"
+SEEDEOF
+  t7_run "$SEED"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *ERROR* ]]
+  [[ "$output" == *"never assigns it"* ]]
+}
+
+@test "a defaulted \${WORKSPACE:-...} read is not a reference" {
+  t7_setup
+  t7_doc "Overlay-link gitignore" "lname '*dotfiles/projects/*'"
+  cat >"$TPL" <<'TPLEOF'
+#!/usr/bin/env bash
+
+overlay_links="$(cd "${WORKSPACE:-/w}" && find . -type l -lname '*dotfiles/projects/*' -print)"
+echo "$overlay_links"
+TPLEOF
+  # The control case for the test above: a defaulted expansion is precisely the
+  # shape that SURVIVES an unset parameter, so it must not raise the ERROR.
+  cat >"$SEED" <<'SEEDEOF'
+#!/usr/bin/env bash
+
+overlay_links="$(cd "${WORKSPACE:-/w}" && find . -type l -lname '*dotfiles/projects/*' -print)"
+echo "$overlay_links"
+SEEDEOF
+  t7_run "$SEED"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *ERROR* ]]
+}
+
+@test "the templated-assignment grammar accepts declarations and rejects shell syntax" {
+  # Exercised through the tool's own function via sd_source, because the point
+  # of the shared grammar is that ONE definition answers this for both the drop
+  # rule and the whole-file check. 0 = literal declaration (dropped from the
+  # comparison), 2 = declaration with a non-literal RHS (kept and reported),
+  # 1 = not one of these declarations at all.
+  local good bad other
+  for good in 'WORKSPACE="/app"' "WORKSPACE='/app'" 'WORKSPACE=/app' \
+    'SEED_USER="vscode"' 'export WORKSPACE="/app"' 'readonly SEED_USER="node"' \
+    'WORKSPACE="{WORKSPACE}"'; do
+    sd_source sd_classify_templated_assignment "$good"
+    [ "$status" -eq 0 ] || {
+      echo "expected literal (0), got $status for: $good"
+      false
+    }
+  done
+  # Every one of these passed the old `$`/backtick/whitespace heuristic and so
+  # was silently dropped from the comparison.
+  for bad in 'WORKSPACE=/w;true' 'WORKSPACE=~' 'WORKSPACE=<(pwd)' \
+    'WORKSPACE="$(git rev-parse --show-toplevel)"' 'WORKSPACE=`pwd`' \
+    'WORKSPACE=/w cmd' 'WORKSPACE="/w" "x"' 'WORKSPACE=/w*'; do
+    sd_source sd_classify_templated_assignment "$bad"
+    [ "$status" -eq 2 ] || {
+      echo "expected non-literal (2), got $status for: $bad"
+      false
+    }
+  done
+  for other in 'PATH=/usr/bin' 'echo "$WORKSPACE"' 'WORKSPACES="/x"'; do
+    sd_source sd_classify_templated_assignment "$other"
+    [ "$status" -eq 1 ] || {
+      echo "expected not-a-declaration (1), got $status for: $other"
+      false
+    }
+  done
 }
 
 @test "<<< herestrings are not heredoc openers" {

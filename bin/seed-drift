@@ -352,34 +352,74 @@ sd_drop_priv_prefix() {
 #
 # The definedness check in sd_check_seed is the compensating guard: block
 # comparison no longer notices a seed that never assigns these at all.
-sd_is_templated_assignment() {
-  case "$1" in
+# The single grammar for a per-project templated declaration, shared by the drop
+# rule in sd_normalize_code_line and the whole-file check in
+# sd_templated_var_problems. Exactly one place decides what one of these
+# declarations IS and whether its RHS is a plain literal: two copies of that
+# question drifting apart is precisely how a line gets dropped from the diff by
+# one rule and then missed by the other.
+#
+#   0 - a declaration with a plain literal RHS   => dropped from comparison
+#   2 - a declaration with any other RHS         => kept, and reported
+#   1 - not one of these declarations at all
+sd_classify_templated_assignment() {
+  local line="$1" rhs inner
+  line="${line#"${line%%[![:space:]]*}"}"
+  # Declaration prefixes, kept identical on both sides of the shared grammar.
+  # `export` matters: a seed that exports WORKSPACE has declared it just as much
+  # as a bare assignment does, and rejecting the form here while accepting it in
+  # the definedness check is the inconsistency this function exists to prevent.
+  case "$line" in
+    export\ * | declare\ * | readonly\ * | typeset\ * | local\ *)
+      line="${line#* }"
+      line="${line#"${line%%[![:space:]]*}"}"
+      ;;
+  esac
+  case "$line" in
     SEED_USER=* | WORKSPACE=*) ;;
     *) return 1 ;;
   esac
-  local rhs="${1#*=}"
-  # Strip one layer of matching quotes; a literal path needs no more than that.
+  rhs="${line#*=}"
   case "$rhs" in
-    \"*\") rhs="${rhs%\"}" rhs="${rhs#\"}" ;;
-    \'*\') rhs="${rhs%\'}" rhs="${rhs#\'}" ;;
+    # Single quotes suppress every expansion, so the content is literal whatever
+    # it holds - but the closing quote must be the LAST character, or what looks
+    # like a quoted value is really a quoted value followed by more command.
+    \'*\')
+      inner="${rhs%\'}" inner="${inner#\'}"
+      case "$inner" in *\'*) return 2 ;; esac
+      return 0
+      ;;
+    \"*\")
+      inner="${rhs%\"}" inner="${inner#\"}"
+      case "$inner" in *'$'* | *'`'* | *'"'*) return 2 ;; esac
+      return 0
+      ;;
+    # Unquoted: an allowlist of characters a literal path can contain, so every
+    # form carrying shell syntax - `WORKSPACE=/w;true`, `WORKSPACE=<(pwd)`,
+    # `WORKSPACE=~`, a glob, a prefix assignment with a trailing command - is
+    # rejected rather than silently dropped from the comparison. Rejecting is
+    # the safe direction: a rejected line is kept and shows up as drift.
+    *)
+      case "$rhs" in
+        *[!A-Za-z0-9_/.:@%+,-]*) return 2 ;;
+      esac
+      return 0
+      ;;
   esac
-  case "$rhs" in
-    *'$'* | *'`'*) return 1 ;;
-    # An unquoted RHS with whitespace is `WORKSPACE=/x cmd ...` - a prefix
-    # assignment to some other command, not the declaration we mean to drop.
-    *[[:space:]]*) [ "$rhs" != "${1#*=}" ] || return 1 ;;
-  esac
-  return 0
 }
 
 sd_normalize_code_line() {
-  local line="$1"
+  local line="$1" cls=0
   line="${line//$'\t'/ }"
   while [ "$line" != "${line//  / }" ]; do line="${line//  / }"; done
   line="${line#"${line%%[![:space:]]*}"}"
   line="${line%"${line##*[![:space:]]}"}"
   [ -n "$line" ] || return 0
-  sd_is_templated_assignment "$line" && return 0
+  # Only a LITERAL declaration is dropped. A derived one stays in the diff and
+  # is reported by the whole-file check as well, so that it is caught wherever
+  # the seed happens to put it.
+  sd_classify_templated_assignment "$line" || cls=$?
+  [ "$cls" -ne 0 ] || return 0
   line=$(sd_drop_priv_prefix "$line")
   [ -n "$line" ] || return 0
   printf '%s\n' "$line" | sd_neutralize_paths
@@ -607,30 +647,65 @@ sd_report_thin() {
     "$1" "$2" "$SD_THIN_WINDOW"
 }
 
-# Names every per-project variable the seed READS but never ASSIGNS. This is
-# the compensating guard for the drop rule in sd_normalize_code_line: once those
-# assignments are excluded from block comparison, "the seed hoisted it into its
-# variable block" and "the seed never defines it at all" look identical to the
-# diff. The second is the failure mode catch-up-local-seed.md calls the main way
-# the task goes wrong - under `set -euo pipefail` the first expansion aborts the
-# whole seed and surfaces as an unrelated-looking container start error - so it
-# is checked directly instead of being left to a block verdict that no longer
-# covers it. Reported on the host, before a rebuild, rather than in a log.
+# Names every per-project templated variable this seed gets WRONG, as
+# `VAR<TAB>KIND` with KIND one of `undefined` or `derived`. Both are whole-file
+# questions on purpose: block comparison cannot answer either one, and must not
+# be relied on to.
+#
+#   undefined - the seed reads the variable but never declares it. This is the
+#               compensating guard for the drop rule: once those declarations
+#               are excluded from comparison, "hoisted into the variable block"
+#               and "never defined at all" look identical to the diff. The
+#               second is the failure mode catch-up-local-seed.md calls the main
+#               way the task goes wrong - under `set -euo pipefail` the first
+#               expansion aborts the whole seed and surfaces as an
+#               unrelated-looking container start error.
+#   derived   - the declaration exists but is computed. The doc forbids this for
+#               WORKSPACE: the seed is mounted at an arbitrary container path
+#               that need not sit inside the checkout, so `git rev-parse` from
+#               there resolves to the wrong tree. Checked here rather than left
+#               to a block verdict because a derived declaration hoisted into
+#               the variable block never lands in a compared window at all - the
+#               same placement blindness the drop rule was written to remove.
 #
 # Reads the scan, not the file: `C` records have already had trailing comments
 # stripped, so a `$WORKSPACE` mentioned only in a comment is not a reference.
-# `${VAR:-...}` is deliberately not a reference either - a defaulted expansion
-# is exactly the shape that survives an undefined variable.
-sd_undefined_templated_vars() {
-  local scan="$1" var
+sd_templated_var_problems() {
+  local scan="$1" var tag text cls assigned derived
   for var in WORKSPACE SEED_USER; do
-    if awk -F'\t' -v v="$var" '
-      $3 != "C" { next }
-      $4 ~ ("^[[:space:]]*((export|declare|readonly|local)[[:space:]]+)?" v "=") { set = 1 }
-      $4 ~ ("\\$" v "([^A-Za-z0-9_]|$)") || $4 ~ ("\\$\\{" v "\\}") { used = 1 }
-      END { exit (used && !set) ? 0 : 1 }
-    ' "$scan"; then
-      printf '%s\n' "$var"
+    assigned=0
+    derived=0
+    # The declaration side goes through the shared grammar, in bash, so the
+    # answer here cannot disagree with what sd_normalize_code_line dropped.
+    while IFS=$'\t' read -r _ _ tag text; do
+      [ "$tag" = C ] || continue
+      cls=0
+      sd_classify_templated_assignment "$text" || cls=$?
+      case "$cls" in
+        0) case "$text" in *"$var"=*) assigned=1 ;; esac ;;
+        2) case "$text" in *"$var"=*) assigned=1 derived=1 ;; esac ;;
+      esac
+    done <"$scan"
+    if [ "$derived" = 1 ]; then
+      printf '%s\tderived\n' "$var"
+    elif [ "$assigned" = 0 ] &&
+      # The read side stays in awk, which is where the regex work belongs.
+      # A braced expansion counts as a read unless its operator TOLERATES an
+      # unset parameter - `:-` `:=` `:+` and their colonless forms substitute a
+      # default and survive `set -u`. Everything else (`${v}`, `${v%...}`,
+      # `${v#...}`, `${v/...}`, `${v:?...}`, `${v:0:3}`, `${#v}`) aborts, so it
+      # is a read. The trailing word-character exclusions keep `${WORKSPACE_X}`
+      # and `$WORKSPACE_X` from counting as uses of WORKSPACE.
+      awk -F'\t' -v v="$var" '
+        $3 != "C" { next }
+        $4 ~ ("\\$" v "([^A-Za-z0-9_]|$)") { used = 1 }
+        $4 ~ ("\\$\\{" v "\\}") { used = 1 }
+        $4 ~ ("\\$\\{" v ":[^-=+]") { used = 1 }
+        $4 ~ ("\\$\\{" v "[^:=+}A-Za-z0-9_-]") { used = 1 }
+        $4 ~ ("\\$\\{#" v "[^A-Za-z0-9_]") { used = 1 }
+        END { exit used ? 0 : 1 }
+      ' "$scan"; then
+      printf '%s\tundefined\n' "$var"
     fi
   done
   return 0
@@ -638,7 +713,7 @@ sd_undefined_templated_vars() {
 
 sd_check_seed() {
   local seed="$1" name rc=0 block anchor verdict tnorm snorm sscan
-  local behind ahead nb na est tst tsize esize docrows undef var
+  local behind ahead nb na est tst tsize esize docrows problems pvar pkind
   name=$(basename -- "$(dirname -- "$(dirname -- "$seed")")")
   printf '%s  %s\n' "$name" "$seed"
   if ! bash -n "$seed" 2>/dev/null; then
@@ -658,12 +733,21 @@ sd_check_seed() {
   fi
   # rc, not `return 2`: the block verdicts are still worth printing, and this
   # is a whole-file finding that none of them depends on.
-  undef=$(sd_undefined_templated_vars "$sscan")
-  if [ -n "$undef" ]; then
-    for var in $undef; do
-      sd_report_block ERROR '(whole file)' "seed reads \$$var but never assigns it"
-    done
-    sd_report_action 'define it in the seed variable block; see catch-up-local-seed.md'
+  problems=$(sd_templated_var_problems "$sscan")
+  if [ -n "$problems" ]; then
+    while IFS=$'\t' read -r pvar pkind; do
+      [ -n "$pvar" ] || continue
+      case "$pkind" in
+        undefined)
+          sd_report_block ERROR '(whole file)' "seed reads \$$pvar but never assigns it"
+          sd_report_action 'define it in the seed variable block; see catch-up-local-seed.md'
+          ;;
+        derived)
+          sd_report_block ERROR '(whole file)' "seed derives $pvar instead of assigning a literal"
+          sd_report_action 'the container path need not sit inside the checkout; use a literal'
+          ;;
+      esac
+    done <<<"$problems"
     rc=2
   fi
   sd_tmp tnorm || return 2
