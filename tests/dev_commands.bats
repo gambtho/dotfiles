@@ -278,6 +278,8 @@ dev_open_load_libs() {
   source "$REPO_ROOT/tools/dev/lib/backend-tmux.sh"
   source "$REPO_ROOT/tools/dev/commands/open.sh"
   source "$REPO_ROOT/tools/dev/commands/attach.sh"
+  source "$REPO_ROOT/tools/dev/commands/stop.sh"
+  source "$REPO_ROOT/tools/dev/commands/list.sh"
 }
 
 dev_open_fixture() {
@@ -623,5 +625,153 @@ esac
   [[ "$output" != *"command not found"* ]]
   [[ "$output" == *"not a terminal"* ]]
 
+  dev_tmux kill-server || true
+}
+
+@test "stop ends the session and the next dev list reports stopped/user" {
+  setup_dev_test
+  dev_open_load_libs
+  dev_open_stub_attach
+  local dir ws_id
+  dir=$(dev_open_fixture demo)
+  ws_id=$(dev_resolve_workspace_id "$dir")
+
+  run dev_cmd_open demo
+  [ "$status" -eq 0 ]
+
+  run dev_cmd_stop demo
+  [ "$status" -eq 0 ]
+
+  run dev_tmux has-session -t '=demo'
+  [ "$status" -ne 0 ]
+
+  [ "$(dev_open_events 'select(.event == "workspace.stopped") | .data.reason')" = "user" ]
+
+  # stop reconciles after the kill, so the record itself reads stopped without
+  # waiting for the next command to project it.
+  [ "$(jq -r '.status' "$(dev_state_path "$ws_id")")" = "stopped" ]
+
+  run dev_cmd_list --json
+  [ "$status" -eq 0 ]
+  [ "$(jq -r '.workspaces[] | select(.session_name == "demo") | .status' <<<"$output")" = "stopped" ]
+  [ "$(jq -r '.workspaces[] | select(.session_name == "demo") | .stopped_reason' <<<"$output")" = "user" ]
+  dev_tmux kill-server || true
+}
+
+@test "a kill that fails does not record the workspace as stopped" {
+  # The ordering regression: emitting workspace.stopped before the kill left a
+  # live session recorded as stopped, and reconcile treats stopped as terminal,
+  # so nothing ever corrected it.
+  setup_dev_test
+  dev_open_load_libs
+  dev_open_stub_attach
+  local dir ws_id
+  dir=$(dev_open_fixture demo)
+  ws_id=$(dev_resolve_workspace_id "$dir")
+
+  run dev_cmd_open demo
+  [ "$status" -eq 0 ]
+
+  dev_backend_kill() { return 1; }
+
+  run dev_cmd_stop demo
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"still running"* ]]
+
+  # No event, so nothing to fold into a false stopped.
+  [ -z "$(dev_open_events 'select(.event == "workspace.stopped") | .id')" ]
+
+  # The session index is back, so the hook is still armed for the eventual close.
+  [ -s "$(dev_open_session_index_path demo)" ]
+
+  unset -f dev_backend_kill
+  run dev_cmd_list --json
+  [ "$status" -eq 0 ]
+  [ "$(jq -r '.workspaces[] | select(.session_name == "demo") | .status' <<<"$output")" = "running" ]
+  dev_tmux kill-server || true
+}
+
+@test "stop without --container leaves the container alone; --container stops it" {
+  setup_dev_test
+  dev_open_load_libs
+  dev_open_stub_attach
+  local dir ws_id record
+  dir=$(dev_open_fixture demo)
+  mkdir -p "$dir/.devcontainer"
+  printf '{"image":"alpine:3"}\n' >"$dir/.devcontainer/devcontainer.json"
+
+  stub_command devcontainer '
+case "$1" in
+  --version) echo 0.86.1; exit 0 ;;
+  exec) shift; while [ "${1#-}" != "$1" ]; do shift 2; done; exec "$@" ;;
+  *) echo "{\"outcome\":\"success\",\"containerId\":\"cid1\",\"remoteUser\":\"vscode\",\"remoteWorkspaceFolder\":\"'"$dir"'\"}" ;;
+esac
+'
+  stub_command mise 'shift 2; shift; exec "$@"'
+  stub_command claude 'exec sleep 30'
+  stub_command docker '
+if [ "$1" = "stop" ]; then echo "$2" >>"$TEST_ROOT/docker-stop"; exit 0; fi
+if [ "$1" = "info" ]; then exit 0; fi
+if [ "$1" = "inspect" ]; then echo true; exit 0; fi
+if [ "$1" = "exec" ]; then shift; while [ "${1#-}" != "$1" ]; do shift 2; done; shift; exec "$@"; fi
+exit 0
+'
+
+  run dev_cmd_open demo
+  [ "$status" -eq 0 ]
+
+  run dev_cmd_stop demo
+  [ "$status" -eq 0 ]
+  [ ! -e "$TEST_ROOT/docker-stop" ]
+
+  run dev_cmd_open demo
+  [ "$status" -eq 0 ]
+  run dev_cmd_stop demo --container
+  [ "$status" -eq 0 ]
+  [ "$(cat "$TEST_ROOT/docker-stop")" = "cid1" ]
+  dev_tmux kill-server || true
+}
+
+@test "stop exits 7 while the operation lock is held" {
+  setup_dev_test
+  dev_open_load_libs
+  dev_open_stub_attach
+  local dir ws_id
+  dir=$(dev_open_fixture demo)
+  ws_id=$(dev_resolve_workspace_id "$dir")
+
+  run dev_cmd_open demo
+  [ "$status" -eq 0 ]
+
+  flock -x "$DEV_STATE_ROOT/locks/$ws_id.op" sleep 5 &
+  local holder=$!
+  sleep 0.4
+
+  run dev_cmd_stop demo
+  [ "$status" -eq 7 ]
+  [[ "$output" == *"another dev is working on this workspace"* ]]
+  run dev_tmux has-session -t '=demo'
+  [ "$status" -eq 0 ]
+
+  kill "$holder" 2>/dev/null || true
+  wait "$holder" 2>/dev/null || true
+  dev_tmux kill-server || true
+}
+
+@test "stop on an already-stopped workspace is a no-op exiting 0" {
+  setup_dev_test
+  dev_open_load_libs
+  dev_open_stub_attach
+  dev_open_fixture demo >/dev/null
+
+  run dev_cmd_open demo
+  [ "$status" -eq 0 ]
+  run dev_cmd_stop demo
+  [ "$status" -eq 0 ]
+
+  run dev_cmd_stop demo
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"already stopped"* ]]
+  [ "$(dev_open_events 'select(.event == "workspace.stopped") | .id' | wc -l)" -eq 1 ]
   dev_tmux kill-server || true
 }
