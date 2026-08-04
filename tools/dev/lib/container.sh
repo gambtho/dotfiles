@@ -219,6 +219,16 @@ dev_window_inner_command() {
   agent=$(jq -r '.agent // ""' <<<"$window_json")
   command=$(jq -r '.command // ""' <<<"$window_json")
 
+  # Agent windows exec their process directly, so shell init never wires the
+  # vekil proxy env the way an interactive shell would (ai/vekil/env.zsh).
+  # Merge the overlay UNDER the declared environment: explicit keys win, and
+  # an unreachable proxy contributes {} so agents fall back to direct.
+  if [[ -n "$agent" ]]; then
+    local vekil_env
+    vekil_env=$(dev_vekil_env_json "$location")
+    env_json=$(jq -nc --argjson v "$vekil_env" --argjson e "$env_json" '$v + $e')
+  fi
+
   # jq's @sh quotes each value for POSIX sh, so a value containing a space,
   # quote or newline survives intact.
   assignments=$(jq -r 'to_entries | map("\(.key)=" + (.value | tostring | @sh))

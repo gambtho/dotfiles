@@ -5,6 +5,7 @@ load test_helper
 setup() {
   setup_dev_test
   source "$REPO_ROOT/tools/dev/lib/events.sh"
+  source "$REPO_ROOT/tools/dev/lib/vekil.sh"
   source "$REPO_ROOT/tools/dev/lib/container.sh"
   source "$REPO_ROOT/tools/dev/lib/backend-tmux.sh"
   export TEST_WT="$TEST_ROOT/workspace/proj"

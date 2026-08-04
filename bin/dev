@@ -82,7 +82,7 @@ dev_main() {
     cmd_file="$DEV_DOTFILES_ROOT/tools/dev/commands/open.sh"
   fi
 
-  for lib in resolve config events state fold reconcile runtime container backend-tmux; do
+  for lib in resolve config events state fold reconcile runtime vekil container backend-tmux; do
     # shellcheck source=/dev/null
     source "$DEV_DOTFILES_ROOT/tools/dev/lib/${lib}.sh"
   done
