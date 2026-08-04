@@ -332,3 +332,21 @@ fixture_config() {
   done
   [ "$clients" = "0" ]
 }
+
+@test "query reports pane logical names and handles; unstamped panes report pane:null" {
+  dev_backend_create "proj" "aa11" "proj" "$TEST_WT"
+  dev_tmux new-window -d -t "=proj:" -n w1 "sleep 30" \
+    ';' set-window-option -t "=proj:=w1" remain-on-exit on \
+    ';' set-option -p -t "=proj:=w1" @dev_pane agent-1
+  pid=$(dev_tmux split-window -d -P -F '#{pane_id}' -t "=proj:=w1" "sleep 30")
+  dev_tmux set-option -p -t "$pid" @dev_pane shell
+  dev_tmux split-window -d -t "=proj:=w1" "sleep 30" # unstamped
+
+  run dev_backend_query "proj"
+  [ "$status" -eq 0 ]
+  win=$(jq -c '.windows[] | select(.name == "w1")' <<<"$output")
+  [ "$(jq -r '.panes | length' <<<"$win")" -eq 3 ]
+  [ "$(jq -r '[.panes[].pane] | sort | join(",")' <<<"$win")" = ",agent-1,shell" ]
+  [ "$(jq -r '[.panes[] | select(.pane == "shell") | .pane_id] | first' <<<"$win")" = "$pid" ]
+  [ "$(jq -r '[.panes[] | select(.pane == null)] | length' <<<"$win")" -eq 1 ]
+}

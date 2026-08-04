@@ -157,10 +157,14 @@ dev_backend_apply_layout() {
 # does not — it silently resolves `=name` to `name-longer` and returns exit 0,
 # which is exactly the cross-workspace misattachment ADR-7 exists to prevent.
 # That asymmetry between tmux's own commands is the whole reason this hid.
+#
+# `pane_id` is an opaque, ephemeral backend handle for targeting a live pane
+# (respawn, select); it is never written to events or records — logical
+# identity is `pane`.
 dev_backend_query() {
   local session_name="$1" panes worktree clients
   if ! panes=$(dev_tmux list-panes -s -t "=$session_name:" \
-    -F '#{pane_dead} #{window_index} #{window_name}' 2>/dev/null); then
+    -F '#{pane_dead} #{window_index} #{pane_id} #{?#{@dev_pane},#{@dev_pane},-} #{window_name}' 2>/dev/null); then
     printf '{"exists":false,"worktree":null,"clients":0,"windows":[]}\n'
     return 0
   fi
@@ -173,9 +177,12 @@ dev_backend_query() {
   printf '%s\n' "$panes" | jq -Rsc --arg wt "$worktree" --argjson clients "$clients" '
     (split("\n")
      | map(select(length > 0))
-     | map(capture("^(?<dead>[01]) (?<idx>[0-9]+) (?<name>.*)$")))
+     | map(capture("^(?<dead>[01]) (?<idx>[0-9]+) (?<pid>%[0-9]+) (?<pn>[^ ]+) (?<name>.*)$")))
     | group_by(.idx | tonumber)
-    | map({name: .[0].name, panes: map({alive: (.dead == "0")})})
+    | map({name: .[0].name,
+           panes: map({alive: (.dead == "0"),
+                       pane: (if .pn == "-" then null else .pn end),
+                       pane_id: .pid})})
     | {exists: true,
        worktree: (if $wt == "" then null else $wt end),
        clients: $clients,
