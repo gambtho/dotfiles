@@ -1782,6 +1782,90 @@ t8_pad() {
   [[ "$output" == *"seed window is only 1 lines"* ]]
 }
 
+@test "a multi-paragraph anchor is judged by the UNION of its windows, not the last one alone" {
+  # Pins SD_LAST_WINDOW_SIZE to the union computation in sd_extract rather than
+  # a naive `sd_window`-per-call formula (Task 8 review). An anchor can match
+  # more than one paragraph (the design doc's own example: TREE_SITTER_VERSION,
+  # core.hooksPath). Two disjoint 3-line paragraphs here each fall under the
+  # 5-line threshold on their own, but their union (6 raw lines) does not. A
+  # formula that only remembers the LAST paragraph's window (the loop
+  # overwrites a per-call global on every iteration) would see just that one
+  # 3-line window and wrongly call the seed side thin; the union formula sees
+  # 6 and correctly does not.
+  t7_setup
+  t7_doc "multi block" MULTI_ANCHOR
+  {
+    printf '#!/usr/bin/env bash\n\n'
+    t8_pad
+    printf 'MULTI_ANCHOR=1\n'
+  } >"$TPL"
+  # Two separate 3-line paragraphs, both matched by the fixed-string anchor
+  # (MULTI_ANCHOR is a substring of MULTI_ANCHOR_TWO too) — mirrors the real
+  # template's own multi-occurrence anchors. Each already parses standalone,
+  # so sd_window never grows either one past its own 3 lines.
+  printf '#!/usr/bin/env bash\n\n# s1\n# s2\nMULTI_ANCHOR=1\n\n# s3\n# s4\nMULTI_ANCHOR_TWO=2\n' >"$SEED"
+
+  t7_run
+  [ "$status" -eq 1 ]
+  [[ "$output" == *AHEAD* ]]
+  [[ "$output" != *"window is only"* ]]
+}
+
+@test "sabotage: reverting to a per-call (non-union) window size wrongly flags the multi-paragraph seed as thin" {
+  # Same intent as the other sabotage-probe: confirm the test above actually
+  # exercises the union math rather than passing under both formulas. The
+  # naive replacement here is exactly the brief's original suggestion —
+  # END - START + 1 off the single `sd_window` result, i.e. the last one the
+  # loop ran (the loop overwrites `window` every iteration) — which is what a
+  # regression back to it would look like.
+  #
+  # A plain `sed`/string substitution on this line is fragile (nested single
+  # quotes, `$` sigils), so the swap goes through python3 doing an exact,
+  # asserted-unique literal replacement instead.
+  #
+  # bin/seed-drift is committed at 6091300 with no further edits since, so
+  # restoring via `git checkout --` is safe here (unlike the file-under-
+  # construction case the /tmp-backup convention above guards against). Still
+  # take the /tmp backup and diff-verify the restore, per the standing
+  # process note: `cp` in this environment is interactive and silently
+  # declines instead of failing loudly — confirmed again while building this
+  # very test.
+  local backup="/tmp/seed-drift.t8-union-sabotage.bak.$$"
+  cp "$REPO_ROOT/bin/seed-drift" "$backup"
+
+  t7_setup
+  t7_doc "multi block" MULTI_ANCHOR
+  {
+    printf '#!/usr/bin/env bash\n\n'
+    t8_pad
+    printf 'MULTI_ANCHOR=1\n'
+  } >"$TPL"
+  printf '#!/usr/bin/env bash\n\n# s1\n# s2\nMULTI_ANCHOR=1\n\n# s3\n# s4\nMULTI_ANCHOR_TWO=2\n' >"$SEED"
+
+  python3 - "$REPO_ROOT/bin/seed-drift" <<'PYEOF'
+import sys
+path = sys.argv[1]
+old = '''  SD_LAST_WINDOW_SIZE=$(printf '%s\\n' "$keep" | awk 'END { print NR }')'''
+new = '''  SD_LAST_WINDOW_SIZE=$(printf '%s\\n' "$window" | awk '{ print $2 - $1 + 1 }')'''
+text = open(path).read()
+assert text.count(old) == 1, "sabotage target line not found or not unique"
+open(path, "w").write(text.replace(old, new))
+PYEOF
+
+  t7_run
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"seed window is only 3 lines"* ]]
+
+  git -C "$REPO_ROOT" checkout -- bin/seed-drift
+  diff -q "$backup" "$REPO_ROOT/bin/seed-drift" >/dev/null
+  rm -f "$backup"
+
+  t7_run
+  [ "$status" -eq 1 ]
+  [[ "$output" == *AHEAD* ]]
+  [[ "$output" != *"window is only"* ]]
+}
+
 @test "sabotage: raising SD_THIN_WINDOW past the seed's window size hides the note" {
   # Pins the load-bearing test above to the actual threshold constant, not to
   # a hardcoded string it happens to match. Backed up to /tmp first per the
