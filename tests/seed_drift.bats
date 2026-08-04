@@ -625,7 +625,10 @@ setup_drift_fixtures() {
 
 make_project() { mkdir -p "$SEED_DRIFT_ROOT/$1/.devcontainer"; }
 seed_path() { printf '%s\n' "$SEED_DRIFT_ROOT/$1/.devcontainer/local-seed.sh"; }
-seed_from_template() { make_project "$1"; write_drift_template "$(seed_path "$1")"; }
+seed_from_template() {
+  make_project "$1"
+  write_drift_template "$(seed_path "$1")"
+}
 sd_drift() { run "$SEED_DRIFT" --template "$FIXTURE_TEMPLATE" --doc "$FIXTURE_DOC" "$@"; }
 
 @test "a clean seed exits 0 and is counted as checked" {

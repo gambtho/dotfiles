@@ -36,7 +36,10 @@ guard_verdict() {
   # Fail loudly rather than silently testing an empty chunk if the surrounding
   # code is reindented or the function renamed.
   grep -q 'function tree_sitter_cli_works' "$guard" ||
-    { echo "could not extract tree_sitter_cli_works from $INIT_LUA" >&2; return 2; }
+    {
+      echo "could not extract tree_sitter_cli_works from $INIT_LUA" >&2
+      return 2
+    }
   echo 'io.write(tostring(tree_sitter_cli_works()))' >>"$guard"
 
   PATH="$STUB_BIN:/usr/bin:/bin" "$NVIM_BIN" --clean --headless \
@@ -53,13 +56,19 @@ guard_verdict() {
   for v in 0.26.1 0.26.11 0.27.0 1.0.0; do
     stub_command tree-sitter "echo 'tree-sitter $v'"
     run guard_verdict
-    [ "$output" = true ] || { echo "expected $v accepted, got: $output"; false; }
+    [ "$output" = true ] || {
+      echo "expected $v accepted, got: $output"
+      false
+    }
   done
 
   for v in 0.20.8 0.25.9 0.26.0; do
     stub_command tree-sitter "echo 'tree-sitter $v'"
     run guard_verdict
-    [ "$output" = false ] || { echo "expected $v rejected, got: $output"; false; }
+    [ "$output" = false ] || {
+      echo "expected $v rejected, got: $output"
+      false
+    }
   done
 }
 
@@ -121,8 +130,14 @@ guard_verdict() {
   ' "$INIT_LUA"
 
   [ "$status" -eq 0 ]
-  [[ "$output" != *UNGATED* ]] || { echo "$output"; false; }
+  [[ "$output" != *UNGATED* ]] || {
+    echo "$output"
+    false
+  }
   # Pin the count: a new, unnoticed call site should fail here rather than be
   # silently accepted by a check that only looks at the ones it knows about.
-  [[ "$output" == *"sites=2"* ]] || { echo "expected 2 install sites, got: $output"; false; }
+  [[ "$output" == *"sites=2"* ]] || {
+    echo "expected 2 install sites, got: $output"
+    false
+  }
 }
