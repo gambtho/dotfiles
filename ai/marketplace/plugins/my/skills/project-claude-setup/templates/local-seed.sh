@@ -268,8 +268,13 @@ if [ ! -d "$WORKSPACE" ]; then
   echo "⚠️  seed: workspace $WORKSPACE is not a directory — leaving ~/.gitignore" >&2
   echo "   overlay-symlink list untouched; overlay files may show up in git status" >&2
 else
-  overlay_links="$(cd "$WORKSPACE" && find . -type l -lname '*dotfiles/projects/*' \
-    -not -path './node_modules/*' 2>/dev/null | sed 's#^\./##' | sort)"
+  # -prune on every node_modules, not `-not -path './node_modules/*'`: the
+  # -path form anchors at the top level, so a nested web/node_modules was
+  # neither excluded nor even skipped — find descended through all of it and
+  # then listed whatever it found. -prune is what actually stops the descent,
+  # which is where the cost is in a repo with a JS workspace.
+  overlay_links="$(cd "$WORKSPACE" && find . \( -type d -name node_modules -prune \) -o \
+    -type l -lname '*dotfiles/projects/*' -print 2>/dev/null | sed 's#^\./##' | sort)"
   # Rewrite the marked block: strip any existing one, then append the current set.
   new_gitignore="$(as_user sed "/^${GI_MARK_BEGIN}$/,/^${GI_MARK_END}$/d" "$GITIGNORE")"
   # Write to a sibling temp and rename, rather than tee-ing over the live file.
@@ -291,11 +296,19 @@ else
   # Remove the temp on either failure: `set -e` aborts the seed on the very next
   # line, so without these each failed start would strand one in the home dir
   # for good — the fixed path at least got overwritten by the following run.
+  # &&-chained rather than four bare printfs: a plain sequence yields only the
+  # LAST command's status, so a failure on any earlier line (a full layer while
+  # writing the pre-existing content, which is the largest of the four) is
+  # invisible and this block publishes a truncated excludes file as a success.
+  # The overlay_links line is written `test -z || printf` rather than
+  # `test -n && printf` precisely because it sits in a chain now: the natural
+  # form returns false when the list is legitimately empty and would abort the
+  # write. Under `set -o pipefail` the block's status survives the tee.
   if ! {
-    printf '%s\n' "$new_gitignore"
-    printf '%s\n' "$GI_MARK_BEGIN"
-    [ -n "$overlay_links" ] && printf '%s\n' "$overlay_links"
-    printf '%s\n' "$GI_MARK_END"
+    printf '%s\n' "$new_gitignore" &&
+      printf '%s\n' "$GI_MARK_BEGIN" &&
+      { [ -z "$overlay_links" ] || printf '%s\n' "$overlay_links"; } &&
+      printf '%s\n' "$GI_MARK_END"
   } | as_user tee "$gi_tmp" >/dev/null; then
     as_user rm -f "$gi_tmp"
     echo "⚠️  seed: could not write ~/.gitignore overlay list — leaving original"
@@ -945,11 +958,36 @@ self_check() {
     fi
   fi
 
-  # a) The zshrc hook landed (written by the always-run block above).
-  if grep -Fq 'ai/vekil/env.zsh' "$ZSHRC" 2>/dev/null; then
-    echo "   PASS  ~/.zshrc contains the vekil hook"
+  # a) The zshrc hooks landed (written by the always-run block above) AND the
+  # Vekil hook is the LAST of the two. Presence alone is not the property that
+  # matters: load-custom.zsh re-exports the API env, so if it runs AFTER
+  # ai/vekil/env.zsh it overwrites the proxy variables and interactive `claude`
+  # silently bypasses Vekil — a container that passes a presence-only check
+  # while doing exactly the thing the hook exists to prevent.
+  #
+  # Matched with grep -Fxn (fixed string, whole line, numbered) rather than a
+  # substring: line numbers are what the ordering comparison needs, and an exact
+  # match is what the always-run block actually writes. A hand-edited hook line
+  # therefore reads as absent here — deliberate, since the block above would
+  # append a second copy of the canonical line on the next start anyway.
+  #
+  # LAST occurrence, not first: duplicates are an expected state (see above),
+  # and what a duplicate changes is the final value of the env, since whichever
+  # hook sources last wins. Taking the first match would compare two positions
+  # that no longer decide anything and PASS a ~/.zshrc where a later
+  # load-custom.zsh re-export clobbers the proxy variables — exactly the
+  # bypass this check exists to catch.
+  local l_at v_at
+  l_at="$(grep -Fxn "$DOTFILES_LOAD_HOOK" "$ZSHRC" 2>/dev/null | tail -n1 | cut -d: -f1 || true)"
+  v_at="$(grep -Fxn "$VEKIL_ENV_HOOK" "$ZSHRC" 2>/dev/null | tail -n1 | cut -d: -f1 || true)"
+  if [ -z "$l_at" ] || [ -z "$v_at" ]; then
+    echo "   FAIL  ~/.zshrc missing a hook (load=${l_at:-absent} vekil=${v_at:-absent})"
+    fails=$((fails + 1))
+  elif [ "$l_at" -lt "$v_at" ]; then
+    echo "   PASS  ~/.zshrc hooks present, vekil last"
   else
-    echo "   FAIL  ~/.zshrc missing the vekil hook"
+    echo "   FAIL  ~/.zshrc hook order wrong (load=$l_at vekil=$v_at);"
+    echo "         claude may bypass the Vekil proxy in interactive shells"
     fails=$((fails + 1))
   fi
 
@@ -1051,10 +1089,28 @@ self_check() {
   # is the check that catches the dangling-overlay-link bug directly: without it
   # .claude/skills and CLAUDE.md are broken symlinks and Claude Code silently
   # loses the project's skills and instructions.
-  if [ -L "$STABLE_LINK_ROOT" ] && [ -d "$STABLE_LINK_ROOT" ]; then
-    echo "   PASS  $STABLE_LINK_ROOT -> $(readlink "$STABLE_LINK_ROOT")"
+  #
+  # The TARGET is compared, not merely the link's existence — which is what the
+  # paragraph above actually claims to verify. A root left pointing at some
+  # other checkout is still a symlink to a directory and sails through a
+  # presence-only test, while every overlay link beneath it resolves into the
+  # wrong tree. Wrong-target and missing are reported separately because they
+  # have different fixes: one is a stale link to repoint, the other is a seed
+  # that never got far enough to create it.
+  #
+  # The bare `[ -L ] && root_target=` is safe under `set -e`: a short-circuiting
+  # AND-OR list does not trigger the shell's error exit, so a missing root falls
+  # through to the else branch rather than killing the self-check silently.
+  local root_target=""
+  [ -L "$STABLE_LINK_ROOT" ] && root_target="$(readlink "$STABLE_LINK_ROOT" 2>/dev/null || true)"
+  if [ "$root_target" = "$DOTFILES_HOME" ]; then
+    echo "   PASS  $STABLE_LINK_ROOT -> $DOTFILES_HOME"
+  elif [ -n "$root_target" ]; then
+    echo "   FAIL  $STABLE_LINK_ROOT -> $root_target (expected $DOTFILES_HOME)"
+    fails=$((fails + 1))
   else
-    echo "   FAIL  $STABLE_LINK_ROOT missing or not a directory symlink"
+    echo "   FAIL  $STABLE_LINK_ROOT missing — personal overlay links (agents,"
+    echo "         commands, CLAUDE.md) will not resolve in this container"
     fails=$((fails + 1))
   fi
 
@@ -1062,17 +1118,28 @@ self_check() {
   # links) rather than testing which ones resolve: the inverted form prints the
   # HEALTHY links, so a real break prints nothing — which reads as success to
   # anyone scanning for empty output.
+  #
+  # The find criteria deliberately mirror the overlay_links generator above,
+  # rather than approximating it: a check that scans a different set than the
+  # block it validates reports on links that were never listed and stays silent
+  # about ones that were. That means no maxdepth and the same node_modules
+  # prune — including the -prune spelling, since the `-not -path` form it
+  # replaced only ever anchored at the top level and let a nested
+  # web/node_modules through.
   if [ -d "$WORKSPACE" ]; then
     local broken
-    broken="$(cd "$WORKSPACE" &&
-      find . -maxdepth 3 -lname '*dotfiles/projects/*' -xtype l 2>/dev/null)"
+    broken="$(cd "$WORKSPACE" && find . \( -type d -name node_modules -prune \) -o \
+      -type l -lname '*dotfiles/projects/*' -xtype l -print 2>/dev/null | sed 's#^\./##' | sort)"
     if [ -z "$broken" ]; then
       echo "   PASS  no dangling overlay symlinks in $WORKSPACE"
     else
       echo "   FAIL  dangling overlay symlinks in $WORKSPACE:"
-      # Unquoted on purpose: split the newline-separated list into one line each.
-      # shellcheck disable=SC2086
-      printf '         %s\n' $broken
+      # Indent via sed rather than an unquoted `printf %s\n $broken`: word
+      # splitting mangles any link whose path contains a space, and the same
+      # expansion globs — a link named with a `*` or `?` would be replaced by
+      # whatever it happens to match in the CWD, printing paths that are not
+      # the broken links at all.
+      printf '%s\n' "$broken" | sed 's/^/         /'
       fails=$((fails + 1))
     fi
   fi
@@ -1156,7 +1223,7 @@ if [ "$SEED_ALREADY_CURRENT" -eq 0 ]; then
   SEED_PATH="$SEED_HOME/.local/bin:$PATH"
   MARKETPLACE_OK=1
   if [ -x "$DOTFILES_HOME/ai/marketplace/install.sh" ]; then
-    echo "🌱 seed: installing my@guarzo marketplace + plugin"
+    echo "🌱 seed: installing my@guarzo marketplace + plugins"
     as_user env PATH="$SEED_PATH" bash "$DOTFILES_HOME/ai/marketplace/install.sh" || {
       MARKETPLACE_OK=0
       echo "⚠️  seed: marketplace install failed — NOT stamping sentinel; next launch retries"
