@@ -47,7 +47,13 @@ dev_container_up() {
   local out_file err_file status=0
   out_file=$(mktemp)
   err_file=$(mktemp)
-  timeout "$timeout_s" "${argv[@]}" >"$out_file" 2>"$err_file" || status=$?
+  # </dev/null is load-bearing: GNU timeout runs its child in a NEW process
+  # group, which is a background group on the invoking terminal. If the CLI
+  # then reads its inherited-tty stdin, the kernel stops it with SIGTTIN and
+  # the whole `dev open` hangs silently forever — the timeout clock keeps
+  # ticking against a process that is asleep, not slow. The up call is
+  # non-interactive by design (dev-autostart runs it with no tty at all).
+  timeout "$timeout_s" "${argv[@]}" </dev/null >"$out_file" 2>"$err_file" || status=$?
 
   local json="" line
   while IFS= read -r line; do
