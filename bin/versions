@@ -46,6 +46,7 @@ list_pins() {
   printf 'git zsh-defer %s\n' "$ZSH_DEFER_REF"
   printf 'channel kubernetes %s\n' "$KUBERNETES_CHANNEL"
   printf 'artifact mise %s\n' "$MISE_VERSION"
+  printf 'artifact krew %s\n' "$KREW_VERSION"
   printf 'artifact yq %s\n' "$YQ_VERSION"
   printf 'artifact win32yank %s\n' "$WIN32YANK_VERSION"
   printf 'artifact vekil %s\n' "$VEKIL_VERSION"
@@ -136,6 +137,7 @@ check_pins() {
     printf 'outdated channel kubernetes %s -> %s\n' "$KUBERNETES_CHANNEL" "$latest_channel"
   fi
   check_artifact_release mise jdx/mise "$MISE_VERSION"
+  check_artifact_release krew kubernetes-sigs/krew "$KREW_VERSION"
   check_artifact_release yq mikefarah/yq "$YQ_VERSION"
   check_artifact_release win32yank equalsraf/win32yank "$WIN32YANK_VERSION"
   check_artifact_release vekil sozercan/vekil "$VEKIL_VERSION"

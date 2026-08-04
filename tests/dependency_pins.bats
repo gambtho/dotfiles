@@ -23,6 +23,7 @@ setup() {
   [[ "$output" == *"git zsh-defer $ZSH_DEFER_REF"* ]]
   [[ "$output" == *"channel kubernetes v1.28"* ]]
   [[ "$output" == *"artifact mise v2026.7.18"* ]]
+  [[ "$output" == *"artifact krew v0.5.0"* ]]
   [[ "$output" == *"artifact yq v4.45.1"* ]]
   [[ "$output" == *"artifact win32yank v0.1.1"* ]]
   [[ "$output" == *"artifact vekil v0.14.0"* ]]
@@ -90,6 +91,7 @@ url="${@: -1}"
 case "$url" in
   *dl.k8s.io*) printf 'v1.28.0\n' ;;
   *jdx/mise*) printf '{"tag_name":"v2026.7.18"}\n' ;;
+  *kubernetes-sigs/krew*) printf '{"tag_name":"v0.5.0"}\n' ;;
   *mikefarah/yq*) printf '{"tag_name":"v4.45.1"}\n' ;;
   *equalsraf/win32yank*) printf '{"tag_name":"v0.1.1"}\n' ;;
   *sozercan/vekil*) printf '{"tag_name":"v0.14.0"}\n' ;;
@@ -102,6 +104,7 @@ SCRIPT
 
   [ "$status" -eq 0 ]
   [[ "$output" == *"current artifact mise v2026.7.18"* ]]
+  [[ "$output" == *"current artifact krew v0.5.0"* ]]
   [[ "$output" == *"current artifact yq v4.45.1"* ]]
   [[ "$output" == *"current artifact win32yank v0.1.1"* ]]
   [[ "$output" == *"current artifact vekil v0.14.0"* ]]
