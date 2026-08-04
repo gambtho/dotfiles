@@ -480,3 +480,44 @@ fill_events() {
   [ "$reads" -gt 0 ]
   [ "$bad" -eq 0 ]
 }
+
+@test "state: dev_state_commit rejects an empty string, record untouched, exit 5" {
+  local rec path before
+  rec=$(dev_state_new "$WS_ID" slabledger slabledger /w)
+  dev_state_commit "$WS_ID" "" "$rec"
+  path=$(dev_state_path "$WS_ID")
+  before=$(cat "$path")
+
+  run dev_state_commit "$WS_ID" "$rec" ""
+  [ "$status" -eq 5 ]
+  [[ "$output" == *"$WS_ID"* ]]
+  [ "$(cat "$path")" = "$before" ]
+}
+
+@test "state: dev_state_commit rejects non-object JSON, record untouched, exit 5" {
+  local rec path before candidate
+  rec=$(dev_state_new "$WS_ID" slabledger slabledger /w)
+  dev_state_commit "$WS_ID" "" "$rec"
+  path=$(dev_state_path "$WS_ID")
+  before=$(cat "$path")
+
+  for candidate in null '"str"' '[]'; do
+    run dev_state_commit "$WS_ID" "$rec" "$candidate"
+    [ "$status" -eq 5 ]
+    [ "$(cat "$path")" = "$before" ]
+  done
+}
+
+@test "state: dev_state_commit rejecting a bad new_json creates no temp files" {
+  local rec path dir before_count after_count
+  rec=$(dev_state_new "$WS_ID" slabledger slabledger /w)
+  dev_state_commit "$WS_ID" "" "$rec"
+  path=$(dev_state_path "$WS_ID")
+  dir=$(dirname "$path")
+  before_count=$(find "$dir" -type f | wc -l)
+
+  run dev_state_commit "$WS_ID" "$rec" ""
+  [ "$status" -eq 5 ]
+  after_count=$(find "$dir" -type f | wc -l)
+  [ "$before_count" -eq "$after_count" ]
+}

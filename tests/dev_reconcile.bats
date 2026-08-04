@@ -425,3 +425,37 @@ copy_fn() { eval "$2 () $(declare -f "$1" | tail -n +2)"; }
   second=$(jq -c . "$(dev_state_path "$WS_ID")")
   [ "$(jq -S -c 'del(.last_seen)' <<<"$second")" = "$(jq -S -c 'del(.last_seen)' <<<"$after")" ]
 }
+
+@test "a corrupt event line makes the fold fail and reconcile leaves the record byte-identical" {
+  # Regression: dev_fold_stream's `jq -s` on a non-JSON line writes nothing
+  # (empty stdout), which used to flow uncaught all the way to
+  # dev_state_commit and overwrite the record with a bare newline.
+  seed_record "$(mk_record)"
+  BACKEND_EXISTS=false
+  local path before_sha
+  path=$(dev_state_path "$WS_ID")
+  before_sha=$(sha256sum "$path")
+
+  printf 'not json{{{\n' >>"$DEV_STATE_ROOT/events/events.jsonl"
+
+  run dev_reconcile "$RESOLVED" "sha256:aaa"
+  [ "$status" -eq 5 ]
+  [ "$(sha256sum "$path")" = "$before_sha" ]
+}
+
+@test "a corrupt event line prints a diagnostic to stderr and never reaches commit" {
+  seed_record "$(mk_record)"
+  BACKEND_EXISTS=false
+  printf 'not json{{{\n' >>"$DEV_STATE_ROOT/events/events.jsonl"
+
+  copy_fn dev_state_commit dev_state_commit_orig
+  dev_state_commit() {
+    printf 'dev_state_commit called\n' >"$TEST_ROOT/commit-called"
+    dev_state_commit_orig "$@"
+  }
+
+  run dev_reconcile "$RESOLVED" "sha256:aaa"
+  [ "$status" -eq 5 ]
+  [[ "$output" == *"fold"* ]]
+  [ ! -e "$TEST_ROOT/commit-called" ]
+}

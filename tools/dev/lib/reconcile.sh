@@ -56,6 +56,16 @@ dev_reconcile() {
     local all_events folded
     all_events=$(dev_events_read_all)
     folded=$(printf '%s\n' "$all_events" | dev_fold_stream "$base")
+    if [[ $? -ne 0 || -z "$folded" ]]; then
+      # A corrupt/non-JSON line anywhere in the event log makes `jq -s` inside
+      # dev_fold_stream fail silently (empty stdout). Falling through would
+      # carry that emptiness to dev_state_commit and destroy the record; fail
+      # the pass instead. No skip, no repair -- the corrupt line stays for a
+      # human to look at.
+      printf 'dev: workspace %s: event log could not be folded (it may contain a corrupt line); refusing to commit\n' \
+        "$slug" >&2
+      return 5
+    fi
 
     local container_id container_alive=unknown
     container_id=$(jq -r '.container.id // empty' <<<"$folded")

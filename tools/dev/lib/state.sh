@@ -61,6 +61,16 @@ dev_state_read() {
 dev_state_commit() {
   local workspace_id=$1 expected=$2 new=$3
   local path lock
+  # Refuse anything that isn't a JSON object before taking the lock or
+  # touching disk: a doomed commit must not create temp files, and an empty
+  # or malformed $new (e.g. from a failed upstream fold) must never overwrite
+  # a good record. `<<<""` gives jq an empty input, which also fails this
+  # check, which is the point.
+  if ! jq -e 'type == "object"' >/dev/null 2>&1 <<<"$new"; then
+    printf 'dev: refusing to commit a non-object record for workspace %s\n' \
+      "$workspace_id" >&2
+    return 5
+  fi
   path=$(dev_state_path "$workspace_id")
   lock="$DEV_STATE_ROOT/locks/$workspace_id.lock"
   mkdir -p "$DEV_STATE_ROOT/workspaces" "$DEV_STATE_ROOT/locks"
