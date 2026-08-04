@@ -149,6 +149,22 @@ fill_events() {
   [ "$status" -ne 0 ]
 }
 
+@test "events: has_id's grep prefilter cannot falsely report a substring hit as present" {
+  # aaaa000000000003 never appears as an id, only buried inside another
+  # event's data field. If the grep prefilter were mistaken for the answer
+  # rather than a cheap way to skip the jq scan, this would be a false
+  # positive: the trap the prefilter must not fall into.
+  dev_event_build aaaa000000000001 2026-08-03T13:00:00.000Z workspace.attached \
+    "$WS_ID" s s /w '{"client":"/dev/pts/aaaa000000000003"}' \
+    >"$DEV_STATE_ROOT/events/events.jsonl"
+  run dev_events_has_id aaaa000000000001
+  [ "$status" -eq 0 ]
+  run dev_events_has_id aaaa000000000003
+  [ "$status" -ne 0 ]
+  run dev_events_has_id aaaa00000000ffff
+  [ "$status" -ne 0 ]
+}
+
 @test "events: rotation is a no-op below the threshold" {
   fill_events 100
   dev_events_rotate_if_needed
