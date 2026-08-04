@@ -324,14 +324,17 @@ sd_drop_priv_prefix() {
   # operator arm gets the same `*` for symmetry — no seed nests it inside `$(`
   # today, but the gap is identical and an asymmetric fix would only invite the
   # question later.
-  # `$((` opens ARITHMETIC, not a command. In `x=$((sudo + 1))` the word `sudo`
-  # is an arithmetic variable, and the operator arm — which deliberately
-  # requires no space after its opener — would happily strip it to
-  # `x=$((+ 1))`. sed has no lookbehind, so shield the token for the duration of
-  # the loop and restore it after. \001 is used as the shield because it cannot
-  # occur in a shell script these seeds are written in.
+  # `((` opens ARITHMETIC, not a command — both as `$((x))` and as the bare
+  # `((x))` command. In `x=$((sudo + 1))` and `if ((sudo + 1)); then` the word
+  # `sudo` is an arithmetic variable, and the operator arm — which deliberately
+  # requires no space after its opener — would strip it to `+ 1`. sed has no
+  # lookbehind, so shield the token for the duration of the loop and restore it
+  # after. Shielding `((` covers `$((` too: it leaves a bare `$` in front of the
+  # shield, and `$` is not in the operator class. A single `(` is deliberately
+  # NOT shielded, so a real subshell like `(sudo foo)` still strips. \001 is used
+  # because it cannot occur in a shell script these seeds are written in.
   local line="$1" prev="" arith=$'\001'
-  line=${line//'$(('/"$arith"}
+  line=${line//'(('/"$arith"}
   while [ "$line" != "$prev" ]; do
     prev="$line"
     line=$(printf '%s\n' "$line" | sed -E \
@@ -342,7 +345,7 @@ sd_drop_priv_prefix() {
       -e 's/(^|[[:space:]])(if|then|while|until|do|elif)([[:space:]]+)runuser -u [^[:space:]]+ --[[:space:]]+/\1\2\3/g' \
       -e 's/^runuser -u [^[:space:]]+ --[[:space:]]+//')
   done
-  line=${line//"$arith"/'$(('}
+  line=${line//"$arith"/'(('}
   printf '%s' "$line"
 }
 

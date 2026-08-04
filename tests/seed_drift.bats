@@ -2864,3 +2864,21 @@ PYEOF
   [ "$status" -eq 0 ]
   [ "$output" = 'test -f x && echo test ! value' ]
 }
+
+@test "sd_normalize does not strip an arithmetic operand in an (( )) command" {
+  # The bare arithmetic command leaks the same way `$((` did: its second `(`
+  # matches the operator class and the arm requires no space after it.
+  scan_line 1 1 C 'if ((sudo + 1)); then'
+  norm
+  [ "$status" -eq 0 ]
+  [ "$output" = 'if ((sudo + 1)); then' ]
+}
+
+@test "sd_normalize still strips a privilege word in a real subshell" {
+  # A SINGLE `(` is deliberately left unshielded — `(sudo foo)` is a subshell
+  # running a privileged command, not arithmetic, and must still normalize.
+  scan_line 1 1 C '(sudo foo)'
+  norm
+  [ "$status" -eq 0 ]
+  [ "$output" = '(foo)' ]
+}
