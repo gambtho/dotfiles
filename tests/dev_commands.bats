@@ -281,6 +281,7 @@ dev_open_load_libs() {
   source "$REPO_ROOT/tools/dev/commands/attach.sh"
   source "$REPO_ROOT/tools/dev/commands/stop.sh"
   source "$REPO_ROOT/tools/dev/commands/list.sh"
+  source "$REPO_ROOT/tools/dev/commands/status.sh"
 }
 
 dev_open_fixture() {
@@ -879,6 +880,23 @@ exit 0
   [ "$status" -eq 0 ]
   [[ "$output" != *"command not found"* ]]
   [ ! -e "$(dev_open_session_index_path demo)" ]
+
+  dev_tmux kill-server || true
+}
+
+@test "status reports undeclared windows and undeclared panes as drift" {
+  scenario_setup_demo_workspace
+
+  run dev_cmd_open demo --no-attach
+  [ "$status" -eq 0 ]
+
+  dev_tmux new-window -d -t '=demo:' -n rogue "sleep 30"
+  dev_tmux split-window -d -t '=demo:=shell' "sleep 30"
+
+  run dev_cmd_status demo
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"drift:"*"rogue"* ]]
+  [[ "$output" == *"drift:"*"shell"*"undeclared pane"* ]]
 
   dev_tmux kill-server || true
 }

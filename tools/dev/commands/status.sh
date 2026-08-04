@@ -49,9 +49,30 @@ dev_cmd_status() {
     "$(printf '%s' "$record" | jq -r '.container.status // "none"')"
 
   printf '%s' "$query" | jq -r '.windows[]? |
-    "  window \(.name): " + ([.panes[] | if .alive then "alive" else "dead" end] | join(", "))'
+    "  window \(.name): " + ([.panes[]
+      | (if .pane == null then "" else "\(.pane) " end)
+        + (if .alive then "alive" else "dead" end)] | join(", "))'
   printf '%s' "$record" | jq -r '.agents[]? |
-    "  agent \(.window): \(.state) (\(.command // "?"))"'
+    "  agent \(.window)\(if (.pane // null) != null then "/" + .pane else "" end): \(.state) (\(.command // "?"))"'
+
+  # Drift: running windows/panes the merged configuration does not declare.
+  # Reported, never repaired — open never destroys, and status never repairs.
+  printf '%s' "$query" | jq -r --argjson cfg "$(printf '%s' "$config" | jq -c '.windows // []')" '
+    ([$cfg[].name]) as $wnames
+    | .windows[]?
+    | . as $w
+    | if ($w.name | IN($wnames[])) | not then
+        "  drift:      window \($w.name) is running but not declared"
+      else
+        (first($cfg[] | select(.name == $w.name))) as $decl
+        | (if ($decl.panes // null) != null then
+             [$w.panes[] | select(.pane == null or ((.pane | IN($decl.panes[].name)) | not))]
+           elif ($w.panes | length) > 1 then $w.panes[1:]
+           else [] end) as $extra
+        | if ($extra | length) > 0 then
+            "  drift:      window \($w.name) has \($extra | length) undeclared pane(s) (\([$extra[] | .pane // "unnamed"] | join(", ")))"
+          else empty end
+      end'
 
   local current applied
   current=$(printf '%s' "$record" | jq -r '.config_digest // "none"')
