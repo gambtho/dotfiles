@@ -423,8 +423,9 @@ if as_user test -x "$SEED_HOME/.local/bin/claude" || as_user bash -lc 'command -
   # Report the version, not just presence. "already installed" alone cannot
   # distinguish a current CLI from one a stale volume has been pinning for
   # months — the usual first question when a container behaves unlike the host.
-  # Non-fatal by construction: the substitution swallows its own failure, and
-  # pipefail makes the `|| echo '?'` fire when the binary itself exits nonzero.
+  # Non-fatal by construction: stderr is discarded and `|| echo '?'` fires on the
+  # non-zero exit from `as_user bash -lc`, so a stale or broken CLI degrades to
+  # `(?)` rather than taking the seed down under `set -e`.
   echo "🌱 seed: claude already installed for $SEED_USER ($(as_user bash -lc 'claude --version 2>/dev/null' || echo '?')) — skipping CLI install"
 elif [ -n "${CLAUDE_CLI_INSTALL_CMD:-}" ]; then
   echo "🌱 seed: installing Claude Code CLI via pinned CLAUDE_CLI_INSTALL_CMD"
@@ -466,6 +467,9 @@ fi
 # nvim-dist/bin/nvim) still passes, while a directory — which `-x` alone reports
 # as executable — no longer counts as "already installed" and silently skips.
 if as_user test -f "$SEED_HOME/.local/bin/nvim" && as_user test -x "$SEED_HOME/.local/bin/nvim"; then
+  # Same `(?)` fallback as the claude guard above, but here it rests on pipefail:
+  # without it `head -1` would report success and mask nvim's own failure, and the
+  # parens would come out empty instead. Applies to the "neovim ready" line too.
   echo "🌱 seed: nvim already present ($(as_user "$SEED_HOME/.local/bin/nvim" --version 2>/dev/null | head -1 || echo '?'))"
 elif [ -r "$DOTFILES_HOME/config/versions.env" ]; then
   # shellcheck source=/dev/null
