@@ -556,7 +556,7 @@ sd_report_thin() {
 
 sd_check_seed() {
   local seed="$1" name rc=0 block anchor verdict tnorm snorm sscan
-  local behind ahead nb na est tst tsize esize
+  local behind ahead nb na est tst tsize esize docrows
   name=$(basename -- "$(dirname -- "$(dirname -- "$seed")")")
   printf '%s  %s\n' "$name" "$seed"
   if ! bash -n "$seed" 2>/dev/null; then
@@ -581,13 +581,25 @@ sd_check_seed() {
   # eighteen files. Same reuse as tnorm/snorm/sscan above.
   sd_tmp behind || return 2
   sd_tmp ahead || return 2
-  # sd_main already fails closed when the doc yields no rows, so this counter
-  # guards a case that cannot happen today. It is here because the loop reads
-  # through a process substitution, whose failure is invisible to both `set -e`
-  # and pipefail: were the doc to become unreadable between sd_main's parse and
-  # this one, the body would never run, rc would stay 0, and the seed would be
-  # reported clean having compared nothing. Same invariant, same reasoning as
-  # the empty-template guard below.
+  # Parsed to a file, not piped into the loop through `< <(sd_parse_doc …)`: a
+  # process substitution discards its command's exit status, which is invisible
+  # to both `set -e` and pipefail. Were the doc to become unreadable — or awk to
+  # die partway through it — between sd_main's parse and this one, the loop would
+  # run over however many rows had already been emitted and report the seed on a
+  # truncated block list, or report it clean having compared nothing. Capturing
+  # the status separately from the rows is what sd_main already does with
+  # `if ! blocks=$(sd_parse_doc "$doc")`; this is the same check on the same
+  # input, at the point where the rows are actually consumed.
+  sd_tmp docrows || return 2
+  if ! sd_parse_doc "$SD_DOC" >"$docrows"; then
+    sd_report_block ERROR '(whole file)' 'the doc table could not be parsed'
+    sd_report_action 'check the Step 1 table in catch-up-local-seed.md'
+    return 2
+  fi
+  # A successful parse emitting nothing is a separate case: sd_parse_doc's awk
+  # already exits non-zero on zero rows, so this counter guards a shape that
+  # cannot arise today. It stays because "compared nothing" must never read as
+  # "clean" — same invariant, same reasoning as the empty-template guard below.
   local rows=0
   while IFS=$'\t' read -r block anchor; do
     rows=$((rows + 1))
@@ -694,7 +706,7 @@ sd_check_seed() {
     if [ "$esize" -lt "$SD_THIN_WINDOW" ]; then
       sd_report_thin seed "$esize"
     fi
-  done < <(sd_parse_doc "$SD_DOC")
+  done <"$docrows"
   if [ "$rows" -eq 0 ]; then
     sd_report_block ERROR '(whole file)' 'no blocks read from the doc table'
     sd_report_action 'check the Step 1 table in catch-up-local-seed.md'

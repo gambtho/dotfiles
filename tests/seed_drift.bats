@@ -2139,12 +2139,10 @@ PYEOF
 }
 
 @test "a seed whose doc table yields no blocks is an ERROR at exit 2, never clean" {
-  # The block loop reads through a process substitution, whose failure is
-  # invisible to both `set -e` and pipefail: with no rows the body never runs,
-  # rc stays 0, and the seed reports clean having compared nothing. sd_main's
-  # own parse check makes that unreachable through the CLI, so this calls
-  # sd_check_seed directly with an sd_parse_doc that succeeds and emits
-  # nothing — the shape the guard exists to catch.
+  # A successful parse that emits nothing: sd_parse_doc's awk exits non-zero on
+  # zero rows, so this shape is unreachable through the CLI. The guard exists so
+  # that "compared nothing" can never be reported as "clean". Calling
+  # sd_check_seed directly is the only way to produce it.
   setup_drift_fixtures
   seed_from_template clean
 
@@ -2160,5 +2158,33 @@ PYEOF
 
   [ "$status" -eq 2 ]
   [[ "$output" == *"no blocks read from the doc table"* ]]
+  [[ "$output" != *"ok  "* ]]
+}
+
+@test "a doc parse that emits rows and then fails is an ERROR at exit 2, never clean" {
+  # The row-count guard above cannot catch a parse that dies partway through:
+  # rows were emitted, so the counter is non-zero, and the seed would be judged
+  # on a truncated block list. The stub emits both real fixture rows — which a
+  # clean seed matches — and then fails, so a run that ignores the exit status
+  # reports "ok" at exit 0 and this test fails.
+  setup_drift_fixtures
+  seed_from_template clean
+
+  run env SEED_DRIFT_SOURCE_ONLY=1 bash -c '
+    source "$1"
+    SD_TEMPLATE="$2"
+    SD_DOC="$3"
+    sd_tmp SD_TEMPLATE_SCAN
+    sd_scan "$SD_TEMPLATE" >"$SD_TEMPLATE_SCAN"
+    sd_parse_doc() {
+      printf "tree-sitter CLI\tTREE_SITTER_VERSION\n"
+      printf "global gitignore\tcore.excludesFile\n"
+      return 3
+    }
+    sd_check_seed "$4"
+  ' _ "$SEED_DRIFT" "$FIXTURE_TEMPLATE" "$FIXTURE_DOC" "$(seed_path clean)"
+
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"the doc table could not be parsed"* ]]
   [[ "$output" != *"ok  "* ]]
 }
