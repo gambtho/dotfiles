@@ -279,6 +279,44 @@ This is narrower than it sounds — several anchors (`TREE_SITTER_VERSION`,
 paragraphs are covered from the other side — but it is real, and it is not
 detectable from inside the tool.
 
+### Thin-window warning (informational, Task 8)
+
+A window that already parses is not grown further (see above), so a genuinely
+small paragraph — one that happens to parse standalone — yields a small window,
+and a small window compares very little. A "clean" verdict on a two-line window
+is close to meaningless: the tool would be silently wrong in exactly the one
+place everything else here is designed to be loud instead.
+
+Measured on the real five-seed corpus: 95 windows, 94 of which never grew past
+their starting paragraph (growth is near-inert), sizes ranging from **9 to 138
+lines**, median ~30. None fell at or below 8 lines. An earlier design proposed
+warning whenever the growth loop did not iterate; that was rejected because it
+would fire on 94 of the 95 windows — including a 109-line one — training the
+reader to ignore it. The concern (a window that proves too little) is real; the
+proxy (did it grow) was not measuring that. Warn on **size**, directly.
+
+The tool now emits a note whenever an extracted window — template or seed,
+independently — is fewer than **`SD_THIN_WINDOW` (5) raw, pre-normalization
+lines**. Calibrated against the corpus above: the smallest window measured
+there is 9 lines, so 5 leaves headroom against ordinary variation while still
+catching a window degenerate enough to matter.
+
+The note:
+
+- Names which side is thin (`template` or `seed`) — a thin template window
+  means the anchor is weakly defined for *every* project; a thin seed window
+  means *this* seed's block is degenerate. Different problems, so the reader
+  is told which.
+- Fires regardless of verdict, including `ok` — an `ok` block is exactly the
+  case a thin window makes untrustworthy, so suppressing the note there would
+  defeat the point.
+- Never affects the exit code or the drift tallies. The tool does not know the
+  thin block is wrong, only that it checked very little of it; turning that
+  uncertainty into a drift signal would be a false positive by construction.
+- Is not counted in the summary line. It fired zero times across the real
+  corpus; if that changes, it is a signal to revisit the design, not to add a
+  tally.
+
 ### Alternative considered and deferred: whole-file paragraph matching
 
 Normalize both files into paragraphs, match them by similarity, name matched

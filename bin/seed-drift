@@ -232,6 +232,13 @@ sd_window() {
   printf '%s %s\n' "$start" "$end"
 }
 
+# Below this many raw (pre-normalization) lines, a window has proven too
+# little to trust a verdict on. Calibrated against the real five-seed corpus
+# (Task 8 brief): the smallest window measured there is 9 lines, so 5 leaves
+# headroom against ordinary variation while still catching a genuinely
+# degenerate window. Do not raise this without re-measuring the corpus.
+SD_THIN_WINDOW=5
+
 sd_neutralize_paths() {
   sed -e 's/\${SEED_HOME}/«HOME»/g' -e 's/\$SEED_HOME/«HOME»/g' \
     -e 's/\${DOTFILES_HOME}/«HOME»\/.dotfiles/g' \
@@ -323,7 +330,7 @@ sd_normalize() {
 }
 
 sd_extract() {
-  local file="$1" scan="$2" anchor="$3" paras para window ranges=""
+  local file="$1" scan="$2" anchor="$3" paras para window ranges="" keep
 
   paras=$(sd_paras_with_anchor "$scan" "$anchor")
   [ -n "$paras" ] || return 4
@@ -335,8 +342,18 @@ sd_extract() {
 
   # Union the windows by source line number: `sort -n -u` puts them in file
   # order and collapses lines two overlapping windows both claim.
-  printf '%s' "$ranges" |
-    awk '{ for (i = $1; i <= $2; i++) print i }' | sort -n -u |
+  keep=$(printf '%s' "$ranges" | awk '{ for (i = $1; i <= $2; i++) print i }' | sort -n -u)
+
+  # SD_LAST_WINDOW_SIZE is deliberately a global, not local: both call sites in
+  # sd_check_seed invoke sd_extract with a plain redirect (`sd_extract ... >"$f"`),
+  # not a command substitution, so sd_extract runs in the caller's own shell and
+  # this assignment survives the call — it does not need `printf -v` or a
+  # separate accessor. It is the raw (pre-normalization) line count of the
+  # unioned window, matching END-START+1 in the common single-paragraph case and
+  # generalizing correctly when an anchor matches more than one paragraph.
+  SD_LAST_WINDOW_SIZE=$(printf '%s\n' "$keep" | awk 'END { print NR }')
+
+  printf '%s\n' "$keep" |
     awk -F'\t' 'NR == FNR { keep[$1] = 1; next } keep[$2]' - "$scan" |
     sd_normalize
 }
@@ -455,9 +472,17 @@ sd_report_action() {
   printf '             -> %s\n' "$1"
 }
 
+# Informational only: a thin window proves little either way and must never
+# affect the verdict or the exit code. $1 names the side ("template" or
+# "seed"); $2 is the raw window size in lines.
+sd_report_thin() {
+  printf '             note: %s window is only %d lines (< %d) - check covers little\n' \
+    "$1" "$2" "$SD_THIN_WINDOW"
+}
+
 sd_check_seed() {
   local seed="$1" name rc=0 block anchor verdict tnorm snorm sscan
-  local behind ahead nb na est tst
+  local behind ahead nb na est tst tsize esize
   name=$(basename -- "$(dirname -- "$(dirname -- "$seed")")")
   printf '%s  %s\n' "$name" "$seed"
   if ! bash -n "$seed" 2>/dev/null; then
@@ -485,7 +510,7 @@ sd_check_seed() {
     tst=0
     sd_extract "$SD_TEMPLATE" "$SD_TEMPLATE_SCAN" "$anchor" >"$tnorm" || tst=$?
     case "$tst" in
-      0) ;;
+      0) tsize="$SD_LAST_WINDOW_SIZE" ;;
       4)
         sd_report_block ERROR "$block" 'anchor absent from template'
         rc=2
@@ -500,7 +525,7 @@ sd_check_seed() {
     est=0
     sd_extract "$seed" "$sscan" "$anchor" >"$snorm" || est=$?
     case "$est" in
-      0) ;;
+      0) esize="$SD_LAST_WINDOW_SIZE" ;;
       4)
         sd_report_block MISSING "$block" 'anchor absent from seed'
         sd_report_action 'port the block; see catch-up-local-seed.md Step 2'
@@ -557,6 +582,11 @@ sd_check_seed() {
         [ "$rc" -ge 1 ] || rc=1
         ;;
     esac
+    # Informational only, fires regardless of verdict (including ok) and never
+    # touches rc or the drift tallies above — a thin window means the check
+    # covered too little to trust, not that the block itself is wrong.
+    [ "$tsize" -lt "$SD_THIN_WINDOW" ] && sd_report_thin template "$tsize"
+    [ "$esize" -lt "$SD_THIN_WINDOW" ] && sd_report_thin seed "$esize"
   done < <(sd_parse_doc "$SD_DOC")
   return "$rc"
 }

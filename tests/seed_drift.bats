@@ -1697,3 +1697,117 @@ SEEDEOF
   after="$(find "$WS" -type f -exec sha256sum {} + | sort)"
   [ "$before" = "$after" ]
 }
+
+# ── Task 8 fixture helpers ───────────────────────────────────────────────────
+#
+# A comment-only line strips to empty text in sd_scan and contributes nothing
+# to sd_normalize's output, but it is still a non-blank physical line and so
+# still counts toward sd_window's raw (pre-normalization) line count. That
+# lets these fixtures pad one side's window past the thin-window threshold
+# without changing what actually gets compared: `# pad 1` through `# pad 4`
+# below add four lines to the raw window and zero lines to the normalized
+# diff, while `ANCHOR_VAR=1` (and `FOO=2`, where present) are the only lines
+# that ever reach the diff.
+
+t8_pad() {
+  printf '# pad 1\n# pad 2\n# pad 3\n# pad 4\n'
+}
+
+@test "a thin SEED window emits the note, names the seed side, and stays exit 0 when ok" {
+  t7_setup
+  t7_doc "anchor block" ANCHOR_VAR
+  {
+    printf '#!/usr/bin/env bash\n\n'
+    t8_pad
+    printf 'ANCHOR_VAR=1\n'
+  } >"$TPL"
+  printf '#!/usr/bin/env bash\n\nANCHOR_VAR=1\n' >"$SEED"
+
+  t7_run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"seed window is only 1 lines"* ]]
+  [[ "$output" != *"template window is only"* ]]
+  [[ "$output" == *"  ok"*"anchor block"* ]]
+}
+
+@test "a thin TEMPLATE window emits the note and names the template side" {
+  t7_setup
+  t7_doc "anchor block" ANCHOR_VAR
+  printf '#!/usr/bin/env bash\n\nANCHOR_VAR=1\n' >"$TPL"
+  {
+    printf '#!/usr/bin/env bash\n\n'
+    t8_pad
+    printf 'ANCHOR_VAR=1\n'
+  } >"$SEED"
+
+  t7_run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"template window is only 1 lines"* ]]
+  [[ "$output" != *"seed window is only"* ]]
+}
+
+@test "a normal-sized window on both sides emits no thin-window note" {
+  t7_setup
+  t7_doc "anchor block" ANCHOR_VAR
+  {
+    printf '#!/usr/bin/env bash\n\n'
+    t8_pad
+    printf 'ANCHOR_VAR=1\n'
+  } >"$TPL"
+  {
+    printf '#!/usr/bin/env bash\n\n'
+    t8_pad
+    printf 'ANCHOR_VAR=1\n'
+  } >"$SEED"
+
+  t7_run
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"window is only"* ]]
+  [[ "$output" == *"  ok"*"anchor block"* ]]
+}
+
+@test "a thin AND drifted block reports both the real verdict and the note" {
+  t7_setup
+  t7_doc "anchor block" ANCHOR_VAR
+  {
+    printf '#!/usr/bin/env bash\n\n'
+    t8_pad
+    printf 'ANCHOR_VAR=1\nFOO=2\n'
+  } >"$TPL"
+  printf '#!/usr/bin/env bash\n\nANCHOR_VAR=1\n' >"$SEED"
+
+  t7_run
+  [ "$status" -eq 1 ]
+  [[ "$output" == *BEHIND* ]]
+  [[ "$output" == *"seed window is only 1 lines"* ]]
+}
+
+@test "sabotage: raising SD_THIN_WINDOW past the seed's window size hides the note" {
+  # Pins the load-bearing test above to the actual threshold constant, not to
+  # a hardcoded string it happens to match. Backed up to /tmp first per the
+  # brief: `git checkout --` restores to HEAD, not to a moment ago, and would
+  # silently destroy any uncommitted work in this file.
+  local backup="/tmp/seed-drift.t8-sabotage.bak.$$"
+  cp "$REPO_ROOT/bin/seed-drift" "$backup"
+
+  t7_setup
+  t7_doc "anchor block" ANCHOR_VAR
+  {
+    printf '#!/usr/bin/env bash\n\n'
+    t8_pad
+    printf 'ANCHOR_VAR=1\n'
+  } >"$TPL"
+  printf '#!/usr/bin/env bash\n\nANCHOR_VAR=1\n' >"$SEED"
+
+  sed -i.orig 's/^SD_THIN_WINDOW=5$/SD_THIN_WINDOW=1/' "$REPO_ROOT/bin/seed-drift"
+  t7_run
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"window is only"* ]]
+
+  cp "$backup" "$REPO_ROOT/bin/seed-drift"
+  rm -f "$backup" "$REPO_ROOT/bin/seed-drift.orig"
+
+  t7_run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"seed window is only 1 lines"* ]]
+}
