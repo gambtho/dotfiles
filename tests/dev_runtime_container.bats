@@ -209,7 +209,10 @@ JSON
 
 # --- Task 10: container -----------------------------------------------------
 
-load_container() { source "$REPO_ROOT/tools/dev/lib/container.sh"; }
+load_container() {
+  source "$REPO_ROOT/tools/dev/lib/vekil.sh"
+  source "$REPO_ROOT/tools/dev/lib/container.sh"
+}
 
 CFG_AUTO='{"devcontainer":{"enabled":"auto","start_timeout":300}}'
 
@@ -501,4 +504,65 @@ JSON
   run dev_runtime_kind "$WT"
   [ "$status" -eq 0 ]
   [ "$output" = compose ]
+}
+
+# --- vekil proxy overlay -----------------------------------------------------
+
+# Ready proxy state + a curl stub answering the readyz probe.
+vekil_ready_fixture() {
+  export VEKIL_STATE_DIR="$TEST_ROOT/vekil"
+  mkdir -p "$VEKIL_STATE_DIR"
+  printf '127.0.0.1\n' >"$VEKIL_STATE_DIR/proxy-host"
+  : >"$VEKIL_STATE_DIR/proxy-ready"
+  stub_command curl 'exit 0'
+}
+
+@test "an agent window gets the vekil env when the proxy is ready" {
+  load_container
+  vekil_ready_fixture
+  rec='{"worktree":"/w","container":{"status":"none","id":null}}'
+  run dev_window_inner_command "$rec" '{"name":"agent-1","agent":"claude","location":"host"}' '{}'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"ANTHROPIC_BASE_URL='http://127.0.0.1:1337'"* ]]
+  [[ "$output" == *"ANTHROPIC_API_KEY='dummy'"* ]]
+  [[ "$output" == *"; exec claude"* ]]
+}
+
+@test "a container-located agent reaches the proxy as host.docker.internal" {
+  load_container
+  vekil_ready_fixture
+  rec='{"worktree":"/w","container":{"status":"ready","id":"cid1","user":"node","workdir":"/w"}}'
+  run dev_window_inner_command "$rec" '{"name":"agent-1","agent":"claude","location":null}' '{}'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"ANTHROPIC_BASE_URL='http://host.docker.internal:1337'"* ]]
+}
+
+@test "no vekil env is injected when the readyz probe fails" {
+  load_container
+  vekil_ready_fixture
+  stub_command curl 'exit 7'
+  rec='{"worktree":"/w","container":{"status":"none","id":null}}'
+  run dev_window_inner_command "$rec" '{"name":"agent-1","agent":"claude","location":"host"}' '{}'
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"ANTHROPIC_BASE_URL"* ]]
+}
+
+@test "a declared environment key beats the vekil overlay" {
+  load_container
+  vekil_ready_fixture
+  rec='{"worktree":"/w","container":{"status":"none","id":null}}'
+  run dev_window_inner_command "$rec" '{"name":"agent-1","agent":"claude","location":"host"}' \
+    '{"ANTHROPIC_MODEL":"claude-fable-5"}'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"ANTHROPIC_MODEL='claude-fable-5'"* ]]
+  [[ "$output" != *"claude-opus-5"* ]]
+}
+
+@test "command windows get no vekil overlay" {
+  load_container
+  vekil_ready_fixture
+  rec='{"worktree":"/w","container":{"status":"none","id":null}}'
+  run dev_window_inner_command "$rec" '{"name":"shell","command":"make test","location":"host"}' '{}'
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"ANTHROPIC_BASE_URL"* ]]
 }

@@ -36,6 +36,10 @@ setup_dev_test() {
   export DEV_REPO_ROOT="$TEST_ROOT/workspace"
   export DEV_OVERLAY_ROOT="$TEST_ROOT/overlay"
   export DEV_TMUX_SOCKET="devtest-$$-$BATS_TEST_NUMBER"
+  # Point the vekil probe at a directory that does not exist, so tests never
+  # see the developer machine's real proxy state (XDG_STATE_HOME can leak in
+  # from the invoking environment; HOME scoping alone does not cover it).
+  export VEKIL_STATE_DIR="$TEST_ROOT/no-vekil"
   mkdir -p "$DEV_STATE_ROOT/workspaces" "$DEV_STATE_ROOT/events" \
     "$DEV_STATE_ROOT/locks" "$DEV_REPO_ROOT" "$DEV_OVERLAY_ROOT"
 }

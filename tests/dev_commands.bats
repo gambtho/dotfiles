@@ -274,6 +274,7 @@ dev_open_load_libs() {
   source "$REPO_ROOT/tools/dev/lib/fold.sh"
   source "$REPO_ROOT/tools/dev/lib/reconcile.sh"
   source "$REPO_ROOT/tools/dev/lib/runtime.sh"
+  source "$REPO_ROOT/tools/dev/lib/vekil.sh"
   source "$REPO_ROOT/tools/dev/lib/container.sh"
   source "$REPO_ROOT/tools/dev/lib/backend-tmux.sh"
   source "$REPO_ROOT/tools/dev/commands/open.sh"
