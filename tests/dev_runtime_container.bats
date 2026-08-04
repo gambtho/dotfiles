@@ -120,3 +120,89 @@ JSON
   [ "$status" -eq 0 ]
   [ "$(jq -r '.docker' <<<"$output")" = false ]
 }
+
+# --- fix round 1: additive coverage for review findings, plan tests unchanged above ---
+
+@test "cli spec is read from config/mise/config.toml, not hardcoded" {
+  local fake_root="$TEST_ROOT/fake-dotfiles"
+  mkdir -p "$fake_root/config/mise"
+  cat >"$fake_root/config/mise/config.toml" <<'TOML'
+"npm:@devcontainers/cli" = "1.2.3"
+TOML
+  export DEV_DOTFILES_ROOT="$fake_root"
+  run dev_runtime_cli_spec
+  [ "$status" -eq 0 ]
+  [ "$output" = "npm:@devcontainers/cli@1.2.3" ]
+}
+
+@test "cli spec takes the first line when the pin appears more than once" {
+  local fake_root="$TEST_ROOT/fake-dotfiles"
+  mkdir -p "$fake_root/config/mise"
+  cat >"$fake_root/config/mise/config.toml" <<'TOML'
+"npm:@devcontainers/cli" = "1.1.1"
+"npm:@devcontainers/cli" = "2.2.2"
+TOML
+  export DEV_DOTFILES_ROOT="$fake_root"
+  run dev_runtime_cli_spec
+  [ "$status" -eq 0 ]
+  [ "$output" = "npm:@devcontainers/cli@1.1.1" ]
+}
+
+@test "cli spec ignores a commented-out pin line" {
+  local fake_root="$TEST_ROOT/fake-dotfiles"
+  mkdir -p "$fake_root/config/mise"
+  cat >"$fake_root/config/mise/config.toml" <<'TOML'
+# "npm:@devcontainers/cli" = "9.9.9"
+"npm:@devcontainers/cli" = "1.2.3"
+TOML
+  export DEV_DOTFILES_ROOT="$fake_root"
+  run dev_runtime_cli_spec
+  [ "$status" -eq 0 ]
+  [ "$output" = "npm:@devcontainers/cli@1.2.3" ]
+}
+
+@test "cli spec fails when the pinned version is empty" {
+  local fake_root="$TEST_ROOT/fake-dotfiles"
+  mkdir -p "$fake_root/config/mise"
+  cat >"$fake_root/config/mise/config.toml" <<'TOML'
+"npm:@devcontainers/cli" = ""
+TOML
+  export DEV_DOTFILES_ROOT="$fake_root"
+  run dev_runtime_cli_spec
+  [ "$status" -ne 0 ]
+}
+
+@test "runtime kind survives JSONC torture in a compose fixture" {
+  mkdir -p "$WT/.devcontainer"
+  cat >"$WT/.devcontainer/devcontainer.json" <<'JSON'
+{
+  // See https://containers.dev — this URL must not be mistaken for a comment.
+  "name": "demo",
+  "image": "https://example.com/img:tag", // trailing comment
+  "dockerComposeFile": "docker-compose.yml",
+  "service": "app",
+}
+JSON
+  run dev_runtime_kind "$WT"
+  [ "$status" -eq 0 ]
+  [ "$output" = compose ]
+}
+
+@test "runtime kind is single for a .devcontainer directory with no json in it" {
+  mkdir -p "$WT/.devcontainer"
+  run dev_runtime_kind "$WT"
+  [ "$status" -eq 0 ]
+  [ "$output" = single ]
+}
+
+@test "runtime kind reads a root-level .devcontainer.json" {
+  cat >"$WT/.devcontainer.json" <<'JSON'
+{
+  "name": "demo",
+  "image": "mcr.microsoft.com/devcontainers/base:bookworm"
+}
+JSON
+  run dev_runtime_kind "$WT"
+  [ "$status" -eq 0 ]
+  [ "$output" = single ]
+}
