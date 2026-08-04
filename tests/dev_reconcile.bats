@@ -296,14 +296,108 @@ copy_fn() { eval "$2 () $(declare -f "$1" | tail -n +2)"; }
   [ "$(all_events | jq -r 'select(.event == "container.lost") | .id' | sort -u | wc -l)" -eq 2 ]
 }
 
-@test "a config edited A to B and back to A emits an event each way" {
+@test "a config edited A to B, applied, to C and back to B emits three distinct events" {
+  # Keyed on the wanted digest alone, this collapses to two events: the third
+  # step's digest (B) repeats the first step's digest, and a discriminator
+  # that ignores the applied side of the pair drops it as a duplicate. The
+  # simpler "A -> B -> A" round trip (still exercised as steps 1-2 here)
+  # cannot distinguish the two discriminators, because applied_digest never
+  # moves off its starting value in that shorter sequence -- the wanted digest
+  # alone already discriminates every event in it. Telling them apart needs an
+  # actual apply in between, which is what the workspace.opened event below
+  # provides: it folds config_digest into applied_digest, so step 3's
+  # (wanted=B) collides with step 1's (wanted=B) only if applied_digest is
+  # dropped from the key -- at step 1 applied was A, at step 3 it is B.
   seed_record "$(mk_record)"
   BACKEND_EXISTS=true
+
+  # Step 1: aaa -> bbb. applied_digest is still aaa (mk_record's seed).
   dev_reconcile "$RESOLVED" "sha256:bbb" >/dev/null
-  dev_reconcile "$RESOLVED" "sha256:aaa" >/dev/null
-  [ "$(all_events | jq -r 'select(.event == "config.changed") | .id' | sort -u | wc -l)" -eq 2 ]
+
+  # An actual apply: workspace.opened folds config_digest into applied_digest.
+  emit workspace.opened "2026-08-03T13:00:00.000Z" \
+    "$(jq -nc --arg b "$BOOT_ID" \
+      '{session_name_actual: "demo", boot_id: $b, config_digest: "sha256:bbb"}')"
+
+  # Step 2: bbb -> ccc. applied_digest is now bbb.
+  dev_reconcile "$RESOLVED" "sha256:ccc" >/dev/null
+
+  # Step 3: back to bbb -- same WANTED digest as step 1, but a different
+  # applied digest (bbb, not aaa).
+  dev_reconcile "$RESOLVED" "sha256:bbb" >/dev/null
+
+  [ "$(all_events | jq -r 'select(.event == "config.changed") | .id' | sort -u | wc -l)" -eq 3 ]
   [ "$(all_events | jq -r 'select(.event == "config.changed") | .data.config_digest' |
-    tr '\n' ' ')" = "sha256:bbb sha256:aaa " ]
+    tr '\n' ' ')" = "sha256:bbb sha256:ccc sha256:bbb " ]
+}
+
+@test "CAS: the has_id guard alone prevents a duplicate when the fold cannot see the event" {
+  # The CAS tests above prove FOLD-suppression: on a retry, the event appended
+  # by the failed attempt is already in the stream, so the SECOND attempt's
+  # own fold already shows the record as stopped/lost/changed and the
+  # discovery is never recomputed at all -- the dev_events_has_id guard is
+  # never even reached. That is a different property from the one it exists
+  # to guarantee (ADR-1: a CAS retry appends nothing). This test forces the
+  # guard itself to be the deciding factor: the deterministic-id event is
+  # pre-planted with a ts BEFORE opened_at, which the fold's own guard skips
+  # (any non-workspace.opened event predating opened_at is dropped), so the
+  # fold cannot suppress the re-derivation -- only dev_events_has_id can.
+  seed_record "$(mk_record)"
+  BACKEND_EXISTS=false
+
+  planted_id=$(dev_event_id_deterministic "$WS_ID" workspace.vanished \
+    "$BOOT_ID:2026-08-03T09:00:00.000Z")
+  dev_event_append "$(dev_event_build "$planted_id" "2026-08-03T08:00:00.000Z" \
+    workspace.vanished "$WS_ID" demo demo "$WT" \
+    "$(jq -nc --arg d "$FAKE_NOW" --arg b "$BOOT_ID" \
+      '{discovered_at: $d, reason: "vanished", last_boot_id: $b}')")"
+
+  run dev_reconcile "$RESOLVED" "sha256:aaa"
+  [ "$status" -eq 0 ]
+  [ "$(all_events | jq -r 'select(.event == "workspace.vanished") | .id' | wc -l)" -eq 1 ]
+}
+
+@test "an ADR-7-renamed session is queried under the record's name, not the resolver's guess" {
+  # Invariant 9: the recorded session_name beats the resolver's proposal.
+  # Every other test names the record and the resolved proposal identically
+  # (both "demo"), so this branch has never actually been observed to fire.
+  seed_record "$(mk_record | jq -c '.session_name = "demo--worktree--abcdef"')"
+  BACKEND_EXISTS=true
+  dev_backend_query() {
+    printf '%s\n' "$1" >"$DEV_STATE_ROOT/queried-name"
+    jq -nc --arg e "$BACKEND_EXISTS" --arg w "$WT" \
+      '{exists: ($e == "true"), worktree: $w, clients: 0, windows: []}'
+  }
+
+  run dev_reconcile "$RESOLVED" "sha256:aaa"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$DEV_STATE_ROOT/queried-name")" = "demo--worktree--abcdef" ]
+  [ "$(jq -r '.session_name' <<<"$output")" = "demo--worktree--abcdef" ]
+}
+
+@test "a rotated-away cursor with the backend absent is reported stopped by the overlay alone" {
+  # Test 15 below only exercises the fold_gap re-anchor with the backend
+  # PRESENT, so the overlay's "elif fold_gap == true then stopped" branch
+  # never runs there (the "exists == true" arm wins first). This record's
+  # status starts as "unknown" (dev_state_new's default, never "running"),
+  # so the workspace.vanished discovery branch -- which only fires when the
+  # folded status is already "running" -- cannot fire either. The only thing
+  # that can turn this into "stopped" is the overlay's fold_gap branch.
+  local rec
+  rec=$(dev_state_new "$WS_ID" demo demo "$WT" | jq -c \
+    --arg b "$BOOT_ID" \
+    '.boot_id = $b
+     | .config_digest = "sha256:aaa"
+     | .applied_digest = "sha256:aaa"
+     | .scanned_through = {id: "deadbeefdeadbeef", ts: "2026-08-03T10:00:00.000Z"}')
+  seed_record "$rec"
+  BACKEND_EXISTS=false
+
+  run dev_reconcile "$RESOLVED" "sha256:aaa"
+  [ "$status" -eq 0 ]
+  [ "$(jq -r '.fold_gap' <<<"$output")" = true ]
+  [ "$(jq -r '.status' <<<"$output")" = stopped ]
+  [ -z "$(all_events | jq -r 'select(.event == "workspace.vanished") | .id')" ]
 }
 
 @test "a rotated-away cursor re-anchors: fold_gap stays set but the rescan stops" {
