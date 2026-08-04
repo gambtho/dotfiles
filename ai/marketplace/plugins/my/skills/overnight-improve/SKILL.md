@@ -114,7 +114,7 @@ You are running one iteration of an autonomous overnight improvement loop. The s
 - You may NOT: force-push, switch/merge/delete branches, run `git clean -fd`, run any `--no-verify` variant, touch any other branch.
 - During PHASE 2 (wrap-up) ONLY, you MAY `git push -u origin HEAD`, run `gh pr create`, run additional `git push` commands for follow-up commits, and invoke the `coderabbit:autofix` skill. These permissions do NOT apply during normal iteration work — only inside the wrap-up phase below.
 - You may run any read-only command (tests, lint, typecheck, build).
-- Commits must include the `Co-Authored-By: Claude` trailer and a clear subject `improve: <finding title>`.
+- Commits must use a clear subject `improve: <finding title>`. Do not hand-write a `Co-Authored-By` trailer — commit attribution is governed by the `attribution` setting in `~/.claude/settings.json`.
 
 == STATE TRACKING ==
 
@@ -195,7 +195,7 @@ W4. Address CodeRabbit in rounds. CodeRabbit (`coderabbitai[bot]`) auto-reviews 
 
 Use the `coderabbit:autofix` skill in batch mode against the PR for each round (Claude Code). On Pi, if `coderabbit:autofix` is not installed, fetch the latest review with `gh pr view "$PR" --comments` and apply fixes inline; if there is no clear automated path for a comment, skip it and log `manual: <comment-id> deferred` rather than silently dropping it. After each round:
 - Re-run all gates (the same ones from step 5)
-- If gates pass and there are file changes, commit with subject `improve: address coderabbit review (round <N>)` (with Co-Authored-By trailer) and push
+- If gates pass and there are file changes, commit with subject `improve: address coderabbit review (round <N>)` and push
 - If gates fail after autofix, `git reset --hard HEAD` and log `autofix broke <gate>, rolled back` — break the loop, do NOT push a broken commit
 
 Stop conditions for the wrap loop (any breaks):
