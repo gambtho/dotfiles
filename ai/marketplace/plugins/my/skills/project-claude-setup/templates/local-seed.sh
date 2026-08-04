@@ -420,7 +420,13 @@ fi
 # remote installer is then never invoked. Note `ai/claude/install.sh` itself has
 # no version/checksum support — the pinned artifact must come from the project.
 if as_user test -x "$SEED_HOME/.local/bin/claude" || as_user bash -lc 'command -v claude >/dev/null 2>&1'; then
-  echo "🌱 seed: claude already installed for $SEED_USER — skipping CLI install"
+  # Report the version, not just presence. "already installed" alone cannot
+  # distinguish a current CLI from one a stale volume has been pinning for
+  # months — the usual first question when a container behaves unlike the host.
+  # Non-fatal by construction: stderr is discarded and `|| echo '?'` fires on the
+  # non-zero exit from `as_user bash -lc`, so a stale or broken CLI degrades to
+  # `(?)` rather than taking the seed down under `set -e`.
+  echo "🌱 seed: claude already installed for $SEED_USER ($(as_user bash -lc 'claude --version 2>/dev/null' || echo '?')) — skipping CLI install"
 elif [ -n "${CLAUDE_CLI_INSTALL_CMD:-}" ]; then
   echo "🌱 seed: installing Claude Code CLI via pinned CLAUDE_CLI_INSTALL_CMD"
   as_user bash -lc "$CLAUDE_CLI_INSTALL_CMD" ||
@@ -438,7 +444,7 @@ fi
 # Testing config.toml therefore latches: config present, `codex` missing, and
 # the installer skipped on every subsequent start.
 if as_user test -x "$SEED_HOME/.local/bin/codex"; then
-  echo "🌱 seed: codex already present"
+  echo "🌱 seed: codex already present ($(as_user "$SEED_HOME/.local/bin/codex" --version 2>/dev/null || echo '?'))"
 elif [ -x "$DOTFILES_HOME/ai/codex/install.sh" ]; then
   echo "🌱 seed: linking Codex config"
   as_user bash "$DOTFILES_HOME/ai/codex/install.sh" || echo "⚠️  seed: codex install failed (non-fatal)"
@@ -461,7 +467,10 @@ fi
 # nvim-dist/bin/nvim) still passes, while a directory — which `-x` alone reports
 # as executable — no longer counts as "already installed" and silently skips.
 if as_user test -f "$SEED_HOME/.local/bin/nvim" && as_user test -x "$SEED_HOME/.local/bin/nvim"; then
-  echo "🌱 seed: nvim already present"
+  # Same `(?)` fallback as the claude guard above, but here it rests on pipefail:
+  # without it `head -1` would report success and mask nvim's own failure, and the
+  # parens would come out empty instead. Applies to the "neovim ready" line too.
+  echo "🌱 seed: nvim already present ($(as_user "$SEED_HOME/.local/bin/nvim" --version 2>/dev/null | head -1 || echo '?'))"
 elif [ -r "$DOTFILES_HOME/config/versions.env" ]; then
   # shellcheck source=/dev/null
   . "$DOTFILES_HOME/config/versions.env"
@@ -527,7 +536,7 @@ elif [ -r "$DOTFILES_HOME/config/versions.env" ]; then
       mv "$NVIM_DIST.new" "$NVIM_DIST" &&
       as_user ln -sf "$NVIM_DIST/bin/nvim" "$SEED_HOME/.local/bin/nvim" &&
       as_user test -x "$SEED_HOME/.local/bin/nvim"; then
-      echo "🌱 seed: neovim ready"
+      echo "🌱 seed: neovim ready ($(as_user "$SEED_HOME/.local/bin/nvim" --version 2>/dev/null | head -1 || echo '?'))"
     else
       echo "⚠️  seed: neovim install failed (non-fatal; EDITOR falls back to vim)"
     fi
