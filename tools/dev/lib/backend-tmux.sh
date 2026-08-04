@@ -138,9 +138,17 @@ dev_backend_apply_layout() {
 # list-panes uses -s (all panes in the session), not -a: with -a tmux ignores
 # -t and returns every pane on the server. Fields are ordered so window_name,
 # which may contain spaces, is last and absorbs the remainder of the line.
+#
+# The trailing colon on the list-panes target is required for the same reason
+# as show-options below, but the failure mode here is worse: has-session,
+# list-clients and list-windows all correctly reject a bare `=name` when only
+# a longer-named session exists ("can't find session"), but `list-panes -s`
+# does not — it silently resolves `=name` to `name-longer` and returns exit 0,
+# which is exactly the cross-workspace misattachment ADR-7 exists to prevent.
+# That asymmetry between tmux's own commands is the whole reason this hid.
 dev_backend_query() {
   local session_name="$1" panes worktree clients
-  if ! panes=$(dev_tmux list-panes -s -t "=$session_name" \
+  if ! panes=$(dev_tmux list-panes -s -t "=$session_name:" \
     -F '#{pane_dead} #{window_index} #{window_name}' 2>/dev/null); then
     printf '{"exists":false,"worktree":null,"clients":0,"windows":[]}\n'
     return 0

@@ -202,3 +202,83 @@ fixture_config() {
   run dev_backend_kill "proj"
   [ "$status" -eq 0 ]
 }
+
+# --- Fix round 1: closing review findings 1, 2 and 4 (finding 3 is out of scope) ---
+#
+# Every test below creates ONLY a longer-named session ("proj-longer") and then
+# targets the shorter name ("proj"), which exists nowhere. This is deliberate:
+# tmux resolves an unqualified target by prefix match, so a bare (non-"=")
+# target for "proj" silently resolves to "proj-longer" and returns success —
+# exactly the cross-workspace misattachment ADR-7's "=" prefix exists to
+# prevent. Creating both names would not expose this: when a session exists
+# under the exact requested name, tmux prefers the exact match regardless of
+# whether "=" is present, so the ambiguity only shows up when the exact name
+# is entirely absent.
+
+@test "query, kill and apply_layout never misattach to a longer-named session" {
+  mkdir -p "$TEST_ROOT/workspace/proj-longer"
+  dev_backend_create "proj-longer" "id-longer" "proj" "$TEST_ROOT/workspace/proj-longer"
+
+  # M1: list-panes losing "=" would resolve "proj" to "proj-longer" and report
+  # its panes as if they belonged to the (nonexistent) "proj" session.
+  run dev_backend_query "proj"
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | jq -r '.exists')" = "false" ]
+
+  # M2: has-session/kill-session losing "=" would find and destroy
+  # "proj-longer" when asked to kill the (nonexistent) "proj".
+  run dev_backend_kill "proj"
+  [ "$status" -eq 0 ]
+  run dev_tmux has-session -t "=proj-longer"
+  [ "$status" -eq 0 ]
+
+  # M3: new-window losing "=" would create the new window inside
+  # "proj-longer" instead of failing to find the (nonexistent) "proj".
+  run dev_backend_apply_layout "proj" "$(fixture_config)" "$(fixture_record "$TEST_ROOT/workspace/proj-longer" "proj")"
+  [ "$status" -ne 0 ]
+  run dev_tmux list-windows -t "=proj-longer:" -F '#{window_name}'
+  [ "$output" = "dev-holder" ]
+}
+
+# M4 (set-window-option losing "=" on "=$session:=$name") cannot be exercised
+# independently of M3 under single-mutation testing: set-window-option only
+# ever runs immediately after new-window has just created that exact window
+# name in that exact session, and new-window's own "=" (unmutated when M4
+# alone is applied) already guarantees the target is unambiguous by the time
+# set-window-option runs. Every scenario that reaches this line therefore has
+# only one possible session and only one possible window of that name, so the
+# bare and "=" forms resolve identically. No test can distinguish them; see
+# task-11-report.md for the full argument. Kill table below reports this
+# honestly as SURVIVED (structurally unreachable), not as a gap in test design.
+
+@test "apply_layout creates a same-name window even when only a longer name pre-exists" {
+  # M27: the existing-window diff (grep -Fxq) must treat "my-shell" and
+  # "shell" as distinct names. A substring-based diff would wrongly treat the
+  # pre-existing "my-shell" as satisfying the config's request for "shell" and
+  # skip creating it.
+  dev_backend_create "proj" "aa11" "proj" "$TEST_WT"
+  dev_tmux new-window -d -t "=proj:" -n "my-shell" "sleep 30"
+
+  local cfg
+  cfg=$(jq -nc '{version: 1, autostart: false, environment: {}, windows: [
+    {name: "shell", agent: null, command: "sleep 30", cwd: null, location: "host", focus: false}]}')
+  dev_backend_apply_layout "proj" "$cfg" "$(fixture_record)"
+
+  run dev_backend_query "proj"
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | jq -r '[.windows[].name] | sort | join(",")')" = "my-shell,shell" ]
+}
+
+@test "query reports clients as a present, numeric field" {
+  # M8: `clients` must actually be read from tmux and typed as a number, not
+  # merely present with a fixed placeholder. Its true value needs a real
+  # attached client (a pty) to observe, which is out of reach for these tests
+  # and is deferred to Task 14 (M9); this only pins presence and type.
+  dev_backend_create "proj" "aa11" "proj" "$TEST_WT"
+  dev_backend_apply_layout "proj" "$(fixture_config)" "$(fixture_record)"
+
+  run dev_backend_query "proj"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | jq -e '.clients | type == "number"' >/dev/null
+  [ "$(printf '%s' "$output" | jq -r 'has("clients")')" = "true" ]
+}
