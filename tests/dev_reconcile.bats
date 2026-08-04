@@ -188,7 +188,8 @@ copy_fn() { eval "$2 () $(declare -f "$1" | tail -n +2)"; }
   dev_state_commit() {
     if [[ "$CAS_TRIPPED" == 0 ]]; then
       CAS_TRIPPED=1
-      local p; p="$(dev_state_path "$WS_ID")"
+      local p
+      p="$(dev_state_path "$WS_ID")"
       jq -c '.last_seen = "2026-08-03T12:31:00.000Z"' "$p" >"$p.mut"
       mv "$p.mut" "$p"
     fi
@@ -208,7 +209,8 @@ copy_fn() { eval "$2 () $(declare -f "$1" | tail -n +2)"; }
   copy_fn dev_state_commit dev_state_commit_orig
   # Mutate the record before every commit attempt, so all three exit 9.
   dev_state_commit() {
-    local p; p="$(dev_state_path "$WS_ID")"
+    local p
+    p="$(dev_state_path "$WS_ID")"
     jq -c --arg n "$RANDOM" '.last_seen = ("2026-08-03T12:31:00." + $n + "Z")' "$p" >"$p.mut"
     mv "$p.mut" "$p"
     dev_state_commit_orig "$@"
