@@ -112,8 +112,12 @@ dev_reconcile() {
     fi
 
     if [[ "$container_alive" == no ]]; then
-      ts=$(jq -r '.container.observed_at // .last_seen // empty' <<<"$folded")
-      [[ -n "$ts" ]] || ts="$now"
+      # ts is the discovery moment, not the binding moment: container.ready
+      # for the id being lost necessarily precedes this incarnation's own
+      # workspace.opened, so backdating ts to that binding would put it
+      # before opened_at and the fold's incarnation guard (fold.sh) would
+      # silently drop a loss that belongs to the CURRENT incarnation.
+      ts="$now"
       data=$(jq -nc --arg o "$container_id" --arg d "$now" \
         '{old_id: $o, discovered_at: $d}')
       # `container.observed_at` is written by the fold from the `container.ready`

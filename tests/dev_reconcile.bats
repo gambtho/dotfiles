@@ -116,7 +116,7 @@ all_events() { cat "$DEV_STATE_ROOT"/events/*.jsonl 2>/dev/null; }
   ev=$(all_events | jq -c 'select(.event == "container.lost")')
   [ "$(jq -r '.data.old_id' <<<"$ev")" = a710dead ]
   [ "$(jq -r '.data.discovered_at' <<<"$ev")" = "$FAKE_NOW" ]
-  [ "$(jq -r '.ts' <<<"$ev")" = "2026-08-03T11:00:00.000Z" ]
+  [ "$(jq -r '.ts' <<<"$ev")" = "$FAKE_NOW" ]
 }
 
 @test "case D: a changed config digest emits config.changed and touches no tmux" {
