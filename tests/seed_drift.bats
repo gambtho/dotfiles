@@ -1408,6 +1408,8 @@ TPLEOF
   cat >"$SEED" <<'SEEDEOF'
 #!/usr/bin/env bash
 
+WORKSPACE="/w"
+
 GI_MARK_BEGIN="# >>> overlay symlinks (auto, do not edit) >>>"
 GI_MARK_END="# << overlay symlinks (auto) <<"
 overlay_links="$(cd "$WORKSPACE" && find . -type l -lname '*dotfiles/projects/*' -print)"
@@ -1439,6 +1441,8 @@ TPLEOF
   cat >"$SEED" <<'SEEDEOF'
 #!/usr/bin/env bash
 
+WORKSPACE="/w"
+
 overlay_links="$(cd "$WORKSPACE" && find . -type l -lname '*/.dotfiles/projects/*' -print)"
 echo "$overlay_links"
 SEEDEOF
@@ -1447,6 +1451,173 @@ SEEDEOF
   [[ "$output" == *MISSING* ]]
   [[ "$output" == *"Overlay-link gitignore"* ]]
   [[ "$output" == *"Step 2"* ]]
+}
+
+# --- per-project templated assignments (SEED_USER / WORKSPACE) ---------------
+#
+# The template carries these as `{USER}` / `{WORKSPACE}` placeholders, so every
+# rendered seed necessarily holds a different literal and no seed can ever match
+# the template on that line. The fleet writes them in two shapes and BOTH must
+# read ok; the compensating definedness check is what keeps that from hiding a
+# seed that never assigns them at all.
+
+@test "an INLINE templated assignment reads ok despite the placeholder" {
+  t7_setup
+  t7_doc "Overlay-link gitignore" "lname '*dotfiles/projects/*'"
+  cat >"$TPL" <<'TPLEOF'
+#!/usr/bin/env bash
+
+WORKSPACE="{WORKSPACE}"
+overlay_links="$(cd "$WORKSPACE" && find . -type l -lname '*dotfiles/projects/*' -print)"
+echo "$overlay_links"
+TPLEOF
+  # Same paragraph as the anchor, so the assignment lands INSIDE the compared
+  # window: without the drop rule this is a value mismatch — 1 behind AND
+  # 1 ahead — and reports DIVERGED.
+  cat >"$SEED" <<'SEEDEOF'
+#!/usr/bin/env bash
+
+WORKSPACE="/workspaces/demo"
+overlay_links="$(cd "$WORKSPACE" && find . -type l -lname '*dotfiles/projects/*' -print)"
+echo "$overlay_links"
+SEEDEOF
+  t7_run "$SEED"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *DIVERGED* ]]
+  [[ "$output" != *BEHIND* ]]
+}
+
+@test "a HOISTED templated assignment reads ok despite sitting in the variable block" {
+  t7_setup
+  t7_doc "Overlay-link gitignore" "lname '*dotfiles/projects/*'"
+  cat >"$TPL" <<'TPLEOF'
+#!/usr/bin/env bash
+
+WORKSPACE="{WORKSPACE}"
+overlay_links="$(cd "$WORKSPACE" && find . -type l -lname '*dotfiles/projects/*' -print)"
+echo "$overlay_links"
+TPLEOF
+  # Lifted into its own paragraph far from the anchor — the shape wanderer-kills,
+  # wanderer and slabledger all use. The template's line then has no counterpart
+  # in the window at all: a PLACEMENT mismatch reporting BEHIND, which is why
+  # neutralizing the placeholder to its value would not have been enough.
+  cat >"$SEED" <<'SEEDEOF'
+#!/usr/bin/env bash
+
+WORKSPACE="/app"
+
+overlay_links="$(cd "$WORKSPACE" && find . -type l -lname '*dotfiles/projects/*' -print)"
+echo "$overlay_links"
+SEEDEOF
+  t7_run "$SEED"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *DIVERGED* ]]
+  [[ "$output" != *BEHIND* ]]
+}
+
+@test "a DERIVED WORKSPACE is still flagged, not dropped" {
+  t7_setup
+  t7_doc "Overlay-link gitignore" "lname '*dotfiles/projects/*'"
+  cat >"$TPL" <<'TPLEOF'
+#!/usr/bin/env bash
+
+WORKSPACE="{WORKSPACE}"
+overlay_links="$(cd "$WORKSPACE" && find . -type l -lname '*dotfiles/projects/*' -print)"
+echo "$overlay_links"
+TPLEOF
+  # catch-up-local-seed.md is explicit that WORKSPACE must not be derived: the
+  # seed is mounted at an arbitrary container path that need not sit inside the
+  # checkout, so `git rev-parse` from there resolves to the wrong tree. The drop
+  # rule is literal-RHS-only precisely so this regression still surfaces.
+  cat >"$SEED" <<'SEEDEOF'
+#!/usr/bin/env bash
+
+WORKSPACE="$(git rev-parse --show-toplevel)"
+overlay_links="$(cd "$WORKSPACE" && find . -type l -lname '*dotfiles/projects/*' -print)"
+echo "$overlay_links"
+SEEDEOF
+  t7_run "$SEED"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"Overlay-link gitignore"* ]]
+  [[ "$output" == *AHEAD* || "$output" == *DIVERGED* ]]
+}
+
+@test "a seed that READS \$WORKSPACE but never assigns it is an ERROR at exit 2" {
+  t7_setup
+  t7_doc "Overlay-link gitignore" "lname '*dotfiles/projects/*'"
+  cat >"$TPL" <<'TPLEOF'
+#!/usr/bin/env bash
+
+WORKSPACE="{WORKSPACE}"
+overlay_links="$(cd "$WORKSPACE" && find . -type l -lname '*dotfiles/projects/*' -print)"
+echo "$overlay_links"
+TPLEOF
+  # The failure catch-up-local-seed.md calls the main way the task goes wrong:
+  # under `set -euo pipefail` the first expansion aborts the WHOLE seed and
+  # surfaces as an unrelated-looking container start error. Once the drop rule
+  # excludes these assignments from block comparison, "hoisted" and "never
+  # defined" look identical to the diff — so it is checked directly instead.
+  cat >"$SEED" <<'SEEDEOF'
+#!/usr/bin/env bash
+
+overlay_links="$(cd "$WORKSPACE" && find . -type l -lname '*dotfiles/projects/*' -print)"
+echo "$overlay_links"
+SEEDEOF
+  t7_run "$SEED"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *ERROR* ]]
+  [[ "$output" == *'$WORKSPACE'* ]]
+  [[ "$output" == *"never assigns it"* ]]
+}
+
+@test "a \$WORKSPACE mentioned only in a comment is not a reference" {
+  t7_setup
+  t7_doc "Overlay-link gitignore" "lname '*dotfiles/projects/*'"
+  cat >"$TPL" <<'TPLEOF'
+#!/usr/bin/env bash
+
+overlay_links="$(cd /w && find . -type l -lname '*dotfiles/projects/*' -print)"
+echo "$overlay_links"
+TPLEOF
+  # The check reads `C` scan records, which have had trailing comments stripped,
+  # so this must not trip the definedness ERROR.
+  cat >"$SEED" <<'SEEDEOF'
+#!/usr/bin/env bash
+
+# $WORKSPACE is deliberately not used by this seed
+overlay_links="$(cd /w && find . -type l -lname '*dotfiles/projects/*' -print)"
+echo "$overlay_links"
+SEEDEOF
+  t7_run "$SEED"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *ERROR* ]]
+}
+
+@test "sabotage: dropping templated assignments without the definedness check hides an undefined WORKSPACE" {
+  t7_setup
+  t7_copy_tool
+  t7_doc "Overlay-link gitignore" "lname '*dotfiles/projects/*'"
+  # Excise the guard from the copy and confirm the seed above goes quiet. This
+  # is the whole argument for the check being mandatory rather than a nicety:
+  # without it the drop rule trades a false positive for a false NEGATIVE on the
+  # documented fatal case.
+  sed -i '/^  undef=\$(sd_undefined_templated_vars/,/^  fi$/d' "$T7_TOOL"
+  cat >"$TPL" <<'TPLEOF'
+#!/usr/bin/env bash
+
+WORKSPACE="{WORKSPACE}"
+overlay_links="$(cd "$WORKSPACE" && find . -type l -lname '*dotfiles/projects/*' -print)"
+echo "$overlay_links"
+TPLEOF
+  cat >"$SEED" <<'SEEDEOF'
+#!/usr/bin/env bash
+
+overlay_links="$(cd "$WORKSPACE" && find . -type l -lname '*dotfiles/projects/*' -print)"
+echo "$overlay_links"
+SEEDEOF
+  t7_run_tool "$T7_TOOL" "$SEED"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *ERROR* ]]
 }
 
 @test "<<< herestrings are not heredoc openers" {

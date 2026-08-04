@@ -327,6 +327,51 @@ sd_drop_priv_prefix() {
   printf '%s' "$line"
 }
 
+# Per-project assignments the template carries as `{USER}` / `{WORKSPACE}`
+# placeholders, for which every rendered seed necessarily holds a different
+# literal. Dropping them from BOTH sides is what makes the two shapes the fleet
+# actually uses compare equal:
+#
+#   inline  - the seed keeps `WORKSPACE="/workspaces/x"` where the template has
+#             `WORKSPACE="{WORKSPACE}"`, inside a compared window. A value
+#             mismatch: 1 line behind AND 1 ahead, reported as DIVERGED.
+#   hoisted - the seed lifts the assignment into its variable block, far above
+#             every anchor. A placement mismatch: the template's line has no
+#             counterpart in the window at all, reported as BEHIND.
+#
+# Neutralizing the placeholder to its value would only fix the first shape.
+# Dropping the line fixes both, because a window that no longer contains it on
+# either side compares equal whether the seed hoisted it or not.
+#
+# LITERAL RHS ONLY. catch-up-local-seed.md is explicit that WORKSPACE must not
+# be derived - the seed is mounted at an arbitrary container path that need not
+# sit inside the checkout, so `git rev-parse` from there resolves to the wrong
+# tree. A seed that regressed to `WORKSPACE="$(git rev-parse --show-toplevel)"`
+# must still be flagged, so anything containing `$`, a backtick or `$(` is kept
+# and drifts against the template's dropped literal.
+#
+# The definedness check in sd_check_seed is the compensating guard: block
+# comparison no longer notices a seed that never assigns these at all.
+sd_is_templated_assignment() {
+  case "$1" in
+    SEED_USER=* | WORKSPACE=*) ;;
+    *) return 1 ;;
+  esac
+  local rhs="${1#*=}"
+  # Strip one layer of matching quotes; a literal path needs no more than that.
+  case "$rhs" in
+    \"*\") rhs="${rhs%\"}" rhs="${rhs#\"}" ;;
+    \'*\') rhs="${rhs%\'}" rhs="${rhs#\'}" ;;
+  esac
+  case "$rhs" in
+    *'$'* | *'`'*) return 1 ;;
+    # An unquoted RHS with whitespace is `WORKSPACE=/x cmd ...` - a prefix
+    # assignment to some other command, not the declaration we mean to drop.
+    *[[:space:]]*) [ "$rhs" != "${1#*=}" ] || return 1 ;;
+  esac
+  return 0
+}
+
 sd_normalize_code_line() {
   local line="$1"
   line="${line//$'\t'/ }"
@@ -334,6 +379,7 @@ sd_normalize_code_line() {
   line="${line#"${line%%[![:space:]]*}"}"
   line="${line%"${line##*[![:space:]]}"}"
   [ -n "$line" ] || return 0
+  sd_is_templated_assignment "$line" && return 0
   line=$(sd_drop_priv_prefix "$line")
   [ -n "$line" ] || return 0
   printf '%s\n' "$line" | sd_neutralize_paths
@@ -561,9 +607,38 @@ sd_report_thin() {
     "$1" "$2" "$SD_THIN_WINDOW"
 }
 
+# Names every per-project variable the seed READS but never ASSIGNS. This is
+# the compensating guard for the drop rule in sd_normalize_code_line: once those
+# assignments are excluded from block comparison, "the seed hoisted it into its
+# variable block" and "the seed never defines it at all" look identical to the
+# diff. The second is the failure mode catch-up-local-seed.md calls the main way
+# the task goes wrong - under `set -euo pipefail` the first expansion aborts the
+# whole seed and surfaces as an unrelated-looking container start error - so it
+# is checked directly instead of being left to a block verdict that no longer
+# covers it. Reported on the host, before a rebuild, rather than in a log.
+#
+# Reads the scan, not the file: `C` records have already had trailing comments
+# stripped, so a `$WORKSPACE` mentioned only in a comment is not a reference.
+# `${VAR:-...}` is deliberately not a reference either - a defaulted expansion
+# is exactly the shape that survives an undefined variable.
+sd_undefined_templated_vars() {
+  local scan="$1" var
+  for var in WORKSPACE SEED_USER; do
+    if awk -F'\t' -v v="$var" '
+      $3 != "C" { next }
+      $4 ~ ("^[[:space:]]*((export|declare|readonly|local)[[:space:]]+)?" v "=") { set = 1 }
+      $4 ~ ("\\$" v "([^A-Za-z0-9_]|$)") || $4 ~ ("\\$\\{" v "\\}") { used = 1 }
+      END { exit (used && !set) ? 0 : 1 }
+    ' "$scan"; then
+      printf '%s\n' "$var"
+    fi
+  done
+  return 0
+}
+
 sd_check_seed() {
   local seed="$1" name rc=0 block anchor verdict tnorm snorm sscan
-  local behind ahead nb na est tst tsize esize docrows
+  local behind ahead nb na est tst tsize esize docrows undef var
   name=$(basename -- "$(dirname -- "$(dirname -- "$seed")")")
   printf '%s  %s\n' "$name" "$seed"
   if ! bash -n "$seed" 2>/dev/null; then
@@ -580,6 +655,16 @@ sd_check_seed() {
     sd_report_block ERROR '(whole file)' 'seed could not be scanned'
     sd_report_action 'check the seed parses; see catch-up-local-seed.md Step 3'
     return 2
+  fi
+  # rc, not `return 2`: the block verdicts are still worth printing, and this
+  # is a whole-file finding that none of them depends on.
+  undef=$(sd_undefined_templated_vars "$sscan")
+  if [ -n "$undef" ]; then
+    for var in $undef; do
+      sd_report_block ERROR '(whole file)' "seed reads \$$var but never assigns it"
+    done
+    sd_report_action 'define it in the seed variable block; see catch-up-local-seed.md'
+    rc=2
   fi
   sd_tmp tnorm || return 2
   sd_tmp snorm || return 2

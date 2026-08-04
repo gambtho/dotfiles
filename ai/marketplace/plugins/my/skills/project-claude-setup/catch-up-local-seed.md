@@ -82,6 +82,7 @@ match the template":
 | `DIVERGED` | both sides have lines the other lacks | inspect by hand. On a seed whose vocabulary differs from the template's this is often spelling rather than stale logic — decide per block |
 | `MISSING` | the anchor is absent from the seed entirely | port the whole block — Step 2 |
 | `ERROR` | the block could not be extracted or parsed | the tool could not compare; investigate before treating the seed as clean |
+| `ERROR` on `(whole file)` | the seed reads `$WORKSPACE` or `$SEED_USER` but never assigns it | fix before rebuilding. Under `set -euo pipefail` the first expansion aborts the whole seed, which surfaces as an unrelated-looking container start error rather than as a seed failure |
 
 A `note: … window is only N lines` under a verdict means the extracted block was
 small enough that the comparison covers little — worth an eye even when it says
