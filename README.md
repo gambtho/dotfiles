@@ -238,6 +238,29 @@ The personal plugin is the single source of truth for commands and skills. See
   and the deliberately-invoked `blindspot-pass`, `implementation-plan`,
   `change-explainer`.
 
+### Devcontainer seed drift
+
+`bin/seed-drift` reports, per project and per documented block, whether a
+project's `.devcontainer/local-seed.sh` has fallen behind the
+`project-claude-setup` template, run ahead of it, or diverged from it.
+
+```bash
+bin/seed-drift                       # every project under ~/workspace
+bin/seed-drift ~/workspace/myproject # named candidates only
+```
+
+It is strictly read-only with respect to the seeds it inspects. Exit codes:
+`0` clean, `1` drift found, `2` usage / template / doc / extraction error, or no
+projects discovered.
+
+`AHEAD` is a **promotion candidate**, not an error — the seed has something the
+template does not, and the seed is the hand-owned file, so the fix direction is
+to port it up rather than overwrite it.
+
+The blocks it compares come from the Step 1 table in
+`ai/marketplace/plugins/my/skills/project-claude-setup/catch-up-local-seed.md`;
+that table is the tool's input, so adding a row there extends the detector.
+
 ### Global working agreement
 
 `ai/claude/CLAUDE.md` and `ai/codex/AGENTS.md` hold always-loaded default guidance

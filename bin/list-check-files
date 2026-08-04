@@ -60,7 +60,11 @@ is_repository_zsh() {
       if is_direct_bin_shell "$path" || is_repository_sh "$path"; then printf '%s\0' "$path"; fi
       ;;
     shfmt)
-      if is_direct_bin_shell "$path" || is_repository_sh "$path" || [[ "$path" == tests/test_helper.bash ]]; then printf '%s\0' "$path"; fi
+      # tests/*.bats is shfmt-only: `bash -n` and shellcheck cannot parse the
+      # `@test "name" { ... }` form, but shfmt has understood it since v3.2.0
+      # (mvdan/sh, 2020-10-29). An shfmt older than that fails loudly on these
+      # paths rather than skipping them.
+      if is_direct_bin_shell "$path" || is_repository_sh "$path" || [[ "$path" == tests/test_helper.bash ]] || [[ "$path" == tests/*.bats ]]; then printf '%s\0' "$path"; fi
       ;;
   esac
 done
