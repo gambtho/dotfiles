@@ -268,7 +268,66 @@ CASES
   [ "${#lines[@]}" -eq 2 ]
 }
 
-# --- project overlay attach -------------------------------------------------
+# --- work profile Krew bootstrap --------------------------------------------
+#
+# The ctx/ns plugins are installed through Krew, and Linux/WSL has no package
+# for Krew itself, so the work profile installs the pinned tarball first. These
+# cover the artifact selection and the "already present" and "no artifact"
+# paths without touching the network.
+
+@test "work profile installs the reviewed Krew artifact for each Linux architecture" {
+  local arch expected_asset expected_digest
+  while read -r arch expected_asset expected_digest; do
+    run env WORK_INSTALL_SOURCE_ONLY=1 ARTIFACT_ARCH="$arch" OS=WSL bash -c '
+      source "$1/work/install.sh"
+      kubectl() { return 1; }
+      download_verified_artifact() { printf "%s|%s\n" "$1" "$2"; }
+      # Stand in for the real extraction: place a fake krew where the installer
+      # expects the unpacked binary, so the self-install step can run.
+      tar() {
+        local extracted="$4/${5#./}"
+        printf "%s\n" "#!/usr/bin/env bash" "echo krew-self-install \$*" >"$extracted"
+        chmod +x "$extracted"
+      }
+      install_krew
+    ' _ "$REPO_ROOT"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"/$expected_asset.tar.gz|$expected_digest"* ]]
+    [[ "$output" == *"krew-self-install install krew"* ]]
+  done <<CASES
+x86_64 krew-linux_amd64 $KREW_LINUX_AMD64_SHA256
+aarch64 krew-linux_arm64 $KREW_LINUX_ARM64_SHA256
+CASES
+}
+
+@test "work profile leaves an existing Krew install alone" {
+  run env WORK_INSTALL_SOURCE_ONLY=1 OS=WSL bash -c '
+    source "$1/work/install.sh"
+    kubectl() { return 0; }
+    download_verified_artifact() { printf "downloaded\n"; }
+    install_krew
+  ' _ "$REPO_ROOT"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"downloaded"* ]]
+}
+
+@test "work profile warns instead of downloading a Krew artifact it has not reviewed" {
+  run env WORK_INSTALL_SOURCE_ONLY=1 ARTIFACT_ARCH=ppc64le OS=WSL bash -c '
+    source "$1/work/install.sh"
+    kubectl() { return 1; }
+    download_verified_artifact() { printf "downloaded\n"; }
+    install_krew
+  ' _ "$REPO_ROOT"
+  [ "$status" -ne 0 ]
+  [[ "$output" != *"downloaded"* ]]
+  [[ "$output" == *"No reviewed Krew artifact for ppc64le"* ]]
+}
+
+@test "work profile puts the Krew bin directory on PATH for interactive shells" {
+  run rg -n 'KREW_ROOT:-\$HOME/\.krew' "$REPO_ROOT/work/path.zsh"
+  [ "$status" -eq 0 ]
+}
+
 #
 # setup_projects_overlay clones the private overlay repo to ~/.dotfiles/projects.
 # It must never be fatal: a machine without overlays is a working machine, so
