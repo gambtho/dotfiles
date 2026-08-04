@@ -462,85 +462,6 @@ $HOME/literal' ]
   [ "$output" = '  «HOME»/x   # not a comment' ]
 }
 
-# Fix round 3 (Task 7, group 2): the ownership drop moved out of per-file
-# normalization into sd_apply_ownership_rule at the comparison stage, because
-# the rule is inherently cross-file ("does the OTHER side still show a chown
-# difference?") and per-file dropping hid a changed target/flag/identity as
-# AHEAD instead of DIVERGED. sd_normalize on its own must now pass these
-# lines through unchanged; see the sd_apply_ownership_rule unit test below
-# for the actual dropping behavior.
-@test "sd_normalize no longer drops the ownership-verification lines itself" {
-  scan_line 1 1 C '      { chown -R "$SEED_UID:$SEED_GID" "$NVIM_DIST.new" 2>/dev/null ||'
-  scan_line 1 2 C '        [ -z "$(find "$NVIM_DIST.new" \( ! -uid "$SEED_UID" -o ! -gid "$SEED_GID" \) -print -quit 2>/dev/null)" ]; } &&'
-  scan_line 1 3 C '      { chown "$SEED_UID:$SEED_GID" "$TS_BIN.new" 2>/dev/null ||'
-  scan_line 1 4 C '        [ -z "$(find "$TS_BIN.new" \( ! -uid "$SEED_UID" -o ! -gid "$SEED_GID" \) -print -quit 2>/dev/null)" ]; } &&'
-  scan_line 1 5 C 'echo after'
-  norm
-  [ "$status" -eq 0 ]
-  [ "$output" = '{ chown -R "$SEED_UID:$SEED_GID" "$NVIM_DIST.new" 2>/dev/null ||
-[ -z "$(find "$NVIM_DIST.new" \( ! -uid "$SEED_UID" -o ! -gid "$SEED_GID" \) -print -quit 2>/dev/null)" ]; } &&
-{ chown "$SEED_UID:$SEED_GID" "$TS_BIN.new" 2>/dev/null ||
-[ -z "$(find "$TS_BIN.new" \( ! -uid "$SEED_UID" -o ! -gid "$SEED_GID" \) -print -quit 2>/dev/null)" ]; } &&
-echo after' ]
-}
-
-# sd_apply_ownership_rule BEHIND_FILE AHEAD_FILE: drops the exact idiom lines
-# from BEHIND_FILE only when AHEAD_FILE has no chown/chgrp line of its own —
-# the root-flavored-seed-omits-it-entirely case the rule exists for.
-@test "sd_apply_ownership_rule drops the idiom from behind when ahead is silent about ownership" {
-  local behind="$FIX/behind" ahead="$FIX/ahead"
-  printf '%s\n%s\n' \
-    '{ chown -R "$SEED_UID:$SEED_GID" "$NVIM_DIST.new" 2>/dev/null ||' \
-    '[ -z "$(find "$NVIM_DIST.new" \( ! -uid "$SEED_UID" -o ! -gid "$SEED_GID" \) -print -quit 2>/dev/null)" ]; } &&' \
-    >"$behind"
-  : >"$ahead"
-  sd_source sd_apply_ownership_rule "$behind" "$ahead"
-  [ "$status" -eq 0 ]
-  [ ! -s "$behind" ]
-}
-
-# The counterpart: any chown/chgrp line on the ahead side blocks the drop, so
-# a changed target/flag/identity keeps the idiom's original lines in behind
-# and the block reports DIVERGED rather than AHEAD.
-@test "sd_apply_ownership_rule keeps behind untouched when ahead mentions chown" {
-  local behind="$FIX/behind" ahead="$FIX/ahead"
-  printf '%s\n' \
-    '{ chown -R "$SEED_UID:$SEED_GID" "$NVIM_DIST.new" 2>/dev/null ||' \
-    >"$behind"
-  printf '%s\n' 'chown -R "0:0" "$NVIM_DIST.new"' >"$ahead"
-  sd_source sd_apply_ownership_rule "$behind" "$ahead"
-  [ "$status" -eq 0 ]
-  [ "$(cat "$behind")" = '{ chown -R "$SEED_UID:$SEED_GID" "$NVIM_DIST.new" 2>/dev/null ||' ]
-}
-
-# Fix round 1 (Task 7 review, I-1): pins SD_OWNERSHIP_GUARD_PATTERN to
-# SD_OWNERSHIP_DROP so the two cannot drift apart silently. The guard exists
-# to recognize when AHEAD_FILE still carries a trace of an idiom line; if a
-# future idiom entry is added to the array whose distinguishing tokens the
-# guard doesn't cover, this is exactly the class of bug the find-half
-# regression test (below, in the Task 7 end-to-end block) caught — and it
-# would recur silently, one entry at a time, without this test.
-@test "SD_OWNERSHIP_GUARD_PATTERN matches every SD_OWNERSHIP_DROP entry" {
-  run env SEED_DRIFT_SOURCE_ONLY=1 bash -c '
-    source "$1"
-    for line in "${SD_OWNERSHIP_DROP[@]}"; do
-      grep -qE "$SD_OWNERSHIP_GUARD_PATTERN" <<<"$line" || printf "MISS: %s\n" "$line"
-    done
-  ' _ "$SEED_DRIFT"
-  [ -z "$output" ]
-}
-
-# Fix round 1 (Task 7 review, M-2): this test used to claim to cover "the
-# ownership rule" but only ever exercised sd_normalize passthrough — it would
-# pass identically with no ownership rule at all, since sd_normalize stopped
-# touching these lines the moment the drop moved to sd_apply_ownership_rule
-# (see "sd_normalize no longer drops..." above). That passthrough claim is
-# already covered there; the actual rule (target/-R/identity/unrelated-chown
-# all producing real drift) is covered end-to-end, against the real tool, by
-# the four "ownership idiom ... is drift, not dropped" tests and "an
-# unrelated chown line is compared normally" below. Deleted as a redundant,
-# uncatchable duplicate rather than kept as a test that cannot fail.
-
 @test "sd_extract unions windows in file order, deduped, and normalizes" {
   printf 'echo ANCHOR one\n\necho middle\n\nas_user echo ANCHOR two\n' >"$FIX/f.sh"
   make_scan "$FIX/f.sh"
@@ -1538,13 +1459,11 @@ SEEDEOF
   t7_doc "neovim install" NVIM_DIST
   t7_own_tpl
   # The chown half is byte-identical to the template on both sides here, so
-  # it cancels in the diff and never reaches AHEAD_FILE. Only the find-half
-  # (`! -uid`) changed. A guard that only looks for `chown` in AHEAD_FILE is
-  # blind to this: AHEAD_FILE holds nothing but the modified find-half line,
-  # which has no `chown` token, so the guard fires anyway, the idiom is
-  # dropped from BEHIND_FILE, and the block reports AHEAD with "promotion
-  # candidate" advice — silently wrong, since the seed's ownership check no
-  # longer verifies the group it claims to.
+  # it cancels in the diff; only the find-half (`! -uid`) differs. There is
+  # no ownership-specific rule left to fool, but this still stresses that a
+  # single changed line inside a two-line idiom instance is reported as
+  # ordinary drift — DIVERGED, never AHEAD/"promotion candidate" — the same
+  # way any other single-line change inside a multi-line block would be.
   cat >"$SEED" <<'SEEDEOF'
 #!/usr/bin/env bash
 
@@ -1581,13 +1500,39 @@ SEEDEOF
   # This line has nothing to do with the ownership idiom (a different target
   # entirely, no matching template counterpart), so per Decision 5 (design
   # doc :521-522, "extra seed lines -> AHEAD") it is a promotion candidate,
-  # not a divergence — the ownership rule (group-2 fix) only changes the
-  # verdict for lines that DO match the idiom's shape on one side. The
-  # positive assertion below is the test's actual subject: the line must be
-  # compared (shown as extra), not silently absorbed by the ownership drop.
+  # not a divergence. There is no ownership-specific rule anymore to risk
+  # over-matching it; this pins the ordinary case — an unrelated added line
+  # is compared and reported like any other, not swallowed by anything.
   [[ "$output" == *AHEAD* ]]
   [[ "$output" == *'chown -R "$SEED_UID:$SEED_GID" "«HOME»/.cache"'* ]]
   [[ "$output" != *"overwrite the seed with"* ]]
+}
+
+# Fix round 2 (Task 7 review): the ownership rule was removed entirely (per
+# the human's ruling after measurement showed it changed no verdict on the
+# real corpus, and it had failed three separate ways — per-file asymmetry,
+# blindness to a rewritten idiom half, and diff hunk adjacency). A root-
+# flavored seed that verifies nothing about ownership now correctly reports
+# the template's two idiom lines as BEHIND, same as any other omitted
+# template content. This is the documented, intended behavior — pin it so it
+# is not mistaken for a regression and "fixed" back into a drop later.
+@test "a root-flavored seed with no ownership check reports the idiom lines as BEHIND" {
+  t7_setup
+  t7_doc "neovim install" NVIM_DIST
+  t7_own_tpl
+  cat >"$SEED" <<'SEEDEOF'
+#!/usr/bin/env bash
+
+NVIM_DIST="$SEED_HOME/.local/nvim"
+if [ -d "$NVIM_DIST.new" ]; then
+  as_user mv "$NVIM_DIST.new" "$NVIM_DIST"
+fi
+SEEDEOF
+  t7_run "$SEED"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *BEHIND* ]]
+  [[ "$output" == *'2 template lines absent from seed'* ]]
+  [[ "$output" == *'chown -R "$SEED_UID:$SEED_GID"'* ]]
 }
 
 @test "false-positive guard: as_user prefix vs direct invocation" {
@@ -1691,45 +1636,6 @@ SEEDEOF
   t7_run "$SEED"
   [ "$status" -eq 0 ]
   [[ "$output" == *ok* ]]
-}
-
-@test "false-positive guard: both exact ownership idiom forms are dropped" {
-  t7_setup
-  t7_doc "neovim install" NVIM_DIST "tree-sitter CLI" TS_BIN
-  cat >"$TPL" <<'TPLEOF'
-#!/usr/bin/env bash
-
-NVIM_DIST="$SEED_HOME/.local/nvim"
-if [ -d "$NVIM_DIST.new" ]; then
-  { chown -R "$SEED_UID:$SEED_GID" "$NVIM_DIST.new" 2>/dev/null ||
-    [ -z "$(find "$NVIM_DIST.new" \( ! -uid "$SEED_UID" -o ! -gid "$SEED_GID" \) -print -quit 2>/dev/null)" ]; } &&
-    as_user mv "$NVIM_DIST.new" "$NVIM_DIST"
-fi
-
-TS_BIN="$SEED_HOME/.local/bin/tree-sitter"
-if [ -f "$TS_BIN.new" ]; then
-  { chown "$SEED_UID:$SEED_GID" "$TS_BIN.new" 2>/dev/null ||
-    [ -z "$(find "$TS_BIN.new" \( ! -uid "$SEED_UID" -o ! -gid "$SEED_GID" \) -print -quit 2>/dev/null)" ]; } &&
-    as_user mv "$TS_BIN.new" "$TS_BIN"
-fi
-TPLEOF
-  cat >"$SEED" <<'SEEDEOF'
-#!/usr/bin/env bash
-
-NVIM_DIST="$SEED_HOME/.local/nvim"
-if [ -d "$NVIM_DIST.new" ]; then
-  as_user mv "$NVIM_DIST.new" "$NVIM_DIST"
-fi
-
-TS_BIN="$SEED_HOME/.local/bin/tree-sitter"
-if [ -f "$TS_BIN.new" ]; then
-  as_user mv "$TS_BIN.new" "$TS_BIN"
-fi
-SEEDEOF
-  t7_run "$SEED"
-  [ "$status" -eq 0 ]
-  [[ "$output" != *BEHIND* ]]
-  [[ "$output" != *DIVERGED* ]]
 }
 
 @test "sed substitution with # delimiters survives comment stripping" {

@@ -301,7 +301,6 @@ Applied to **shell code only**, narrowest first:
 | Collapse whitespace runs, trim | reindentation is noise |
 | Drop `as_user`, `$SUDO`, `sudo [-n]`, `runuser -u X --` prefixes | privilege vocabulary |
 | `$SEED_HOME` / `$HOME` -> `«HOME»`; `$DOTFILES_HOME` -> `«HOME»/.dotfiles`; `$WORKSPACE` -> `«WS»` | path vocabulary; substitute the token only, preserving surrounding quotes |
-| Drop the two **fully literal** ownership-verification lines listed below | that idiom exists only in the non-root flavor |
 
 ### Heredoc bodies are payload and are compared verbatim
 
@@ -324,33 +323,53 @@ exactly when the shell itself expands the variable. A quoted delimiter
 `$HOME` there would rewrite text the container will see. Both template heredocs
 are quoted, so both are compared byte-for-byte after extraction.
 
-### The ownership rule takes exact arguments, with nothing free
+### The ownership-verification idiom is not special-cased (removed)
 
-The rule is deliberately **not** "drop every `chown`/`chgrp` line". An earlier
-draft said that, and a later one narrowed it to two forms with the target path
-left free — which still hid the thing the surrounding paragraph says must stay
-visible: template and seed could name different targets and both lines would
-vanish.
+Three fix rounds tried to special-case the non-root ownership-verification
+idiom — `{ chown ... || find ... -uid ... -gid ... }` — so that a root-flavored
+seed which skips it entirely would not report the idiom's template lines as
+drift. Each version failed a different way:
 
-The idiom occurs exactly twice in the template, and the two instances differ in
-both flag and target:
+- **Per-file asymmetry** (Task 6 draft): dropped the idiom during
+  normalization, one file at a time, which could not tell "seed omits it" from
+  "seed relocated it" — a seed that moved the check elsewhere would silently
+  lose both copies.
+- **Blindness to a rewritten idiom half** (Task 7 review, I-1): a guard keyed
+  on `chown`/`chgrp` tokens in the seed-only lines missed a seed that left the
+  chown half untouched and rewrote only the find half's identity check — the
+  guard saw no token, dropped the idiom anyway, and reported AHEAD
+  ("promotion candidate") for a seed whose check no longer verified what it
+  claimed to.
+- **Diff hunk adjacency** (fix round 2): a hunk-aware rewrite tried to drop a
+  template line only when GNU diff's own hunk header marked it as a pure
+  delete (never a change), so a rewrite could no longer be mistaken for an
+  omission. This failed on a real seed: a genuinely-omitted idiom sitting
+  immediately next to an unrelated, independently-edited line left diff with
+  no unchanged anchor line between them, so diff merged both into a single
+  change hunk. The rule then refused to drop lines that really had been
+  omitted, and the general case is worse than a count discrepancy — a seed
+  that cleanly omits the idiom and edits anything on the adjacent line would
+  flip a correct AHEAD into a false DIVERGED, the exact failure mode round 2
+  was meant to retire.
 
-```
-{ chown -R "$SEED_UID:$SEED_GID" "$NVIM_DIST.new" 2>/dev/null ||
-  [ -z "$(find "$NVIM_DIST.new" \( ! -uid "$SEED_UID" -o ! -gid "$SEED_GID" \) -print -quit 2>/dev/null)" ]; } &&
+Before committing to a fourth attempt, the cost of removing the rule entirely
+was measured against the real five-project corpus (`8c780a0` baseline vs. the
+rule disabled): every DIVERGED block stayed DIVERGED, **no verdict changed
+anywhere in the corpus**, and the summary line
+(`5 checked, 2 skipped, 28 blocks drifted (4 behind, 1 ahead, 23 diverged)`)
+was identical either way. The only effect was inflated BEHIND counts on the
+two root-flavored seeds that omit the idiom (`slabledger`, `wanderer`), 2 extra
+lines each on both idiom-bearing blocks (neovim install, tree-sitter CLI) — a
+cosmetic reporting difference, not a wrong verdict, on already-DIVERGED
+blocks.
 
-{ chown "$SEED_UID:$SEED_GID" "$TS_BIN.new" 2>/dev/null ||
-  [ -z "$(find "$TS_BIN.new" \( ! -uid "$SEED_UID" -o ! -gid "$SEED_GID" \) -print -quit 2>/dev/null)" ]; } &&
-```
-
-Both are matched **fully literally, post-normalization** — the `-R` on the first
-and its absence on the second are part of the match, as are the two target
-paths. Nothing is free. (The previous draft wrote both without `-R`, so it would
-not have matched the neovim instance at all.)
-
-Any other `chown` or `chgrp` line is compared normally. Tests assert that a
-changed target, a changed `-R`, a changed identity, and an unrelated `chown`
-each produce drift.
+Given three independent failure modes and a measured cost of "some inflated
+line counts on already-drifted blocks, zero verdict changes," the rule was
+removed rather than attempted a fourth time. `BEHIND` now reports whatever the
+plain diff produces for these lines, same as any other template content a
+seed happens not to carry. A root-flavored seed that verifies no ownership at
+all correctly reports the idiom's template lines as `BEHIND` — this is the
+documented, intended output now, not a bug to fix.
 
 Known residual false-positive source, accepted and documented rather than
 normalized: **literal** workspace paths (`/app` vs `/workspace`). Only the
@@ -515,10 +534,13 @@ Required cases:
 - differences both directions -> `DIVERGED`
 - false-positive guards, one test each: `as_user` vs direct invocation,
   `$SEED_HOME` vs `$HOME`, `$DOTFILES_HOME` vs `$HOME/.dotfiles`, restyled line
-  continuations, reworded comments, the two exact ownership-idiom forms
-- **the ownership rule is exact**, four cases: a changed target, a changed `-R`,
-  a changed `$SEED_UID:$SEED_GID` identity, and an unrelated `chown` line each
-  produce drift rather than being dropped.
+  continuations, reworded comments
+- **the ownership-verification idiom is not special-cased**: a changed target,
+  a changed `-R`, a changed `$SEED_UID:$SEED_GID` identity (on either physical
+  half of the idiom), and an unrelated `chown` line each produce ordinary
+  drift, the same as any other differing line; a root-flavored seed that
+  carries no ownership check at all correctly reports the idiom's two
+  template lines as `BEHIND`
 - `sed 's#...#g'` survives comment stripping
 - an anchor appearing only in a comment does not anchor a block
 - candidate with `.devcontainer/` but no seed -> skipped, exit 0, counted as

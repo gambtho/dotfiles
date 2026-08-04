@@ -232,44 +232,6 @@ sd_window() {
   printf '%s %s\n' "$start" "$end"
 }
 
-# The non-root ownership-verification idiom, matched fully literally at the
-# comparison stage (see sd_apply_ownership_rule), never during per-file
-# normalization: template lines 491-492 (chown -R, "$NVIM_DIST.new") and
-# 594-595 (plain chown, "$TS_BIN.new"). Two physical lines each, because the
-# first ends in `||` and the second in `; } &&`. Nothing in the match is free —
-# a changed flag, target or identity is drift, not vocabulary.
-SD_OWNERSHIP_DROP=(
-  '{ chown -R "$SEED_UID:$SEED_GID" "$NVIM_DIST.new" 2>/dev/null ||'
-  '[ -z "$(find "$NVIM_DIST.new" \( ! -uid "$SEED_UID" -o ! -gid "$SEED_GID" \) -print -quit 2>/dev/null)" ]; } &&'
-  '{ chown "$SEED_UID:$SEED_GID" "$TS_BIN.new" 2>/dev/null ||'
-  '[ -z "$(find "$TS_BIN.new" \( ! -uid "$SEED_UID" -o ! -gid "$SEED_GID" \) -print -quit 2>/dev/null)" ]; } &&'
-)
-
-# Fix round 1 (Task 7 review): each idiom instance is TWO physical lines, and
-# only the first (the chown half) contains `chown`/`chgrp` — the second (the
-# find half) is the actual verification and contains neither. A guard that
-# only looked for `chown|chgrp` in AHEAD_FILE was blind to a seed that leaves
-# the chown half untouched and edits only the find half (e.g. the identity in
-# `! -uid`): that half cancels out of the diff, AHEAD_FILE holds only the
-# modified, chown-free find line, the guard fired anyway, and the block
-# reported AHEAD ("promotion candidate") for a seed whose ownership check no
-# longer verifies what it claims to — exactly the class of bug the Task 7
-# relocation was meant to eliminate, surviving in the half nobody looked at.
-# `! -uid`/`! -gid` are the tokens that survive every modification that
-# matters (changed target, flag, or identity), which is why they work as a
-# guard for the find half. One variable, used by both this guard and the
-# meta-test below that pins it to SD_OWNERSHIP_DROP, so the two cannot drift
-# apart silently if another idiom line is ever added to the array.
-#
-# Widening the guard trades toward more false DIVERGED (a root-flavored seed
-# that omits the idiom entirely, but happens to carry an unrelated seed-only
-# chown/find line, now reports DIVERGED instead of a clean drop) rather than
-# false AHEAD. That is the correct side to err on: a false DIVERGED says
-# "inspect by hand" and costs a human two minutes; a false AHEAD says
-# "promotion candidate" and invites promoting a broken ownership check into
-# the template, which is silent damage.
-SD_OWNERSHIP_GUARD_PATTERN='chown|chgrp|! -uid|! -gid'
-
 sd_neutralize_paths() {
   sed -e 's/\${SEED_HOME}/«HOME»/g' -e 's/\$SEED_HOME/«HOME»/g' \
     -e 's/\${DOTFILES_HOME}/«HOME»\/.dotfiles/g' \
@@ -429,35 +391,6 @@ sd_count_lines() {
   printf '%s' "${n//[[:space:]]/}"
 }
 
-# The ownership rule is inherently cross-file — "does the OTHER side still
-# show an ownership difference of its own?" — so it cannot be decided while
-# normalizing one file in isolation; that was the Task 6 design's mistake.
-# Applied here, at the comparison stage, after diffing: BEHIND_FILE and
-# AHEAD_FILE already hold the template-only and seed-only lines. If AHEAD_FILE
-# matches none of SD_OWNERSHIP_GUARD_PATTERN, the seed is silent about
-# ownership on both idiom halves (typically the non-root idiom omitted
-# wholesale under a root-flavored seed), so the exact idiom lines are dropped
-# from BEHIND_FILE and the block reads clean. If AHEAD_FILE matches the
-# pattern, the seed changed something on either half — chown target, `-R`,
-# identity on either half, or an unrelated chown entirely — and nothing is
-# dropped, so the mismatch surfaces as DIVERGED. Called identically from
-# sd_verdict and sd_check_seed so both compute the same verdict from the same
-# counts; if they disagreed, a caller using sd_verdict directly (as the tests
-# do) could see a different answer than a full run.
-sd_apply_ownership_rule() {
-  local behind="$1" ahead="$2" patterns filtered rc=0
-  grep -qE "$SD_OWNERSHIP_GUARD_PATTERN" "$ahead" && return 0
-  sd_tmp patterns || return 3
-  sd_tmp filtered || return 3
-  printf '%s\n' "${SD_OWNERSHIP_DROP[@]}" >"$patterns"
-  grep -Fvxf "$patterns" "$behind" >"$filtered" || rc=$?
-  if [ "$rc" -gt 1 ]; then
-    printf 'seed-drift: ownership filter failed on %s\n' "$behind" >&2
-    return 3
-  fi
-  cp -- "$filtered" "$behind"
-}
-
 # Pure classifier: given the two difference counts, name the direction. Split
 # out from sd_verdict so a caller that already holds the counts can name the
 # verdict without re-running diff — and, more importantly, without the
@@ -485,7 +418,6 @@ sd_verdict() {
   sd_tmp af || return 3
   sd_diff_lines "$1" "$2" '<' >"$bf" || return 3
   sd_diff_lines "$1" "$2" '>' >"$af" || return 3
-  sd_apply_ownership_rule "$bf" "$af" || return 3
   behind=$(sd_count_lines "$bf")
   ahead=$(sd_count_lines "$af")
   sd_verdict_from_counts "$behind" "$ahead"
@@ -589,11 +521,6 @@ sd_check_seed() {
     if ! sd_diff_lines "$tnorm" "$snorm" '<' >"$behind" ||
       ! sd_diff_lines "$tnorm" "$snorm" '>' >"$ahead"; then
       sd_report_block ERROR "$block" 'diff failed'
-      rc=2
-      continue
-    fi
-    if ! sd_apply_ownership_rule "$behind" "$ahead"; then
-      sd_report_block ERROR "$block" 'ownership filter failed'
       rc=2
       continue
     fi
