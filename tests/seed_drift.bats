@@ -1642,11 +1642,12 @@ TPLEOF
   # after the FIRST word past the keyword leaves `-x` looking like the variable
   # name, and the seed is then reported as never assigning a variable it plainly
   # assigns — a false ERROR that sends the reader to fix a non-problem.
+  # `local` is deliberately NOT here; see the function-scope test below.
   local decl
   for decl in \
     'declare -x WORKSPACE="/w"' \
     'declare -x -r WORKSPACE="/w"' \
-    'local -r WORKSPACE="/w"' \
+    'typeset -r WORKSPACE="/w"' \
     'export FOO=1 WORKSPACE="/w"'; do
     cat >"$SEED" <<SEEDEOF
 #!/usr/bin/env bash
@@ -1667,6 +1668,39 @@ SEEDEOF
       return 1
     }
   done
+}
+
+@test "a function-local WORKSPACE does not define it for the rest of the seed" {
+  t7_setup
+  t7_doc "Overlay-link gitignore" "lname '*dotfiles/projects/*'"
+  cat >"$TPL" <<'TPLEOF'
+#!/usr/bin/env bash
+
+WORKSPACE="{WORKSPACE}"
+overlay_links="$(cd "$WORKSPACE" && find . -type l -lname '*dotfiles/projects/*' -print)"
+echo "$overlay_links"
+TPLEOF
+  # `local` binds for the duration of the CALL, so the read below still hits an
+  # unset variable and aborts the whole seed under `set -u` — the documented
+  # fatal case. Counting it as a declaration alongside export/declare/readonly
+  # would silence exactly the failure this check exists to catch. (Bash also
+  # rejects `local` outside a function outright, so there is no top-level form
+  # of it that declares anything either.)
+  cat >"$SEED" <<'SEEDEOF'
+#!/usr/bin/env bash
+
+seed_paths() {
+  local -r WORKSPACE="/w"
+  echo "inside $WORKSPACE"
+}
+seed_paths
+overlay_links="$(cd "$WORKSPACE" && find . -type l -lname '*dotfiles/projects/*' -print)"
+echo "$overlay_links"
+SEEDEOF
+  t7_run "$SEED"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *ERROR* ]]
+  [[ "$output" == *"never assigns it"* ]]
 }
 
 @test "a prefix assignment does not count as defining WORKSPACE" {
@@ -1862,6 +1896,15 @@ SEEDEOF
       false
     }
   done
+  # The one form whose answer depends on which question is being asked: `local`
+  # is a per-project value the drop rule may ignore, but it is NOT a whole-file
+  # declaration, because the binding dies with the function call.
+  sd_source sd_classify_templated_assignment 'local -r WORKSPACE="/w"'
+  [ "$status" -eq 0 ]
+  sd_source sd_classify_templated_assignment 'local -r WORKSPACE="/w"' WORKSPACE
+  [ "$status" -eq 1 ]
+  sd_source sd_classify_templated_assignment 'declare -r WORKSPACE="/w"' WORKSPACE
+  [ "$status" -eq 0 ]
 }
 
 @test "<<< herestrings are not heredoc openers" {

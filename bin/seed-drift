@@ -412,6 +412,15 @@ sd_classify_templated_assignment() {
   case "$line" in
     export\ * | declare\ * | readonly\ * | typeset\ * | local\ *)
       kw=1
+      # `local` does NOT declare a whole-file variable: bash refuses it outside
+      # a function outright, and inside one the binding dies with the call, so a
+      # top-level read afterwards still aborts under `set -u`. Treating it as an
+      # assignment would silence exactly the failure this check exists to catch.
+      # It stays a declaration for the DROP rule, where the question is only
+      # whether the line is a per-project value the diff should ignore.
+      case "$line" in
+        local\ *) [ -z "$want" ] || return 1 ;;
+      esac
       line="${line#* }"
       line="${line#"${line%%[![:space:]]*}"}"
       # EVERY option word, not just the first: `declare -x -r WORKSPACE=...` and
