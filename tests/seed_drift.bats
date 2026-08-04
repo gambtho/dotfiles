@@ -376,21 +376,24 @@ sd_cap_fixture() {
 }
 
 @test "sd_window finds a far window while the search stays under the parse-attempt cap" {
-  # 9 * 9 + 1 = 82 attempts, well under the cap: the window is found.
-  sd_cap_fixture 8 8
-  sd_source sd_window "$FIX/f.sh" "$FIX/f.sh.scan" 10
+  # 41 * 41 + 1 = 1682 attempts, just under SD_MAX_PARSE_ATTEMPTS=2000: the
+  # window is still found. Sized to bracket the cap from below rather than to
+  # sit comfortably away from it, so a reduction of the cap fails this test
+  # instead of passing silently.
+  sd_cap_fixture 40 40
+  sd_source sd_window "$FIX/f.sh" "$FIX/f.sh.scan" 42
   [ "$status" -eq 0 ]
-  [ "$output" = "1 20" ]
+  [ "$output" = "1 84" ]
 }
 
 @test "sd_window gives up with status 3 once the parse-attempt cap is reached" {
-  # Identical shape, only bigger: 21 * 21 + 1 = 442 attempts, so the winning
-  # pair sits past SD_MAX_PARSE_ATTEMPTS=400 and is never reached. The cap —
+  # Identical shape, only bigger: 45 * 45 + 1 = 2026 attempts, so the winning
+  # pair sits past SD_MAX_PARSE_ATTEMPTS=2000 and is never reached. The cap —
   # not exhaustion — is what ends this search, and it reports the same
   # status 3 the exhaustion path already uses, so it needs no new handling in
   # sd_extract or sd_check_seed.
-  sd_cap_fixture 20 20
-  sd_source sd_window "$FIX/f.sh" "$FIX/f.sh.scan" 22
+  sd_cap_fixture 44 44
+  sd_source sd_window "$FIX/f.sh" "$FIX/f.sh.scan" 46
   [ "$status" -eq 3 ]
 }
 
@@ -2061,9 +2064,9 @@ PYEOF
   } >"$TPL"
   {
     printf 'if true; then\n\n'
-    for n in $(seq 20); do printf '  echo p%s\n\n' "$n"; done
+    for n in $(seq 44); do printf '  echo p%s\n\n' "$n"; done
     printf '  ANCHOR=1\nfi\n\n'
-    for n in $(seq 20); do printf '  echo q%s\n\n' "$n"; done
+    for n in $(seq 44); do printf '  echo q%s\n\n' "$n"; done
   } >"$SEED"
 
   t7_run

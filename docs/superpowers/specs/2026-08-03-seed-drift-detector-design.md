@@ -164,7 +164,7 @@ the extracted text parses on its own**:
    last. Extract lines `[start of lo .. end of hi]` and test it with `bash -n`.
    The first pair that parses is the window. `(para, para)` is tried first, so a
    paragraph that already parses standalone is returned unchanged.
-3. The search is capped at **400 parse attempts** per anchor. If no pair parses
+3. The search is capped at **2000 parse attempts** per anchor. If no pair parses
    before the cap, or the pairs are exhausted first, the block is an
    **extraction error** (exit 2), never `ok`.
 
@@ -204,6 +204,20 @@ rather than O(paragraphs). The cap bounds the *error* path only — a window tha
 parses exits on its first success, and 58 of 59 corpus windows parse at the very
 first pair — so it costs a passing anchor nothing. It reports the same status
 the exhaustion path already did, so it needs no new handling downstream.
+
+**Why 2000 rather than a tight multiple of the measurement.** The worst
+plausible real shape measures ~280 attempts. The cap is set roughly 7x above
+that on purpose, because the two failure directions are not symmetric:
+exceeding the cap turns a *legitimate* block into a hard exit-2 ERROR, while
+overshooting costs only wasted `bash -n` invocations on a block that was going
+to fail anyway. The margin also absorbs the fact that the sweep is **not
+strictly smallest-window-first** — the inner loop always runs `hi` to `last`,
+so `(para, last)` is tried before `(para-1, para)`, and a backward-only case
+burns a full forward sweep per step. A diagonal by-window-size ordering would
+be more elegant and was deliberately declined: reordering changes which window
+an ambiguous anchor resolves to, and this ordering was verified against the real
+corpus by exhaustive old-vs-new comparison. Raising the cap is the cheap,
+behavior-preserving lever; reordering is not.
 
 ### Blank lines are formatting; the parse check is what makes extraction sound
 
@@ -328,18 +342,24 @@ and a small window compares very little. A "clean" verdict on a two-line window
 is close to meaningless: the tool would be silently wrong in exactly the one
 place everything else here is designed to be loud instead.
 
-Measured on the real five-seed corpus: 95 windows, 94 of which never grew past
-their starting paragraph (growth is near-inert), sizes ranging from **9 to 138
-lines**, median ~30. None fell at or below 8 lines. An earlier design proposed
-warning whenever the growth loop did not iterate; that was rejected because it
-would fire on 94 of the 95 windows — including a 109-line one — training the
-reader to ignore it. The concern (a window that proves too little) is real; the
-proxy (did it grow) was not measuring that. Warn on **size**, directly.
+Measured on the real five-seed corpus: **59 distinct windows** (the template's
+9 plus 50 across the five seeds), 58 of which parse at the very first pair the
+search tries — growth is near-inert — with sizes ranging from **9 to 109
+lines**, median **29**. None fell at or below 8 lines. An earlier design
+proposed warning whenever the growth loop did not iterate; that was rejected
+because it would fire on 58 of the 59 windows — including a 109-line one —
+training the reader to ignore it. The concern (a window that proves too little)
+is real; the proxy (did it grow) was not measuring that. Warn on **size**,
+directly.
 
-Re-measured after the pair-search correction above: the 138-line maximum was the
-runaway-to-EOF window, and the true maximum is 109. The **minimum is unchanged
-at 9**, which is the number `SD_THIN_WINDOW` is calibrated against, so the
-threshold is unaffected.
+Two figures in the project's history reconcile to those numbers. The count was
+first recorded as **95**, which counted window *comparisons* rather than
+distinct windows: the template's 9 windows were re-counted once per seed
+(9 x 5 = 45, plus the 50 seed windows). And the maximum was first recorded as
+**138 lines** — that was the runaway-to-EOF window described above, an artifact
+of the one-dimensional search, not a real block. The **minimum is unchanged at
+9**, which is the number `SD_THIN_WINDOW` is actually calibrated against, so
+neither correction moves the threshold.
 
 The tool now emits a note whenever an extracted window — template or seed,
 independently — is fewer than **`SD_THIN_WINDOW` (5) raw, pre-normalization

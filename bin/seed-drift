@@ -206,10 +206,29 @@ sd_para_range() {
 # parses at the very first pair the search tries — so this cap costs a passing
 # anchor nothing. It is only ever reached by an anchor whose block never
 # parses at all, where the search is O(paragraphs^2) `bash -n` invocations
-# rather than O(paragraphs). 400 is far above any real block's needs (the
-# largest real window is 109 lines inside a 961-line template) and still
-# bounds the failing case to a second or two.
-SD_MAX_PARSE_ATTEMPTS=400
+# rather than O(paragraphs).
+#
+# 2000 is deliberate headroom, not a measurement. The worst plausible real
+# shape was measured at ~280 attempts (the largest real window is 109 lines
+# inside a 961-line template), so this sits roughly 7x above it. The margin is
+# that wide on purpose, for two reasons:
+#
+#   1. The failure mode is asymmetric. Exceeding the cap turns a legitimate
+#      block into a hard exit-2 ERROR — a false alarm on good input. Going
+#      over costs only ~2000 `bash -n` invocations on a block that was going
+#      to fail anyway.
+#   2. The sweep below is NOT strictly smallest-window-first: the inner loop
+#      always runs `hi` to `last`, so (para, last) is tried before
+#      (para-1, para), and a backward-only case burns a full forward sweep per
+#      step. The attempt count therefore does not track window size, which is
+#      why the margin is set this wide rather than at a tight multiple of the
+#      ~280 measurement.
+#
+# Do not "tune" this down to hug the measurement. The ordering it compensates
+# for is deliberate — it was verified against the real corpus by exhaustive
+# old-vs-new window comparison, and reordering the search would change which
+# window an ambiguous anchor resolves to.
+SD_MAX_PARSE_ATTEMPTS=2000
 
 # Grows the window until the extracted fragment parses. The search is
 # two-dimensional — every (lo, hi) paragraph pair, `lo` walking down from the
@@ -680,6 +699,12 @@ sd_visit_candidates() {
     # so setting nullglob and walking away would silently change globbing in
     # the caller's shell. The restore sits after the loop, ahead of both
     # returns below, so no exit path from here leaks it.
+    #
+    # Not a trap. A `set -e` abort from inside the loop would still leak, and
+    # an ERR trap would not catch it without `set -E` — a larger change than
+    # this justifies. More to the point, sourcing this script already sets
+    # `e`, `u`, and pipefail in the caller unconditionally, on the success
+    # path, so an abort-only nullglob edge is not the marginal exposure here.
     local had_nullglob=0
     shopt -q nullglob && had_nullglob=1
     shopt -s nullglob
