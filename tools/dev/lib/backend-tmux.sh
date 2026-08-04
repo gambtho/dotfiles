@@ -88,12 +88,18 @@ dev_backend_apply_layout() {
       workdir="$worktree"
     fi
 
-    dev_tmux new-window -d -t "=$session_name:" -n "$name" -c "$workdir" "$pane_cmd" || return 1
-
     # Per window, never -g. pane-died fires only when remain-on-exit holds the
     # dead pane, so scenario 3's event fidelity depends on this; setting it
     # globally would leave every ordinary tmux pane the user has hanging dead.
-    dev_tmux set-window-option -t "=$session_name:=$name" remain-on-exit on || return 1
+    # new-window and set-window-option must reach the server as ONE tmux
+    # invocation: as two separate calls, a pane_cmd fast enough to exit
+    # between them (a failing container command, or a bats stub) races
+    # tmux's default no-remain-on-exit behavior, which destroys the window
+    # before the second call can protect it -- "no such window" on the
+    # set-window-option that follows. The literal ';' argument is tmux's own
+    # command separator, chaining both into a single atomic request.
+    dev_tmux new-window -d -t "=$session_name:" -n "$name" -c "$workdir" "$pane_cmd" \
+      ';' set-window-option -t "=$session_name:=$name" remain-on-exit on || return 1
     created=$((created + 1))
 
     ev_id=$(dev_event_id_random)
