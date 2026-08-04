@@ -901,10 +901,18 @@ if [ "$SEED_ALREADY_CURRENT" -eq 0 ]; then
   # A failed install must NOT be stamped: the sentinel is the only thing standing
   # between a half-populated ~/.claude/plugins and a permanent skip on every later
   # launch. Record the failure and leave the sentinel alone so the next run retries.
+  # Every claude invocation below goes through as_user, which is non-interactive
+  # and so never sources ~/.zshrc — the only place ~/.local/bin joins PATH. Without
+  # this the seed cannot see the claude binary the always-run block just installed:
+  # the probe below answers "no", marketplaces go unregistered, and MARKETPLACE_OK=0
+  # leaves the sentinel unstamped, so EVERY launch re-runs this block and exits 1.
+  # Export it to the child rather than the seed's own PATH, so only the calls that
+  # need the CLI are affected.
+  SEED_PATH="$SEED_HOME/.local/bin:$PATH"
   MARKETPLACE_OK=1
   if [ -x "$DOTFILES_HOME/ai/marketplace/install.sh" ]; then
     echo "🌱 seed: installing my@guarzo marketplace + plugin"
-    as_user bash "$DOTFILES_HOME/ai/marketplace/install.sh" || {
+    as_user env PATH="$SEED_PATH" bash "$DOTFILES_HOME/ai/marketplace/install.sh" || {
       MARKETPLACE_OK=0
       echo "⚠️  seed: marketplace install failed — NOT stamping sentinel; next launch retries"
     }
@@ -926,7 +934,7 @@ if [ "$SEED_ALREADY_CURRENT" -eq 0 ]; then
   # `command -v claude` gets "no" while the user's shell finds it fine. And an
   # unavailable CLI clears MARKETPLACE_OK rather than silently skipping — skipping
   # stamps the sentinel, and the gated block then never retries the registration.
-  if as_user sh -c 'command -v claude >/dev/null 2>&1'; then
+  if as_user env PATH="$SEED_PATH" sh -c 'command -v claude >/dev/null 2>&1'; then
     mp_registry="$CLAUDE_HOME/plugins/known_marketplaces.json"
     while read -r mp_name mp_repo; do
       [ -n "$mp_name" ] || continue
@@ -941,7 +949,7 @@ if [ "$SEED_ALREADY_CURRENT" -eq 0 ]; then
         continue
       fi
       echo "🌱 seed: registering marketplace $mp_name ($mp_repo)"
-      as_user claude plugin marketplace add "$mp_repo" >/dev/null 2>&1 || {
+      as_user env PATH="$SEED_PATH" claude plugin marketplace add "$mp_repo" >/dev/null 2>&1 || {
         MARKETPLACE_OK=0
         echo "⚠️  seed: could not register $mp_repo (needs network) — NOT stamping sentinel"
       }
