@@ -594,3 +594,34 @@ esac
   [ -z "$(dev_open_events 'select(.event == "workspace.vanished") | .id')" ]
   dev_tmux kill-server || true
 }
+
+@test "the real dispatcher resolves dev_open_attach when attaching to a live session" {
+  # bin/dev sources exactly one command file per verb (dev_commands.bats:66-79),
+  # so a real `dev attach` never gets open.sh's functions for free the way
+  # dev_open_load_libs does. Only invoking the staged dispatcher end to end --
+  # not dev_cmd_attach in-process -- can catch attach.sh calling a function
+  # open.sh defines.
+  setup_dev_test
+  stage_dev_root
+  make_fixture_repo "proj"
+  dev_open_load_libs
+  local dir ws_id session record
+  dir=$(dev_open_fixture demo)
+  ws_id=$(dev_resolve_workspace_id "$dir")
+  session=demo
+  record=$(dev_state_new "$ws_id" demo demo "$dir")
+  printf '%s\n' "$record" >"$(dev_state_path "$ws_id")"
+  dev_backend_create "$session" "$ws_id" demo "$dir"
+  dev_open_session_index_write "$ws_id" demo "$session" "$dir"
+
+  run "$TEST_ROOT/root/bin/dev" attach demo
+  # A missing source of dev_open_attach dies at "dev_open_attach: command not
+  # found" (exit 127) even though the session above is alive and attachable.
+  # Getting past that into tmux's own "not a terminal" attach failure (there is
+  # no tty under `run`) proves dev_open_attach was resolved and its exec ran.
+  [ "$status" -ne 127 ]
+  [[ "$output" != *"command not found"* ]]
+  [[ "$output" == *"not a terminal"* ]]
+
+  dev_tmux kill-server || true
+}

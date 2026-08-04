@@ -1,6 +1,15 @@
 # shellcheck shell=bash
 # dev attach — attach only. Never creates, never repairs, takes no operation lock.
 
+# The dispatcher sources exactly one command file per verb (bin/dev), but
+# attaching delegates the actual exec-into-tmux step to open.sh's
+# dev_open_attach. Guarded so a double-source (the test helper sources both
+# files) stays harmless -- open.sh only defines functions.
+if ! declare -F dev_open_attach >/dev/null 2>&1; then
+  # shellcheck source=/dev/null
+  source "$DEV_DOTFILES_ROOT/tools/dev/commands/open.sh"
+fi
+
 dev_cmd_attach() {
   local arg="${1:-}"
   if [[ $# -gt 1 || "$arg" == -* ]]; then
