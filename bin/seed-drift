@@ -584,8 +584,8 @@ sd_check_seed() {
   sd_tmp tnorm || return 2
   sd_tmp snorm || return 2
   # Allocated once per seed, not once per block: the diff output is consumed
-  # before the next iteration overwrites it, so nine blocks do not need
-  # eighteen files. Same reuse as tnorm/snorm/sscan above.
+  # before the next iteration overwrites it, so N blocks do not need 2N
+  # files. Same reuse as tnorm/snorm/sscan above.
   sd_tmp behind || return 2
   sd_tmp ahead || return 2
   # Parsed to a file, not piped into the loop through `< <(sd_parse_doc …)`: a
