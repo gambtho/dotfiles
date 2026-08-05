@@ -39,7 +39,7 @@ Run: `git rev-parse --show-toplevel` and store as `ROOT`. All paths below are re
 
 ### 0d: Worktrees
 
-This repo's workflow puts feature work in linked worktrees under `.claude/worktrees/<name>/`, so the spec and plan under review usually live in a worktree, not the main checkout. Passing `-C {ROOT}` handles this — verified behavior when `ROOT` is a linked worktree:
+This repo's workflow puts feature work in linked worktrees under `.claude/worktrees/<name>/`, so the spec and plan under review usually live in a worktree, not the main checkout. Passing `-C "$ROOT"` handles this — verified behavior when `ROOT` is a linked worktree:
 
 - Codex resolves `git rev-parse --show-toplevel` to the **worktree** path and `git branch --show-current` to the **worktree's branch**, not `main`.
 - Codex reads the **working tree**, including uncommitted files. You can review a plan before it is committed.
@@ -103,7 +103,15 @@ Codex review — {MODE}
 
 ## Phase 2: Build the Review Prompt
 
-Write the prompt to `/tmp/codex-review-prompt-$(date +%s).md`. Store the path as `PROMPT_FILE` — you will delete it in Phase 5.
+Create a private directory for this run and keep both temp files inside it:
+
+```
+WORKDIR=$(mktemp -d /tmp/codex-review-XXXXXX)
+```
+
+Store `WORKDIR`, then write the prompt to `"$WORKDIR/prompt.md"` as `PROMPT_FILE`. Phase 5 removes the whole directory.
+
+Use `mktemp -d`, not a `$(date +%s)` suffix. Second resolution is not enough: you routinely have several worktrees open, and two reviews started in the same second would share a prompt and an output file — one run reading another's prompt, or deleting its result.
 
 Pass the docs to Codex **by path, not by content**. Codex has read-only repo access and reviews far better when it can open the files, follow references, and check claims against real code.
 
@@ -145,10 +153,12 @@ A spec is usually reviewed **early**, before any of it is built. Tell Codex expl
 - Step ordering and hidden dependencies — does any step need something a later step provides?
 - Can each step land independently, or does the tree break in the middle?
 - Does every step carry real verification, or does it hand-wave "add tests"?
-- **Do the files, paths, symbols, and commands the plan cites actually exist?** Check them. This is the single most valuable thing you can do here.
+- **Do the files, paths, symbols, and commands the plan cites as *already existing* actually exist?** Check them. This is the single most valuable thing you can do here.
 - Missing steps: migration, rollback, docs, config, cleanup of the thing being replaced.
 - Steps that are under-specified to the point of ambiguity, and steps so over-specified they'll be wrong on contact.
 - Blast radius: what else in the repo does this touch that the plan doesn't mention?
+
+The same exemption applies as for specs, and it matters more here: a plan's job is to list artifacts it will **create**. Tell Codex that files, paths, symbols, and commands a step proposes creating are not defects — the check is for references the plan treats as pre-existing ground truth. When it's ambiguous whether a step creates or consumes something, say so as a `[Nit|LOW]` ambiguity finding rather than asserting the file is missing.
 
 **PAIR rubric** (PAIR mode only — this is the highest-value section, put it first):
 
@@ -187,13 +197,15 @@ Severity is `Blocking` (would produce wrong or broken work), `Concern` (worth re
 ## Phase 3: Run Codex
 
 ```
-codex exec --sandbox read-only -C {ROOT} --color never -o /tmp/codex-review-out-{ts}.md - < {PROMPT_FILE}
+codex exec --sandbox read-only -C "$ROOT" --color never -o "$WORKDIR/review.md" - < "$PROMPT_FILE"
 ```
 
-Store the output path as `OUT_FILE`.
+Store `"$WORKDIR/review.md"` as `OUT_FILE`.
+
+**Quote every path substitution**, as above. `ROOT` is a worktree path and can contain spaces; unquoted it breaks `-C`, `-o`, and the input redirect — and unquoted cleanup in Phase 5 then targets the wrong thing.
 
 - `--sandbox read-only` — Codex can read the whole repo but cannot modify it. Do **not** loosen this; a reviewer has no reason to write.
-- `-C {ROOT}` — pins the working root to the current checkout/worktree.
+- `-C "$ROOT"` — pins the working root to the current checkout/worktree.
 - `-o` — writes only the final message, so you get the review without the reasoning transcript.
 - `-` — reads the prompt from stdin, avoiding shell-quoting problems with a long prompt.
 
@@ -240,17 +252,33 @@ Ask which findings the user wants folded into the doc. Then:
 
 If the user wants none applied, that is a complete and correct outcome — stop cleanly.
 
+### 4c: Warn Before Editing Outside a Worktree
+
+Applying findings **writes to a spec or plan**, which this repo's working agreement counts as feature work — and feature work belongs in a linked worktree.
+
+Before the first edit, check whether `ROOT` is under `.claude/worktrees/`. If it is not, you are about to write to the main checkout. Say so and get explicit confirmation:
+
+```text
+Heads up: applying these findings edits {doc} in the main checkout ({ROOT}),
+not a linked worktree. The working agreement puts spec and plan writes in a
+worktree. Apply here anyway, or move to a worktree first?
+```
+
+Warn and confirm — do **not** hard-stop. Reviewing is read-only and legitimately useful from any checkout, and a hard gate would also block the ordinary case of amending a doc that has already merged to `main`. The user decides; a hard rule cannot tell "starting feature work" apart from "fixing a stale line in a merged plan."
+
+Once confirmed, proceed. Do not re-ask on subsequent edits in the same run.
+
 ---
 
 ## Phase 5: Clean Up
 
-Remove the temp files:
+Remove the run directory:
 
 ```
-rm -f {PROMPT_FILE} {OUT_FILE}
+rm -rf "$WORKDIR"
 ```
 
-Use `rm -f` — plain `rm` silently no-ops in this shell.
+Quote the path, and use `-f`/`-rf` — plain `rm` silently no-ops in this shell. Because `WORKDIR` came from `mktemp -d`, this cannot collide with another in-flight review's files.
 
 ---
 
