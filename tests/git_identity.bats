@@ -433,3 +433,61 @@ be_default() {
   run cat "$TEST_ROOT/lfs-stdin.txt"
   [[ "$output" == *"refs/heads/main"* ]]
 }
+
+@test "doctor reports the default identity for an unmapped owner" {
+  setup_shim_repo "$TEST_ROOT/r" https://github.com/kubernetes-sigs/repo.git
+  cd "$TEST_ROOT/r"
+  run "$REPO_ROOT/bin/git-identity"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"default"* ]]
+}
+
+@test "doctor exits 1 on an invalid owner map" {
+  setup_shim_repo "$TEST_ROOT/r" https://github.com/guarzo/repo.git
+  printf 'guarzo guarzo\nguarzo default\n' >"$DOTFILES/core/git/identity-owners"
+  cd "$TEST_ROOT/r"
+  run "$REPO_ROOT/bin/git-identity"
+  [ "$status" -eq 1 ]
+}
+
+@test "doctor exits 3 for a mapped but unprovisioned identity" {
+  setup_shim_repo "$TEST_ROOT/r" https://github.com/guarzo/repo.git
+  cd "$TEST_ROOT/r"
+  run "$REPO_ROOT/bin/git-identity"
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"NOT PROVISIONED"* ]]
+}
+
+@test "doctor exits 2 for a mixed-owner repository" {
+  setup_shim_repo "$TEST_ROOT/r" https://github.com/gambtho/repo.git
+  git -C "$TEST_ROOT/r" remote add upstream https://github.com/guarzo/repo.git
+  cd "$TEST_ROOT/r"
+  run "$REPO_ROOT/bin/git-identity"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"MIXED"* ]]
+}
+
+@test "doctor exits 5 for a guarzo ssh remote" {
+  setup_shim_repo "$TEST_ROOT/r" git@github.com:guarzo/repo.git
+  provision_guarzo_files
+  cd "$TEST_ROOT/r"
+  run "$REPO_ROOT/bin/git-identity"
+  [ "$status" -eq 5 ]
+  [[ "$output" == *"SSH"* ]]
+}
+
+@test "doctor exits 4 when the token is invalid" {
+  setup_shim_repo "$TEST_ROOT/r" https://github.com/guarzo/repo.git
+  provision_guarzo_files
+  rm -f "$STUB_BIN/real/gh"
+  stub_command gh 'echo "token invalid" >&2; exit 1'
+  cd "$TEST_ROOT/r"
+  run "$REPO_ROOT/bin/git-identity"
+  [ "$status" -eq 4 ]
+  [[ "$output" == *"TOKEN"* ]]
+}
+
+@test "doctor uses no bash-4-only constructs" {
+  run grep -nE '(^|[[:space:]])(mapfile|readarray)([[:space:]]|$)|declare -g?A' "$REPO_ROOT/bin/git-identity"
+  [ "$status" -ne 0 ]
+}

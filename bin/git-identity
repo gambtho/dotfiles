@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+# Report which GitHub identity applies to the current repository and whether it
+# is usable. Every failure mode in this design is silent -- a missing include,
+# an unmapped remote, an expired token all present as "you are quietly the
+# default identity" -- so this turns that into one line.
+#
+# BASH 3.2 ONLY (see core/git/identity-lib.sh).
+set -uo pipefail
+
+IDENTITY_DOTFILES_ROOT="${DOTFILES:-$HOME/.dotfiles}"
+# shellcheck source=/dev/null
+. "$IDENTITY_DOTFILES_ROOT/core/git/identity-lib.sh"
+
+if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  printf 'not inside a git repository\n'
+  exit 0
+fi
+
+identity_validate_map || exit 1
+
+owners=""
+owner_count=0
+while IFS= read -r o; do
+  [ -n "$o" ] || continue
+  owners="$owners $o"
+  owner_count=$((owner_count + 1))
+done < <(identity_repo_owners)
+
+if [ "$owner_count" -eq 0 ]; then
+  printf 'owner:    <unmapped>\nidentity: default (stock gh config)\n'
+  exit 0
+fi
+
+if [ "$owner_count" -gt 1 ]; then
+  printf 'owner:   %s\n' "$owners"
+  printf 'identity: MIXED -- this repository is not routed.\n'
+  printf 'Use an explicit GH_CONFIG_DIR, or remove one remote.\n'
+  exit 2
+fi
+
+owner="${owners# }"
+slug="$(identity_owner_slug "$owner")"
+printf 'owner:    %s\nidentity: %s\n' "$owner" "$slug"
+
+if [ "$slug" = default ]; then
+  printf 'email:    %s\n' "$(git config user.email 2>/dev/null || echo '<unset>')"
+  exit 0
+fi
+
+if ! identity_slug_provisioned "$slug"; then
+  printf 'status:   NOT PROVISIONED\n'
+  [ -e "$(identity_slug_configfile "$slug")" ] ||
+    printf '  missing: %s\n' "$(identity_slug_configfile "$slug")"
+  [ -d "$(identity_slug_configdir "$slug")" ] ||
+    printf '  missing: %s\n' "$(identity_slug_configdir "$slug")"
+  exit 3
+fi
+
+configdir="$(identity_slug_configdir "$slug")"
+printf 'email:    %s\n' "$(git config user.email 2>/dev/null || echo '<unset>')"
+printf 'key:      %s\n' "$(git config user.signingKey 2>/dev/null || echo '<unset>')"
+printf 'ghconfig: %s\n' "$configdir"
+
+# SSH transport is deliberately unsupported: git never invokes a credential
+# helper for it, and user.signingKey does not select an authentication key.
+while IFS= read -r url; do
+  case "$url" in
+    https://*) continue ;;
+  esac
+  if [ "$(identity_url_owner "$url" 2>/dev/null || true)" = "$owner" ]; then
+    printf 'status:   UNSUPPORTED -- SSH remote for a routed identity (%s)\n' "$url"
+    printf 'Re-point the remote at its https:// URL.\n'
+    exit 5
+  fi
+done < <(git config --get-regexp '^remote\..*\.url$' 2>/dev/null | cut -d' ' -f2-)
+
+if ! GH_CONFIG_DIR="$configdir" gh auth status >/dev/null 2>&1; then
+  printf 'status:   TOKEN INVALID OR MISSING\n'
+  printf 'Run: GH_CONFIG_DIR=%s gh auth login\n' "$configdir"
+  exit 4
+fi
+
+printf 'status:   OK\n'
