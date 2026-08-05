@@ -871,12 +871,25 @@ run_map_setup() {
 
 @test "bootstrap does not glob-expand the secondaries answer" {
   setup_map_boot mb4
-  run_map_setup 'y\nguarzo\n*\n'
+  # Run from a directory whose only entry is a VALID owner name. Without this,
+  # '*' expands to repo files like AGENTS.md, validation rejects them, and the
+  # map is absent either way -- the test would pass even with expansion enabled.
+  # With 'acme' as the sole entry, an expansion produces a map that validates
+  # and installs, so the assertion below genuinely detects the bug.
+  local glob_dir="$TEST_ROOT/glob-input"
+  mkdir -p "$glob_dir"
+  : >"$glob_dir/acme"
+  # The cd must happen AFTER sourcing: bin/bootstrap cds to its own repo root at
+  # source time, so any directory set before the source call is discarded.
+  run env BOOTSTRAP_SOURCE_ONLY=1 HOME="$HOME" bash -c "
+    source '$REPO_ROOT/bin/bootstrap'
+    cd '$glob_dir'
+    NON_INTERACTIVE=false
+    DOTFILES_ROOT='$MAPBOOT'
+    printf 'y\nguarzo\n*\n' | setup_identity_map
+  "
   [ "$status" -eq 0 ]
-  # '*' is not a valid owner, so it must be rejected -- never expanded to
-  # surrounding filenames such as 'core'.
   assert_file_absent "$MAPBOOT/core/git/identity-owners.local"
-  [[ "$output" != *"core core"* ]]
 }
 
 @test "bootstrap refuses to install over a non-regular map path" {
