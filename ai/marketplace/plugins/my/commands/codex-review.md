@@ -1,0 +1,263 @@
+---
+name: codex-review
+description: Get a second opinion from Codex on a spec or implementation plan — reviews the doc you have been working on, against the actual code
+argument-hint: "[path — defaults to the doc most recently discussed in this session] [--with-spec | --with-plan]"
+allowed-tools: Bash(codex --version), Bash(codex exec:*), Bash(git rev-parse:*), Bash(ls:*), Bash(date:*), Bash(mkdir:*), Bash(rm -f:*), Read, Write, Edit, Glob, Grep
+---
+
+# Codex Review — Second Opinion on a Spec or Plan
+
+You are handing a design doc or implementation plan to Codex for an independent review, then bringing its findings back for the user to act on. Codex reads the repository itself, so it reviews the doc **against the actual code**, not just as prose.
+
+**Default target**: the document this session has been working on. **One doc, reviewed on its own rubric** — reviewing a spec should never wait on a plan existing.
+
+**Arguments**: $ARGUMENTS (all optional — a path, two paths, or `--with-spec` / `--with-plan`)
+
+---
+
+## Phase 0: Preflight
+
+### 0a: Verify Codex Is Available
+
+Run: `codex --version`
+
+If it fails, print this and **STOP**:
+
+```
+ERROR: Codex CLI not found. Install it first (see ~/.dotfiles/ai/codex/install.sh).
+```
+
+### 0b: Never Prefix the `codex` Invocation
+
+`codex` is a **zsh function**, not just a binary. It injects `-c openai_base_url=...` when the vekil proxy is running. Any wrapper that execs the binary directly — `timeout codex ...`, `env codex ...`, `xargs codex ...`, a `#!/bin/sh` script — bypasses the function and fails with `401 Unauthorized` against `api.openai.com`.
+
+Call `codex` as the **first word** of the command. If you need a timeout, let the Bash tool's own `timeout` parameter handle it.
+
+### 0c: Resolve the Repository Root
+
+Run: `git rev-parse --show-toplevel` and store as `ROOT`. All paths below are relative to it, and `ROOT` is what gets passed to `codex -C`.
+
+### 0d: Worktrees
+
+This repo's workflow puts feature work in linked worktrees under `.claude/worktrees/<name>/`, so the spec and plan under review usually live in a worktree, not the main checkout. Passing `-C {ROOT}` handles this — verified behavior when `ROOT` is a linked worktree:
+
+- Codex resolves `git rev-parse --show-toplevel` to the **worktree** path and `git branch --show-current` to the **worktree's branch**, not `main`.
+- Codex reads the **working tree**, including uncommitted files. You can review a plan before it is committed.
+- Git works inside the worktree even under `--sandbox read-only`, despite `.git` being a file pointing into the main checkout's `.git/worktrees/`.
+
+Two things follow:
+
+1. **Never hardcode the main checkout.** Always derive `ROOT` from `git rev-parse --show-toplevel` in the session's current directory. A review run against the wrong tree reads stale docs and stale code, and every finding it produces is suspect.
+2. **State which tree you reviewed.** If `ROOT` is under `.claude/worktrees/`, include the worktree name and branch in the Phase 1c confirmation, so the user can tell at a glance that Codex looked at the right copy.
+
+To review a doc in a *different* worktree than the session's, pass its path explicitly and set `ROOT` to that worktree's root — not the session's. Reviewing a plan from tree A against the code in tree B is the one failure mode here that produces confidently wrong findings.
+
+---
+
+## Phase 1: Resolve the Target
+
+**Default to one document.** Reviewing a spec early — before any plan exists — is the common case, not a degraded one. Do not go looking for a plan to pair with unless asked.
+
+Docs usually live at `docs/superpowers/specs/{date}-{slug}-design.md` and `docs/superpowers/plans/{date}-{slug}.md`, sharing a `{date}-{slug}` stem, but any markdown path is a valid target.
+
+### 1a: Pick the Document
+
+Work down this list and stop at the first that resolves:
+
+1. **A path in the arguments.** Two paths → PAIR mode, first is the spec. Verify each exists; **STOP** with the path that failed if not.
+2. **The document this session has been working on** — the spec or plan most recently written, edited, or discussed in this conversation. This is the default and it is almost always right: you know which doc is live, and the filesystem does not. If several are in play, pick the most recently touched and name it in the confirmation so a wrong guess is visible immediately.
+3. **Newest on disk**, only if the session gives you nothing to go on: `ls docs/superpowers/specs/ docs/superpowers/plans/`, take the newest by the leading `{date}` (ties: prefer the spec). Say explicitly that you fell back to date order — that is a guess, and the user should see it as one.
+4. Nothing found → **STOP**:
+   ```
+   No spec or plan identified. Pass a path explicitly:
+     /my:codex-review path/to/doc.md
+   ```
+
+Classify the resolved doc: under `specs/` or ending in `-design.md` → **SPEC**; otherwise → **PLAN**.
+
+### 1b: Pairing Is Opt-In
+
+Cross-check the plan against its spec **only** when the user asks, via either:
+
+- two paths in the arguments, or
+- `--with-spec` / `--with-plan` — find the sibling by stem: from `specs/{stem}-design.md` look for `plans/{stem}.md`, and vice versa. If the exact stem misses, retry on the slug alone, ignoring the date prefix — the two docs are often written on different days.
+
+If the flag is given and no sibling is found, say so and review the single doc rather than stopping. If no flag is given, **do not** pull in a sibling even when one exists on disk — a stale plan from an earlier iteration produces confident, wrong traceability findings.
+
+| Target | Mode | What Codex checks |
+|--------|------|-------------------|
+| One spec | **SPEC** | Design rubric |
+| One plan | **PLAN** | Plan rubric |
+| Both (opt-in) | **PAIR** | Both rubrics, **plus** traceability between them |
+
+### 1c: Confirm Before Spending Tokens
+
+```
+Codex review — {MODE}
+  tree: {ROOT}  {"(worktree {name}, branch {branch})" if under .claude/worktrees/}
+  doc:  {path}   {"— picked from this session" | "— newest on disk (guess)"}
+  {"spec:/plan:" lines instead, in PAIR mode}
+```
+
+---
+
+## Phase 2: Build the Review Prompt
+
+Write the prompt to `/tmp/codex-review-prompt-$(date +%s).md`. Store the path as `PROMPT_FILE` — you will delete it in Phase 5.
+
+Pass the docs to Codex **by path, not by content**. Codex has read-only repo access and reviews far better when it can open the files, follow references, and check claims against real code.
+
+The prompt has four parts:
+
+### 2a: Role
+
+```
+You are reviewing a design document / implementation plan for this repository.
+You are a REVIEWER, not an implementer. Do not write, edit, or create any files.
+Read whatever you need from the repo to check the document's claims against the
+actual code — that cross-check is the point of this review.
+
+Documents under review:
+  SPEC: {spec_path}   (omit this line if none)
+  PLAN: {plan_path}   (omit this line if none)
+```
+
+### 2b: Rubric
+
+Include the section(s) matching the mode.
+
+**SPEC rubric** (include in SPEC and PAIR modes):
+
+- Does the design actually solve the stated problem? Any requirement it silently drops?
+- Are the alternatives considered, and are the stated reasons for rejecting them sound?
+- Architecture and ownership boundaries — does this put logic in the right component?
+- Data model, persistence, migration, and backward compatibility.
+- Security and privacy implications.
+- Failure modes, concurrency, and partial-failure behavior.
+- Observability — will anyone be able to tell when this breaks?
+- **Anything in the repository that contradicts the design.** Cite `file:line`.
+- Scope creep: parts of the design that solve a problem nobody has.
+
+A spec is usually reviewed **early**, before any of it is built. Tell Codex explicitly: files, symbols, and commands the spec *proposes creating* are not defects — do not report them as missing. Only flag a conflict when the design contradicts something that already exists.
+
+**PLAN rubric** (include in PLAN and PAIR modes):
+
+- Step ordering and hidden dependencies — does any step need something a later step provides?
+- Can each step land independently, or does the tree break in the middle?
+- Does every step carry real verification, or does it hand-wave "add tests"?
+- **Do the files, paths, symbols, and commands the plan cites actually exist?** Check them. This is the single most valuable thing you can do here.
+- Missing steps: migration, rollback, docs, config, cleanup of the thing being replaced.
+- Steps that are under-specified to the point of ambiguity, and steps so over-specified they'll be wrong on contact.
+- Blast radius: what else in the repo does this touch that the plan doesn't mention?
+
+**PAIR rubric** (PAIR mode only — this is the highest-value section, put it first):
+
+- **Traceability**: list every requirement in the spec that has no corresponding step in the plan.
+- **Scope creep**: list every plan step with no basis in the spec.
+- **Contradictions**: places where the plan's approach diverges from the design without saying so.
+
+### 2c: Repository Conventions
+
+If `CLAUDE.md` or `AGENTS.md` exists at `ROOT`, tell Codex to read it and treat it as authoritative for this repo's conventions.
+
+### 2d: Output Contract
+
+```
+Return your review in exactly this format and nothing else:
+
+VERDICT: SHIP | REVISE | RETHINK
+
+FINDINGS:
+- [Blocking|HIGH] {doc}:{section} — {what is wrong and why it matters}
+- [Concern|MEDIUM] {doc}:{section} — {...}
+- [Nit|LOW] {doc}:{section} — {...}
+
+COVERAGE GAPS:            (PAIR mode only; omit the section otherwise)
+- {spec requirement} — not addressed by any plan step
+- {plan step} — no basis in the spec
+
+SUMMARY:
+{3-5 sentences: is this doc ready to build from, and what is the biggest risk}
+```
+
+Severity is `Blocking` (would produce wrong or broken work), `Concern` (worth resolving before starting), or `Nit` (author's discretion). Confidence is `HIGH` / `MEDIUM` / `LOW`. Tell Codex to **prefer few high-confidence findings over many speculative ones**, and to cite `file:line` for every claim about existing code.
+
+---
+
+## Phase 3: Run Codex
+
+```
+codex exec --sandbox read-only -C {ROOT} --color never -o /tmp/codex-review-out-{ts}.md - < {PROMPT_FILE}
+```
+
+Store the output path as `OUT_FILE`.
+
+- `--sandbox read-only` — Codex can read the whole repo but cannot modify it. Do **not** loosen this; a reviewer has no reason to write.
+- `-C {ROOT}` — pins the working root to the current checkout/worktree.
+- `-o` — writes only the final message, so you get the review without the reasoning transcript.
+- `-` — reads the prompt from stdin, avoiding shell-quoting problems with a long prompt.
+
+This takes a few minutes on a substantial plan. If the Bash call times out, say so and offer to re-run — do **not** silently report a partial review.
+
+**If Codex errors:**
+
+| Error | Meaning | Action |
+|-------|---------|--------|
+| `401 Unauthorized` on `api.openai.com` | The zsh wrapper was bypassed (Phase 0b) | Re-run with `codex` as the first word |
+| Connection refused to `172.17.0.1:1337` | Vekil proxy is down | Tell the user; do not fall back to a direct API call |
+| Codex reports `main` as the branch, or can't find the doc | `-C` pointed at the main checkout, not the worktree (Phase 0d) | Re-derive `ROOT` and re-run |
+| Git commands fail inside Codex, in a worktree only | Sandbox can't reach `.git/worktrees/` in the main checkout | Re-run with `--add-dir {main checkout}/.git`; report if that's needed, it's a regression |
+| Non-zero exit, no output file | Run failed | Report the stderr tail verbatim; do not fabricate a review |
+
+Then read `OUT_FILE` with the Read tool.
+
+---
+
+## Phase 4: Report and Offer to Apply
+
+### 4a: Report
+
+Present Codex's review in the conversation, grouped by severity, Blocking first. Keep its wording for the findings themselves — the value here is an independent voice, not your paraphrase.
+
+Then add your own short assessment, clearly separated:
+
+```
+## My take
+{Where you agree, where you don't, and why. Flag any finding you believe is
+a false positive — you have the conversation context Codex lacks.}
+```
+
+Be honest when Codex is right about something you missed. Be equally direct when it's wrong: a finding that misreads the repo is worth saying so, with the `file:line` that disproves it.
+
+### 4b: Offer to Apply
+
+Ask which findings the user wants folded into the doc. Then:
+
+- Edit **only** the spec/plan markdown files. Never touch source code from this command — if a finding implies a code change, it belongs in a plan step, not an edit here.
+- Apply only the findings the user accepted. Do not sneak in the rest.
+- Preserve the doc's existing structure and voice; you are amending it, not rewriting it.
+- After editing, show a summary of what changed in each doc.
+
+If the user wants none applied, that is a complete and correct outcome — stop cleanly.
+
+---
+
+## Phase 5: Clean Up
+
+Remove the temp files:
+
+```
+rm -f {PROMPT_FILE} {OUT_FILE}
+```
+
+Use `rm -f` — plain `rm` silently no-ops in this shell.
+
+---
+
+## Important Notes
+
+- **Codex reviews, Claude decides.** This command produces a second opinion, not a verdict. Conflicting findings are useful information, not a problem to resolve by deferring.
+- Never report a review you did not actually receive. If the run failed, say it failed.
+- Do not run builds, tests, or linters — Codex is reading, not verifying.
+- One target per run. Reviewing a spec early, before a plan exists, is the normal path — not a reduced one.
+- This command is intentionally **not** symlinked into `prompts/` — that surface is for Codex, and pointing Codex at a command that calls Codex is a loop with no upside.
