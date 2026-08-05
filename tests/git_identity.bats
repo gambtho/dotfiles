@@ -133,3 +133,112 @@ EOF
   run grep -Fq 'GH_CONFIG_DIR=$HOME/.gh-guarzo' "$template"
   [ "$status" -eq 0 ]
 }
+
+setup_shim_repo() {
+  local dir="$1" url="$2"
+  git init -q "$dir"
+  git -C "$dir" remote add origin "$url"
+  export DOTFILES="$TEST_ROOT/dotfiles"
+  mkdir -p "$DOTFILES/core/git"
+  cp "$REPO_ROOT/core/git/identity-lib.sh" "$DOTFILES/core/git/"
+  cp "$MAP" "$DOTFILES/core/git/identity-owners"
+  unset IDENTITY_MAP_FILE
+  mkdir -p "$STUB_BIN/real"
+  printf '#!/usr/bin/env bash\necho "real gh: GH_CONFIG_DIR=[${GH_CONFIG_DIR:-unset}] args=$*"\n' \
+    >"$STUB_BIN/real/gh"
+  chmod +x "$STUB_BIN/real/gh"
+  export PATH="$STUB_BIN:$STUB_BIN/real:/usr/bin:/bin"
+}
+
+provision_guarzo_files() {
+  cat >"$HOME/.gitconfig.guarzo" <<'EOF'
+[user]
+	email = guarzo@example.invalid
+	signingKey = /keys/guarzo.pub
+EOF
+  mkdir -p "$HOME/.gh-guarzo"
+}
+
+@test "shim routes a guarzo repo to the guarzo gh config dir" {
+  setup_shim_repo "$TEST_ROOT/r" https://github.com/guarzo/repo.git
+  provision_guarzo_files
+  cd "$TEST_ROOT/r"
+  run "$REPO_ROOT/bin/gh" pr list
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"GH_CONFIG_DIR=[$HOME/.gh-guarzo]"* ]]
+}
+
+@test "shim delegates unchanged for a default-owner repo" {
+  setup_shim_repo "$TEST_ROOT/r" https://github.com/gambtho/repo.git
+  cd "$TEST_ROOT/r"
+  run "$REPO_ROOT/bin/gh" pr list
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"GH_CONFIG_DIR=[unset]"* ]]
+}
+
+@test "shim delegates unchanged outside a repository" {
+  setup_shim_repo "$TEST_ROOT/r" https://github.com/guarzo/repo.git
+  cd "$TEST_ROOT"
+  run "$REPO_ROOT/bin/gh" auth status
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"GH_CONFIG_DIR=[unset]"* ]]
+}
+
+@test "shim refuses a mixed-owner repo even when the secondary is unprovisioned" {
+  setup_shim_repo "$TEST_ROOT/r" https://github.com/gambtho/repo.git
+  git -C "$TEST_ROOT/r" remote add upstream https://github.com/guarzo/repo.git
+  cd "$TEST_ROOT/r"
+  run "$REPO_ROOT/bin/gh" pr merge
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"mixed"* ]]
+}
+
+@test "shim does not treat a mapped owner plus an unmapped org as mixed" {
+  setup_shim_repo "$TEST_ROOT/r" https://github.com/guarzo/repo.git
+  git -C "$TEST_ROOT/r" remote add fork https://github.com/kubernetes-sigs/repo.git
+  provision_guarzo_files
+  cd "$TEST_ROOT/r"
+  run "$REPO_ROOT/bin/gh" pr list
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"GH_CONFIG_DIR=[$HOME/.gh-guarzo]"* ]]
+}
+
+@test "shim refuses an unprovisioned guarzo repo and names the missing step" {
+  setup_shim_repo "$TEST_ROOT/r" https://github.com/guarzo/repo.git
+  cd "$TEST_ROOT/r"
+  run "$REPO_ROOT/bin/gh" pr list
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"not provisioned"* ]]
+}
+
+@test "shim refuses when the owner map is invalid" {
+  setup_shim_repo "$TEST_ROOT/r" https://github.com/guarzo/repo.git
+  printf 'guarzo guarzo\nguarzo default\n' >"$DOTFILES/core/git/identity-owners"
+  cd "$TEST_ROOT/r"
+  run "$REPO_ROOT/bin/gh" pr list
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"duplicate owner"* ]]
+}
+
+@test "shim passes through untouched when the caller set GH_CONFIG_DIR" {
+  setup_shim_repo "$TEST_ROOT/r" https://github.com/gambtho/repo.git
+  git -C "$TEST_ROOT/r" remote add upstream https://github.com/guarzo/repo.git
+  cd "$TEST_ROOT/r"
+  GH_CONFIG_DIR="$HOME/explicit" run "$REPO_ROOT/bin/gh" pr merge
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"GH_CONFIG_DIR=[$HOME/explicit]"* ]]
+}
+
+@test "shim does not recurse when reached through a symlink" {
+  setup_shim_repo "$TEST_ROOT/r" https://github.com/gambtho/repo.git
+  ln -s "$REPO_ROOT/bin/gh" "$STUB_BIN/gh"
+  cd "$TEST_ROOT/r"
+  run timeout 10 "$STUB_BIN/gh" pr list
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"real gh"* ]]
+}
+
+@test "shim uses no bash-4-only constructs" {
+  run grep -nE '(^|[[:space:]])(mapfile|readarray)([[:space:]]|$)|declare -g?A' "$REPO_ROOT/bin/gh"
+  [ "$status" -ne 0 ]
+}

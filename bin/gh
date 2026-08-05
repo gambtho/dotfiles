@@ -1,0 +1,114 @@
+#!/usr/bin/env bash
+# PATH shim routing `gh` to the identity owning the current repository's
+# remote. A shell function would reach only interactive zsh; scripts, editors,
+# Codex, and Claude Code's bash tool would all silently use the default
+# account -- the exact disagreement this design exists to prevent.
+#
+# BASH 3.2 ONLY: macOS ships bash 3.2, and tests/portability.bats rejects
+# Bash-4-only array builtins anywhere under bin/ -- including in comments,
+# since it matches the bare word. Keep that word out of this file.
+set -uo pipefail
+
+IDENTITY_DOTFILES_ROOT="${DOTFILES:-$HOME/.dotfiles}"
+# shellcheck source=/dev/null
+. "$IDENTITY_DOTFILES_ROOT/core/git/identity-lib.sh"
+
+# Resolve through symlinks. Comparing raw paths fails to recognise this script
+# when invoked through a link, and the exec below then re-enters this file
+# forever.
+identity_realpath() {
+  local target="$1" dir base
+  if readlink -f / >/dev/null 2>&1; then
+    readlink -f "$target"
+    return
+  fi
+  dir="$(cd "$(dirname "$target")" 2>/dev/null && pwd -P)" || return 1
+  base="$(basename "$target")"
+  while [ -L "$dir/$base" ]; do
+    target="$(readlink "$dir/$base")"
+    case "$target" in
+      /*) : ;;
+      *) target="$dir/$target" ;;
+    esac
+    dir="$(cd "$(dirname "$target")" 2>/dev/null && pwd -P)" || return 1
+    base="$(basename "$target")"
+  done
+  printf '%s/%s\n' "$dir" "$base"
+}
+
+find_real_gh() {
+  local self entry candidate rest="$PATH"
+  self="$(identity_realpath "${BASH_SOURCE[0]}")"
+  while [ -n "$rest" ]; do
+    entry="${rest%%:*}"
+    if [ "$entry" = "$rest" ]; then
+      rest=""
+    else
+      rest="${rest#*:}"
+    fi
+    [ -n "$entry" ] || continue
+    candidate="$entry/gh"
+    [ -x "$candidate" ] || continue
+    [ "$(identity_realpath "$candidate")" = "$self" ] && continue
+    printf '%s\n' "$candidate"
+    return 0
+  done
+  return 1
+}
+
+real_gh="$(find_real_gh)" || {
+  printf 'gh: no real gh found on PATH\n' >&2
+  exit 127
+}
+
+# An explicit GH_CONFIG_DIR means the caller has already chosen. Never
+# second-guess it -- it is the documented escape hatch for mixed-owner repos.
+if [ -n "${GH_CONFIG_DIR:-}" ]; then
+  exec "$real_gh" "$@"
+fi
+
+git rev-parse --is-inside-work-tree >/dev/null 2>&1 || exec "$real_gh" "$@"
+
+# Inside a git repository, an unusable map is a hard error. Falling through
+# would silently use the default account for a repo that may not be its.
+if ! identity_validate_map; then
+  printf 'gh: refusing to run -- the owner map is unusable (see above).\n' >&2
+  exit 5
+fi
+
+owners=""
+owner_count=0
+while IFS= read -r owner; do
+  [ -n "$owner" ] || continue
+  owners="$owners $owner"
+  owner_count=$((owner_count + 1))
+done < <(identity_repo_owners)
+
+if [ "$owner_count" -eq 0 ]; then
+  exec "$real_gh" "$@"
+fi
+
+if [ "$owner_count" -gt 1 ]; then
+  printf 'gh: refusing to run -- remotes under mixed mapped identities:%s\n' "$owners" >&2
+  printf 'gh: re-run with an explicit GH_CONFIG_DIR (and GH_REPO if needed).\n' >&2
+  exit 3
+fi
+
+owner="${owners# }"
+slug="$(identity_owner_slug "$owner")"
+
+if [ "$slug" = default ]; then
+  exec "$real_gh" "$@"
+fi
+
+if ! identity_slug_provisioned "$slug"; then
+  printf 'gh: identity "%s" is mapped but not provisioned.\n' "$slug" >&2
+  printf 'gh: expected %s and %s.\n' \
+    "$(identity_slug_configfile "$slug")" "$(identity_slug_configdir "$slug")" >&2
+  printf 'gh: run bin/git-identity for the remaining steps.\n' >&2
+  exit 4
+fi
+
+GH_CONFIG_DIR="$(identity_slug_configdir "$slug")"
+export GH_CONFIG_DIR
+exec "$real_gh" "$@"
