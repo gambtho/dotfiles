@@ -94,8 +94,46 @@ one shapes the design below.
 
 ## Design
 
-Five components. Routing is declarative and covers the common case; a guard
+Six components. Routing is declarative and covers the common case; a guard
 converts the cases routing cannot cover from silent to loud.
+
+### 0. The owner map (tracked, public)
+
+`core/git/identity-owners` is a tracked, non-secret table mapping a GitHub owner
+to an identity slug:
+
+```
+gambtho default
+guarzo  guarzo
+```
+
+It is the single source of truth for "which owners does this machine know about",
+and it exists **independently of provisioning**. That independence is what makes
+the rest of the design coherent, and its absence was a contradiction in an
+earlier draft: if knowledge of `guarzo` were inferred from the presence of
+`~/.gitconfig.guarzo`, the guard could never detect that the file was missing,
+and a push to a guarzo URL on an unprovisioned machine would proceed silently as
+the default identity — the exact failure this design exists to prevent.
+
+Mapping the **default** owner explicitly matters for the same reason. Detecting
+`origin`=gambtho plus `upstream`=guarzo as mixed-owner requires knowing that
+`gambtho` is a mapped owner too, not merely that `guarzo` is.
+
+Three states follow, and every consumer shares them:
+
+| Owner | Meaning |
+| --- | --- |
+| Absent from the map (work orgs, `Azure`, `kubernetes-sigs`, …) | **unmapped** — out of remit, fail open |
+| Maps to `default` | use the default identity, already configured |
+| Maps to a secondary slug | requires `~/.gitconfig.<slug>` and `~/.gh-<slug>`; if either is absent the state is **known but unprovisioned**, never "unmapped" |
+
+`bin/gh`, the pre-push guard, and `bin/git-identity` all read this one file, so
+they cannot disagree about what is known.
+
+The map and the conditional includes are two representations of the same fact, so
+a test asserts every non-`default` slug in the map has a matching `includeIf` in
+`gitconfig.symlink`, and vice versa. Adding a third identity means editing both,
+and the test fails if only one is edited.
 
 ### 1. Routing (tracked, public)
 
@@ -167,7 +205,7 @@ with placeholders, mirroring the existing `gitconfig.local.symlink.example`.
 owner, sets `GH_CONFIG_DIR` for a matching identity, and then execs the real
 `gh`. It locates the real binary by scanning `PATH` for the first `gh` that is
 not itself, so it cannot recurse, and it delegates unchanged when there is no
-match, no repository, or no configured identity.
+match, no repository, or an unmapped owner.
 
 A shim rather than a shell function because a zsh function reaches only
 interactive zsh: not bash, not scripts, not editor integrations, not Codex, and
@@ -178,9 +216,14 @@ design exists to remove.
 **Mixed-owner repositories.** The pre-push guard protects `git push` only.
 Repository-contextual `gh` commands — `gh pr merge`, `gh issue close`,
 `gh release delete` — carry the same wrong-account risk with no hook to catch
-them. When the shim finds more than one mapped GitHub owner among the
-repository's remotes it therefore **refuses to run** and exits non-zero with an
-actionable message, rather than guessing.
+them. When the shim finds more than one distinct **mapped** owner (per component
+0) among the repository's remotes it therefore **refuses to run** and exits
+non-zero with an actionable message, rather than guessing. `gambtho` +
+`guarzo` is mixed; `guarzo` + an unmapped work org is not, because only one
+owner is in remit.
+
+Mixed-owner detection is independent of provisioning: two mapped owners are
+mixed whether or not the secondary identity's files exist.
 
 The refusal covers every `gh` invocation in such a repository rather than only
 the repository-contextual subset, because distinguishing them means parsing
@@ -253,10 +296,11 @@ an unroutable identity must fail loudly.
 
 | Destination | Condition | Behaviour |
 | --- | --- | --- |
-| Non-`github.com`, or owner maps to no configured identity | any | exit 0, silent |
-| Owner maps to a configured identity | resolved identity matches | allow |
-| Owner maps to a configured identity | resolved identity disagrees | block, actionable message |
-| Owner maps to a configured identity | cannot determine — missing `gh`/`jq`, unreadable config, indeterminate identity | **block**, actionable message |
+| Non-`github.com`, or owner **unmapped** | any | exit 0, silent |
+| Mapped owner | resolved identity matches | allow |
+| Mapped owner | resolved identity disagrees | block, actionable message |
+| Mapped owner | **known but unprovisioned** — include file or `gh` config dir absent | **block**, naming the missing provisioning step |
+| Mapped owner | cannot determine — missing `gh`/`jq`, unreadable config, indeterminate identity | **block**, actionable message |
 
 The first row preserves the constraint that a global hook must not break
 unrelated repositories: a machine with no guarzo identity, or any repository
@@ -320,24 +364,55 @@ login shells, bypass the shim and use the default identity for `gh`. Git routing
 is unaffected, since it depends on config rather than `PATH`, and the guard still
 applies to any push.
 
-**Machine without a guarzo identity.** The conditional include references a
-missing file, which git ignores silently; the shim finds no config directory and
-delegates; the guard maps no owner and exits 0. A fresh bootstrap is unaffected.
+**Machine without a guarzo identity provisioned.** `guarzo` is still a *mapped*
+owner, because the owner map is tracked and independent of provisioning. So the
+state is "known but unprovisioned", not "unmapped":
+
+- Routing: the conditional include references a missing file, which git ignores
+  silently, so the repository resolves to the default identity.
+- Shim: `gh` in a guarzo repository refuses to run and names the missing
+  provisioning step.
+- Guard: a push to a guarzo URL is **blocked**, naming the missing step.
+- Everything else on the machine is untouched — unmapped owners never reach a
+  blocking path, so unrelated repositories and a fresh bootstrap behave exactly
+  as before.
+
+This is a deliberate behaviour change from an earlier draft, which claimed the
+whole mechanism stayed inert. Inert was wrong: it meant a push to guarzo from an
+unprovisioned machine would silently succeed as the default identity. Blocking a
+guarzo push until the identity is provisioned is the loud failure this design
+promises, and it is scoped so narrowly that nothing outside guarzo repositories
+can notice.
 
 ## Provisioning
 
 The conditional include is inert until `core/git/gitconfig.guarzo.symlink`
 exists, is populated, and is linked to `~/.gitconfig.guarzo`. Because the real
-file is gitignored, **it does not exist after cloning this repository**, so a
-new machine can complete every other step and still silently use the default
-identity.
+file is gitignored, **it does not exist after cloning this repository**, so a new
+machine can complete every other step and still resolve to the default identity.
+
+The owner map is what keeps that from being silent: `guarzo` stays mapped, so the
+guard blocks a guarzo push and the shim refuses, both naming the missing step,
+instead of quietly acting as the default account.
 
 Provisioning therefore covers all four of:
 
-1. `bootstrap` copies `gitconfig.guarzo.symlink.example` to
-   `gitconfig.guarzo.symlink` and prompts for the identity values, following the
-   pattern it already uses for `gitconfig.local`. It skips the whole step when
-   the user declines a second identity, leaving the include inert.
+1. **Interactive** `bootstrap` offers to copy
+   `gitconfig.guarzo.symlink.example` to `gitconfig.guarzo.symlink` and prompts
+   for the identity values, following the pattern it already uses for
+   `gitconfig.local`. Declining skips the step.
+
+   **`--non-interactive` bootstrap never prompts for a secondary identity and
+   never partially creates one.** It skips provisioning entirely unless
+   `core/git/gitconfig.guarzo.symlink` already exists, in which case it only
+   links it. No new flags are introduced.
+
+   This mirrors the contract `bin/bootstrap` already enforces for the primary
+   identity, where `--non-interactive` requires `user.name` and `user.email` to
+   be configured beforehand and errors out rather than reading from stdin. A
+   prompt here would hang automation at EOF or produce a half-populated identity
+   file, which is worse than none — a half-populated file makes the owner look
+   provisioned to the guard while failing at push time.
 2. `bin/relink` creates the `~/.gitconfig.guarzo` symlink.
 3. `GH_CONFIG_DIR=~/.gh-guarzo gh auth login` with `repo` and `workflow` scopes.
    `BROWSER=false` selects the device flow if the browser handoff fails. **Manual
@@ -380,6 +455,13 @@ A new bats suite follows the existing `setup_dotfiles_test` pattern, using a
 temporary `HOME` and throwaway repositories. Nothing in the suite touches a real
 token or the network.
 
+Owner map:
+
+- Every non-`default` slug in `core/git/identity-owners` has a matching
+  `includeIf` in `gitconfig.symlink`, and vice versa — the two cannot drift.
+- An unmapped owner, a `default` owner, and an unprovisioned mapped owner
+  resolve to three distinct states.
+
 Routing:
 
 - HTTPS guarzo remote resolves email, signing key, and credential helper; a
@@ -399,6 +481,10 @@ Shim:
   the first `gh` on `PATH`.
 - Refuses to run, non-zero, in a mixed-owner repository, and passes through
   untouched when the caller has already set `GH_CONFIG_DIR`.
+- Detects `gambtho` + `guarzo` as mixed **even when the guarzo identity is
+  unprovisioned**, and does not treat `guarzo` + an unmapped work org as mixed.
+- Refuses, naming the missing step, in a guarzo repository whose identity files
+  are absent.
 
 Bash login coverage:
 
@@ -417,15 +503,24 @@ Guard:
 - Allows a correctly-matched push.
 - Fails **open** — exit 0, no output — for a non-`github.com` host and an
   unmapped owner. A regression here breaks every repository on the machine.
-- Fails **closed** for a configured destination when `gh` or `jq` is missing or
-  the identity is otherwise indeterminate. Paired with the row above, these two
+- Fails **closed** for a mapped destination when `gh` or `jq` is missing or the
+  identity is otherwise indeterminate. Paired with the row above, these two
   tests pin the boundary that a single blanket rule would blur.
+- Fails **closed** for a push to a guarzo URL when the include file is absent,
+  naming the missing provisioning step — the case an earlier draft let through
+  silently.
 
 Hook composition:
 
 - With `git-lfs` stubbed to exit non-zero and the guard passing, the composed
   hook exits non-zero — LFS failures are not masked.
 - With the guard rejecting, `git lfs pre-push` is never reached.
+
+Bootstrap:
+
+- `--non-interactive` with no existing `gitconfig.guarzo.symlink` skips
+  secondary provisioning, reads nothing from stdin, and exits successfully.
+- `--non-interactive` with the file already present links it without prompting.
 
 Doctor and hygiene:
 
