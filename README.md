@@ -175,6 +175,27 @@ compatible minor in `config/versions.env` by hand.
 - `localrc` — ssh-agent + goms.io environment
 - `script-bootstrap`, `script-install` — old install scripts (replaced by `bin/bootstrap` and `bin/install`)
 
+## Reaping Merged Worktrees
+
+`bin/git-worktree-gc` removes linked worktrees whose branch has already landed.
+Because `bin` is on `PATH`, Git resolves it as a subcommand:
+
+```bash
+git worktree-gc                          # dry run: print the plan, change nothing
+git worktree-gc --yes                    # remove the worktrees it listed
+git worktree-gc --yes --delete-branches  # and delete their branches
+```
+
+Merge detection reads `git branch --merged` *and* `gh pr list --state merged`.
+The second source is what makes it useful in a squash-merge repository, where
+a shipped branch is never an ancestor of `main` and ancestry alone reports
+almost everything as unmerged. Without `gh`, the script says so and falls back
+to ancestry rather than reporting a clean sweep.
+
+The main worktree, the one you are standing in, detached-HEAD worktrees, and
+anything with uncommitted changes are never removed. Locked worktrees are
+skipped unless `--include-locked`, which unlocks each before removing it.
+
 ## Repository Hygiene
 
 - Active configuration must not discover files under `archived/`.
