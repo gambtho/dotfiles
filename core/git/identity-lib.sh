@@ -1,0 +1,219 @@
+#!/usr/bin/env bash
+# Shared owner -> identity resolution for bin/gh, bin/git-identity, and the
+# pre-push guard. Sourced, never executed.
+#
+# BASH 3.2 ONLY: macOS ships bash 3.2. No associative arrays, and none of the
+# Bash-4-only array-reading builtins.
+#
+# Three states, and conflating any two reintroduces a silent wrong-identity
+# path:
+#   unmapped   owner absent from the map   -> out of remit
+#   default    owner maps to the default   -> stock gh config
+#   secondary  maps to another slug        -> may be UNPROVISIONED
+
+IDENTITY_DOTFILES_ROOT="${DOTFILES:-$HOME/.dotfiles}"
+IDENTITY_MAP_FILE="${IDENTITY_MAP_FILE:-$IDENTITY_DOTFILES_ROOT/core/git/identity-owners}"
+
+# Print the owner for a github.com URL. Exit 1 for any other host or
+# unparseable input; callers treat that as "out of remit".
+identity_url_owner() {
+  local url="$1" rest host path
+
+  case "$url" in
+    https://* | http://*)
+      rest="${url#*://}"
+      rest="${rest#*@}"
+      host="${rest%%/*}"
+      path="${rest#*/}"
+      ;;
+    ssh://*)
+      rest="${url#ssh://}"
+      rest="${rest#*@}"
+      host="${rest%%/*}"
+      path="${rest#*/}"
+      ;;
+    *@*:*)
+      rest="${url#*@}"
+      host="${rest%%:*}"
+      path="${rest#*:}"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+
+  host="${host%%:*}"
+  [ "$host" = "github.com" ] || return 1
+
+  path="${path#/}"
+  case "$path" in
+    */*) : ;;
+    *) return 1 ;;
+  esac
+
+  printf '%s\n' "${path%%/*}"
+}
+
+# Validate the map. A malformed or duplicated entry is a hard error, never a
+# skipped line: a dropped entry demotes a known owner to "unmapped" and turns a
+# blocked push into a silent wrong-identity push.
+identity_validate_map() {
+  local file="${1:-$IDENTITY_MAP_FILE}"
+  local line owner slug extra rest lineno=0 seen=""
+
+  if [ ! -r "$file" ]; then
+    printf 'identity: owner map not readable: %s\n' "$file" >&2
+    return 1
+  fi
+
+  while IFS= read -r line || [ -n "$line" ]; do
+    lineno=$((lineno + 1))
+    line="${line%%#*}"
+    # Split explicitly rather than relying on unquoted expansion, so the
+    # behaviour is identical under `sh`-like IFS settings.
+    IFS=$' \t' read -r owner slug extra rest <<<"$line"
+    [ -n "$owner" ] || continue
+
+    if [ -z "$slug" ] || [ -n "$extra" ]; then
+      printf 'identity: malformed entry at %s:%d\n' "$file" "$lineno" >&2
+      return 1
+    fi
+    case "$owner" in
+      [A-Za-z0-9]*) : ;;
+      *)
+        printf 'identity: malformed entry at %s:%d\n' "$file" "$lineno" >&2
+        return 1
+        ;;
+    esac
+    case "$slug" in
+      [a-z0-9]*) : ;;
+      *)
+        printf 'identity: malformed entry at %s:%d\n' "$file" "$lineno" >&2
+        return 1
+        ;;
+    esac
+    case " $seen " in
+      *" $owner "*)
+        printf 'identity: duplicate owner %s at %s:%d\n' "$owner" "$file" "$lineno" >&2
+        return 1
+        ;;
+    esac
+    seen="$seen $owner"
+  done <"$file"
+
+  return 0
+}
+
+identity_owner_slug() {
+  local owner="$1" file="${2:-$IDENTITY_MAP_FILE}"
+  local line o s extra rest
+
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line%%#*}"
+    IFS=$' \t' read -r o s extra rest <<<"$line"
+    [ -n "$o" ] || continue
+    if [ "$o" = "$owner" ]; then
+      printf '%s\n' "$s"
+      return 0
+    fi
+  done <"$file"
+
+  return 1
+}
+
+# shellcheck disable=SC2120  # callers may pass a map path; the default is used internally
+identity_slugs() {
+  local file="${1:-$IDENTITY_MAP_FILE}"
+  local line o s extra rest
+
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line%%#*}"
+    IFS=$' \t' read -r o s extra rest <<<"$line"
+    [ -n "$s" ] || continue
+    printf '%s\n' "$s"
+  done <"$file" | sort -u
+}
+
+identity_slug_configdir() {
+  local slug="$1"
+  if [ "$slug" = default ]; then
+    printf '%s\n' "${GH_DEFAULT_CONFIG_DIR:-$HOME/.config/gh}"
+  else
+    printf '%s\n' "$HOME/.gh-$slug"
+  fi
+}
+
+identity_slug_configfile() {
+  local slug="$1"
+  if [ "$slug" = default ]; then
+    printf '%s\n' "$HOME/.gitconfig.local"
+  else
+    printf '%s\n' "$HOME/.gitconfig.$slug"
+  fi
+}
+
+# A secondary slug is provisioned only when BOTH its git include and its gh
+# config dir exist. Either alone is a half-configured identity, which looks
+# usable to a naive check and then fails at push time.
+identity_slug_provisioned() {
+  local slug="$1" dir
+  [ "$slug" = default ] && return 0
+  [ -e "$(identity_slug_configfile "$slug")" ] || return 1
+  dir="$(identity_slug_configdir "$slug")"
+  [ -d "$dir" ] || return 1
+  return 0
+}
+
+identity_slug_email() {
+  local file
+  file="$(identity_slug_configfile "$1")"
+  [ -r "$file" ] || return 1
+  git config --file "$file" user.email 2>/dev/null
+}
+
+identity_slug_key() {
+  local file
+  file="$(identity_slug_configfile "$1")"
+  [ -r "$file" ] || return 1
+  git config --file "$file" user.signingKey 2>/dev/null
+}
+
+# Distinct MAPPED owners across every remote. Unmapped owners are omitted, so
+# "guarzo + an unmapped work org" is not mixed-owner.
+identity_repo_owners() {
+  local url owner
+  git config --get-regexp '^remote\..*\.url$' 2>/dev/null |
+    cut -d' ' -f2- |
+    while IFS= read -r url; do
+      [ -n "$url" ] || continue
+      owner="$(identity_url_owner "$url")" || continue
+      identity_owner_slug "$owner" >/dev/null 2>&1 || continue
+      printf '%s\n' "$owner"
+    done | sort -u
+}
+
+# Which mapped slug does this repository's EFFECTIVE config actually match?
+# Compares author email and signing key -- the original incident had correct
+# emails and the wrong signing key in all three repositories, so email alone
+# does not identify an identity. Prints nothing when no slug matches.
+identity_effective_slug() {
+  local eff_email eff_key slug exp_email exp_key
+  eff_email="$(git config user.email 2>/dev/null || true)"
+  eff_key="$(git config user.signingKey 2>/dev/null || true)"
+  [ -n "$eff_email" ] || return 0
+
+  while IFS= read -r slug; do
+    [ -n "$slug" ] || continue
+    exp_email="$(identity_slug_email "$slug" 2>/dev/null || true)"
+    [ -n "$exp_email" ] || continue
+    [ "$exp_email" = "$eff_email" ] || continue
+    exp_key="$(identity_slug_key "$slug" 2>/dev/null || true)"
+    if [ -n "$exp_key" ] && [ -n "$eff_key" ] && [ "$exp_key" != "$eff_key" ]; then
+      continue
+    fi
+    printf '%s\n' "$slug"
+    return 0
+  done < <(identity_slugs)
+
+  return 0
+}
