@@ -491,3 +491,36 @@ be_default() {
   run grep -nE '(^|[[:space:]])(mapfile|readarray)([[:space:]]|$)|declare -g?A' "$REPO_ROOT/bin/git-identity"
   [ "$status" -ne 0 ]
 }
+
+@test "non-interactive bootstrap skips secondary provisioning and reads no stdin" {
+  local fake="$TEST_ROOT/boot1"
+  mkdir -p "$fake/core/git"
+  cp "$REPO_ROOT/core/git/gitconfig.guarzo.symlink.example" "$fake/core/git/"
+  run env BOOTSTRAP_SOURCE_ONLY=1 HOME="$HOME" bash -c "
+    source '$REPO_ROOT/bin/bootstrap'
+    NON_INTERACTIVE=true
+    DOTFILES_ROOT='$fake'
+    setup_secondary_identity
+  " </dev/null
+  [ "$status" -eq 0 ]
+  assert_file_absent "$fake/core/git/gitconfig.guarzo.symlink"
+}
+
+@test "non-interactive bootstrap leaves an already-provisioned identity for relink" {
+  local fake="$TEST_ROOT/boot2"
+  mkdir -p "$fake/core/git"
+  cp "$REPO_ROOT/core/git/gitconfig.guarzo.symlink.example" "$fake/core/git/"
+  printf '[user]\n\temail = x@example.invalid\n' >"$fake/core/git/gitconfig.guarzo.symlink"
+  run env BOOTSTRAP_SOURCE_ONLY=1 HOME="$HOME" bash -c "
+    source '$REPO_ROOT/bin/bootstrap'
+    NON_INTERACTIVE=true
+    DOTFILES_ROOT='$fake'
+    setup_secondary_identity
+  " </dev/null
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"already configured"* ]]
+  run grep -c 'x@example.invalid' "$fake/core/git/gitconfig.guarzo.symlink"
+  [ "$output" -eq 1 ]
+  run bash -c "source '$REPO_ROOT/bin/common.sh' >/dev/null 2>&1; managed_link_pairs '$fake' '$HOME' | tr '\0' '\n'"
+  [[ "$output" == *"$HOME/.gitconfig.guarzo"* ]]
+}

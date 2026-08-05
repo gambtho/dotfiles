@@ -92,6 +92,57 @@ setup_gitconfig() {
   fi
 }
 
+# Optional secondary GitHub identity (see core/git/identity-owners).
+#
+# --non-interactive NEVER prompts and NEVER partially creates this file, the
+# same contract bootstrap already enforces for the primary identity. A
+# half-populated identity file is worse than none: it looks provisioned to the
+# pre-push guard and then fails at push time.
+setup_secondary_identity() {
+  local template="$DOTFILES_ROOT/core/git/gitconfig.guarzo.symlink.example"
+  local target="$DOTFILES_ROOT/core/git/gitconfig.guarzo.symlink"
+  local name email keypath reply
+
+  [ -f "$template" ] || return 0
+
+  if [ -f "$target" ]; then
+    log_info "Secondary GitHub identity already configured."
+    return 0
+  fi
+
+  if [ "${NON_INTERACTIVE:-false}" = true ]; then
+    log_info "Skipping optional secondary GitHub identity (non-interactive)."
+    return 0
+  fi
+
+  printf 'Configure a secondary GitHub identity? [y/N] '
+  read -r reply
+  case "$reply" in
+    [Yy]*) : ;;
+    *) return 0 ;;
+  esac
+
+  printf 'Account name: '
+  read -r name
+  printf 'Account email: '
+  read -r email
+  printf 'Absolute path to its SSH signing public key: '
+  read -r keypath
+
+  if [ -z "$name" ] || [ -z "$email" ] || [ -z "$keypath" ]; then
+    log_warning "Incomplete answers; leaving the secondary identity unconfigured."
+    return 0
+  fi
+
+  sed -e "s|YOUR_ACCOUNT_NAME|$name|" \
+    -e "s|you@example.com|$email|" \
+    -e "s|/home/YOUR_USER/.ssh/id_ed25519_guarzo.pub|$keypath|" \
+    "$template" >"$target"
+
+  log_success "Secondary identity written to $target"
+  log_info "Next: GH_CONFIG_DIR=\$HOME/.gh-guarzo gh auth login"
+}
+
 setup_profile() {
   if [[ -n "$BOOTSTRAP_PROFILE" ]]; then
     printf '%s\n' "$BOOTSTRAP_PROFILE" >"$HOME/.dotfiles-profile"
@@ -317,6 +368,7 @@ main() {
   esac
 
   setup_gitconfig
+  setup_secondary_identity
   setup_profile
   # $HOME/.dotfiles, not $DOTFILES_ROOT: the latter is wherever this script was
   # run from, which may be a disposable linked worktree. The stable root must
