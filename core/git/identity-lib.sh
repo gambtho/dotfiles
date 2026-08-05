@@ -108,6 +108,16 @@ identity_owner_slug() {
   local owner="$1" file="${2:-$IDENTITY_MAP_FILE}"
   local line o s extra rest
 
+  # GitHub owner names are case-insensitive (Guarzo/guarzo/GUARZO all resolve
+  # to the same account), but git's own `includeIf hasconfig:` matching is
+  # case-sensitive and cannot be fixed from here. Fold here, once, so every
+  # consumer -- bin/gh, bin/git-identity, the pre-push guard -- treats a
+  # differently-cased owner as the same mapped identity instead of silently
+  # falling through to "unmapped" and the default account. `tr` is used
+  # instead of `${owner,,}` because that expansion is bash-4-only and this
+  # file must run under bash 3.2 (macOS).
+  owner="$(printf '%s' "$owner" | tr '[:upper:]' '[:lower:]')"
+
   while IFS= read -r line || [ -n "$line" ]; do
     line="${line%%#*}"
     IFS=$' \t' read -r o s extra rest <<<"$line"

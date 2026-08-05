@@ -96,6 +96,12 @@ from scripts, editors, and AI tool shells, not just interactive zsh. It
 refuses to run rather than guess when a repository has remotes under two
 different mapped owners.
 
+`GH_CONFIG_DIR` also partitions **non-repo** `gh` state, not just
+credentials: inside a secondary-identity repository, `gh extension list` and
+similar commands see that identity's config dir. `gh` extensions installed
+under the default identity are not visible there and must be installed again
+per identity.
+
 `bin/git-identity` is the diagnostic: run it inside a repository to see which
 owner/identity applies and whether it's usable (provisioned, token valid,
 transport supported). It's the fastest way to check "why is this behaving
@@ -117,9 +123,18 @@ bypassed or the repo's local config drifted.
 - **Mixed-owner repositories** (remotes under two different mapped owners,
   e.g. a fork with `origin` under one owner and `upstream` under another).
   `hasconfig` matches any configured remote, not the push target, so this
-  can't be routed unambiguously. `bin/gh` refuses to run and the pre-push
-  guard blocks the push; use an explicit `GH_CONFIG_DIR` (and `GH_REPO` if
-  needed) instead.
+  can't be routed unambiguously. `bin/gh` refuses to run in either direction.
+  The pre-push guard is narrower: it only blocks pushing to the *default*
+  owner from a repo whose effective identity resolves to the secondary (the
+  fork case) -- pushing to the secondary owner is allowed, since routing
+  correctly resolved to that identity. Use an explicit `GH_CONFIG_DIR` (and
+  `GH_REPO` if needed) instead.
+- **Owner casing.** GitHub owner names are case-insensitive, but git's own
+  `includeIf hasconfig:` matching is not, so a differently-cased clone (e.g.
+  `Guarzo/repo`) won't pick up the include -- the repo's effective identity
+  stays the default. `bin/gh` and the pre-push guard still fold case when
+  resolving the destination owner, so they recognise the mismatch and refuse
+  rather than silently pushing under the wrong account.
 
 **Manual provisioning steps** (also driven interactively by `bin/bootstrap`'s
 secondary-identity prompt, which fills in the template but does not run

@@ -10,8 +10,20 @@
 set -uo pipefail
 
 IDENTITY_DOTFILES_ROOT="${DOTFILES:-$HOME/.dotfiles}"
+IDENTITY_LIB="$IDENTITY_DOTFILES_ROOT/core/git/identity-lib.sh"
+
+# Fail closed but readably. Without the library we cannot resolve an owner to
+# an identity, and guessing is exactly what this design forbids -- but a moved
+# or broken $DOTFILES checkout must not turn every `gh` invocation on the
+# machine, including in unrelated repositories, into raw bash "no such file"
+# errors.
+if [ ! -r "$IDENTITY_LIB" ]; then
+  printf 'gh: refusing to run -- identity library not found: %s\n' "$IDENTITY_LIB" >&2
+  printf 'gh: cannot route identities without it.\n' >&2
+  exit 5
+fi
 # shellcheck source=/dev/null
-. "$IDENTITY_DOTFILES_ROOT/core/git/identity-lib.sh"
+. "$IDENTITY_LIB"
 
 # Resolve through symlinks. Comparing raw paths fails to recognise this script
 # when invoked through a link, and the exec below then re-enters this file

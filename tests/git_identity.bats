@@ -66,6 +66,20 @@ EOF
   [ "$status" -eq 1 ]
 }
 
+@test "identity_owner_slug case-folds the owner before lookup" {
+  run bash -c "source '$LIB'; identity_owner_slug Guarzo '$MAP'"
+  [ "$status" -eq 0 ]
+  [ "$output" = "guarzo" ]
+
+  run bash -c "source '$LIB'; identity_owner_slug GUARZO '$MAP'"
+  [ "$status" -eq 0 ]
+  [ "$output" = "guarzo" ]
+
+  run bash -c "source '$LIB'; identity_owner_slug GaMbThO '$MAP'"
+  [ "$status" -eq 0 ]
+  [ "$output" = "default" ]
+}
+
 @test "identity_slug_provisioned distinguishes default, provisioned, unprovisioned" {
   run bash -c "source '$LIB'; identity_slug_provisioned default"
   [ "$status" -eq 0 ]
@@ -238,6 +252,16 @@ EOF
   [[ "$output" == *"real gh"* ]]
 }
 
+@test "shim fails closed with a clear message when the identity library is missing" {
+  setup_shim_repo "$TEST_ROOT/r" https://github.com/gambtho/repo.git
+  rm -f "$DOTFILES/core/git/identity-lib.sh"
+  cd "$TEST_ROOT/r"
+  run "$REPO_ROOT/bin/gh" pr list
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"identity library not found"* ]]
+  [[ "$output" != *": No such file or directory"* ]]
+}
+
 @test "shim uses no bash-4-only constructs" {
   run grep -nE '(^|[[:space:]])(mapfile|readarray)([[:space:]]|$)|declare -g?A' "$REPO_ROOT/bin/gh"
   [ "$status" -ne 0 ]
@@ -391,6 +415,31 @@ be_default() {
   git config --unset user.email || true
   run "$HOOK" origin https://github.com/guarzo/repo.git </dev/null
   [ "$status" -ne 0 ]
+}
+
+@test "guard blocks a mixed-case owner push made under the default identity" {
+  # GitHub owner names are case-insensitive, so a clone of Guarzo/repo is
+  # ordinary. Git's own hasconfig matching is case-sensitive and won't fire,
+  # so the repo's effective identity stays default -- but the guard must
+  # still recognise the destination as the guarzo identity and block, not
+  # silently allow a push under the wrong account.
+  setup_guard
+  provision_guarzo
+  be_default
+  cd "$GUARD_REPO"
+  run "$HOOK" origin https://github.com/Guarzo/repo.git </dev/null
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Guarzo"* ]]
+  [[ "$output" == *"guarzo"* ]]
+}
+
+@test "guard still fails open for an unmapped owner in mixed case" {
+  # Case-folding the lookup must not widen the guard's remit to owners that
+  # were never mapped in the first place.
+  setup_guard
+  cd "$GUARD_REPO"
+  run "$HOOK" origin https://github.com/Kubernetes-SIGS/repo.git </dev/null
+  [ "$status" -eq 0 ]
 }
 
 @test "guard blocks a github push when the owner map is invalid" {
