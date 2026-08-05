@@ -1,13 +1,102 @@
-#!/bin/sh
+#!/bin/bash
+# Global pre-push hook: identity guard, then the stock git-lfs hook.
+#
+# ORDER IS LOAD-BEARING. `git lfs pre-push` runs LAST because its exit status
+# is the hook's exit status; running it first and appending the guard would let
+# a passing guard mask a failed LFS upload and push refs whose objects never
+# uploaded.
+#
+# This hook must never read stdin: git feeds ref updates there and
+# `git lfs pre-push` consumes them. The guard uses only $1 and $2.
+#
+# FAIL-OPEN BOUNDARY. core.hooksPath is global, so this runs for every repo on
+# the machine. It exits 0 silently for anything outside its remit -- non-github
+# hosts and unmapped owners. Once the destination is a mapped owner, every
+# uncertainty blocks instead.
+
+remote_url="${2:-}"
+
+identity_guard() {
+  local url="$1"
+  local root owner dest eff exp_email exp_key eff_email eff_key
+
+  [ -n "$url" ] || return 0
+
+  root="${DOTFILES:-$HOME/.dotfiles}"
+  [ -r "$root/core/git/identity-lib.sh" ] || return 0
+  # shellcheck source=/dev/null
+  . "$root/core/git/identity-lib.sh"
+
+  owner="$(identity_url_owner "$url")" || return 0
+
+  # Past this point the destination is on github.com. An unusable map can no
+  # longer be shrugged off: a dropped entry would demote a known owner to
+  # "unmapped" and convert a blocked push into a wrong-identity push.
+  if ! identity_validate_map; then
+    printf 'pre-push: BLOCKED -- the owner map is unusable (see above).\n' >&2
+    return 1
+  fi
+
+  dest="$(identity_owner_slug "$owner")" || return 0
+
+  if [ "$dest" != default ]; then
+    if ! identity_slug_provisioned "$dest"; then
+      printf 'pre-push: BLOCKED -- pushing to %s but identity "%s" is not provisioned.\n' "$owner" "$dest" >&2
+      printf 'pre-push: expected %s and %s. Run bin/git-identity.\n' \
+        "$(identity_slug_configfile "$dest")" "$(identity_slug_configdir "$dest")" >&2
+      return 1
+    fi
+
+    exp_email="$(identity_slug_email "$dest" 2>/dev/null || true)"
+    exp_key="$(identity_slug_key "$dest" 2>/dev/null || true)"
+    eff_email="$(git config user.email 2>/dev/null || true)"
+    eff_key="$(git config user.signingKey 2>/dev/null || true)"
+
+    if [ -z "$exp_email" ] || [ -z "$eff_email" ]; then
+      printf 'pre-push: BLOCKED -- cannot determine the identity for %s.\n' "$owner" >&2
+      return 1
+    fi
+    if [ "$exp_email" != "$eff_email" ]; then
+      printf 'pre-push: BLOCKED -- pushing to %s as %s, but identity "%s" is %s.\n' \
+        "$owner" "$eff_email" "$dest" "$exp_email" >&2
+      return 1
+    fi
+    if [ -n "$exp_key" ] && [ "$exp_key" != "$eff_key" ]; then
+      printf 'pre-push: BLOCKED -- signing key %s does not match identity "%s" (%s).\n' \
+        "${eff_key:-<unset>}" "$dest" "$exp_key" >&2
+      return 1
+    fi
+    return 0
+  fi
+
+  # Default destination. Block only when the effective identity positively
+  # matches ANOTHER provisioned identity -- that is the fork case (origin=
+  # default owner, upstream=secondary, routing resolved to the secondary).
+  # A merely unusual per-repo email matches nothing and is left alone.
+  eff="$(identity_effective_slug)"
+  if [ -n "$eff" ] && [ "$eff" != default ]; then
+    if identity_slug_provisioned "$eff"; then
+      printf 'pre-push: BLOCKED -- pushing to %s, but this repository resolves to identity "%s".\n' \
+        "$owner" "$eff" >&2
+      printf 'pre-push: a repository with remotes under two mapped owners is not routed; see bin/git-identity.\n' >&2
+      return 1
+    fi
+  fi
+
+  return 0
+}
+
+identity_guard "$remote_url" || exit 1
+
 # Stock git-lfs hook, adapted for a GLOBAL core.hooksPath. git-lfs writes these
 # per-repo, where a missing binary really is an error worth `exit 2`. The
 # dotfiles point core.hooksPath here for EVERY repo, so that exit code turns any
-# machine without git-lfs into one where clone and checkout fail outright —
+# machine without git-lfs into one where clone and checkout fail outright --
 # including the repos that never touched LFS. Devcontainer images are the common
 # case: it breaks lazy.nvim's plugin clones with an error naming LFS, not the
 # container. Warn and step aside instead. A genuine LFS repo still checks out,
 # just with pointer files, which is the best available outcome without the
-# binary — and far better than no checkout at all.
+# binary -- and far better than no checkout at all.
 command -v git-lfs >/dev/null 2>&1 || {
   printf >&2 '%s\n' "git-lfs not found - skipping 'git lfs pre-push'; any LFS files are left as pointers."
   exit 0

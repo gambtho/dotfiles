@@ -1,0 +1,14 @@
+# GitHub owner -> identity slug.
+#
+# Tracked and non-secret on purpose: this file states which owners this machine
+# knows about INDEPENDENTLY of whether their identity files exist. That is what
+# lets consumers tell "unmapped and unrelated" (fail open) apart from "known
+# identity but not provisioned" (fail closed).
+#
+# The default slug uses the stock ~/.config/gh and ~/.gitconfig.local. Any other
+# slug requires ~/.gitconfig.<slug> and ~/.gh-<slug>.
+#
+# Adding an owner here also requires an includeIf block in gitconfig.symlink;
+# tests/git_identity.bats asserts the two agree as owner+slug pairs.
+gambtho default
+guarzo  guarzo

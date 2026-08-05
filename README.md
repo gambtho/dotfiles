@@ -64,32 +64,97 @@ self-guard with `[[ -z "$WORK_PROFILE" ]] && return` to prevent accidental loadi
 
 ## Multiple GitHub Accounts
 
-If this repo needs to use a different GitHub account than your default, use an SSH host alias.
+Repositories are routed to a GitHub identity by **remote owner**, not by
+per-repo configuration you have to remember to set. `core/git/identity-owners`
+is a tracked, non-secret map of `owner slug`:
 
-**1. Generate a key for the second account**
-```bash
-ssh-keygen -t ed25519 -C "you@example.com" -f ~/.ssh/id_ed25519_work
 ```
-Add `~/.ssh/id_ed25519_work.pub` to that GitHub account under Settings → SSH keys.
-
-**2. Add a host alias to `~/.ssh/config`**
-```
-Host github-work
-    HostName github.com
-    User git
-    IdentityFile ~/.ssh/id_ed25519_work
+gambtho default
+guarzo  guarzo
 ```
 
-**3. Update the repo remote to use the alias**
-```bash
-git remote set-url origin git@github-work:gambtho/dotfiles.git
-```
+The `default` slug means "use the stock `~/.config/gh` and `~/.gitconfig.local`
+— nothing extra to provision." Any other slug (`guarzo`) requires two
+machine-local files that this map alone does not create:
+`~/.gitconfig.<slug>` and a `~/.gh-<slug>` config directory. That split is
+deliberate: the map says which owners this machine *knows about*, independent
+of whether they are actually set up, so tooling can tell "unmapped and
+unrelated" apart from "known identity but not provisioned."
 
-**Verify:**
-```bash
-ssh -T git@github-work
-# Hi gambtho! You've successfully authenticated...
-```
+**How routing works.** `core/git/gitconfig.symlink` carries an
+`includeIf "hasconfig:remote.*.url:..."` block per non-default owner, pulling
+in `~/.gitconfig.guarzo` only for repositories with a matching remote. That
+include path is gitignored and machine-local — the tracked template lives at
+`core/git/gitconfig.guarzo.symlink.example`. Copy it to
+`core/git/gitconfig.guarzo.symlink` (relinked to `~/.gitconfig.guarzo`) and
+fill in the real name, email, and signing key.
+
+`bin/gh` is a PATH shim (installed ahead of the real `gh`, see the symlink
+table below) that resolves the current repository's remote owner and exports
+`GH_CONFIG_DIR` before exec'ing the real binary — so `gh` behaves correctly
+from scripts, editors, and AI tool shells, not just interactive zsh. It
+refuses to run rather than guess when a repository has remotes under two
+different mapped owners.
+
+`GH_CONFIG_DIR` also partitions **non-repo** `gh` state, not just
+credentials: inside a secondary-identity repository, `gh extension list` and
+similar commands see that identity's config dir. `gh` extensions installed
+under the default identity are not visible there and must be installed again
+per identity.
+
+`bin/git-identity` is the diagnostic: run it inside a repository to see which
+owner/identity applies and whether it's usable (provisioned, token valid,
+transport supported). It's the fastest way to check "why is this behaving
+oddly" and is what both `bin/gh` and the pre-push guard point you at on
+failure.
+
+A global `pre-push` hook (`core/git/git-hooks.symlink/pre-push`) double-checks
+before every push: if the destination owner resolves to a provisioned
+identity, it blocks the push when the effective `user.email` or
+`user.signingKey` doesn't match what that identity expects. This is the last
+line of defense against pushing under the wrong account even if `bin/gh` was
+bypassed or the repo's local config drifted.
+
+**Unsupported and detected, not silently mishandled:**
+- **SSH remotes** for a routed identity. Git never invokes a credential
+  helper over SSH, and `user.signingKey` doesn't select an SSH auth key, so
+  SSH remotes bypass this whole mechanism. `bin/git-identity` reports
+  `UNSUPPORTED` and tells you to re-point the remote at its `https://` URL.
+- **Mixed-owner repositories** (remotes under two different mapped owners,
+  e.g. a fork with `origin` under one owner and `upstream` under another).
+  `hasconfig` matches any configured remote, not the push target, so this
+  can't be routed unambiguously. `bin/gh` refuses to run in either direction.
+  The pre-push guard is narrower: it only blocks pushing to the *default*
+  owner from a repo whose effective identity resolves to the secondary (the
+  fork case) -- pushing to the secondary owner is allowed, since routing
+  correctly resolved to that identity. Use an explicit `GH_CONFIG_DIR` (and
+  `GH_REPO` if needed) instead.
+- **Owner casing.** GitHub owner names are case-insensitive, but git's own
+  `includeIf hasconfig:` matching is not, so a differently-cased clone (e.g.
+  `Guarzo/repo`) won't pick up the include -- the repo's effective identity
+  stays the default. `bin/gh` and the pre-push guard still fold case when
+  resolving the destination owner, so they recognise the mismatch and refuse
+  rather than silently pushing under the wrong account.
+
+**Manual provisioning steps** (also driven interactively by `bin/bootstrap`'s
+secondary-identity prompt, which fills in the template but does not run
+either of these for you):
+
+1. Authenticate `gh` into the identity's own config directory, with the
+   scopes this design's credential helper needs:
+   ```bash
+   GH_CONFIG_DIR=$HOME/.gh-guarzo gh auth login --scopes repo,workflow
+   ```
+2. Generate an SSH key registered on the second GitHub account **as a signing
+   key** (Settings → SSH and GPG keys → New SSH key → key type "Signing Key"),
+   then add it to `~/.ssh/allowed_signers` so local `git log --show-signature`
+   and `git verify-commit` can verify it:
+   ```bash
+   ssh-keygen -t ed25519 -C "you@example.com" -f ~/.ssh/id_ed25519_guarzo
+   echo "you@example.com $(cat ~/.ssh/id_ed25519_guarzo.pub)" >> ~/.ssh/allowed_signers
+   ```
+   Point `signingKey` in `~/.gitconfig.guarzo` at the **absolute path** to the
+   `.pub` file — git does not expand `~` for this setting on every platform.
 
 ## Routine Updates
 
@@ -161,6 +226,8 @@ compatible minor in `config/versions.env` by hand.
 | `~/.zshrc` | `core/shell/zshrc.symlink` |
 | `~/.gitconfig` | `core/git/gitconfig.symlink` |
 | `~/.gitconfig.local` | `core/git/gitconfig.local.symlink` (machine-local, gitignored) |
+| `~/.gitconfig.guarzo` | `core/git/gitconfig.guarzo.symlink` (machine-local, gitignored — see [Multiple GitHub Accounts](#multiple-github-accounts)) |
+| `~/.bash_profile` | `core/shell/bash_profile.symlink` |
 | `~/.config/mise/config.toml` | `config/mise/config.toml` |
 | `~/.config/nvim` | `config/nvim/` |
 

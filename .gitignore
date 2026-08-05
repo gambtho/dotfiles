@@ -18,6 +18,9 @@ docs/superpowers/*
 !docs/superpowers/specs/*.md
 platforms/macos/brewfile.lock.json
 core/git/gitconfig.local.symlink
+# Machine-local secondary GitHub identity (name, email, signing key). The
+# tracked template is core/git/gitconfig.guarzo.symlink.example.
+core/git/gitconfig.guarzo.symlink
 .dotfiles-profile
 .opencode/
 ai/codex/projects.local.toml

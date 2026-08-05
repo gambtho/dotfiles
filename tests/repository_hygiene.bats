@@ -96,3 +96,21 @@ setup() {
   [ "$status" -eq 0 ]
   [ -z "$output" ]
 }
+
+@test "tracked git example files carry no real email addresses" {
+  # Templates keep illustrative placeholders, so allow only reserved example
+  # domains. Anything else is a personal address in a public repo.
+  run bash -c "
+    grep -hoE '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' \
+      '$REPO_ROOT'/core/git/*.example 2>/dev/null |
+      grep -vE '@example\.(com|invalid|org)\$' || true
+  "
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "the public repository tracks nothing under git/" {
+  run git -C "$REPO_ROOT" ls-files git/
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}

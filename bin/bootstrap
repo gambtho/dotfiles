@@ -92,6 +92,97 @@ setup_gitconfig() {
   fi
 }
 
+# Optional secondary GitHub identity (see core/git/identity-owners).
+#
+# --non-interactive NEVER prompts and NEVER partially creates this file, the
+# same contract bootstrap already enforces for the primary identity. A
+# half-populated identity file is worse than none: it looks provisioned to the
+# pre-push guard and then fails at push time.
+setup_secondary_identity() {
+  local template="$DOTFILES_ROOT/core/git/gitconfig.guarzo.symlink.example"
+  local target="$DOTFILES_ROOT/core/git/gitconfig.guarzo.symlink"
+  local name email keypath reply
+
+  [ -f "$template" ] || return 0
+
+  if [ -f "$target" ]; then
+    log_info "Secondary GitHub identity already configured."
+    return 0
+  fi
+
+  if [ "${NON_INTERACTIVE:-false}" = true ]; then
+    log_info "Skipping optional secondary GitHub identity (non-interactive)."
+    return 0
+  fi
+
+  printf 'Configure a secondary GitHub identity? [y/N] '
+  read -r reply
+  case "$reply" in
+    [Yy]*) : ;;
+    *) return 0 ;;
+  esac
+
+  printf 'Account name: '
+  read -r name
+  printf 'Account email: '
+  read -r email
+  printf 'Absolute path to its SSH signing public key: '
+  read -r keypath
+
+  if [ -z "$name" ] || [ -z "$email" ] || [ -z "$keypath" ]; then
+    log_warning "Incomplete answers; leaving the secondary identity unconfigured."
+    return 0
+  fi
+
+  # git does not expand ~ for user.signingKey on every platform, so a relative
+  # or tilde path silently yields an unusable signing configuration. Reject it
+  # before writing anything rather than producing a file that looks provisioned.
+  case "$keypath" in
+    /*) : ;;
+    *)
+      log_warning "Signing key path must be absolute; leaving the secondary identity unconfigured."
+      return 0
+      ;;
+  esac
+
+  # Escape the sed replacement metacharacters (\ & and the | delimiter) so an
+  # answer containing them substitutes literally instead of corrupting the file.
+  local esc_name esc_email esc_keypath
+  esc_name=$(printf '%s' "$name" | sed -e 's/[\\&|]/\\&/g')
+  esc_email=$(printf '%s' "$email" | sed -e 's/[\\&|]/\\&/g')
+  esc_keypath=$(printf '%s' "$keypath" | sed -e 's/[\\&|]/\\&/g')
+
+  # Render to a temporary file beside the target and rename only on success. A
+  # plain redirect truncates $target before sed runs, so a failed write would
+  # leave a partial file -- and a partial file is worse than none here: this
+  # function early-returns when the target exists, and the pre-push guard treats
+  # mere existence as "provisioned", so the breakage would surface at push time.
+  # Every failure path here warns and returns 0, like the incomplete-answer and
+  # relative-path paths above. bootstrap runs under `set -e` and calls this
+  # bare, so a non-zero return would abort the run before ensure_stable_link_root
+  # and install_dotfiles -- failing an OPTIONAL secondary identity would leave
+  # the machine with no dotfiles symlinks at all. Leaving the identity absent is
+  # already the safe outcome: the pre-push guard then treats it as unprovisioned
+  # and blocks loudly.
+  local temp
+  if ! temp="$(mktemp "$DOTFILES_ROOT/core/git/.gitconfig.guarzo.XXXXXX")"; then
+    log_warning "Could not create a temporary file; leaving the secondary identity unconfigured."
+    return 0
+  fi
+
+  if ! sed -e "s|YOUR_ACCOUNT_NAME|$esc_name|" \
+    -e "s|you@example.com|$esc_email|" \
+    -e "s|/home/YOUR_USER/.ssh/id_ed25519_guarzo.pub|$esc_keypath|" \
+    "$template" >"$temp" || ! mv "$temp" "$target"; then
+    rm -f "$temp"
+    log_warning "Failed to render the secondary identity; leaving it unconfigured."
+    return 0
+  fi
+
+  log_success "Secondary identity written to $target"
+  log_info "Next: GH_CONFIG_DIR=\$HOME/.gh-guarzo gh auth login"
+}
+
 setup_profile() {
   if [[ -n "$BOOTSTRAP_PROFILE" ]]; then
     printf '%s\n' "$BOOTSTRAP_PROFILE" >"$HOME/.dotfiles-profile"
@@ -317,6 +408,7 @@ main() {
   esac
 
   setup_gitconfig
+  setup_secondary_identity
   setup_profile
   # $HOME/.dotfiles, not $DOTFILES_ROOT: the latter is wherever this script was
   # run from, which may be a disposable linked worktree. The stable root must
