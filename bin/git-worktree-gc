@@ -114,9 +114,14 @@ while IFS= read -r branch; do
   MERGED["$branch"]=ancestry
 done < <(git branch --merged "$BASE_REF" --format='%(refname:short)')
 
+# gh filters on a branch name, so a base given (or resolved) as origin/main has
+# to lose its remote prefix or it matches no PR at all — which would read as
+# "nothing was ever merged" rather than "the filter was malformed".
+PR_BASE=${BASE_REF#origin/}
+
 if ! command -v gh >/dev/null 2>&1; then
   warn "gh not found — squash-merged branches will look unmerged and be left alone"
-elif ! pr_branches=$(gh pr list --state merged --limit "$PR_LIMIT" \
+elif ! pr_branches=$(gh pr list --state merged --base "$PR_BASE" --limit "$PR_LIMIT" \
   --json headRefName --jq '.[].headRefName' 2>&1); then
   warn "gh pr list failed, continuing on ancestry alone: ${pr_branches%%$'\n'*}"
 else
@@ -135,9 +140,9 @@ fi
 
 # ── Worktree inventory ────────────────────────────────────────────────────────
 
-declare -a WT_PATH=() WT_BRANCH=() WT_LOCKED=()
+declare -a WT_PATH=() WT_BRANCH=() WT_LOCKED=() WT_LOCK_REASON=()
 
-path="" branch="" locked=false
+path="" branch="" locked=false lock_reason=""
 while IFS= read -r line; do
   case "$line" in
     "worktree "*) path=${line#worktree } ;;
@@ -145,14 +150,19 @@ while IFS= read -r line; do
       branch=${line#branch }
       branch=${branch#refs/heads/}
       ;;
-    "locked"*) locked=true ;;
+    locked) locked=true ;;
+    "locked "*)
+      locked=true
+      lock_reason=${line#locked }
+      ;;
     "")
       if [[ -n "$path" ]]; then
         WT_PATH+=("$path")
         WT_BRANCH+=("$branch")
         WT_LOCKED+=("$locked")
+        WT_LOCK_REASON+=("$lock_reason")
       fi
-      path="" branch="" locked=false
+      path="" branch="" locked=false lock_reason=""
       ;;
   esac
 done < <(
@@ -169,7 +179,7 @@ CURRENT_WORKTREE=$(git rev-parse --show-toplevel)
 
 # ── Plan ──────────────────────────────────────────────────────────────────────
 
-declare -a PLAN_PATH=() PLAN_BRANCH=() PLAN_WHY=() PLAN_LOCKED=()
+declare -a PLAN_PATH=() PLAN_BRANCH=() PLAN_WHY=() PLAN_LOCKED=() PLAN_LOCK_REASON=()
 declare -a BLOCKED=()
 unmerged=0
 width=0
@@ -218,6 +228,7 @@ for i in "${!WT_PATH[@]}"; do
   PLAN_BRANCH+=("$wt_branch")
   PLAN_WHY+=("$why")
   PLAN_LOCKED+=("$wt_locked")
+  PLAN_LOCK_REASON+=("${WT_LOCK_REASON[$i]}")
   ((${#wt_branch} <= width)) || width=${#wt_branch}
 done
 
@@ -272,6 +283,20 @@ for i in "${!PLAN_PATH[@]}"; do
   # means something changed since, and the right answer is to stop for that one.
   if ! git worktree remove "$wt_path"; then
     warn "could not remove $wt_path"
+    # The unlock above was a means to removal, not a decision to unlock. Left
+    # as-is, a failed removal would silently strip a deliberate marker.
+    #
+    # This restores the lock only when git refused early — the dirty-worktree
+    # race this path exists for. `git worktree remove` deregisters before it
+    # deletes, so a failure during deletion leaves nothing to lock and the
+    # re-lock warns instead. That is reported rather than hidden.
+    if [[ "${PLAN_LOCKED[$i]}" == true ]]; then
+      lock_args=("$wt_path")
+      [[ -z "${PLAN_LOCK_REASON[$i]}" ]] ||
+        lock_args=(--reason "${PLAN_LOCK_REASON[$i]}" "$wt_path")
+      git worktree lock "${lock_args[@]}" ||
+        warn "could not re-lock $wt_path — it is now unlocked"
+    fi
     failures=$((failures + 1))
     continue
   fi
