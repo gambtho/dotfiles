@@ -1,0 +1,16 @@
+# Template for a secondary GitHub identity.
+#
+# bin/bootstrap renders this per identity slug named in the owner map: slug
+# "acme" becomes core/git/gitconfig.acme.symlink, linked to ~/.gitconfig.acme
+# and paired with ~/.gh-acme. Rendered files are gitignored; this template is
+# tracked and must never hold real values.
+#
+# IDENTITY_SLUG is replaced with the slug. signingKey must be an ABSOLUTE path
+# -- git does not expand ~ for this key on every platform.
+[user]
+	name = YOUR_ACCOUNT_NAME
+	email = you@example.com
+	signingKey = /home/YOUR_USER/.ssh/id_ed25519_IDENTITY_SLUG.pub
+[credential "https://github.com"]
+	helper =
+	helper = !GH_CONFIG_DIR=$HOME/.gh-IDENTITY_SLUG gh auth git-credential

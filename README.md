@@ -177,7 +177,12 @@ prevent. List every owner the machine should know — one you leave out becomes
 unmapped, so nothing routes it and nothing blocks it.
 
 `bin/bootstrap` offers to write the local map, or copy
-`identity-owners.local.example` by hand. `bin/git-identity` prints the map
+`identity-owners.local.example` by hand. It then offers to provision each
+non-`default` slug the map names, rendering
+`gitconfig.secondary.symlink.example` into `core/git/gitconfig.<slug>.symlink`
+(gitignored) and pointing you at `GH_CONFIG_DIR=$HOME/.gh-<slug> gh auth login`.
+Which account is secondary differs per machine, so the prompts follow the map
+rather than a fixed account name. `bin/git-identity` prints the map
 actually in effect, which is the first thing to check when routing surprises you
 on a particular machine.
 

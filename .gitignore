@@ -18,9 +18,11 @@ docs/superpowers/*
 !docs/superpowers/specs/*.md
 platforms/macos/brewfile.lock.json
 core/git/gitconfig.local.symlink
-# Machine-local secondary GitHub identity (name, email, signing key). The
-# tracked template is core/git/gitconfig.guarzo.symlink.example.
-core/git/gitconfig.guarzo.symlink
+# Machine-local secondary GitHub identities (name, email, signing key), one
+# per identity slug in the owner map: gitconfig.<slug>.symlink. The tracked
+# template is core/git/gitconfig.secondary.symlink.example. The pattern needs a
+# slug between the dots, so the tracked gitconfig.symlink is not matched.
+core/git/gitconfig.*.symlink
 .dotfiles-profile
 .opencode/
 ai/codex/projects.local.toml

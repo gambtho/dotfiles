@@ -92,30 +92,62 @@ setup_gitconfig() {
   fi
 }
 
-# Optional secondary GitHub identity (see core/git/identity-owners).
+# Optional secondary GitHub identities, one per non-default slug in the owner
+# map (see core/git/identity-owners). Driven by the map rather than hardcoded to
+# one account: which account is secondary differs per machine, so a fixed slug
+# here would offer the wrong identity on any machine but the one it was written
+# for.
 #
-# --non-interactive NEVER prompts and NEVER partially creates this file, the
-# same contract bootstrap already enforces for the primary identity. A
-# half-populated identity file is worse than none: it looks provisioned to the
-# pre-push guard and then fails at push time.
+# --non-interactive NEVER prompts and NEVER partially creates these files, the
+# same contract bootstrap enforces for the primary identity. A half-populated
+# identity file is worse than none: it looks provisioned to the pre-push guard
+# and then fails at push time.
 setup_secondary_identity() {
-  local template="$DOTFILES_ROOT/core/git/gitconfig.guarzo.symlink.example"
-  local target="$DOTFILES_ROOT/core/git/gitconfig.guarzo.symlink"
-  local name email keypath reply
+  local template="$DOTFILES_ROOT/core/git/gitconfig.secondary.symlink.example"
+  local slugs slug reply
 
   [ -f "$template" ] || return 0
 
+  # Ask the library which slugs the resolved map defines, so this honours the
+  # machine-local and per-profile maps rather than re-reading the shared one.
+  slugs="$(DOTFILES="$DOTFILES_ROOT" bash -c \
+    '. "$1/core/git/identity-lib.sh" && identity_slugs' _ "$DOTFILES_ROOT" 2>/dev/null |
+    grep -v '^default$' || true)"
+
+  if [ -z "$slugs" ]; then
+    log_info "Owner map defines no secondary identities; nothing to configure."
+    return 0
+  fi
+
+  for slug in $slugs; do
+    setup_one_secondary_identity "$slug" "$template" || true
+  done
+}
+
+# Provision a single identity slug. Returns 0 on every path -- bootstrap runs
+# under `set -e` and an OPTIONAL identity must never abort the run before
+# install_dotfiles, which would leave the machine with no symlinks at all.
+setup_one_secondary_identity() {
+  local slug="$1" template="$2"
+  local target="$DOTFILES_ROOT/core/git/gitconfig.$slug.symlink"
+  local name email keypath reply temp
+  local esc_name esc_email esc_keypath
+
   if [ -f "$target" ]; then
-    log_info "Secondary GitHub identity already configured."
+    log_info "Secondary identity '$slug' already configured."
+    return 0
+  fi
+  if [ -e "$target" ] || [ -L "$target" ]; then
+    log_warning "$target exists but is not a regular file; leaving identity '$slug' alone."
     return 0
   fi
 
   if [ "${NON_INTERACTIVE:-false}" = true ]; then
-    log_info "Skipping optional secondary GitHub identity (non-interactive)."
+    log_info "Skipping optional secondary identity '$slug' (non-interactive)."
     return 0
   fi
 
-  printf 'Configure a secondary GitHub identity? [y/N] '
+  printf "Configure the '%s' GitHub identity? [y/N] " "$slug"
   read -r reply
   case "$reply" in
     [Yy]*) : ;;
@@ -130,57 +162,46 @@ setup_secondary_identity() {
   read -r keypath
 
   if [ -z "$name" ] || [ -z "$email" ] || [ -z "$keypath" ]; then
-    log_warning "Incomplete answers; leaving the secondary identity unconfigured."
+    log_warning "Incomplete answers; leaving identity '$slug' unconfigured."
     return 0
   fi
 
   # git does not expand ~ for user.signingKey on every platform, so a relative
-  # or tilde path silently yields an unusable signing configuration. Reject it
-  # before writing anything rather than producing a file that looks provisioned.
+  # or tilde path silently yields an unusable signing configuration.
   case "$keypath" in
     /*) : ;;
     *)
-      log_warning "Signing key path must be absolute; leaving the secondary identity unconfigured."
+      log_warning "Signing key path must be absolute; leaving identity '$slug' unconfigured."
       return 0
       ;;
   esac
 
-  # Escape the sed replacement metacharacters (\ & and the | delimiter) so an
-  # answer containing them substitutes literally instead of corrupting the file.
-  local esc_name esc_email esc_keypath
+  # Escape sed replacement metacharacters (\ & and the | delimiter) so an answer
+  # containing them substitutes literally instead of corrupting the file.
   esc_name=$(printf '%s' "$name" | sed -e 's/[\\&|]/\\&/g')
   esc_email=$(printf '%s' "$email" | sed -e 's/[\\&|]/\\&/g')
   esc_keypath=$(printf '%s' "$keypath" | sed -e 's/[\\&|]/\\&/g')
 
-  # Render to a temporary file beside the target and rename only on success. A
-  # plain redirect truncates $target before sed runs, so a failed write would
-  # leave a partial file -- and a partial file is worse than none here: this
-  # function early-returns when the target exists, and the pre-push guard treats
-  # mere existence as "provisioned", so the breakage would surface at push time.
-  # Every failure path here warns and returns 0, like the incomplete-answer and
-  # relative-path paths above. bootstrap runs under `set -e` and calls this
-  # bare, so a non-zero return would abort the run before ensure_stable_link_root
-  # and install_dotfiles -- failing an OPTIONAL secondary identity would leave
-  # the machine with no dotfiles symlinks at all. Leaving the identity absent is
-  # already the safe outcome: the pre-push guard then treats it as unprovisioned
-  # and blocks loudly.
-  local temp
-  if ! temp="$(mktemp "$DOTFILES_ROOT/core/git/.gitconfig.guarzo.XXXXXX")"; then
-    log_warning "Could not create a temporary file; leaving the secondary identity unconfigured."
+  # Render to a temporary file beside the target and rename only on success: a
+  # plain redirect truncates $target before sed runs, and a partial file looks
+  # provisioned to the pre-push guard while failing at push time.
+  if ! temp="$(mktemp "$DOTFILES_ROOT/core/git/.gitconfig.$slug.XXXXXX")"; then
+    log_warning "Could not create a temporary file; leaving identity '$slug' unconfigured."
     return 0
   fi
 
-  if ! sed -e "s|YOUR_ACCOUNT_NAME|$esc_name|" \
+  if ! sed -e "s|IDENTITY_SLUG|$slug|g" \
+    -e "s|YOUR_ACCOUNT_NAME|$esc_name|" \
     -e "s|you@example.com|$esc_email|" \
-    -e "s|/home/YOUR_USER/.ssh/id_ed25519_guarzo.pub|$esc_keypath|" \
+    -e "s|/home/YOUR_USER/.ssh/id_ed25519_$slug.pub|$esc_keypath|" \
     "$template" >"$temp" || ! mv "$temp" "$target"; then
     rm -f "$temp"
-    log_warning "Failed to render the secondary identity; leaving it unconfigured."
+    log_warning "Failed to render identity '$slug'; leaving it unconfigured."
     return 0
   fi
 
-  log_success "Secondary identity written to $target"
-  log_info "Next: GH_CONFIG_DIR=\$HOME/.gh-guarzo gh auth login"
+  log_success "Identity '$slug' written to $target"
+  log_info "Next for '$slug': GH_CONFIG_DIR=\$HOME/.gh-$slug gh auth login --scopes repo,workflow"
 }
 
 # Machine-local owner map. The shared core/git/identity-owners encodes ROLES

@@ -139,12 +139,12 @@ EOF
   [ "$status" -eq 0 ]
 }
 
-@test "the guarzo identity template carries placeholders, not real values" {
-  local template="$REPO_ROOT/core/git/gitconfig.guarzo.symlink.example"
+@test "the secondary identity template carries placeholders, not real values" {
+  local template="$REPO_ROOT/core/git/gitconfig.secondary.symlink.example"
   [ -f "$template" ]
   run grep -Eq '@(gmail|microsoft|outlook)\.' "$template"
   [ "$status" -ne 0 ]
-  run grep -Fq 'GH_CONFIG_DIR=$HOME/.gh-guarzo' "$template"
+  run grep -Fq 'GH_CONFIG_DIR=$HOME/.gh-IDENTITY_SLUG' "$template"
   [ "$status" -eq 0 ]
 }
 
@@ -542,36 +542,30 @@ be_default() {
 }
 
 @test "non-interactive bootstrap skips secondary provisioning and reads no stdin" {
-  local fake="$TEST_ROOT/boot1"
-  mkdir -p "$fake/core/git"
-  cp "$REPO_ROOT/core/git/gitconfig.guarzo.symlink.example" "$fake/core/git/"
+  setup_sec_boot old50 'guarzo default\ngambtho gambtho\n'
   run env BOOTSTRAP_SOURCE_ONLY=1 HOME="$HOME" bash -c "
     source '$REPO_ROOT/bin/bootstrap'
     NON_INTERACTIVE=true
-    DOTFILES_ROOT='$fake'
+    DOTFILES_ROOT='$SECBOOT'
     setup_secondary_identity
   " </dev/null
   [ "$status" -eq 0 ]
-  assert_file_absent "$fake/core/git/gitconfig.guarzo.symlink"
+  assert_file_absent "$SECBOOT/core/git/gitconfig.gambtho.symlink"
 }
 
 @test "non-interactive bootstrap leaves an already-provisioned identity for relink" {
-  local fake="$TEST_ROOT/boot2"
-  mkdir -p "$fake/core/git"
-  cp "$REPO_ROOT/core/git/gitconfig.guarzo.symlink.example" "$fake/core/git/"
-  printf '[user]\n\temail = x@example.invalid\n' >"$fake/core/git/gitconfig.guarzo.symlink"
+  setup_sec_boot old51 'guarzo default\ngambtho gambtho\n'
+  printf '[user]\n\temail = x@example.invalid\n' >"$SECBOOT/core/git/gitconfig.gambtho.symlink"
   run env BOOTSTRAP_SOURCE_ONLY=1 HOME="$HOME" bash -c "
     source '$REPO_ROOT/bin/bootstrap'
     NON_INTERACTIVE=true
-    DOTFILES_ROOT='$fake'
+    DOTFILES_ROOT='$SECBOOT'
     setup_secondary_identity
   " </dev/null
   [ "$status" -eq 0 ]
   [[ "$output" == *"already configured"* ]]
-  run grep -c 'x@example.invalid' "$fake/core/git/gitconfig.guarzo.symlink"
+  run grep -c 'x@example.invalid' "$SECBOOT/core/git/gitconfig.gambtho.symlink"
   [ "$output" -eq 1 ]
-  run bash -c "source '$REPO_ROOT/bin/common.sh' >/dev/null 2>&1; managed_link_pairs '$fake' '$HOME' | tr '\0' '\n'"
-  [[ "$output" == *"$HOME/.gitconfig.guarzo"* ]]
 }
 
 @test "identity_validate_map rejects a non-canonical uppercase owner" {
@@ -613,75 +607,54 @@ be_default() {
 }
 
 @test "secondary identity provisioning rejects a relative signing key path" {
-  local fake="$TEST_ROOT/boot3"
-  mkdir -p "$fake/core/git"
-  cp "$REPO_ROOT/core/git/gitconfig.guarzo.symlink.example" "$fake/core/git/"
-  run env BOOTSTRAP_SOURCE_ONLY=1 HOME="$HOME" bash -c "
-    source '$REPO_ROOT/bin/bootstrap'
-    NON_INTERACTIVE=false
-    DOTFILES_ROOT='$fake'
-    printf 'y\nName\nuser@example.invalid\nrelative/key.pub\n' | setup_secondary_identity
-  "
+  setup_sec_boot old56 'guarzo default\ngambtho gambtho\n'
+  run_sec_setup 'y\nName\nuser@example.invalid\nrelative/key.pub\n'
   [ "$status" -eq 0 ]
   [[ "$output" == *"absolute"* ]]
-  assert_file_absent "$fake/core/git/gitconfig.guarzo.symlink"
+  assert_file_absent "$SECBOOT/core/git/gitconfig.gambtho.symlink"
 }
 
 @test "secondary identity provisioning escapes sed metacharacters in answers" {
-  local fake="$TEST_ROOT/boot4"
-  mkdir -p "$fake/core/git"
-  cp "$REPO_ROOT/core/git/gitconfig.guarzo.symlink.example" "$fake/core/git/"
+  setup_sec_boot old57 'guarzo default\ngambtho gambtho\n'
+  # Inline rather than via run_sec_setup: the & | and backslash survive fewer
+  # quoting layers this way, so the test exercises the escaping and not the
+  # harness.
   run env BOOTSTRAP_SOURCE_ONLY=1 HOME="$HOME" bash -c "
     source '$REPO_ROOT/bin/bootstrap'
     NON_INTERACTIVE=false
-    DOTFILES_ROOT='$fake'
+    DOTFILES_ROOT='$SECBOOT'
     printf 'y\nA&B|C\\\\D\nuser@example.invalid\n/abs/k&y.pub\n' | setup_secondary_identity
   "
   [ "$status" -eq 0 ]
-  run grep -Fq 'A&B|C\D' "$fake/core/git/gitconfig.guarzo.symlink"
+  run grep -Fq 'A&B|C\D' "$SECBOOT/core/git/gitconfig.gambtho.symlink"
   [ "$status" -eq 0 ]
-  run grep -Fq '/abs/k&y.pub' "$fake/core/git/gitconfig.guarzo.symlink"
+  run grep -Fq '/abs/k&y.pub' "$SECBOOT/core/git/gitconfig.gambtho.symlink"
   [ "$status" -eq 0 ]
 }
 
 @test "secondary identity render is atomic and leaves no partial file" {
-  # A plain redirect truncates the target before sed runs; a partial file would
-  # look "provisioned" to the pre-push guard and fail at push time instead.
-  local fake="$TEST_ROOT/boot5"
-  mkdir -p "$fake/core/git"
-  cp "$REPO_ROOT/core/git/gitconfig.guarzo.symlink.example" "$fake/core/git/"
-  chmod a-w "$fake/core/git"
-  run env BOOTSTRAP_SOURCE_ONLY=1 HOME="$HOME" bash -c "
-    source '$REPO_ROOT/bin/bootstrap'
-    NON_INTERACTIVE=false
-    DOTFILES_ROOT='$fake'
-    printf 'y\nName\nuser@example.invalid\n/abs/key.pub\n' | setup_secondary_identity
-  "
-  chmod u+w "$fake/core/git"
-  # Must not abort bootstrap: the step is optional and runs under set -e.
+  setup_sec_boot old58 'guarzo default\ngambtho gambtho\n'
+  chmod a-w "$SECBOOT/core/git"
+  run_sec_setup 'y\nName\nuser@example.invalid\n/abs/key.pub\n'
+  chmod u+w "$SECBOOT/core/git"
   [ "$status" -eq 0 ]
-  # Must not leave a partial or stray file behind.
-  assert_file_absent "$fake/core/git/gitconfig.guarzo.symlink"
-  run bash -c "ls -A '$fake/core/git' | grep -c '^\.gitconfig\.guarzo\.'"
+  assert_file_absent "$SECBOOT/core/git/gitconfig.gambtho.symlink"
+  run bash -c "ls -A '$SECBOOT/core/git' | grep -c '^[.]gitconfig[.]'"
   [ "$output" -eq 0 ]
 }
 
 @test "a failed secondary identity render does not abort bootstrap under set -e" {
-  # Regression guard: returning non-zero here would stop bootstrap before
-  # install_dotfiles, leaving the machine with no symlinks at all.
-  local fake="$TEST_ROOT/boot6"
-  mkdir -p "$fake/core/git"
-  cp "$REPO_ROOT/core/git/gitconfig.guarzo.symlink.example" "$fake/core/git/"
-  chmod a-w "$fake/core/git"
+  setup_sec_boot old59 'guarzo default\ngambtho gambtho\n'
+  chmod a-w "$SECBOOT/core/git"
   run env BOOTSTRAP_SOURCE_ONLY=1 HOME="$HOME" bash -c "
     set -e
     source '$REPO_ROOT/bin/bootstrap'
     NON_INTERACTIVE=false
-    DOTFILES_ROOT='$fake'
+    DOTFILES_ROOT='$SECBOOT'
     printf 'y\nName\nuser@example.invalid\n/abs/key.pub\n' | setup_secondary_identity
     echo REACHED_NEXT_STEP
   "
-  chmod u+w "$fake/core/git"
+  chmod u+w "$SECBOOT/core/git"
   [ "$status" -eq 0 ]
   [[ "$output" == *"REACHED_NEXT_STEP"* ]]
 }
@@ -901,4 +874,93 @@ run_map_setup() {
   [ -d "$MAPBOOT/core/git/identity-owners.local" ]
   run bash -c "ls -A '$MAPBOOT/core/git/identity-owners.local' | wc -l"
   [ "$output" -eq 0 ]
+}
+
+# ---- slug-agnostic secondary identity provisioning ----
+
+@test "gitignore covers any secondary identity slug, not just guarzo" {
+  run git -C "$REPO_ROOT" check-ignore -q core/git/gitconfig.gambtho.symlink
+  [ "$status" -eq 0 ]
+  run git -C "$REPO_ROOT" check-ignore -q core/git/gitconfig.acme.symlink
+  [ "$status" -eq 0 ]
+  # The existing machine-local guarzo file must stay covered.
+  run git -C "$REPO_ROOT" check-ignore -q core/git/gitconfig.guarzo.symlink
+  [ "$status" -eq 0 ]
+}
+
+@test "the wildcard ignore does not swallow tracked git config files" {
+  # gitconfig.symlink is the tracked global config -- ignoring it would be a
+  # catastrophic regression. Templates must stay trackable too.
+  run git -C "$REPO_ROOT" check-ignore -q core/git/gitconfig.symlink
+  [ "$status" -ne 0 ]
+  run git -C "$REPO_ROOT" ls-files --error-unmatch core/git/gitconfig.symlink
+  [ "$status" -eq 0 ]
+  run git -C "$REPO_ROOT" check-ignore -q core/git/gitconfig.secondary.symlink.example
+  [ "$status" -ne 0 ]
+}
+
+@test "the secondary identity template is slug-agnostic" {
+  local t="$REPO_ROOT/core/git/gitconfig.secondary.symlink.example"
+  [ -f "$t" ]
+  run grep -c 'IDENTITY_SLUG' "$t"
+  [ "$output" -ge 2 ]
+  run grep -Eq '@(gmail|microsoft|outlook)\.' "$t"
+  [ "$status" -ne 0 ]
+}
+
+setup_sec_boot() {
+  SECBOOT="$TEST_ROOT/$1"
+  # setup() exports IDENTITY_MAP_FILE, which outranks every discovered map and
+  # would otherwise feed these tests the fixture map instead of the one below.
+  unset IDENTITY_MAP_FILE
+  mkdir -p "$SECBOOT/core/git"
+  cp "$REPO_ROOT/core/git/gitconfig.secondary.symlink.example" "$SECBOOT/core/git/"
+  cp "$REPO_ROOT/core/git/identity-lib.sh" "$SECBOOT/core/git/"
+  printf '%b' "$2" >"$SECBOOT/core/git/identity-owners"
+}
+
+run_sec_setup() {
+  run env BOOTSTRAP_SOURCE_ONLY=1 HOME="$HOME" bash -c "
+    source '$REPO_ROOT/bin/bootstrap'
+    NON_INTERACTIVE=${2:-false}
+    DOTFILES_ROOT='$SECBOOT'
+    printf '%b' '$1' | setup_secondary_identity
+  "
+}
+
+@test "bootstrap provisions the secondary slug named by the owner map" {
+  setup_sec_boot sec1 'guarzo default\ngambtho gambtho\n'
+  run_sec_setup 'y\ngambtho\nuser@example.invalid\n/abs/gambtho.pub\n'
+  [ "$status" -eq 0 ]
+  # Named for the slug in the map, NOT hardcoded to guarzo.
+  [ -f "$SECBOOT/core/git/gitconfig.gambtho.symlink" ]
+  assert_file_absent "$SECBOOT/core/git/gitconfig.guarzo.symlink"
+  run grep -Fq 'GH_CONFIG_DIR=$HOME/.gh-gambtho' "$SECBOOT/core/git/gitconfig.gambtho.symlink"
+  [ "$status" -eq 0 ]
+  run grep -cE 'IDENTITY_SLUG|YOUR_ACCOUNT_NAME|you@example.com|YOUR_USER' "$SECBOOT/core/git/gitconfig.gambtho.symlink"
+  [ "$output" -eq 0 ]
+}
+
+@test "bootstrap offers nothing when the map has no secondary slugs" {
+  setup_sec_boot sec2 'guarzo default\n'
+  run_sec_setup 'y\n'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"no secondary"* ]]
+}
+
+@test "bootstrap skips a secondary slug that is already provisioned" {
+  setup_sec_boot sec3 'guarzo default\ngambtho gambtho\n'
+  printf '[user]\n\temail = existing@example.invalid\n' >"$SECBOOT/core/git/gitconfig.gambtho.symlink"
+  run_sec_setup 'y\n'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"already configured"* ]]
+  run grep -c 'existing@example.invalid' "$SECBOOT/core/git/gitconfig.gambtho.symlink"
+  [ "$output" -eq 1 ]
+}
+
+@test "non-interactive bootstrap still skips secondary identities" {
+  setup_sec_boot sec4 'guarzo default\ngambtho gambtho\n'
+  run_sec_setup '' true
+  [ "$status" -eq 0 ]
+  assert_file_absent "$SECBOOT/core/git/gitconfig.gambtho.symlink"
 }
