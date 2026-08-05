@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # Global pre-push hook: identity guard, then the stock git-lfs hook.
 #
 # ORDER IS LOAD-BEARING. `git lfs pre-push` runs LAST because its exit status
