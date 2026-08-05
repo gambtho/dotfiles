@@ -565,6 +565,7 @@ be_default() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"already configured"* ]]
   run grep -c 'x@example.invalid' "$SECBOOT/core/git/gitconfig.gambtho.symlink"
+  [ "$status" -eq 0 ]
   [ "$output" -eq 1 ]
 }
 
@@ -903,6 +904,7 @@ run_map_setup() {
   local t="$REPO_ROOT/core/git/gitconfig.secondary.symlink.example"
   [ -f "$t" ]
   run grep -c 'IDENTITY_SLUG' "$t"
+  [ "$status" -eq 0 ]
   [ "$output" -ge 2 ]
   run grep -Eq '@(gmail|microsoft|outlook)\.' "$t"
   [ "$status" -ne 0 ]
@@ -955,6 +957,7 @@ run_sec_setup() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"already configured"* ]]
   run grep -c 'existing@example.invalid' "$SECBOOT/core/git/gitconfig.gambtho.symlink"
+  [ "$status" -eq 0 ]
   [ "$output" -eq 1 ]
 }
 

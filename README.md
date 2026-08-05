@@ -85,9 +85,11 @@ unrelated" apart from "known identity but not provisioned."
 `includeIf "hasconfig:remote.*.url:..."` block per non-default owner, pulling
 in `~/.gitconfig.guarzo` only for repositories with a matching remote. That
 include path is gitignored and machine-local — the tracked template lives at
-`core/git/gitconfig.guarzo.symlink.example`. Copy it to
-`core/git/gitconfig.guarzo.symlink` (relinked to `~/.gitconfig.guarzo`) and
-fill in the real name, email, and signing key.
+`core/git/gitconfig.secondary.symlink.example`, which is slug-agnostic.
+`bin/bootstrap` renders it per non-`default` slug into
+`core/git/gitconfig.<slug>.symlink` (relinked to `~/.gitconfig.<slug>`); to do
+it by hand, copy the template, replace `IDENTITY_SLUG` with the slug, and fill
+in the real name, email, and absolute signing-key path.
 
 `bin/gh` is a PATH shim (installed ahead of the real `gh`, see the symlink
 table below) that resolves the current repository's remote owner and exports
