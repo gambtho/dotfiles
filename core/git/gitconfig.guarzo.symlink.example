@@ -1,0 +1,12 @@
+# Copy to core/git/gitconfig.guarzo.symlink and fill in. That file is
+# gitignored; this template is tracked and must never hold real values.
+#
+# signingKey must be an ABSOLUTE path -- git does not expand ~ for this key on
+# every platform.
+[user]
+	name = YOUR_ACCOUNT_NAME
+	email = you@example.com
+	signingKey = /home/YOUR_USER/.ssh/id_ed25519_guarzo.pub
+[credential "https://github.com"]
+	helper =
+	helper = !GH_CONFIG_DIR=$HOME/.gh-guarzo gh auth git-credential

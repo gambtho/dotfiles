@@ -119,3 +119,17 @@ EOF
     [ "$status" -eq 0 ]
   done < <(sed -n 's|^\[includeIf "hasconfig:remote\.\*\.url:https://github\.com/\([^/]*\)/\*\*"\]$|\1|p' "$config")
 }
+
+@test "the machine-local guarzo identity file is gitignored" {
+  run git -C "$REPO_ROOT" check-ignore -q core/git/gitconfig.guarzo.symlink
+  [ "$status" -eq 0 ]
+}
+
+@test "the guarzo identity template carries placeholders, not real values" {
+  local template="$REPO_ROOT/core/git/gitconfig.guarzo.symlink.example"
+  [ -f "$template" ]
+  run grep -Eq '@(gmail|microsoft|outlook)\.' "$template"
+  [ "$status" -ne 0 ]
+  run grep -Fq 'GH_CONFIG_DIR=$HOME/.gh-guarzo' "$template"
+  [ "$status" -eq 0 ]
+}
