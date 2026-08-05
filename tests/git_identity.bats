@@ -83,3 +83,39 @@ EOF
   run grep -nE '(^|[[:space:]])(mapfile|readarray)([[:space:]]|$)|declare -g?A' "$LIB"
   [ "$status" -ne 0 ]
 }
+
+@test "gitconfig declares exactly one github credential block" {
+  run grep -c '^\[credential "https://github.com"\]' "$REPO_ROOT/core/git/gitconfig.symlink"
+  [ "$status" -eq 0 ]
+  [ "$output" -eq 1 ]
+}
+
+@test "tracked gitconfig pins no absolute gh path" {
+  run grep -n 'helper = !/.*gh auth git-credential' "$REPO_ROOT/core/git/gitconfig.symlink"
+  [ "$status" -ne 0 ]
+}
+
+@test "owner map and conditional includes agree as owner+slug pairs" {
+  # Compare PAIRS, not slugs: a slug-only check passes while an owner is wired
+  # to the wrong include.
+  local config="$REPO_ROOT/core/git/gitconfig.symlink"
+  local owner slug expected
+  while read -r owner slug; do
+    [ -n "$owner" ] || continue
+    [ "$slug" = default ] && continue
+    expected="[includeIf \"hasconfig:remote.*.url:https://github.com/$owner/**\"]"
+    run grep -Fq "$expected" "$config"
+    [ "$status" -eq 0 ]
+    run grep -A1 -F "$expected" "$config"
+    [[ "$output" == *"~/.gitconfig.$slug"* ]]
+  done < <(grep -v '^[[:space:]]*#' "$REPO_ROOT/core/git/identity-owners" | grep -v '^[[:space:]]*$')
+}
+
+@test "every conditional include corresponds to a mapped owner" {
+  local config="$REPO_ROOT/core/git/gitconfig.symlink"
+  local owner
+  while read -r owner; do
+    run grep -qE "^$owner[[:space:]]" "$REPO_ROOT/core/git/identity-owners"
+    [ "$status" -eq 0 ]
+  done < <(sed -n 's|^\[includeIf "hasconfig:remote\.\*\.url:https://github\.com/\([^/]*\)/\*\*"\]$|\1|p' "$config")
+}

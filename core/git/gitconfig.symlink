@@ -39,8 +39,19 @@
 [coderabbit]
 	machineId = cli/5bd04c69e8d44ee38277024221b4b453
 [credential "https://github.com"]
-	helper = 
-	helper = !/usr/bin/gh auth git-credential
+	helper =
+	helper = !gh auth git-credential
 [credential "https://gist.github.com"]
-	helper = 
-	helper = !/usr/bin/gh auth git-credential
+	helper =
+	helper = !gh auth git-credential
+
+# Secondary GitHub identity, routed by remote owner per
+# core/git/identity-owners. The include path is gitignored and machine-local,
+# so this block is inert where it has not been provisioned -- git silently
+# ignores a missing include file.
+#
+# hasconfig matches ANY configured remote, not the push target, so a repo with
+# remotes under two mapped owners resolves ambiguously. That case is not
+# routed: the pre-push guard blocks it and bin/gh refuses to run.
+[includeIf "hasconfig:remote.*.url:https://github.com/guarzo/**"]
+	path = ~/.gitconfig.guarzo
