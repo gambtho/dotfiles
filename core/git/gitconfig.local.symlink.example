@@ -1,6 +1,6 @@
 [user]
-	name = Tom
-	email = Guaro.Eve@gmail.com
+	name = YOUR_NAME
+	email = you@example.com
 	# signingkey = YOUR_GPG_KEY_ID
 # [commit]
 #	gpgsign = true
