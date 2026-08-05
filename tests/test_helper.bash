@@ -35,12 +35,12 @@ assert_symlink_target() {
 # config/mise/config.toml still resolve. Tests that need the single-pane
 # window shape as a stable fixture (merge mechanics, single-window scenarios)
 # call this; tests proving what the real shipped default does must not.
-dev_pin_legacy_default_root() {
-  local root="$TEST_ROOT/legacy-dotfiles-root"
-  if [ ! -e "$root" ]; then
-    mkdir -p "$root/tools/dev"
-    ln -s "$REPO_ROOT/config" "$root/config"
-    cat >"$root/tools/dev/default-workspace.yaml" <<'EOF'
+# dev_legacy_default_yaml — prints the legacy layout. The single source for
+# every fixture that pins it (this file's root builder, and stage_dev_root in
+# dev_commands.bats, whose staged root also carries copied platform code and
+# so cannot reuse the root this file builds).
+dev_legacy_default_yaml() {
+  cat <<'EOF'
 version: 1
 autostart: false
 devcontainer:
@@ -58,6 +58,14 @@ windows:
     command: null
     location: host
 EOF
+}
+
+dev_pin_legacy_default_root() {
+  local root="$TEST_ROOT/legacy-dotfiles-root"
+  if [ ! -e "$root" ]; then
+    mkdir -p "$root/tools/dev"
+    ln -s "$REPO_ROOT/config" "$root/config"
+    dev_legacy_default_yaml >"$root/tools/dev/default-workspace.yaml"
   fi
   export DEV_DOTFILES_ROOT="$root"
 }

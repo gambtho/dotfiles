@@ -473,6 +473,9 @@ EOF
   # pass; a pane literally named "-" would read back as pane:null.
   run dev_config_validate "$(bad '{"name":"m","agent":null,"command":null,"cwd":null,"location":null,"focus":false,"panes":[{"name":"-","agent":null,"command":null,"cwd":null,"location":null,"focus":false}]}')"
   [ "$status" -eq 5 ]
+  # only the exact placeholder is reserved: "--" cannot collide and stays valid
+  run dev_config_validate "$(bad '{"name":"m","agent":null,"command":null,"cwd":null,"location":null,"focus":false,"panes":[{"name":"--","agent":null,"command":null,"cwd":null,"location":null,"focus":false}]}')"
+  [ "$status" -eq 0 ]
   # exclusive schema: window-level environment is a single-pane key (spec §5)
   run dev_config_validate "$(bad '{"name":"m","agent":null,"command":null,"cwd":null,"location":null,"focus":false,"environment":{"A":"1"},"panes":[{"name":"a","agent":null,"command":null,"cwd":null,"location":null,"focus":false}]}')"
   [ "$status" -eq 5 ]

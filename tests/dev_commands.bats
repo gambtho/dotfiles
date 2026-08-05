@@ -25,24 +25,10 @@ stage_dev_root() {
   # Pinned to the LEGACY four-window layout (not a cp of the shipped default):
   # these dispatcher-pattern scenarios exercise the single-pane window paths
   # and must keep doing so regardless of what the shipped default becomes.
-  cat >"$TEST_ROOT/root/tools/dev/default-workspace.yaml" <<'EOF'
-version: 1
-autostart: false
-devcontainer:
-  enabled: auto
-  start_timeout: 300
-windows:
-  - name: agent-1
-    agent: claude
-    focus: true
-  - name: agent-2
-    agent: claude
-  - name: shell
-    command: null
-  - name: scratch
-    command: null
-    location: host
-EOF
+  # The YAML comes from test_helper.bash's single fixture source; this staged
+  # root (which also carries copied platform code) is separate from the
+  # config-only root dev_pin_legacy_default_root builds.
+  dev_legacy_default_yaml >"$TEST_ROOT/root/tools/dev/default-workspace.yaml"
   export DEV_DOTFILES_ROOT="$TEST_ROOT/root"
 }
 

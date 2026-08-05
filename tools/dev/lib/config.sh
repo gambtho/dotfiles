@@ -159,7 +159,7 @@ dev_config_validate() {
           | select(.name == null or ((.name | tostring) | test("^[A-Za-z0-9._-]+$") | not))
           | "a pane in window \($w.name) has an invalid name; use [A-Za-z0-9._-]"))
       + ((.windows // []) | map(. as $w | (.panes // [])[]
-          | select(.name != null and ((.name | tostring) | test("^-+$")))
+          | select(.name == "-")
           | "pane \($w.name)/\(.name) has a reserved name"))
       + ((.windows // []) | map(. as $w | (.panes // [])[]
           | select(.location != null and ((.location | IN("container","host")) | not))

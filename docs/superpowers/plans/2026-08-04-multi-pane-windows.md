@@ -508,7 +508,7 @@ In `tools/dev/dev-event`, inside `dev_event_data_from_pairs`'s loop, after `valu
 
 In `tools/dev/dev.tmux.conf`, extend the pane-died hook line (keep it one line, same quoting pattern as the current one):
 
-```
+```tmux
 set-hook -gw pane-died "run-shell -b \"~/.dotfiles/tools/dev/dev-event '#{@dev_workspace_id}' '#{@dev_slug}' '#{session_name}' '#{@dev_worktree}' pane.died 'window=#{window_name}' 'pane=#{@dev_pane}'\""
 ```
 

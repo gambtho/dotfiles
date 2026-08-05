@@ -468,7 +468,7 @@ fixture_pane_config() {
   [ "$(jq -r '.pane' <<<"$dead")" = "shell" ]
 }
 
-@test "apply_layout leaves undeclared panes alone and single-pane window env includes window environment" {
+@test "apply_layout leaves undeclared panes alone" {
   dev_backend_create "proj" "aa11" "proj" "$TEST_WT"
   cfg=$(jq -c '.windows[0].panes |= .[0:2]' <<<"$(fixture_pane_config)")
   dev_backend_apply_layout "proj" "$cfg" "$(fixture_record)"
@@ -477,7 +477,10 @@ fixture_pane_config() {
   dev_backend_apply_layout "proj" "$cfg" "$(fixture_record)"
   run dev_tmux list-panes -t "=proj:=main" -F '#{pane_id}'
   [[ "$output" == *"$manual"* ]]
+}
 
+@test "apply_layout injects window-level environment into a single-pane window" {
+  dev_backend_create "proj" "aa11" "proj" "$TEST_WT"
   # window-level environment reaches a single-pane window's process (spec §7.1 fix)
   envcfg=$(jq -nc '{
     version: 1, autostart: false,

@@ -124,6 +124,12 @@ dev_backend_ensure_pane_window() {
         ';' set-option -p -t "=$session_name:=$wname" @dev_pane "$pname" || return 1
     fi
     created=$((created + 1))
+    # Re-apply the layout after EVERY successful creation, not once at the end:
+    # unbalanced repeated splits halve the active pane each time and can hit
+    # tmux's "pane too small" before the roster is complete; rebalancing as we
+    # go keeps room for the next split. Still conditional on a creation, so a
+    # no-op open never stomps manual resizes (spec §4).
+    dev_tmux select-layout -t "=$session_name:=$wname" "$layout" || return 1
 
     ev_id=$(dev_event_id_random)
     ev_ts=$(dev_now)
@@ -145,11 +151,6 @@ dev_backend_ensure_pane_window() {
     fi
   done < <(jq -c '.panes[]' <<<"$window_json")
 
-  if [[ "$created" -gt 0 ]]; then
-    # Applied only when a pane was created: re-applying on a no-op open would
-    # stomp the user's manual resizes (spec §4).
-    dev_tmux select-layout -t "=$session_name:=$wname" "$layout" || return 1
-  fi
   printf '%s\n' "$created"
 }
 
