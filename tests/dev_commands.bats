@@ -22,7 +22,13 @@ stage_dev_root() {
   cp -r "$REPO_ROOT/bin" "$TEST_ROOT/root/bin"
   cp -r "$REPO_ROOT/tools/dev/lib" "$TEST_ROOT/root/tools/dev/lib"
   cp -r "$REPO_ROOT/tools/dev/commands" "$TEST_ROOT/root/tools/dev/commands"
-  cp "$REPO_ROOT/tools/dev/default-workspace.yaml" "$TEST_ROOT/root/tools/dev/default-workspace.yaml"
+  # Pinned to the LEGACY four-window layout (not a cp of the shipped default):
+  # these dispatcher-pattern scenarios exercise the single-pane window paths
+  # and must keep doing so regardless of what the shipped default becomes.
+  # The YAML comes from test_helper.bash's single fixture source; this staged
+  # root (which also carries copied platform code) is separate from the
+  # config-only root dev_pin_legacy_default_root builds.
+  dev_legacy_default_yaml >"$TEST_ROOT/root/tools/dev/default-workspace.yaml"
   export DEV_DOTFILES_ROOT="$TEST_ROOT/root"
 }
 
@@ -281,7 +287,17 @@ dev_open_load_libs() {
   source "$REPO_ROOT/tools/dev/commands/attach.sh"
   source "$REPO_ROOT/tools/dev/commands/stop.sh"
   source "$REPO_ROOT/tools/dev/commands/list.sh"
+  source "$REPO_ROOT/tools/dev/commands/status.sh"
 }
+
+# dev_open_load_libs sources the real repo directly and setup_dev_test points
+# DEV_DOTFILES_ROOT at $REPO_ROOT, so these sourced-function scenarios read
+# the actual shipped default-workspace.yaml -- not a copy under stage_dev_root
+# (that fixture only feeds the dispatcher-pattern tests above). Scenarios that
+# assert the legacy single-pane *window* shape (agent-1/agent-2/shell/scratch
+# as windows, not panes of one dashboard window) call dev_pin_legacy_default_root
+# (test_helper.bash) to pin that shape regardless of what the shipped default
+# becomes.
 
 dev_open_fixture() {
   local dir="$DEV_REPO_ROOT/$1"
@@ -305,6 +321,7 @@ dev_open_events() {
 @test "open creates the session with the four default windows and emits workspace.opened" {
   setup_dev_test
   dev_open_load_libs
+  dev_pin_legacy_default_root
   dev_open_stub_attach
   dev_open_fixture demo >/dev/null
 
@@ -333,6 +350,7 @@ dev_open_events() {
 @test "a second open creates nothing, re-runs nothing, and leaves scratch untouched" {
   setup_dev_test
   dev_open_load_libs
+  dev_pin_legacy_default_root
   dev_open_stub_attach
   dev_open_fixture demo >/dev/null
 
@@ -411,12 +429,26 @@ dev_open_events() {
   dev_tmux kill-server || true
 }
 
-@test "open after a container loss emits container.replaced then container.ready and respawns dead panes" {
+# The common bootstrap for "plain re-open respawns a dead pane" scenarios:
+# stage a demo fixture with sourced libs, a stubbed attach, and a long-lived
+# stand-in for the "claude" binary the default config's agent-1/agent-2
+# windows run (not on PATH here). As tests/dev_backend_tmux.bats:29-37
+# documents, a command that exits races dev_backend_apply_layout setting
+# remain-on-exit -- the window can vanish before the very next tmux call
+# touches it, so the stub must stay alive rather than just exit 0.
+scenario_setup_demo_workspace() {
   setup_dev_test
   dev_open_load_libs
   dev_open_stub_attach
+  dev_open_fixture demo >/dev/null
+  stub_command claude 'exec sleep 30'
+}
+
+@test "open after a container loss emits container.replaced then container.ready and respawns dead panes" {
+  scenario_setup_demo_workspace
+  dev_pin_legacy_default_root
   local dir ws_id
-  dir=$(dev_open_fixture demo)
+  dir="$DEV_REPO_ROOT/demo"
   mkdir -p "$dir/.devcontainer"
   printf '{"image":"alpine:3"}\n' >"$dir/.devcontainer/devcontainer.json"
 
@@ -446,13 +478,6 @@ case "$1" in
   *) exit 0 ;;
 esac
 '
-  # The default config's agent windows run the real "claude" binary, which is
-  # not on PATH here. As tests/dev_backend_tmux.bats:29-37 documents, a command
-  # that exits races dev_backend_apply_layout setting remain-on-exit -- the
-  # window can vanish before the very next tmux call touches it. Stubbed as a
-  # long-lived placeholder so agent panes survive both this test's own setup
-  # (which calls apply_layout directly) and the `dev_cmd_open` under test.
-  stub_command claude 'exec sleep 30'
 
   # Seed a record bound to a container that no longer exists.
   local session record
@@ -495,6 +520,68 @@ esac
   [ "$(dev_open_events 'select(.event == "pane.respawned") | .id' | wc -l)" = "1" ]
   [ "$(dev_open_events 'select(.event == "pane.respawned") | .data.container_id')" = "newcid" ]
   [ "$(dev_tmux list-panes -t '=demo:=shell' -F '#{pane_dead}')" = "0" ]
+  dev_tmux kill-server || true
+}
+
+@test "plain re-open respawns a dead pane in a host-only workspace (no container loss required)" {
+  scenario_setup_demo_workspace
+  dev_pin_legacy_default_root
+
+  run dev_cmd_open demo --no-attach
+  [ "$status" -eq 0 ]
+
+  dev_tmux respawn-pane -k -t '=demo:=shell' 'exit 3'
+  local i
+  for i in $(seq 1 50); do
+    [ "$(dev_tmux list-panes -t '=demo:=shell' -F '#{pane_dead}')" = "1" ] && break
+    sleep 0.1
+  done
+
+  run dev_cmd_open demo --no-attach
+  [ "$status" -eq 0 ]
+  [ "$(dev_tmux list-panes -t '=demo:=shell' -F '#{pane_dead}')" = "0" ]
+  grep -q '"event":"pane.respawned"' "$DEV_STATE_ROOT/events/events.jsonl"
+  dev_tmux kill-server || true
+}
+
+@test "re-open respawns one dead agent pane of two and leaves the other agent untouched" {
+  scenario_setup_demo_workspace
+  dev_pin_legacy_default_root
+  mkdir -p "$DEV_OVERLAY_ROOT/demo"
+  cat >"$DEV_OVERLAY_ROOT/demo/workspace.yaml" <<'EOF'
+version: 1
+windows:
+  - name: dash
+    layout: tiled
+    panes:
+      - name: agent-1
+        agent: sleep 30
+      - name: agent-2
+        agent: sleep 30
+EOF
+  run dev_cmd_open demo --no-attach
+  [ "$status" -eq 0 ]
+
+  local victim
+  victim=$(dev_tmux list-panes -t '=demo:=dash' -F '#{pane_id} #{?#{@dev_pane},#{@dev_pane},-}' |
+    awk '$2 == "agent-2" {print $1; exit}')
+  dev_tmux respawn-pane -k -t "$victim" 'exit 1'
+  local i
+  for i in $(seq 1 50); do
+    [ "$(dev_tmux display-message -p -t "$victim" '#{pane_dead}')" = "1" ] && break
+    sleep 0.1
+  done
+
+  run dev_cmd_open demo --no-attach
+  [ "$status" -eq 0 ]
+  [ "$(dev_tmux display-message -p -t "$victim" '#{pane_dead}')" = "0" ]
+
+  local record
+  record=$(cat "$DEV_STATE_ROOT"/workspaces/*.json)
+  [ "$(jq -r '.agents[] | select(.pane == "agent-2") | .state' <<<"$record")" = "started" ]
+  # agent-1 never died: exactly one lifecycle event for it, the start
+  [ "$(jq -r '.agents[] | select(.pane == "agent-1") | .state' <<<"$record")" = "started" ]
+  [ "$(grep -c '"pane":"agent-1"' "$DEV_STATE_ROOT/events/events.jsonl")" -eq 2 ] # pane.created + agent.started only
   dev_tmux kill-server || true
 }
 
@@ -814,5 +901,42 @@ exit 0
   [[ "$output" != *"command not found"* ]]
   [ ! -e "$(dev_open_session_index_path demo)" ]
 
+  dev_tmux kill-server || true
+}
+
+@test "status reports undeclared windows and undeclared panes as drift" {
+  scenario_setup_demo_workspace
+  dev_pin_legacy_default_root
+
+  run dev_cmd_open demo --no-attach
+  [ "$status" -eq 0 ]
+
+  dev_tmux new-window -d -t '=demo:' -n rogue "sleep 30"
+  dev_tmux split-window -d -t '=demo:=shell' "sleep 30"
+
+  run dev_cmd_status demo
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"drift:"*"rogue"* ]]
+  [[ "$output" == *"drift:"*"shell"*"undeclared pane"* ]]
+
+  dev_tmux kill-server || true
+}
+
+@test "shipped default opens as a one-window tiled dashboard with four stamped panes" {
+  # Unlike the scenarios above, this one deliberately does NOT pin the legacy
+  # layout: it exercises the real shipped tools/dev/default-workspace.yaml
+  # (scenario_setup_demo_workspace already stubs claude to stay alive).
+  scenario_setup_demo_workspace
+
+  run dev_cmd_open demo --no-attach
+  [ "$status" -eq 0 ]
+  run dev_tmux list-windows -t '=demo' -F '#{window_name}'
+  [ "$output" = "main" ]
+  run dev_tmux list-panes -t '=demo:=main' -F '#{?#{@dev_pane},#{@dev_pane},-}'
+  [ "$(printf '%s\n' "$output" | sort | tr '\n' ',')" = "agent-1,agent-2,scratch,shell," ]
+
+  record=$(cat "$DEV_STATE_ROOT"/workspaces/*.json)
+  [ "$(jq -r '[.agents[] | select(.window == "main")] | length' <<<"$record")" -eq 2 ]
+  [ "$(jq -r '[.agents[].pane] | sort | join(",")' <<<"$record")" = "agent-1,agent-2" ]
   dev_tmux kill-server || true
 }

@@ -29,6 +29,14 @@ dev_event_data_from_pairs() {
     # Longest-prefix removal on the key, shortest on the value: `a=b=c` is the
     # key `a` with the value `b=c`, not a truncated `b`.
     value="${pair#*=}"
+    # `pane=` with an empty value is skipped -- and ONLY pane. The pane-died
+    # hook interpolates #{@dev_pane} unconditionally, and single-pane windows
+    # are never stamped, so this is what keeps their pane.died bytes identical
+    # to the pre-panes era (spec §3). Every other key keeps record-everything
+    # behavior: an empty client or exit_status is an observation, not noise.
+    if [[ "$key" == pane && -z "$value" ]]; then
+      continue
+    fi
     out=$(jq -c --arg k "$key" --arg v "$value" '. + {($k): $v}' <<<"$out")
   done
   printf '%s\n' "$out"

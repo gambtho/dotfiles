@@ -128,25 +128,44 @@ dev_open_container_up() {
                    observed_at: $ts}' <<<"$record"
 }
 
-# Only panes the backend reports dead are touched. A live pane is never respawned.
+# Only panes the backend reports dead are touched; a live pane is never
+# respawned, so running this on every open is idempotent (spec §4 removed the
+# old container-loss gate). Undeclared panes -- unstamped, or stamped with a
+# name the config no longer declares -- are skipped: they are drift for
+# `dev status` to report, not ours to touch. A single-pane window with extra
+# manual panes is skipped for the same reason: the window target cannot say
+# which pane is the declared one.
 dev_open_respawn_dead() {
   local config="$1" record="$2"
-  local query dead cid win wjson cmd env_json
+  local query cid global_env win pname handle total wjson pjson env cmd
   query=$(dev_backend_query "$DEV_OPEN_SESSION")
-  dead=$(jq -r '.windows[] | select([.panes[].alive] | index(false)) | .name' <<<"$query")
-  [[ -n "$dead" ]] || return 0
   cid=$(jq -r '.container.id // ""' <<<"$record")
-  env_json=$(jq -c '.environment // {}' <<<"$config")
-  while IFS= read -r win; do
+  global_env=$(jq -c '.environment // {}' <<<"$config")
+  while IFS=$'\t' read -r win pname handle total; do
     [[ -n "$win" ]] || continue
-    wjson=$(jq -c --arg w "$win" '.windows[] | select(.name == $w)' <<<"$config")
+    wjson=$(jq -c --arg w "$win" 'first(.windows[] | select(.name == $w)) // empty' <<<"$config")
     [[ -n "$wjson" ]] || continue
-    cmd=$(dev_open_window_command "$record" "$wjson" "$env_json") || continue
-    # `dev_backend_respawn_pane` is the sole emitter of pane.respawned (Task 12),
-    # so the container id is handed to it rather than emitted again here. Two
-    # events for one respawn would fold twice and double the `restarts` counter.
-    dev_backend_respawn_pane "$DEV_OPEN_SESSION" "$win" "$cmd" "$cid" || continue
-  done <<<"$dead"
+    if [[ "$(jq -r '.panes != null' <<<"$wjson")" == true ]]; then
+      [[ "$pname" != "-" ]] || continue
+      pjson=$(jq -c --arg p "$pname" 'first(.panes[] | select(.name == $p)) // empty' <<<"$wjson")
+      [[ -n "$pjson" ]] || continue
+      env=$(jq -c --argjson g "$global_env" '$g * (.environment // {})' <<<"$wjson")
+      env=$(jq -c --argjson w "$env" '$w * (.environment // {})' <<<"$pjson")
+      cmd=$(dev_open_window_command "$record" "$pjson" "$env") || continue
+      # `dev_backend_respawn_pane` is the sole emitter of pane.respawned
+      # (Task 12), so the container id is handed to it rather than emitted
+      # again here. Two events for one respawn would fold twice and double
+      # the `restarts` counter.
+      dev_backend_respawn_pane "$DEV_OPEN_SESSION" "$win" "$cmd" "$cid" "$handle" "$pname" || continue
+    else
+      [[ "$total" -eq 1 ]] || continue
+      env=$(jq -c --argjson g "$global_env" '$g * (.environment // {})' <<<"$wjson")
+      cmd=$(dev_open_window_command "$record" "$wjson" "$env") || continue
+      dev_backend_respawn_pane "$DEV_OPEN_SESSION" "$win" "$cmd" "$cid" "$handle" || continue
+    fi
+  done < <(jq -r '.windows[] | .name as $w | (.panes | length) as $n
+    | .panes[] | select(.alive | not)
+    | [$w, (.pane // "-"), .pane_id, ($n | tostring)] | @tsv' <<<"$query")
 }
 
 dev_open_ensure_locked() {
@@ -185,9 +204,7 @@ dev_open_ensure_locked() {
   record=$(jq --arg n "$DEV_OPEN_SESSION" '.session_name = $n' <<<"$record")
   dev_backend_apply_layout "$DEV_OPEN_SESSION" "$config" "$record" || return $?
 
-  if [[ "$repair" -eq 1 && "$created" -eq 0 ]]; then
-    dev_open_respawn_dead "$config" "$record"
-  fi
+  dev_open_respawn_dead "$config" "$record"
 
   if [[ "$created" -eq 1 ]]; then
     dev_open_emit workspace.opened \

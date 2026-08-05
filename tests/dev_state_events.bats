@@ -507,6 +507,28 @@ fill_events() {
   done
 }
 
+@test "dev-event: an empty pane= pair is skipped; a non-empty one is recorded" {
+  run "$REPO_ROOT/tools/dev/dev-event" ws1 proj sess "$TEST_ROOT/workspace/proj" \
+    pane.died 'window=agent-1' 'pane='
+  [ "$status" -eq 0 ]
+  line=$(tail -n 1 "$DEV_STATE_ROOT/events/events.jsonl")
+  [ "$(jq -r '.data | has("pane")' <<<"$line")" = "false" ]
+  [ "$(jq -r '.data.window' <<<"$line")" = "agent-1" ]
+
+  run "$REPO_ROOT/tools/dev/dev-event" ws1 proj sess "$TEST_ROOT/workspace/proj" \
+    pane.died 'window=main' 'pane=shell'
+  [ "$status" -eq 0 ]
+  line=$(tail -n 1 "$DEV_STATE_ROOT/events/events.jsonl")
+  [ "$(jq -r '.data.pane' <<<"$line")" = "shell" ]
+
+  # other keys keep record-everything behavior, empty or not
+  run "$REPO_ROOT/tools/dev/dev-event" ws1 proj sess "$TEST_ROOT/workspace/proj" \
+    workspace.attached 'client='
+  [ "$status" -eq 0 ]
+  line=$(tail -n 1 "$DEV_STATE_ROOT/events/events.jsonl")
+  [ "$(jq -r '.data.client' <<<"$line")" = "" ]
+}
+
 @test "state: dev_state_commit rejecting a bad new_json creates no temp files" {
   local rec path dir before_count after_count
   rec=$(dev_state_new "$WS_ID" slabledger slabledger /w)
