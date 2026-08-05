@@ -2,7 +2,7 @@
 name: codex-review
 description: Get a second opinion from Codex on a spec or implementation plan — reviews the doc you have been working on, against the actual code
 argument-hint: "[path — defaults to the doc most recently discussed in this session] [--with-spec | --with-plan]"
-allowed-tools: Bash(codex --version), Bash(codex exec:*), Bash(git rev-parse:*), Bash(ls:*), Bash(date:*), Bash(mkdir:*), Bash(rm -f:*), Read, Write, Edit, Glob, Grep
+allowed-tools: Bash(codex --version), Bash(codex exec:*), Bash(git rev-parse:*), Bash(git branch:*), Bash(ls:*), Bash(mktemp:*), Bash(rm -rf /tmp/codex-review-*), Read, Write, Edit, Glob, Grep
 ---
 
 # Codex Review — Second Opinion on a Spec or Plan
@@ -252,11 +252,24 @@ Ask which findings the user wants folded into the doc. Then:
 
 If the user wants none applied, that is a complete and correct outcome — stop cleanly.
 
-### 4c: Warn Before Editing Outside a Worktree
+### 4c: Check the Target Before Editing
 
-Applying findings **writes to a spec or plan**, which this repo's working agreement counts as feature work — and feature work belongs in a linked worktree.
+Two checks before the first `Edit`, in this order.
 
-Before the first edit, check whether `ROOT` is under `.claude/worktrees/`. If it is not, you are about to write to the main checkout. Say so and get explicit confirmation:
+**1. The target must live inside the tree you reviewed.** Canonicalize it — resolve symlinks and make it absolute — and confirm the result is under `ROOT`. A relative path that climbs out, an absolute path, or a symlink can all land an edit in a *different* checkout while `ROOT` itself still looks fine. That is the tree-A-plan-against-tree-B-code failure from Phase 0d arriving through the back door: you would be applying findings to a copy Codex never read.
+
+Only the spec/plan files resolved in Phase 1 are eligible. If a target fails this check, **STOP** and report both paths:
+
+```text
+Refusing to edit {canonical target}: it resolves outside the reviewed tree
+({ROOT}). Codex reviewed a different copy of this document.
+```
+
+This one is a hard stop, not a prompt. There is no reading of it where editing an unreviewed file is what the user meant.
+
+**2. Warn if `ROOT` is not a linked worktree.** Applying findings **writes to a spec or plan**, which this repo's working agreement counts as feature work — and feature work belongs in a linked worktree.
+
+If `ROOT` is not under `.claude/worktrees/`, say so and get explicit confirmation:
 
 ```text
 Heads up: applying these findings edits {doc} in the main checkout ({ROOT}),
@@ -264,7 +277,7 @@ not a linked worktree. The working agreement puts spec and plan writes in a
 worktree. Apply here anyway, or move to a worktree first?
 ```
 
-Warn and confirm — do **not** hard-stop. Reviewing is read-only and legitimately useful from any checkout, and a hard gate would also block the ordinary case of amending a doc that has already merged to `main`. The user decides; a hard rule cannot tell "starting feature work" apart from "fixing a stale line in a merged plan."
+Warn and confirm — do **not** hard-stop here. Reviewing is read-only and legitimately useful from any checkout, and a hard gate would also block the ordinary case of amending a doc that has already merged to `main`. The user decides; a static rule cannot tell "starting feature work" apart from "fixing a stale line in a merged plan."
 
 Once confirmed, proceed. Do not re-ask on subsequent edits in the same run.
 
