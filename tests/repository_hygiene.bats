@@ -114,3 +114,16 @@ setup() {
   [ "$status" -eq 0 ]
   [ -z "$output" ]
 }
+
+@test "every core/git example template is actually tracked" {
+  # A local .git/info/exclude pattern of "git/" once matched core/git/ as well
+  # as the legacy top-level git/, so new templates there were silently dropped:
+  # `git add` refuses an ignored path but still exits 0, so `git add -A &&
+  # git commit` succeeded without the file and only CI noticed.
+  local f
+  for f in "$REPO_ROOT"/core/git/*.example; do
+    [ -e "$f" ] || continue
+    run git -C "$REPO_ROOT" ls-files --error-unmatch "${f#"$REPO_ROOT/"}"
+    [ "$status" -eq 0 ]
+  done
+}
