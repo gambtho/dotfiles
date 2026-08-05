@@ -275,3 +275,161 @@ EOF
   [ "$status" -eq 0 ]
   [[ "$output" == *"$HOME/.bash_profile"* ]]
 }
+
+setup_guard() {
+  export DOTFILES="$TEST_ROOT/dotfiles"
+  mkdir -p "$DOTFILES/core/git"
+  cp "$REPO_ROOT/core/git/identity-lib.sh" "$DOTFILES/core/git/"
+  cp "$MAP" "$DOTFILES/core/git/identity-owners"
+  unset IDENTITY_MAP_FILE
+  HOOK="$REPO_ROOT/core/git/git-hooks.symlink/pre-push"
+  GUARD_REPO="$TEST_ROOT/g"
+  git init -q "$GUARD_REPO"
+  stub_command git-lfs 'exit 0'
+  cat >"$HOME/.gitconfig.local" <<'EOF'
+[user]
+	email = default@example.invalid
+	signingKey = /keys/default.pub
+EOF
+}
+
+provision_guarzo() {
+  cat >"$HOME/.gitconfig.guarzo" <<'EOF'
+[user]
+	email = guarzo@example.invalid
+	signingKey = /keys/guarzo.pub
+EOF
+  mkdir -p "$HOME/.gh-guarzo"
+}
+
+be_guarzo() {
+  git -C "$GUARD_REPO" config user.email guarzo@example.invalid
+  git -C "$GUARD_REPO" config user.signingKey /keys/guarzo.pub
+}
+
+be_default() {
+  git -C "$GUARD_REPO" config user.email default@example.invalid
+  git -C "$GUARD_REPO" config user.signingKey /keys/default.pub
+}
+
+@test "guard fails open for a non-github destination" {
+  setup_guard
+  cd "$GUARD_REPO"
+  run "$HOOK" origin https://gitlab.com/guarzo/repo.git </dev/null
+  [ "$status" -eq 0 ]
+}
+
+@test "guard fails open for an unmapped owner" {
+  setup_guard
+  cd "$GUARD_REPO"
+  run "$HOOK" origin https://github.com/kubernetes-sigs/repo.git </dev/null
+  [ "$status" -eq 0 ]
+}
+
+@test "guard blocks a guarzo push when the identity is unprovisioned" {
+  setup_guard
+  cd "$GUARD_REPO"
+  run "$HOOK" origin https://github.com/guarzo/repo.git </dev/null
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"not provisioned"* ]]
+}
+
+@test "guard blocks a guarzo push made under the default identity" {
+  setup_guard
+  provision_guarzo
+  be_default
+  cd "$GUARD_REPO"
+  run "$HOOK" origin https://github.com/guarzo/repo.git </dev/null
+  [ "$status" -ne 0 ]
+}
+
+@test "guard allows a guarzo push made under the guarzo identity" {
+  setup_guard
+  provision_guarzo
+  be_guarzo
+  cd "$GUARD_REPO"
+  run "$HOOK" origin https://github.com/guarzo/repo.git </dev/null
+  [ "$status" -eq 0 ]
+}
+
+@test "guard blocks the fork case: pushing to gambtho as guarzo" {
+  # origin=gambtho, upstream=guarzo -- hasconfig resolves the repo to guarzo,
+  # and the push targets gambtho. This is the case the guard exists for.
+  setup_guard
+  provision_guarzo
+  be_guarzo
+  git -C "$GUARD_REPO" remote add upstream https://github.com/guarzo/repo.git
+  cd "$GUARD_REPO"
+  run "$HOOK" origin https://github.com/gambtho/repo.git </dev/null
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"gambtho"* ]]
+}
+
+@test "guard allows a gambtho push made under the default identity" {
+  setup_guard
+  provision_guarzo
+  be_default
+  cd "$GUARD_REPO"
+  run "$HOOK" origin https://github.com/gambtho/repo.git </dev/null
+  [ "$status" -eq 0 ]
+}
+
+@test "guard allows a gambtho push with an unrelated per-repo email" {
+  # A legitimate override must not be a false positive: it matches no identity.
+  setup_guard
+  provision_guarzo
+  git -C "$GUARD_REPO" config user.email project-specific@example.invalid
+  cd "$GUARD_REPO"
+  run "$HOOK" origin https://github.com/gambtho/repo.git </dev/null
+  [ "$status" -eq 0 ]
+}
+
+@test "guard blocks a mapped destination when the identity is indeterminate" {
+  setup_guard
+  provision_guarzo
+  cd "$GUARD_REPO"
+  git config --unset user.email || true
+  run "$HOOK" origin https://github.com/guarzo/repo.git </dev/null
+  [ "$status" -ne 0 ]
+}
+
+@test "guard blocks a github push when the owner map is invalid" {
+  setup_guard
+  provision_guarzo
+  be_guarzo
+  printf 'guarzo guarzo\nguarzo default\n' >"$DOTFILES/core/git/identity-owners"
+  cd "$GUARD_REPO"
+  run "$HOOK" origin https://github.com/guarzo/repo.git </dev/null
+  [ "$status" -ne 0 ]
+}
+
+@test "composed hook preserves a non-zero git-lfs exit status" {
+  setup_guard
+  provision_guarzo
+  be_guarzo
+  stub_command git-lfs 'exit 7'
+  cd "$GUARD_REPO"
+  run "$HOOK" origin https://github.com/guarzo/repo.git </dev/null
+  [ "$status" -eq 7 ]
+}
+
+@test "a rejecting guard never reaches git lfs pre-push" {
+  setup_guard
+  stub_command git-lfs "echo ran >>'$TEST_ROOT/lfs.log'; exit 0"
+  cd "$GUARD_REPO"
+  run "$HOOK" origin https://github.com/guarzo/repo.git </dev/null
+  [ "$status" -ne 0 ]
+  assert_file_absent "$TEST_ROOT/lfs.log"
+}
+
+@test "guard leaves stdin intact for git lfs pre-push" {
+  setup_guard
+  provision_guarzo
+  be_guarzo
+  stub_command git-lfs "cat >'$TEST_ROOT/lfs-stdin.txt'; exit 0"
+  cd "$GUARD_REPO"
+  printf 'refs/heads/main aaa refs/heads/main bbb\n' |
+    "$HOOK" origin https://github.com/guarzo/repo.git
+  run cat "$TEST_ROOT/lfs-stdin.txt"
+  [[ "$output" == *"refs/heads/main"* ]]
+}
