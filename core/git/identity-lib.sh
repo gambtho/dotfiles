@@ -78,17 +78,21 @@ identity_validate_map() {
       printf 'identity: malformed entry at %s:%d\n' "$file" "$lineno" >&2
       return 1
     fi
+    # Validate the WHOLE token, not just its first character. Owners must be
+    # canonical lowercase because identity_owner_slug folds the lookup key: an
+    # uppercase entry here would parse fine and then never match anything, which
+    # is a silent misconfiguration rather than a visible error.
     case "$owner" in
-      [A-Za-z0-9]*) : ;;
-      *)
-        printf 'identity: malformed entry at %s:%d\n' "$file" "$lineno" >&2
+      -* | *[!a-z0-9-]*)
+        printf 'identity: owner must be lowercase [a-z0-9-] at %s:%d\n' "$file" "$lineno" >&2
         return 1
         ;;
     esac
+    # Slugs become path components in ~/.gitconfig.<slug> and ~/.gh-<slug>, so a
+    # separator or dot segment would escape the intended location.
     case "$slug" in
-      [a-z0-9]*) : ;;
-      *)
-        printf 'identity: malformed entry at %s:%d\n' "$file" "$lineno" >&2
+      -* | *[!a-z0-9-]*)
+        printf 'identity: slug must be lowercase [a-z0-9-] at %s:%d\n' "$file" "$lineno" >&2
         return 1
         ;;
     esac

@@ -1,6 +1,9 @@
 [user]
-	name = YOUR_NAME
-	email = you@example.com
+	# AUTHORNAME and AUTHOREMAIL are substituted by setup_gitconfig in
+	# bin/bootstrap. They must stay exactly these tokens: any other placeholder
+	# is copied through literally and every commit is authored as it.
+	name = AUTHORNAME
+	email = AUTHOREMAIL
 	# signingkey = YOUR_GPG_KEY_ID
 # [commit]
 #	gpgsign = true

@@ -134,9 +134,27 @@ setup_secondary_identity() {
     return 0
   fi
 
-  sed -e "s|YOUR_ACCOUNT_NAME|$name|" \
-    -e "s|you@example.com|$email|" \
-    -e "s|/home/YOUR_USER/.ssh/id_ed25519_guarzo.pub|$keypath|" \
+  # git does not expand ~ for user.signingKey on every platform, so a relative
+  # or tilde path silently yields an unusable signing configuration. Reject it
+  # before writing anything rather than producing a file that looks provisioned.
+  case "$keypath" in
+    /*) : ;;
+    *)
+      log_warning "Signing key path must be absolute; leaving the secondary identity unconfigured."
+      return 0
+      ;;
+  esac
+
+  # Escape the sed replacement metacharacters (\ & and the | delimiter) so an
+  # answer containing them substitutes literally instead of corrupting the file.
+  local esc_name esc_email esc_keypath
+  esc_name=$(printf '%s' "$name" | sed -e 's/[\\&|]/\\&/g')
+  esc_email=$(printf '%s' "$email" | sed -e 's/[\\&|]/\\&/g')
+  esc_keypath=$(printf '%s' "$keypath" | sed -e 's/[\\&|]/\\&/g')
+
+  sed -e "s|YOUR_ACCOUNT_NAME|$esc_name|" \
+    -e "s|you@example.com|$esc_email|" \
+    -e "s|/home/YOUR_USER/.ssh/id_ed25519_guarzo.pub|$esc_keypath|" \
     "$template" >"$target"
 
   log_success "Secondary identity written to $target"

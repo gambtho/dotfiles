@@ -573,3 +573,73 @@ be_default() {
   run bash -c "source '$REPO_ROOT/bin/common.sh' >/dev/null 2>&1; managed_link_pairs '$fake' '$HOME' | tr '\0' '\n'"
   [[ "$output" == *"$HOME/.gitconfig.guarzo"* ]]
 }
+
+@test "identity_validate_map rejects a non-canonical uppercase owner" {
+  # An uppercase owner parses fine but can never match, because
+  # identity_owner_slug folds the lookup key -- a silent misconfiguration.
+  printf 'Guarzo guarzo\n' >"$MAP"
+  run bash -c "source '$LIB'; identity_validate_map '$MAP'"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"lowercase"* ]]
+}
+
+@test "identity_validate_map rejects a slug containing a path separator" {
+  # Slugs become path components in ~/.gitconfig.<slug> and ~/.gh-<slug>.
+  printf 'evil a/../../tmp/pwned\n' >"$MAP"
+  run bash -c "source '$LIB'; identity_validate_map '$MAP'"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"slug"* ]]
+
+  printf 'evil ../escape\n' >"$MAP"
+  run bash -c "source '$LIB'; identity_validate_map '$MAP'"
+  [ "$status" -eq 1 ]
+}
+
+@test "the shipped owner map passes its own validation" {
+  run bash -c "source '$LIB'; identity_validate_map '$REPO_ROOT/core/git/identity-owners'"
+  [ "$status" -eq 0 ]
+}
+
+@test "the primary gitconfig template uses the tokens bootstrap substitutes" {
+  # setup_gitconfig substitutes AUTHORNAME/AUTHOREMAIL; any other placeholder is
+  # copied through literally and every commit is authored as it.
+  local template="$REPO_ROOT/core/git/gitconfig.local.symlink.example"
+  run grep -Fq 'AUTHORNAME' "$template"
+  [ "$status" -eq 0 ]
+  run grep -Fq 'AUTHOREMAIL' "$template"
+  [ "$status" -eq 0 ]
+  run bash -c "sed -e 's|AUTHORNAME|Real Name|g' -e 's|AUTHOREMAIL|real@example.invalid|g' '$template' | grep -cE 'AUTHORNAME|AUTHOREMAIL|YOUR_NAME'"
+  [ "$output" -eq 0 ]
+}
+
+@test "secondary identity provisioning rejects a relative signing key path" {
+  local fake="$TEST_ROOT/boot3"
+  mkdir -p "$fake/core/git"
+  cp "$REPO_ROOT/core/git/gitconfig.guarzo.symlink.example" "$fake/core/git/"
+  run env BOOTSTRAP_SOURCE_ONLY=1 HOME="$HOME" bash -c "
+    source '$REPO_ROOT/bin/bootstrap'
+    NON_INTERACTIVE=false
+    DOTFILES_ROOT='$fake'
+    printf 'y\nName\nuser@example.invalid\nrelative/key.pub\n' | setup_secondary_identity
+  "
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"absolute"* ]]
+  assert_file_absent "$fake/core/git/gitconfig.guarzo.symlink"
+}
+
+@test "secondary identity provisioning escapes sed metacharacters in answers" {
+  local fake="$TEST_ROOT/boot4"
+  mkdir -p "$fake/core/git"
+  cp "$REPO_ROOT/core/git/gitconfig.guarzo.symlink.example" "$fake/core/git/"
+  run env BOOTSTRAP_SOURCE_ONLY=1 HOME="$HOME" bash -c "
+    source '$REPO_ROOT/bin/bootstrap'
+    NON_INTERACTIVE=false
+    DOTFILES_ROOT='$fake'
+    printf 'y\nA&B|C\\\\D\nuser@example.invalid\n/abs/k&y.pub\n' | setup_secondary_identity
+  "
+  [ "$status" -eq 0 ]
+  run grep -Fq 'A&B|C\D' "$fake/core/git/gitconfig.guarzo.symlink"
+  [ "$status" -eq 0 ]
+  run grep -Fq '/abs/k&y.pub' "$fake/core/git/gitconfig.guarzo.symlink"
+  [ "$status" -eq 0 ]
+}
