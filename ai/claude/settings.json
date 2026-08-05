@@ -6,6 +6,8 @@
     "allow": [
       "Bash(git:*)",
       "Bash(gh:*)",
+      "Bash(codex --version)",
+      "Bash(codex exec:*)",
       "Bash(just:*)",
       "Bash(bundle:*)",
       "Bash(bin/rails:*)",

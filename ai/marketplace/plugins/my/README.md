@@ -5,6 +5,7 @@ Custom commands and skills promoted from `~/.dotfiles/ai/` and `~/workspace/slab
 ## Contents
 
 ### Commands
+- `/codex-review` — hands the spec or plan you're working on to Codex for an independent review against the actual code; pairing a plan with its spec is opt-in, then offers to fold accepted findings back into the doc
 - `/fix-pr` — analyzes PR comments + failing CI; produces a prioritized implementation plan
 - `/polish` — auto-fixes high-confidence issues across changed code, dispatches sub-agents for the rest (thin wrapper over the `polish-core` skill)
 - `/polish-pr` — worktree/PR-lifecycle orchestration around polish
