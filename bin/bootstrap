@@ -203,6 +203,14 @@ setup_identity_map() {
     return 0
   fi
 
+  # Something that is not a regular file occupies the path: a directory would
+  # swallow the mv below while reporting success, and the library rejects it at
+  # validation time anyway. Say so instead of installing into it.
+  if [ -e "$target" ] || [ -L "$target" ]; then
+    log_warning "$target exists but is not a regular file; leaving the machine-local map alone."
+    return 0
+  fi
+
   if [ "${NON_INTERACTIVE:-false}" = true ]; then
     log_info "Skipping optional machine-local owner map (non-interactive)."
     return 0
@@ -210,7 +218,9 @@ setup_identity_map() {
 
   log_info "Shared owner map (used unless this machine overrides it):"
   grep -vE '^[[:space:]]*(#|$)' "$shared" 2>/dev/null | sed 's/^/    /'
-  printf 'Does this machine use a different default GitHub account? [y/N] '
+  # Any role may differ, not just the default: a machine can share the default
+  # account and still need a different set of routed secondaries.
+  printf 'Does this machine need a different owner map? [y/N] '
   read -r reply
   case "$reply" in
     [Yy]*) : ;;
@@ -236,10 +246,25 @@ setup_identity_map() {
     printf '# Machine-local owner map, written by bin/bootstrap.\n'
     printf '# Replaces the shared map entirely; see identity-owners.local.example.\n'
     printf '%s default\n' "$default_owner"
+    # Disable pathname expansion while splitting the answer: an unquoted `*`
+    # would otherwise expand to filenames in the current directory.
+    set -f
     for owner in $secondaries; do
       printf '%s %s\n' "$owner" "$owner"
     done
+    set +f
   } >"$temp"
+
+  # Validate with the library itself rather than re-implementing its rules, in a
+  # subshell so sourcing cannot disturb bootstrap's own environment. This catches
+  # malformed names and duplicate owners BEFORE the file is installed -- an
+  # invalid local map replaces the shared one and then fails closed everywhere,
+  # which would be a confusing way to end a bootstrap.
+  if ! (. "$DOTFILES_ROOT/core/git/identity-lib.sh" && identity_validate_map "$temp"); then
+    rm -f "$temp"
+    log_warning "Rejected the answers; leaving the machine-local map unconfigured."
+    return 0
+  fi
 
   if ! mv "$temp" "$target"; then
     rm -f "$temp"

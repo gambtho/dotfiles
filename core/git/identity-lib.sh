@@ -105,8 +105,15 @@ identity_validate_map() {
   local file="${1:-$IDENTITY_MAP_FILE}"
   local line owner slug extra rest lineno=0 seen=""
 
-  if [ ! -r "$file" ]; then
-    printf 'identity: owner map not readable: %s\n' "$file" >&2
+  # A regular file specifically. A directory or FIFO is readable enough to pass
+  # a bare -r test, but the read loop below then fails immediately and the
+  # function would return success with an EMPTY map -- every owner unmapped,
+  # every consumer failing open. That is the exact inversion of this design's
+  # contract, so the type check belongs here rather than at selection time:
+  # selection keeps its precedence and a bogus path is rejected loudly instead
+  # of silently falling through to a map with different roles.
+  if [ ! -f "$file" ] || [ ! -r "$file" ]; then
+    printf 'identity: owner map is not a readable regular file: %s\n' "$file" >&2
     return 1
   fi
 
