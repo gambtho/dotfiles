@@ -42,3 +42,6 @@ __pycache__/
 # (The dev platform's machine-local projects/*/workspace.local.yaml is covered
 # by this rule too.)
 projects/
+
+# Machine-local owner map (see identity-owners.local.example).
+core/git/identity-owners.local

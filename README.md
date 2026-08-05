@@ -156,6 +156,31 @@ either of these for you):
    Point `signingKey` in `~/.gitconfig.guarzo` at the **absolute path** to the
    `.pub` file — git does not expand `~` for this setting on every platform.
 
+### Per-machine identity roles
+
+`core/git/identity-owners` records *roles* — which account is this machine's
+ambient default, and which need their own routed identity. Roles differ between
+machines: an account that is secondary on one may be the ambient default on
+another. Four sources are consulted, highest precedence first, and the first one
+that exists **replaces** the others outright (they are never merged):
+
+| Source | Scope |
+| --- | --- |
+| `$IDENTITY_MAP_FILE` | explicit override, for tests and one-offs |
+| `core/git/identity-owners.local` | this machine only (gitignored) |
+| `core/git/identity-owners.<profile>` | machines sharing that `~/.dotfiles-profile` |
+| `core/git/identity-owners` | the shared default |
+
+Replace rather than merge is deliberate: merging would let a machine silently
+inherit another machine's roles, which is the failure this design exists to
+prevent. List every owner the machine should know — one you leave out becomes
+unmapped, so nothing routes it and nothing blocks it.
+
+`bin/bootstrap` offers to write the local map, or copy
+`identity-owners.local.example` by hand. `bin/git-identity` prints the map
+actually in effect, which is the first thing to check when routing surprises you
+on a particular machine.
+
 ## Routine Updates
 
 ```bash
