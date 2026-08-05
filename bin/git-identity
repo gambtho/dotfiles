@@ -16,6 +16,10 @@ if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   exit 0
 fi
 
+# Name the map in effect. With four possible sources, "which map won?" is the
+# first question when routing behaves unexpectedly on a given machine.
+printf 'map:      %s\n' "$IDENTITY_MAP_FILE"
+
 identity_validate_map || exit 1
 
 owners=""

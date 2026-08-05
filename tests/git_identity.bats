@@ -685,3 +685,220 @@ be_default() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"REACHED_NEXT_STEP"* ]]
 }
+
+# ---- machine-local / per-profile owner map resolution ----
+
+setup_map_root() {
+  export DOTFILES="$TEST_ROOT/dotfiles"
+  mkdir -p "$DOTFILES/core/git"
+  cp "$REPO_ROOT/core/git/identity-lib.sh" "$DOTFILES/core/git/"
+  printf 'gambtho default\nguarzo  guarzo\n' >"$DOTFILES/core/git/identity-owners"
+  unset IDENTITY_MAP_FILE
+}
+
+active_map() {
+  bash -c "source '$DOTFILES/core/git/identity-lib.sh'; printf '%s\n' \"\$IDENTITY_MAP_FILE\""
+}
+
+@test "map resolution falls back to the shared tracked map" {
+  setup_map_root
+  run active_map
+  [ "$output" = "$DOTFILES/core/git/identity-owners" ]
+}
+
+@test "a per-profile map beats the shared map" {
+  setup_map_root
+  printf 'personal\n' >"$HOME/.dotfiles-profile"
+  printf 'guarzo default\n' >"$DOTFILES/core/git/identity-owners.personal"
+  run active_map
+  [ "$output" = "$DOTFILES/core/git/identity-owners.personal" ]
+}
+
+@test "a machine-local map beats the per-profile and shared maps" {
+  setup_map_root
+  printf 'personal\n' >"$HOME/.dotfiles-profile"
+  printf 'guarzo default\n' >"$DOTFILES/core/git/identity-owners.personal"
+  printf 'guarzo default\ngambtho gambtho\n' >"$DOTFILES/core/git/identity-owners.local"
+  run active_map
+  [ "$output" = "$DOTFILES/core/git/identity-owners.local" ]
+}
+
+@test "an explicit IDENTITY_MAP_FILE beats every discovered map" {
+  setup_map_root
+  printf 'guarzo default\n' >"$DOTFILES/core/git/identity-owners.local"
+  printf 'gambtho default\n' >"$TEST_ROOT/explicit-map"
+  run bash -c "export IDENTITY_MAP_FILE='$TEST_ROOT/explicit-map'; source '$DOTFILES/core/git/identity-lib.sh'; printf '%s\n' \"\$IDENTITY_MAP_FILE\""
+  [ "$output" = "$TEST_ROOT/explicit-map" ]
+}
+
+@test "a machine-local map REPLACES rather than extends the shared map" {
+  # Replace semantics: an owner present only in the shared map must become
+  # unmapped, or a machine would silently inherit the other machine's roles.
+  setup_map_root
+  printf 'guarzo default\n' >"$DOTFILES/core/git/identity-owners.local"
+  run bash -c "source '$DOTFILES/core/git/identity-lib.sh'; identity_owner_slug guarzo"
+  [ "$status" -eq 0 ]
+  [ "$output" = "default" ]
+  run bash -c "source '$DOTFILES/core/git/identity-lib.sh'; identity_owner_slug gambtho"
+  [ "$status" -eq 1 ]
+}
+
+@test "a malformed machine-local map fails closed instead of falling back" {
+  setup_map_root
+  printf 'Guarzo guarzo\n' >"$DOTFILES/core/git/identity-owners.local"
+  run bash -c "source '$DOTFILES/core/git/identity-lib.sh'; identity_validate_map"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"lowercase"* ]]
+}
+
+@test "a profile name that is not a safe path component is ignored" {
+  setup_map_root
+  printf '../../etc\n' >"$HOME/.dotfiles-profile"
+  run active_map
+  [ "$output" = "$DOTFILES/core/git/identity-owners" ]
+}
+
+@test "the machine-local map is gitignored and has a tracked example" {
+  run git -C "$REPO_ROOT" check-ignore -q core/git/identity-owners.local
+  [ "$status" -eq 0 ]
+  [ -f "$REPO_ROOT/core/git/identity-owners.local.example" ]
+}
+
+@test "the doctor reports which owner map is in effect" {
+  setup_shim_repo "$TEST_ROOT/r" https://github.com/kubernetes-sigs/repo.git
+  cd "$TEST_ROOT/r"
+  run "$REPO_ROOT/bin/git-identity"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"map:"* ]]
+}
+
+@test "non-interactive bootstrap skips the machine-local owner map" {
+  local fake="$TEST_ROOT/boot7"
+  mkdir -p "$fake/core/git"
+  cp "$REPO_ROOT/core/git/identity-owners.local.example" "$fake/core/git/"
+  cp "$REPO_ROOT/core/git/identity-owners" "$fake/core/git/"
+  run env BOOTSTRAP_SOURCE_ONLY=1 HOME="$HOME" bash -c "
+    source '$REPO_ROOT/bin/bootstrap'
+    NON_INTERACTIVE=true
+    DOTFILES_ROOT='$fake'
+    setup_identity_map
+  " </dev/null
+  [ "$status" -eq 0 ]
+  assert_file_absent "$fake/core/git/identity-owners.local"
+}
+
+@test "bootstrap writes a valid machine-local map from the answers" {
+  local fake="$TEST_ROOT/boot8"
+  mkdir -p "$fake/core/git"
+  cp "$REPO_ROOT/core/git/identity-owners.local.example" "$fake/core/git/"
+  cp "$REPO_ROOT/core/git/identity-owners" "$fake/core/git/"
+  cp "$REPO_ROOT/core/git/identity-lib.sh" "$fake/core/git/"
+  run env BOOTSTRAP_SOURCE_ONLY=1 HOME="$HOME" bash -c "
+    source '$REPO_ROOT/bin/bootstrap'
+    NON_INTERACTIVE=false
+    DOTFILES_ROOT='$fake'
+    printf 'y\nguarzo\ngambtho\n' | setup_identity_map
+  "
+  [ "$status" -eq 0 ]
+  [ -f "$fake/core/git/identity-owners.local" ]
+  # The generated map must satisfy the library's own validator.
+  run bash -c "source '$fake/core/git/identity-lib.sh'; identity_validate_map '$fake/core/git/identity-owners.local'"
+  [ "$status" -eq 0 ]
+  run bash -c "source '$fake/core/git/identity-lib.sh'; identity_owner_slug guarzo '$fake/core/git/identity-owners.local'"
+  [ "$output" = "default" ]
+  run bash -c "source '$fake/core/git/identity-lib.sh'; identity_owner_slug gambtho '$fake/core/git/identity-owners.local'"
+  [ "$output" = "gambtho" ]
+  run bash -c "ls -A '$fake/core/git' | grep -c '^\.identity-owners\.'"
+  [ "$output" -eq 0 ]
+}
+
+@test "a non-regular file at the map path fails closed, not open" {
+  # A directory passes a bare -r test but yields an EMPTY map, which would make
+  # every owner unmapped and every consumer fail open.
+  setup_map_root
+  mkdir -p "$DOTFILES/core/git/identity-owners.local"
+  run bash -c "source '$DOTFILES/core/git/identity-lib.sh'; identity_validate_map"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"regular file"* ]]
+}
+
+setup_map_boot() {
+  MAPBOOT="$TEST_ROOT/$1"
+  mkdir -p "$MAPBOOT/core/git"
+  cp "$REPO_ROOT/core/git/identity-owners.local.example" "$MAPBOOT/core/git/"
+  cp "$REPO_ROOT/core/git/identity-owners" "$MAPBOOT/core/git/"
+  cp "$REPO_ROOT/core/git/identity-lib.sh" "$MAPBOOT/core/git/"
+}
+
+run_map_setup() {
+  run env BOOTSTRAP_SOURCE_ONLY=1 HOME="$HOME" bash -c "
+    source '$REPO_ROOT/bin/bootstrap'
+    NON_INTERACTIVE=false
+    DOTFILES_ROOT='$MAPBOOT'
+    printf '%b' '$1' | setup_identity_map
+  "
+}
+
+@test "bootstrap allows a map that keeps the default but changes secondaries" {
+  setup_map_boot mb1
+  run_map_setup 'y\ngambtho\nacme\n'
+  [ "$status" -eq 0 ]
+  [ -f "$MAPBOOT/core/git/identity-owners.local" ]
+  run bash -c "source '$MAPBOOT/core/git/identity-lib.sh'; identity_owner_slug gambtho '$MAPBOOT/core/git/identity-owners.local'"
+  [ "$output" = "default" ]
+  run bash -c "source '$MAPBOOT/core/git/identity-lib.sh'; identity_owner_slug acme '$MAPBOOT/core/git/identity-owners.local'"
+  [ "$output" = "acme" ]
+  # guarzo came only from the shared map, so replace semantics drop it
+  run bash -c "source '$MAPBOOT/core/git/identity-lib.sh'; identity_owner_slug guarzo '$MAPBOOT/core/git/identity-owners.local'"
+  [ "$status" -eq 1 ]
+}
+
+@test "bootstrap rejects an invalid owner name instead of installing it" {
+  setup_map_boot mb2
+  run_map_setup 'y\nGuarzo\n\n'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Rejected"* ]]
+  assert_file_absent "$MAPBOOT/core/git/identity-owners.local"
+}
+
+@test "bootstrap rejects a duplicate owner across default and secondaries" {
+  setup_map_boot mb3
+  run_map_setup 'y\nguarzo\nguarzo\n'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Rejected"* ]]
+  assert_file_absent "$MAPBOOT/core/git/identity-owners.local"
+}
+
+@test "bootstrap does not glob-expand the secondaries answer" {
+  setup_map_boot mb4
+  # Run from a directory whose only entry is a VALID owner name. Without this,
+  # '*' expands to repo files like AGENTS.md, validation rejects them, and the
+  # map is absent either way -- the test would pass even with expansion enabled.
+  # With 'acme' as the sole entry, an expansion produces a map that validates
+  # and installs, so the assertion below genuinely detects the bug.
+  local glob_dir="$TEST_ROOT/glob-input"
+  mkdir -p "$glob_dir"
+  : >"$glob_dir/acme"
+  # The cd must happen AFTER sourcing: bin/bootstrap cds to its own repo root at
+  # source time, so any directory set before the source call is discarded.
+  run env BOOTSTRAP_SOURCE_ONLY=1 HOME="$HOME" bash -c "
+    source '$REPO_ROOT/bin/bootstrap'
+    cd '$glob_dir'
+    NON_INTERACTIVE=false
+    DOTFILES_ROOT='$MAPBOOT'
+    printf 'y\nguarzo\n*\n' | setup_identity_map
+  "
+  [ "$status" -eq 0 ]
+  assert_file_absent "$MAPBOOT/core/git/identity-owners.local"
+}
+
+@test "bootstrap refuses to install over a non-regular map path" {
+  setup_map_boot mb5
+  mkdir -p "$MAPBOOT/core/git/identity-owners.local"
+  run_map_setup 'y\nguarzo\n\n'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"not a regular file"* ]]
+  [ -d "$MAPBOOT/core/git/identity-owners.local" ]
+  run bash -c "ls -A '$MAPBOOT/core/git/identity-owners.local' | wc -l"
+  [ "$output" -eq 0 ]
+}

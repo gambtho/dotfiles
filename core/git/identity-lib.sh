@@ -12,7 +12,51 @@
 #   secondary  maps to another slug        -> may be UNPROVISIONED
 
 IDENTITY_DOTFILES_ROOT="${DOTFILES:-$HOME/.dotfiles}"
-IDENTITY_MAP_FILE="${IDENTITY_MAP_FILE:-$IDENTITY_DOTFILES_ROOT/core/git/identity-owners}"
+
+# The profile recorded by bin/bootstrap. Read the file directly rather than
+# relying on a shell variable: the pre-push hook and the gh shim run outside
+# any zsh startup, so profiles/*.zsh has not been sourced for them.
+identity_profile() {
+  local p=""
+  [ -r "$HOME/.dotfiles-profile" ] || return 1
+  p="$(tr -d '[:space:]' <"$HOME/.dotfiles-profile")"
+  # The name becomes a path component below, so reject anything that is not a
+  # plain lowercase token -- "../../etc" must not select an arbitrary file.
+  case "$p" in
+    "" | *[!a-z0-9-]*) return 1 ;;
+  esac
+  printf '%s\n' "$p"
+}
+
+# Which owner map applies here. Highest precedence first, REPLACE semantics --
+# the first file that exists wins outright and the others are not merged in.
+# Merging would let a machine silently inherit another machine's roles, which
+# is the failure this whole design exists to prevent.
+#
+#   1. $IDENTITY_MAP_FILE   explicit override (tests, one-offs)
+#   2. identity-owners.local     gitignored, this machine only
+#   3. identity-owners.<profile> tracked, shared by machines of that profile
+#   4. identity-owners           tracked, the shared default
+#
+# A selected file that is malformed or unreadable is NOT skipped: validation
+# fails and every consumer fails closed. Falling through to a different map
+# would silently change which account a push authenticates as.
+identity_default_map_file() {
+  local root="$IDENTITY_DOTFILES_ROOT" profile
+
+  if [ -e "$root/core/git/identity-owners.local" ]; then
+    printf '%s\n' "$root/core/git/identity-owners.local"
+    return 0
+  fi
+  if profile="$(identity_profile)" &&
+    [ -e "$root/core/git/identity-owners.$profile" ]; then
+    printf '%s\n' "$root/core/git/identity-owners.$profile"
+    return 0
+  fi
+  printf '%s\n' "$root/core/git/identity-owners"
+}
+
+IDENTITY_MAP_FILE="${IDENTITY_MAP_FILE:-$(identity_default_map_file)}"
 
 # Print the owner for a github.com URL. Exit 1 for any other host or
 # unparseable input; callers treat that as "out of remit".
@@ -61,8 +105,15 @@ identity_validate_map() {
   local file="${1:-$IDENTITY_MAP_FILE}"
   local line owner slug extra rest lineno=0 seen=""
 
-  if [ ! -r "$file" ]; then
-    printf 'identity: owner map not readable: %s\n' "$file" >&2
+  # A regular file specifically. A directory or FIFO is readable enough to pass
+  # a bare -r test, but the read loop below then fails immediately and the
+  # function would return success with an EMPTY map -- every owner unmapped,
+  # every consumer failing open. That is the exact inversion of this design's
+  # contract, so the type check belongs here rather than at selection time:
+  # selection keeps its precedence and a bogus path is rejected loudly instead
+  # of silently falling through to a map with different roles.
+  if [ ! -f "$file" ] || [ ! -r "$file" ]; then
+    printf 'identity: owner map is not a readable regular file: %s\n' "$file" >&2
     return 1
   fi
 

@@ -183,6 +183,101 @@ setup_secondary_identity() {
   log_info "Next: GH_CONFIG_DIR=\$HOME/.gh-guarzo gh auth login"
 }
 
+# Machine-local owner map. The shared core/git/identity-owners encodes ROLES
+# (which account is the ambient default, which need routing), and roles differ
+# per machine: an account that is secondary here may be the default elsewhere.
+# Writing a local map is how a machine states its own arrangement.
+#
+# Like the secondary identity above, --non-interactive never prompts and never
+# writes a partial file: it skips unless one already exists.
+setup_identity_map() {
+  local example="$DOTFILES_ROOT/core/git/identity-owners.local.example"
+  local target="$DOTFILES_ROOT/core/git/identity-owners.local"
+  local shared="$DOTFILES_ROOT/core/git/identity-owners"
+  local reply default_owner secondaries owner temp
+
+  [ -f "$example" ] || return 0
+
+  if [ -f "$target" ]; then
+    log_info "Machine-local owner map already configured."
+    return 0
+  fi
+
+  # Something that is not a regular file occupies the path: a directory would
+  # swallow the mv below while reporting success, and the library rejects it at
+  # validation time anyway. Say so instead of installing into it.
+  if [ -e "$target" ] || [ -L "$target" ]; then
+    log_warning "$target exists but is not a regular file; leaving the machine-local map alone."
+    return 0
+  fi
+
+  if [ "${NON_INTERACTIVE:-false}" = true ]; then
+    log_info "Skipping optional machine-local owner map (non-interactive)."
+    return 0
+  fi
+
+  log_info "Shared owner map (used unless this machine overrides it):"
+  grep -vE '^[[:space:]]*(#|$)' "$shared" 2>/dev/null | sed 's/^/    /'
+  # Any role may differ, not just the default: a machine can share the default
+  # account and still need a different set of routed secondaries.
+  printf 'Does this machine need a different owner map? [y/N] '
+  read -r reply
+  case "$reply" in
+    [Yy]*) : ;;
+    *) return 0 ;;
+  esac
+
+  printf "This machine's default GitHub account (ambient gh login): "
+  read -r default_owner
+  printf 'Other GitHub accounts needing their own identity (space separated, blank for none): '
+  read -r secondaries
+
+  if [ -z "$default_owner" ]; then
+    log_warning "No default account given; leaving the machine-local map unconfigured."
+    return 0
+  fi
+
+  if ! temp="$(mktemp "$DOTFILES_ROOT/core/git/.identity-owners.XXXXXX")"; then
+    log_warning "Could not create a temporary file; leaving the machine-local map unconfigured."
+    return 0
+  fi
+
+  {
+    printf '# Machine-local owner map, written by bin/bootstrap.\n'
+    printf '# Replaces the shared map entirely; see identity-owners.local.example.\n'
+    printf '%s default\n' "$default_owner"
+    # Disable pathname expansion while splitting the answer: an unquoted `*`
+    # would otherwise expand to filenames in the current directory.
+    set -f
+    for owner in $secondaries; do
+      printf '%s %s\n' "$owner" "$owner"
+    done
+    set +f
+  } >"$temp"
+
+  # Validate with the library itself rather than re-implementing its rules, in a
+  # subshell so sourcing cannot disturb bootstrap's own environment. This catches
+  # malformed names and duplicate owners BEFORE the file is installed -- an
+  # invalid local map replaces the shared one and then fails closed everywhere,
+  # which would be a confusing way to end a bootstrap.
+  if ! (. "$DOTFILES_ROOT/core/git/identity-lib.sh" && identity_validate_map "$temp"); then
+    rm -f "$temp"
+    log_warning "Rejected the answers; leaving the machine-local map unconfigured."
+    return 0
+  fi
+
+  if ! mv "$temp" "$target"; then
+    rm -f "$temp"
+    log_warning "Failed to install the machine-local owner map."
+    return 0
+  fi
+
+  log_success "Machine-local owner map written to $target"
+  for owner in $secondaries; do
+    log_info "Next for '$owner': GH_CONFIG_DIR=\$HOME/.gh-$owner gh auth login, then create core/git/gitconfig.$owner.symlink"
+  done
+}
+
 setup_profile() {
   if [[ -n "$BOOTSTRAP_PROFILE" ]]; then
     printf '%s\n' "$BOOTSTRAP_PROFILE" >"$HOME/.dotfiles-profile"
@@ -409,6 +504,7 @@ main() {
 
   setup_gitconfig
   setup_secondary_identity
+  setup_identity_map
   setup_profile
   # $HOME/.dotfiles, not $DOTFILES_ROOT: the latter is wherever this script was
   # run from, which may be a disposable linked worktree. The stable root must
