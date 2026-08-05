@@ -152,10 +152,32 @@ setup_secondary_identity() {
   esc_email=$(printf '%s' "$email" | sed -e 's/[\\&|]/\\&/g')
   esc_keypath=$(printf '%s' "$keypath" | sed -e 's/[\\&|]/\\&/g')
 
-  sed -e "s|YOUR_ACCOUNT_NAME|$esc_name|" \
+  # Render to a temporary file beside the target and rename only on success. A
+  # plain redirect truncates $target before sed runs, so a failed write would
+  # leave a partial file -- and a partial file is worse than none here: this
+  # function early-returns when the target exists, and the pre-push guard treats
+  # mere existence as "provisioned", so the breakage would surface at push time.
+  # Every failure path here warns and returns 0, like the incomplete-answer and
+  # relative-path paths above. bootstrap runs under `set -e` and calls this
+  # bare, so a non-zero return would abort the run before ensure_stable_link_root
+  # and install_dotfiles -- failing an OPTIONAL secondary identity would leave
+  # the machine with no dotfiles symlinks at all. Leaving the identity absent is
+  # already the safe outcome: the pre-push guard then treats it as unprovisioned
+  # and blocks loudly.
+  local temp
+  if ! temp="$(mktemp "$DOTFILES_ROOT/core/git/.gitconfig.guarzo.XXXXXX")"; then
+    log_warning "Could not create a temporary file; leaving the secondary identity unconfigured."
+    return 0
+  fi
+
+  if ! sed -e "s|YOUR_ACCOUNT_NAME|$esc_name|" \
     -e "s|you@example.com|$esc_email|" \
     -e "s|/home/YOUR_USER/.ssh/id_ed25519_guarzo.pub|$esc_keypath|" \
-    "$template" >"$target"
+    "$template" >"$temp" || ! mv "$temp" "$target"; then
+    rm -f "$temp"
+    log_warning "Failed to render the secondary identity; leaving it unconfigured."
+    return 0
+  fi
 
   log_success "Secondary identity written to $target"
   log_info "Next: GH_CONFIG_DIR=\$HOME/.gh-guarzo gh auth login"

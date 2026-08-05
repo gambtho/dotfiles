@@ -643,3 +643,45 @@ be_default() {
   run grep -Fq '/abs/k&y.pub' "$fake/core/git/gitconfig.guarzo.symlink"
   [ "$status" -eq 0 ]
 }
+
+@test "secondary identity render is atomic and leaves no partial file" {
+  # A plain redirect truncates the target before sed runs; a partial file would
+  # look "provisioned" to the pre-push guard and fail at push time instead.
+  local fake="$TEST_ROOT/boot5"
+  mkdir -p "$fake/core/git"
+  cp "$REPO_ROOT/core/git/gitconfig.guarzo.symlink.example" "$fake/core/git/"
+  chmod a-w "$fake/core/git"
+  run env BOOTSTRAP_SOURCE_ONLY=1 HOME="$HOME" bash -c "
+    source '$REPO_ROOT/bin/bootstrap'
+    NON_INTERACTIVE=false
+    DOTFILES_ROOT='$fake'
+    printf 'y\nName\nuser@example.invalid\n/abs/key.pub\n' | setup_secondary_identity
+  "
+  chmod u+w "$fake/core/git"
+  # Must not abort bootstrap: the step is optional and runs under set -e.
+  [ "$status" -eq 0 ]
+  # Must not leave a partial or stray file behind.
+  assert_file_absent "$fake/core/git/gitconfig.guarzo.symlink"
+  run bash -c "ls -A '$fake/core/git' | grep -c '^\.gitconfig\.guarzo\.'"
+  [ "$output" -eq 0 ]
+}
+
+@test "a failed secondary identity render does not abort bootstrap under set -e" {
+  # Regression guard: returning non-zero here would stop bootstrap before
+  # install_dotfiles, leaving the machine with no symlinks at all.
+  local fake="$TEST_ROOT/boot6"
+  mkdir -p "$fake/core/git"
+  cp "$REPO_ROOT/core/git/gitconfig.guarzo.symlink.example" "$fake/core/git/"
+  chmod a-w "$fake/core/git"
+  run env BOOTSTRAP_SOURCE_ONLY=1 HOME="$HOME" bash -c "
+    set -e
+    source '$REPO_ROOT/bin/bootstrap'
+    NON_INTERACTIVE=false
+    DOTFILES_ROOT='$fake'
+    printf 'y\nName\nuser@example.invalid\n/abs/key.pub\n' | setup_secondary_identity
+    echo REACHED_NEXT_STEP
+  "
+  chmod u+w "$fake/core/git"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"REACHED_NEXT_STEP"* ]]
+}
