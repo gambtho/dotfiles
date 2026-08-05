@@ -1,0 +1,321 @@
+#!/usr/bin/env bash
+# bin/git-worktree-gc — Remove linked worktrees whose branch has already landed.
+#
+# Named for Git's subcommand lookup: anywhere on PATH, `git worktree-gc` works.
+#
+# Dry run by default. Nothing is removed without --yes, and even then the
+# removal is the non-forcing one, so a worktree with uncommitted work is
+# reported rather than discarded.
+#
+# Merge detection reads two sources, because neither alone is sufficient:
+#   * `git branch --merged` catches branches that landed as a merge or a
+#     fast-forward, where the tip really is an ancestor of the base ref.
+#   * `gh pr list --state merged` catches squash-merged branches, whose tips
+#     are never ancestors of anything. In a squash-merge repo, ancestry alone
+#     reports almost every shipped branch as unmerged — which is the failure
+#     mode this script exists to avoid, since it looks like a clean result.
+# Without gh the script still runs, and says plainly what it stopped seeing.
+
+set -euo pipefail
+
+PROGRAM=${0##*/}
+BASE_REF=""
+PR_LIMIT=500
+APPLY=false
+DELETE_BRANCHES=false
+INCLUDE_LOCKED=false
+
+usage() {
+  cat <<'USAGE'
+usage: git-worktree-gc [options]
+
+Report linked worktrees whose branch has already been merged, and optionally
+remove them. Prints a plan and exits without changing anything unless --yes.
+
+  -y, --yes             Actually remove the worktrees listed in the plan.
+      --delete-branches Also delete each removed worktree's branch.
+      --base <ref>      Branch to measure "merged" against.
+                        Default: origin/HEAD, else main, else master.
+      --include-locked  Consider locked worktrees too, unlocking each before
+                        removal. Off by default: a lock is a deliberate
+                        "do not reap this" marker.
+      --pr-limit <n>    Merged PRs to read from gh (default 500).
+  -h, --help            Show this help.
+
+Never removed, regardless of flags: the main worktree, the worktree you are
+standing in, detached-HEAD worktrees, and any worktree with uncommitted
+changes. There is no --force; discarding uncommitted work is not this
+script's job.
+USAGE
+}
+
+warn() {
+  printf '%s: %s\n' "$PROGRAM" "$1" >&2
+}
+
+die() {
+  warn "$1"
+  exit 1
+}
+
+while (($# > 0)); do
+  case "$1" in
+    -y | --yes) APPLY=true ;;
+    --delete-branches) DELETE_BRANCHES=true ;;
+    --include-locked) INCLUDE_LOCKED=true ;;
+    --base)
+      [[ $# -ge 2 ]] || die "--base needs a ref"
+      BASE_REF=$2
+      shift
+      ;;
+    --pr-limit)
+      [[ $# -ge 2 ]] || die "--pr-limit needs a number"
+      [[ $2 =~ ^[0-9]+$ ]] || die "--pr-limit needs a number, got '$2'"
+      PR_LIMIT=$2
+      shift
+      ;;
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    *) die "unknown option '$1' (try --help)" ;;
+  esac
+  shift
+done
+
+[[ $(git rev-parse --is-inside-work-tree 2>/dev/null || true) == true ]] ||
+  die "must run inside a Git checkout"
+
+# ── Base ref ──────────────────────────────────────────────────────────────────
+
+if [[ -z "$BASE_REF" ]]; then
+  if origin_head=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null); then
+    BASE_REF=${origin_head#origin/}
+  else
+    for candidate in main master; do
+      if git show-ref --verify --quiet "refs/heads/$candidate"; then
+        BASE_REF=$candidate
+        break
+      fi
+    done
+  fi
+fi
+
+[[ -n "$BASE_REF" ]] || die "could not infer a base branch; pass --base <ref>"
+git rev-parse --verify --quiet "$BASE_REF" >/dev/null ||
+  die "base ref '$BASE_REF' does not exist"
+
+# ── Merge evidence ────────────────────────────────────────────────────────────
+
+declare -A MERGED=()
+
+while IFS= read -r branch; do
+  [[ -n "$branch" ]] || continue
+  MERGED["$branch"]=ancestry
+done < <(git branch --merged "$BASE_REF" --format='%(refname:short)')
+
+# gh filters on a branch name, so a base given (or resolved) as origin/main has
+# to lose its remote prefix or it matches no PR at all — which would read as
+# "nothing was ever merged" rather than "the filter was malformed".
+PR_BASE=${BASE_REF#origin/}
+
+if ! command -v gh >/dev/null 2>&1; then
+  warn "gh not found — squash-merged branches will look unmerged and be left alone"
+elif ! pr_branches=$(gh pr list --state merged --base "$PR_BASE" --limit "$PR_LIMIT" \
+  --json headRefName --jq '.[].headRefName' 2>&1); then
+  warn "gh pr list failed, continuing on ancestry alone: ${pr_branches%%$'\n'*}"
+else
+  pr_count=0
+  while IFS= read -r branch; do
+    [[ -n "$branch" ]] || continue
+    pr_count=$((pr_count + 1))
+    [[ -n "${MERGED[$branch]:-}" ]] || MERGED["$branch"]=PR
+  done <<<"$pr_branches"
+  # Silence here would read as "nothing older was merged" rather than "we
+  # stopped looking", and the difference is worktrees that quietly survive.
+  if ((pr_count >= PR_LIMIT)); then
+    warn "read the newest $PR_LIMIT merged PRs and stopped; older ones were not checked (--pr-limit)"
+  fi
+fi
+
+# ── Worktree inventory ────────────────────────────────────────────────────────
+
+declare -a WT_PATH=() WT_BRANCH=() WT_LOCKED=() WT_LOCK_REASON=()
+
+path="" branch="" locked=false lock_reason=""
+while IFS= read -r line; do
+  case "$line" in
+    "worktree "*) path=${line#worktree } ;;
+    "branch "*)
+      branch=${line#branch }
+      branch=${branch#refs/heads/}
+      ;;
+    locked) locked=true ;;
+    "locked "*)
+      locked=true
+      lock_reason=${line#locked }
+      ;;
+    "")
+      if [[ -n "$path" ]]; then
+        WT_PATH+=("$path")
+        WT_BRANCH+=("$branch")
+        WT_LOCKED+=("$locked")
+        WT_LOCK_REASON+=("$lock_reason")
+      fi
+      path="" branch="" locked=false lock_reason=""
+      ;;
+  esac
+done < <(
+  git worktree list --porcelain
+  printf '\n'
+)
+
+((${#WT_PATH[@]} > 0)) || die "no worktrees found"
+
+# `git worktree list` documents the main worktree as the first record; it is
+# the one entry that cannot be removed.
+MAIN_WORKTREE=${WT_PATH[0]}
+CURRENT_WORKTREE=$(git rev-parse --show-toplevel)
+
+# ── Plan ──────────────────────────────────────────────────────────────────────
+
+declare -a PLAN_PATH=() PLAN_BRANCH=() PLAN_WHY=() PLAN_LOCKED=() PLAN_LOCK_REASON=()
+declare -a BLOCKED=()
+unmerged=0
+width=0
+
+for i in "${!WT_PATH[@]}"; do
+  wt_path=${WT_PATH[$i]}
+  wt_branch=${WT_BRANCH[$i]}
+  wt_locked=${WT_LOCKED[$i]}
+
+  [[ "$wt_path" != "$MAIN_WORKTREE" ]] || continue
+
+  if [[ -z "$wt_branch" ]]; then
+    BLOCKED+=("$wt_path — detached HEAD, no branch to judge")
+    continue
+  fi
+
+  [[ "$wt_branch" != "$BASE_REF" ]] || continue
+
+  why=${MERGED[$wt_branch]:-}
+  if [[ -z "$why" ]]; then
+    unmerged=$((unmerged + 1))
+    continue
+  fi
+
+  if [[ "$wt_locked" == true && "$INCLUDE_LOCKED" != true ]]; then
+    BLOCKED+=("$wt_branch — locked (--include-locked to consider it)")
+    continue
+  fi
+
+  if [[ "$wt_path" == "$CURRENT_WORKTREE" ]]; then
+    BLOCKED+=("$wt_branch — you are standing in it")
+    continue
+  fi
+
+  if [[ ! -d "$wt_path" ]]; then
+    BLOCKED+=("$wt_branch — directory is gone; \`git worktree prune\` clears it")
+    continue
+  fi
+
+  if [[ -n "$(git -C "$wt_path" status --porcelain 2>/dev/null)" ]]; then
+    BLOCKED+=("$wt_branch — uncommitted changes")
+    continue
+  fi
+
+  PLAN_PATH+=("$wt_path")
+  PLAN_BRANCH+=("$wt_branch")
+  PLAN_WHY+=("$why")
+  PLAN_LOCKED+=("$wt_locked")
+  PLAN_LOCK_REASON+=("${WT_LOCK_REASON[$i]}")
+  ((${#wt_branch} <= width)) || width=${#wt_branch}
+done
+
+# ── Report ────────────────────────────────────────────────────────────────────
+
+printf 'base: %s   worktrees: %d   merged and removable: %d\n\n' \
+  "$BASE_REF" "$((${#WT_PATH[@]} - 1))" "${#PLAN_PATH[@]}"
+
+for i in "${!PLAN_PATH[@]}"; do
+  printf '  %-*s  %-8s  %s\n' \
+    "$width" "${PLAN_BRANCH[$i]}" "${PLAN_WHY[$i]}" "${PLAN_PATH[$i]}"
+done
+
+if ((${#BLOCKED[@]} > 0)); then
+  printf '\nmerged but kept:\n'
+  printf '  %s\n' "${BLOCKED[@]}"
+fi
+
+((unmerged == 0)) || printf '\n%d worktree(s) on unmerged branches, untouched.\n' "$unmerged"
+
+if ((${#PLAN_PATH[@]} == 0)); then
+  printf '\nNothing to remove.\n'
+  exit 0
+fi
+
+if [[ "$APPLY" != true ]]; then
+  printf '\nDry run. Re-run with --yes to remove the %d worktree(s) above.\n' \
+    "${#PLAN_PATH[@]}"
+  exit 0
+fi
+
+# ── Apply ─────────────────────────────────────────────────────────────────────
+
+printf '\n'
+failures=0
+
+for i in "${!PLAN_PATH[@]}"; do
+  wt_path=${PLAN_PATH[$i]}
+  wt_branch=${PLAN_BRANCH[$i]}
+
+  # `git worktree remove` refuses a locked worktree outright, and the escape
+  # hatch it offers is --force twice — which would also override the dirty
+  # check. Unlocking first keeps --include-locked meaning only "ignore the
+  # lock", never "discard uncommitted work".
+  if [[ "${PLAN_LOCKED[$i]}" == true ]] && ! git worktree unlock "$wt_path"; then
+    warn "could not unlock $wt_path"
+    failures=$((failures + 1))
+    continue
+  fi
+
+  # No --force: the plan already excluded dirty worktrees, so a refusal here
+  # means something changed since, and the right answer is to stop for that one.
+  if ! git worktree remove "$wt_path"; then
+    warn "could not remove $wt_path"
+    # The unlock above was a means to removal, not a decision to unlock. Left
+    # as-is, a failed removal would silently strip a deliberate marker.
+    #
+    # This restores the lock only when git refused early — the dirty-worktree
+    # race this path exists for. `git worktree remove` deregisters before it
+    # deletes, so a failure during deletion leaves nothing to lock and the
+    # re-lock warns instead. That is reported rather than hidden.
+    if [[ "${PLAN_LOCKED[$i]}" == true ]]; then
+      lock_args=("$wt_path")
+      [[ -z "${PLAN_LOCK_REASON[$i]}" ]] ||
+        lock_args=(--reason "${PLAN_LOCK_REASON[$i]}" "$wt_path")
+      git worktree lock "${lock_args[@]}" ||
+        warn "could not re-lock $wt_path — it is now unlocked"
+    fi
+    failures=$((failures + 1))
+    continue
+  fi
+  printf 'removed  %s\n' "$wt_path"
+
+  [[ "$DELETE_BRANCHES" == true ]] || continue
+
+  # -D, not -d: a squash-merged branch is not an ancestor of the base ref, so
+  # -d refuses exactly the branches this script is built to reap. The safety
+  # -d provides is already covered — nothing reaches here without merge
+  # evidence from ancestry or a merged PR.
+  if ! git branch -D "$wt_branch" >/dev/null; then
+    warn "removed the worktree but could not delete branch $wt_branch"
+    failures=$((failures + 1))
+    continue
+  fi
+  printf 'deleted  %s\n' "$wt_branch"
+done
+
+git worktree prune
+
+((failures == 0)) || exit 1
