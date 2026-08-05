@@ -242,3 +242,36 @@ EOF
   run grep -nE '(^|[[:space:]])(mapfile|readarray)([[:space:]]|$)|declare -g?A' "$REPO_ROOT/bin/gh"
   [ "$status" -ne 0 ]
 }
+
+@test "bash_profile puts dotfiles/bin ahead of /usr/local/bin in a clean login shell" {
+  local profile="$REPO_ROOT/core/shell/bash_profile.symlink"
+  [ -f "$profile" ]
+  mkdir -p "$HOME/.dotfiles/bin"
+  cp "$profile" "$HOME/.bash_profile"
+  run env -i HOME="$HOME" /bin/bash -lc 'printf "%s\n" "$PATH"'
+  [ "$status" -eq 0 ]
+  local dotfiles_pos local_pos
+  dotfiles_pos=$(printf '%s' "$output" | tr ':' '\n' | grep -n "^$HOME/.dotfiles/bin$" | head -1 | cut -d: -f1)
+  local_pos=$(printf '%s' "$output" | tr ':' '\n' | grep -n '^/usr/local/bin$' | head -1 | cut -d: -f1)
+  [ -n "$dotfiles_pos" ]
+  [ -z "$local_pos" ] || [ "$dotfiles_pos" -lt "$local_pos" ]
+}
+
+@test "bash_profile preserves an existing real ~/.profile" {
+  mkdir -p "$HOME/.dotfiles/bin"
+  cp "$REPO_ROOT/core/shell/bash_profile.symlink" "$HOME/.bash_profile"
+  cat >"$HOME/.profile" <<'EOF'
+export EXISTING_PROFILE_RAN=yes
+PATH="$HOME/preexisting:$PATH"
+EOF
+  run env -i HOME="$HOME" /bin/bash -lc 'printf "%s|%s\n" "$EXISTING_PROFILE_RAN" "$PATH"'
+  [ "$status" -eq 0 ]
+  [[ "$output" == yes\|* ]]
+  [[ "$output" == *"$HOME/preexisting"* ]]
+}
+
+@test "bash_profile is mapped to ~/.bash_profile by the link mapper" {
+  run bash -c "source '$REPO_ROOT/bin/common.sh' >/dev/null 2>&1; managed_link_pairs '$REPO_ROOT' '$HOME' | tr '\0' '\n'"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"$HOME/.bash_profile"* ]]
+}
