@@ -94,7 +94,7 @@ one shapes the design below.
 
 ## Design
 
-Four components. Routing is declarative and covers the common case; a guard
+Five components. Routing is declarative and covers the common case; a guard
 converts the cases routing cannot cover from silent to loud.
 
 ### 1. Routing (tracked, public)
@@ -175,17 +175,46 @@ not Claude Code's bash tool. Routing that disagrees between callers in the same
 repository would reintroduce exactly the silent wrong-identity failure this
 design exists to remove.
 
+**Mixed-owner repositories.** The pre-push guard protects `git push` only.
+Repository-contextual `gh` commands — `gh pr merge`, `gh issue close`,
+`gh release delete` — carry the same wrong-account risk with no hook to catch
+them. When the shim finds more than one mapped GitHub owner among the
+repository's remotes it therefore **refuses to run** and exits non-zero with an
+actionable message, rather than guessing.
+
+The refusal covers every `gh` invocation in such a repository rather than only
+the repository-contextual subset, because distinguishing them means parsing
+`gh`'s arguments, which is the same fragility rejected elsewhere in this design.
+The escape hatch is an explicit `GH_CONFIG_DIR` (optionally with `GH_REPO`) in
+the caller's environment: when `GH_CONFIG_DIR` is already set, the shim passes
+through untouched and the caller owns the choice.
+
 **Coverage is bounded by `PATH`.** `~/.dotfiles/bin` precedes `/usr/local/bin` in
 both zsh and bash, but a clean environment (`env -i bash -l`) does not have it at
 all — it is present in bash only by inheritance from a zsh parent, because
-neither `~/.profile` nor `~/.bashrc` adds it. To make the shim's reach match its
-claim, `~/.dotfiles/bin` is added to `PATH` for bash login shells via a
-dotfiles-managed `~/.profile` snippet. `~/.profile` is not dotfiles-managed
-today, so this is new surface and is called out as such.
+neither `~/.profile` nor `~/.bashrc` adds it.
 
-Even then, cron and other environments that read neither profile are not
-covered. Those must set `GH_CONFIG_DIR` explicitly; this is documented, not
-solved.
+Bash login coverage is delivered by a new tracked `core/shell/bash_profile.symlink`
+mapping to `~/.bash_profile`, which sources `~/.profile` if present and then
+prepends `~/.dotfiles/bin` to `PATH`.
+
+This specific shape is required by the existing installer. `link_file` in
+`bin/relink` uses `policy=skip` for any destination that is not already a
+symlink, and `bin/relink` then calls `log_error` — which exits — if any
+destination was skipped. A `profile.symlink` would therefore collide with the
+real `~/.profile` on this machine and abort `bin/relink` for *every* managed
+dotfile, not merely fail to install itself. `~/.bash_profile` does not exist
+here, so it links cleanly.
+
+Chaining rather than replacing preserves the existing `~/.profile`, which
+sources `~/.bashrc`, adds `~/bin` and `~/.local/bin`, and loads the Cargo
+environment. Bash reads `~/.bash_profile` instead of `~/.profile` when the former
+exists — as the stock `~/.profile` header itself notes — so sourcing it first
+keeps current behaviour intact.
+
+Non-bash POSIX login shells continue to read `~/.profile` only and do not get the
+shim. Neither do cron and other environments that read no profile at all. Those
+must set `GH_CONFIG_DIR` explicitly; this is documented, not solved.
 
 Because the shim covers Claude Code's bash sessions, no per-project
 `.claude/settings.local.json` `env` block is required, and none is added. That
@@ -205,13 +234,37 @@ This is the component that makes the limitations above safe. It catches:
 - a push to a guarzo URL from a repository that resolved to the default
   identity for any other reason.
 
-Per the constraint above, it must fail open on everything outside its remit: a
-non-`github.com` host, a repository whose owner maps to no configured identity,
-a missing `gh` or `jq`, or any internal error all result in `exit 0` and no
-output. It blocks only when it can positively determine that the identity and
-the push destination disagree. The existing hook's own comment is the precedent
-and the cautionary tale — a global hook that errors breaks unrelated
-repositories, including lazy.nvim's plugin clones.
+#### Composition with the existing hook
+
+The existing `pre-push` ends with `git lfs pre-push "$@"`, whose exit status
+becomes the hook's exit status. Appending the guard after it would let a guard
+that exits 0 overwrite a non-zero LFS result, pushing refs whose LFS objects
+never uploaded. Order is therefore fixed and load-bearing:
+
+1. Run the identity guard first — it needs only the destination arguments.
+2. Abort immediately, non-zero, if the guard rejects the push.
+3. Run `git lfs pre-push "$@"` last, so its exit status stays authoritative.
+
+#### Fail-open boundary
+
+Fail-open applies *before* the guard establishes that a push is within its remit,
+not after. Blanket fail-open would contradict this design's stated principle that
+an unroutable identity must fail loudly.
+
+| Destination | Condition | Behaviour |
+| --- | --- | --- |
+| Non-`github.com`, or owner maps to no configured identity | any | exit 0, silent |
+| Owner maps to a configured identity | resolved identity matches | allow |
+| Owner maps to a configured identity | resolved identity disagrees | block, actionable message |
+| Owner maps to a configured identity | cannot determine — missing `gh`/`jq`, unreadable config, indeterminate identity | **block**, actionable message |
+
+The first row preserves the constraint that a global hook must not break
+unrelated repositories: a machine with no guarzo identity, or any repository
+pushing elsewhere, never reaches a blocking path. The existing hook's own comment
+is the precedent and the cautionary tale — a global hook that errors breaks
+unrelated repositories, including lazy.nvim's plugin clones. The last row is the
+narrow, deliberate exception: once the destination is known to be a configured
+identity's, "I cannot verify" is not a safe reason to proceed.
 
 ### 5. Verification command
 
@@ -240,7 +293,8 @@ destination URL and compares it against what git actually resolved.
 
 **Mixed-owner repositories.** Routing selects an identity from any matching
 remote, which may not be the push target. The guard blocks the push and names
-the disagreement. Not silently mitigated, because it cannot be.
+the disagreement, and the `gh` shim refuses to run at all. Not silently
+mitigated, because it cannot be.
 
 **SSH remotes owned by guarzo.** Not routed. Author and signing identity fall
 back to the default, and the guard blocks the push rather than letting it
@@ -261,9 +315,10 @@ than falling back to the other identity. `bin/git-identity` reports it directly.
 solved: solving it would require parsing `gh`'s arguments, which would break on
 `gh` releases.
 
-**Environments without `~/.dotfiles/bin` on `PATH`.** cron and similar contexts
-bypass the shim and use the default identity for `gh`. Git routing is unaffected,
-since it depends on config rather than `PATH`, and the guard still applies.
+**Environments without `~/.dotfiles/bin` on `PATH`.** cron, and non-bash POSIX
+login shells, bypass the shim and use the default identity for `gh`. Git routing
+is unaffected, since it depends on config rather than `PATH`, and the guard still
+applies to any push.
 
 **Machine without a guarzo identity.** The conditional include references a
 missing file, which git ignores silently; the shim finds no config directory and
@@ -342,6 +397,17 @@ Shim:
 - Selects the guarzo config directory for a guarzo remote, delegates unchanged
   for other remotes and outside a repository, and does not recurse when it is
   the first `gh` on `PATH`.
+- Refuses to run, non-zero, in a mixed-owner repository, and passes through
+  untouched when the caller has already set `GH_CONFIG_DIR`.
+
+Bash login coverage:
+
+- `core/shell/bash_profile.symlink` puts `~/.dotfiles/bin` ahead of
+  `/usr/local/bin` in `env -i bash -l`, and preserves the effects of a
+  pre-existing real `~/.profile` — exercised against a temporary `HOME`
+  containing one, not an empty home.
+- `managed_link_pairs` maps it to `~/.bash_profile`, and `bin/relink` completes
+  without skipping when that destination is absent.
 
 Guard:
 
@@ -349,9 +415,17 @@ Guard:
   identity, and a mixed-owner push whose destination disagrees with the routed
   identity.
 - Allows a correctly-matched push.
-- Fails open — exit 0, no output — for a non-`github.com` host, an unmapped
-  owner, and a missing `gh` or `jq`. This is the highest-value test in the suite,
-  because a regression here breaks every repository on the machine.
+- Fails **open** — exit 0, no output — for a non-`github.com` host and an
+  unmapped owner. A regression here breaks every repository on the machine.
+- Fails **closed** for a configured destination when `gh` or `jq` is missing or
+  the identity is otherwise indeterminate. Paired with the row above, these two
+  tests pin the boundary that a single blanket rule would blur.
+
+Hook composition:
+
+- With `git-lfs` stubbed to exit non-zero and the guard passing, the composed
+  hook exits non-zero — LFS failures are not masked.
+- With the guard rejecting, `git lfs pre-push` is never reached.
 
 Doctor and hygiene:
 
