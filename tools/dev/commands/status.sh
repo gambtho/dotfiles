@@ -67,6 +67,9 @@ dev_cmd_status() {
         (first($cfg[] | select(.name == $w.name))) as $decl
         | (if ($decl.panes // null) != null then
              [$w.panes[] | select(.pane == null or ((.pane | IN($decl.panes[].name)) | not))]
+           # Single-pane window: assumes the declared pane is index 0, which a
+           # manual `split-window -b` or a swap-pane can violate; report-only,
+           # so a false positive here never causes repair action.
            elif ($w.panes | length) > 1 then $w.panes[1:]
            else [] end) as $extra
         | if ($extra | length) > 0 then

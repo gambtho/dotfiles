@@ -426,6 +426,35 @@ fixture_pane_config() {
   [ "$(jq -r '[.panes[] | select(.pane == "shell")] | length' <<<"$win")" -eq 1 ]
 }
 
+@test "repair-splitting into a pre-existing, name-colliding user window sets remain-on-exit" {
+  dev_backend_create "proj" "aa11" "proj" "$TEST_WT"
+  # A bare user window, created WITHOUT remain-on-exit chained (the new-window
+  # branch is never exercised for it), that happens to share its name with a
+  # declared panes-form window. Repair must still protect it.
+  dev_tmux new-window -d -t "=proj:" -n main "sleep 30"
+
+  # Two declared panes, not fixture_pane_config's four: the bare window above
+  # already holds one live pane, and a default 80x24 test terminal has no
+  # room to split five.
+  local cfg
+  cfg=$(jq -nc '{
+    version: 1, autostart: false,
+    devcontainer: {enabled: "auto", start_timeout: 300},
+    environment: {},
+    windows: [
+      {name: "main", agent: null, command: null, cwd: null, location: null,
+       focus: true, layout: "tiled",
+       panes: [
+         {name: "agent-1", agent: "sleep 30", command: null, cwd: null, location: null, focus: true},
+         {name: "shell",   agent: null, command: null, cwd: null, location: null, focus: false}
+       ]}
+    ]}')
+  dev_backend_apply_layout "proj" "$cfg" "$(fixture_record)"
+
+  run dev_tmux show-window-options -t "=proj:=main" remain-on-exit
+  [[ "$output" == *on* ]]
+}
+
 @test "apply_layout survives fast-exiting pane commands: dead, held, and stamped" {
   dev_backend_create "proj" "aa11" "proj" "$TEST_WT"
   cfg=$(jq -c '.windows[0].panes[2].command = "exit 5"' <<<"$(fixture_pane_config)")

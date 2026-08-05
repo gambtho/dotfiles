@@ -312,7 +312,6 @@ dev_open_load_libs() {
 # as windows, not panes of one dashboard window) call dev_pin_legacy_default_root
 # (test_helper.bash) to pin that shape regardless of what the shipped default
 # becomes.
-dev_open_pin_legacy_default() { dev_pin_legacy_default_root; }
 
 dev_open_fixture() {
   local dir="$DEV_REPO_ROOT/$1"
@@ -336,7 +335,7 @@ dev_open_events() {
 @test "open creates the session with the four default windows and emits workspace.opened" {
   setup_dev_test
   dev_open_load_libs
-  dev_open_pin_legacy_default
+  dev_pin_legacy_default_root
   dev_open_stub_attach
   dev_open_fixture demo >/dev/null
 
@@ -365,7 +364,7 @@ dev_open_events() {
 @test "a second open creates nothing, re-runs nothing, and leaves scratch untouched" {
   setup_dev_test
   dev_open_load_libs
-  dev_open_pin_legacy_default
+  dev_pin_legacy_default_root
   dev_open_stub_attach
   dev_open_fixture demo >/dev/null
 
@@ -461,7 +460,7 @@ scenario_setup_demo_workspace() {
 
 @test "open after a container loss emits container.replaced then container.ready and respawns dead panes" {
   scenario_setup_demo_workspace
-  dev_open_pin_legacy_default
+  dev_pin_legacy_default_root
   local dir ws_id
   dir="$DEV_REPO_ROOT/demo"
   mkdir -p "$dir/.devcontainer"
@@ -540,7 +539,7 @@ esac
 
 @test "plain re-open respawns a dead pane in a host-only workspace (no container loss required)" {
   scenario_setup_demo_workspace
-  dev_open_pin_legacy_default
+  dev_pin_legacy_default_root
 
   run dev_cmd_open demo --no-attach
   [ "$status" -eq 0 ]
@@ -561,7 +560,7 @@ esac
 
 @test "re-open respawns one dead agent pane of two and leaves the other agent untouched" {
   scenario_setup_demo_workspace
-  dev_open_pin_legacy_default
+  dev_pin_legacy_default_root
   mkdir -p "$DEV_OVERLAY_ROOT/demo"
   cat >"$DEV_OVERLAY_ROOT/demo/workspace.yaml" <<'EOF'
 version: 1
@@ -921,7 +920,7 @@ exit 0
 
 @test "status reports undeclared windows and undeclared panes as drift" {
   scenario_setup_demo_workspace
-  dev_open_pin_legacy_default
+  dev_pin_legacy_default_root
 
   run dev_cmd_open demo --no-attach
   [ "$status" -eq 0 ]

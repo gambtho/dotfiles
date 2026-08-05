@@ -115,7 +115,12 @@ dev_backend_ensure_pane_window() {
         "$workspace_id" "$slug" "$session_name" "$worktree" "$data")
       dev_event_append "$line"
     else
+      # A pre-existing, user-created window that name-collides with a declared
+      # panes-form window never went through the new-window branch above, so it
+      # never got remain-on-exit; set it here too (idempotent for dev-created
+      # windows) or a fast-exiting pane closes the whole window silently.
       dev_tmux split-window -t "=$session_name:=$wname" -c "$workdir" "$pane_cmd" \
+        ';' set-window-option -t "=$session_name:=$wname" remain-on-exit on \
         ';' set-option -p -t "=$session_name:=$wname" @dev_pane "$pname" || return 1
     fi
     created=$((created + 1))
