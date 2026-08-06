@@ -26,7 +26,11 @@ DEFAULTS_TEMPLATE="$DOTFILES_ROOT/tools/projectmux/defaults.yaml.template"
 SYSTEMD_USER_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 UNIT_TEMPLATE="$DOTFILES_ROOT/tools/projectmux/projectmux-autostart.service"
 SERVICE_UNIT="$SYSTEMD_USER_DIR/projectmux-autostart.service"
-PROJECTMUX_REPOSITORY_ROOTS="${PROJECTMUX_REPOSITORY_ROOTS:-$HOME/workspace}"
+# DEV_REPO_ROOT is where the existing tmux platform resolves workspace names
+# (tools/dev/lib/resolve.sh:4). A machine that has moved its checkouts told us
+# so through that variable already, so honour it rather than making the same
+# machine set a second one.
+PROJECTMUX_REPOSITORY_ROOTS="${PROJECTMUX_REPOSITORY_ROOTS:-${DEV_REPO_ROOT:-$HOME/workspace}}"
 
 # Staging paths, cleared as soon as each is published. cleanup removes whatever
 # is still named here, so an interrupted run leaves no dotfile litter in
@@ -294,10 +298,21 @@ install_unit() {
   local escaped_bin
   prepare_destination_directory "$SYSTEMD_USER_DIR"
 
-  # Escape the replacement so an install path containing sed metacharacters
-  # (\, &, or the | delimiter) is substituted literally instead of corrupting
-  # the unit. Same escaping as tools/dev/install.sh:52-54.
+  # Two escaping passes, in this order, because they target different readers.
+  #
+  # First, systemd: the template quotes the placeholder, so a path containing
+  # \ or " would end the quoted word early, % introduces a unit specifier, and
+  # $ introduces environment expansion. Backslash goes first -- after it, the
+  # backslashes this pass adds are already final.
   escaped_bin=${PROJECTMUX_BIN//\\/\\\\}
+  escaped_bin=${escaped_bin//\"/\\\"}
+  escaped_bin=${escaped_bin//%/%%}
+  escaped_bin=${escaped_bin//\$/\$\$}
+
+  # Second, sed: \, & and the | delimiter are replacement metacharacters, so
+  # they are substituted literally instead of corrupting the unit. Same
+  # escaping as tools/dev/install.sh:52-54, applied to the systemd-safe value.
+  escaped_bin=${escaped_bin//\\/\\\\}
   escaped_bin=${escaped_bin//|/\\|}
   escaped_bin=${escaped_bin//&/\\&}
 

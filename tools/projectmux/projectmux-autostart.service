@@ -15,7 +15,7 @@ After=default.target
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=@PROJECTMUX_BIN@ autostart
+ExecStart="@PROJECTMUX_BIN@" autostart
 
 [Install]
 WantedBy=default.target

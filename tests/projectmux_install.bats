@@ -436,6 +436,33 @@ source_installer() {
   [ "$status" -eq 1 ]
 }
 
+@test "repository roots fall back to DEV_REPO_ROOT" {
+  # The existing tmux platform resolves workspace names under DEV_REPO_ROOT
+  # (tools/dev/lib/resolve.sh:4). A machine that has moved its checkouts sets
+  # only that variable, and ProjectMux must land on the same roots.
+  source_installer DEV_REPO_ROOT="$TEST_ROOT/elsewhere" bash -c '
+    unset PROJECTMUX_REPOSITORY_ROOTS
+    source "$1/tools/projectmux/install.sh"
+    install_config
+  ' _ "$REPO_ROOT"
+
+  [ "$status" -eq 0 ]
+  grep -Fq "  - '$TEST_ROOT/elsewhere'" "$TEST_ROOT/config/projectmux/defaults.yaml"
+}
+
+@test "PROJECTMUX_REPOSITORY_ROOTS wins over DEV_REPO_ROOT" {
+  source_installer DEV_REPO_ROOT="$TEST_ROOT/elsewhere" \
+    PROJECTMUX_REPOSITORY_ROOTS="$TEST_ROOT/explicit" bash -c '
+    source "$1/tools/projectmux/install.sh"
+    install_config
+  ' _ "$REPO_ROOT"
+
+  [ "$status" -eq 0 ]
+  local config="$TEST_ROOT/config/projectmux/defaults.yaml"
+  grep -Fq "  - '$TEST_ROOT/explicit'" "$config"
+  [[ "$(cat "$config")" != *"$TEST_ROOT/elsewhere"* ]]
+}
+
 @test "a repository root containing a space renders as one quoted entry" {
   source_installer PROJECTMUX_REPOSITORY_ROOTS="$TEST_ROOT/my code" bash -c '
     source "$1/tools/projectmux/install.sh"
@@ -459,8 +486,23 @@ source_installer() {
   local unit="$TEST_ROOT/config/systemd/user/projectmux-autostart.service"
   [ -f "$unit" ]
   [ ! -L "$unit" ]
-  grep -Fq "ExecStart=$TEST_ROOT/bin/projectmux autostart" "$unit"
+  grep -Fq "ExecStart=\"$TEST_ROOT/bin/projectmux\" autostart" "$unit"
   [[ "$(cat "$unit")" != *"@PROJECTMUX_BIN@"* ]]
+}
+
+@test "an install path with systemd metacharacters is escaped in ExecStart" {
+  # % introduces a unit specifier and $ an environment expansion, so an
+  # unescaped path silently resolves to something else at start time.
+  local dir="$TEST_ROOT/100% \$pace"
+  source_installer XDG_CONFIG_HOME="$TEST_ROOT/config" \
+    PROJECTMUX_INSTALL_DIR="$dir" bash -c '
+    source "$1/tools/projectmux/install.sh"
+    install_unit
+  ' _ "$REPO_ROOT"
+
+  [ "$status" -eq 0 ]
+  grep -Fq "ExecStart=\"$TEST_ROOT/100%% \$\$pace/projectmux\" autostart" \
+    "$TEST_ROOT/config/systemd/user/projectmux-autostart.service"
 }
 
 @test "installing the unit never invokes systemctl" {
