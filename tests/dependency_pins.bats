@@ -27,6 +27,7 @@ setup() {
   [[ "$output" == *"artifact yq v4.45.1"* ]]
   [[ "$output" == *"artifact win32yank v0.1.1"* ]]
   [[ "$output" == *"artifact vekil v0.14.0"* ]]
+  [[ "$output" == *"artifact projectmux v0.1.0"* ]]
   [[ "$output" == *"artifact nerd-fonts v3.4.0"* ]]
   [[ "$output" == *"artifact nerd-font-cascadia-mono v3.4.0 $NERD_FONT_CASCADIA_MONO_SHA256"* ]]
   [[ "$output" == *"artifact nerd-font-hack v3.4.0 $NERD_FONT_HACK_SHA256"* ]]
@@ -43,7 +44,15 @@ setup() {
 }
 
 @test "non-mise pins have one canonical manifest" {
-  run rg -l '^(PREZTO_REF|ZSH_DEFER_REF|KUBERNETES_CHANNEL|VEKIL_VERSION|VEKIL_RELEASE_BASE|VEKIL_(DARWIN|LINUX)_(AMD64|ARM64)_SHA256)=' "$REPO_ROOT" \
+  run rg -l '^(PREZTO_REF|ZSH_DEFER_REF|KUBERNETES_CHANNEL|VEKIL_VERSION|VEKIL_RELEASE_BASE|VEKIL_(DARWIN|LINUX)_(AMD64|ARM64)_SHA256|PROJECTMUX_VERSION|PROJECTMUX_RELEASE_BASE|PROJECTMUX_LINUX_(AMD64|ARM64)_SHA256)=' "$REPO_ROOT" \
+    --glob '!docs/**' --glob '!tests/**'
+  [ "$status" -eq 0 ]
+  [ "$output" = "$REPO_ROOT/config/versions.env" ]
+
+  # The alternation above is an OR, so a missing key family cannot fail it —
+  # any one surviving family still resolves to versions.env. Assert the new
+  # family on its own so the manifest guarantee actually covers it.
+  run rg -l '^PROJECTMUX_(VERSION|RELEASE_BASE|LINUX_(AMD64|ARM64)_SHA256)=' "$REPO_ROOT" \
     --glob '!docs/**' --glob '!tests/**'
   [ "$status" -eq 0 ]
   [ "$output" = "$REPO_ROOT/config/versions.env" ]
@@ -96,6 +105,14 @@ case "$url" in
   *equalsraf/win32yank*) printf '{"tag_name":"v0.1.1"}\n' ;;
   *sozercan/vekil*) printf '{"tag_name":"v0.14.0"}\n' ;;
   *ryanoasis/nerd-fonts*) printf '{"tag_name":"v3.4.0"}\n' ;;
+  # Every ProjectMux release is a prerelease, so /releases/latest really does
+  # 404 and --fail turns that into exit 22. Listing it first means a check
+  # wired to the wrong endpoint fails here instead of quietly passing.
+  *gambtho/projectmux/releases/latest)
+    printf 'curl: (22) The requested URL returned error: 404\n' >&2
+    exit 22
+    ;;
+  *gambtho/projectmux/releases) printf '[{"tag_name":"v0.1.0","prerelease":true}]\n' ;;
 esac
 SCRIPT
   chmod +x "$STUB_BIN/curl"
@@ -108,6 +125,7 @@ SCRIPT
   [[ "$output" == *"current artifact yq v4.45.1"* ]]
   [[ "$output" == *"current artifact win32yank v0.1.1"* ]]
   [[ "$output" == *"current artifact vekil v0.14.0"* ]]
+  [[ "$output" == *"current artifact projectmux v0.1.0"* ]]
   [[ "$output" == *"current artifact nerd-fonts v3.4.0"* ]]
 }
 

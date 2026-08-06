@@ -50,6 +50,7 @@ list_pins() {
   printf 'artifact yq %s\n' "$YQ_VERSION"
   printf 'artifact win32yank %s\n' "$WIN32YANK_VERSION"
   printf 'artifact vekil %s\n' "$VEKIL_VERSION"
+  printf 'artifact projectmux %s\n' "$PROJECTMUX_VERSION"
   printf 'artifact nerd-fonts %s\n' "$NERD_FONTS_VERSION"
   printf 'artifact nerd-font-cascadia-mono %s %s\n' "$NERD_FONTS_VERSION" "$NERD_FONT_CASCADIA_MONO_SHA256"
   printf 'artifact nerd-font-hack %s %s\n' "$NERD_FONTS_VERSION" "$NERD_FONT_HACK_SHA256"
@@ -101,17 +102,43 @@ latest_artifact_release() {
   jq -er '.tag_name' <<<"$response"
 }
 
+report_artifact_release() {
+  local name="$1" current="$2" latest="$3"
+  if [[ "$current" == "$latest" ]]; then
+    printf 'current artifact %s %s\n' "$name" "$current"
+  else
+    printf 'outdated artifact %s %s -> %s\n' "$name" "$current" "$latest"
+  fi
+}
+
 check_artifact_release() {
   local name="$1" repository="$2" current="$3" latest
   latest=$(latest_artifact_release "$repository") || {
     printf 'error artifact %s: unable to query latest release for %s\n' "$name" "$repository" >&2
     return 1
   }
-  if [[ "$current" == "$latest" ]]; then
-    printf 'current artifact %s %s\n' "$name" "$current"
-  else
-    printf 'outdated artifact %s %s -> %s\n' "$name" "$current" "$latest"
-  fi
+  report_artifact_release "$name" "$current" "$latest"
+}
+
+# /releases/latest excludes prereleases and 404s for a repository that has only
+# ever cut v0.x prereleases. /releases lists every release newest-first, so
+# entry 0 is the drift target both now and after the project reaches 1.0 --
+# which is why this is not a temporary shim.
+latest_release_including_prerelease() {
+  local repository="$1" response
+  response=$(curl "${CURL_DOWNLOAD_ARGS[@]}" --silent "https://api.github.com/repos/$repository/releases") || return
+  # Guard the shape before indexing: an error body is a JSON *object*, and
+  # `.[0]` against one is a jq crash rather than a clean lookup failure.
+  jq -er 'if type == "array" and length > 0 then .[0].tag_name else null end' <<<"$response"
+}
+
+check_prerelease_artifact_release() {
+  local name="$1" repository="$2" current="$3" latest
+  latest=$(latest_release_including_prerelease "$repository") || {
+    printf 'error artifact %s: unable to query latest release for %s\n' "$name" "$repository" >&2
+    return 1
+  }
+  report_artifact_release "$name" "$current" "$latest"
 }
 
 check_pins() {
@@ -142,6 +169,7 @@ check_pins() {
   check_artifact_release win32yank equalsraf/win32yank "$WIN32YANK_VERSION"
   check_artifact_release vekil sozercan/vekil "$VEKIL_VERSION"
   check_artifact_release nerd-fonts ryanoasis/nerd-fonts "$NERD_FONTS_VERSION"
+  check_prerelease_artifact_release projectmux gambtho/projectmux "$PROJECTMUX_VERSION"
 }
 
 update_pin() {
