@@ -121,7 +121,34 @@ release is a prerelease. Registering ProjectMux through it would break
 manifest — `config/versions.env` — and `bin/versions list` enumerates them, so
 the pin does belong in both files.
 
-### 3.7 The systemd unit is not a release artifact
+Adding a pin therefore breaks three existing assertions, all of which this change
+must update rather than discover later:
+
+- `tests/dependency_pins.bats:46` — the canonical-manifest `rg` pattern is an
+  explicit key-family alternation. A `PROJECTMUX_*` key not added to it is simply
+  not checked, so the manifest guarantee silently stops covering the new pin.
+- `tests/dependency_pins.bats:19-33` — `versions list` output is asserted line by
+  line; a new `artifact projectmux …` line needs its own assertion.
+- `tests/dependency_pins.bats:88-105` — the stubbed `curl` returns nothing for an
+  unrecognized URL, so `versions check` fails until a ProjectMux case is added.
+  Because §4.8 queries `/releases` rather than `/releases/latest`, the stub must
+  return a JSON **array**, not the single object the other cases return.
+
+### 3.7 `bin/list-check-files` does not see `tools/projectmux/`
+
+Shell discovery (`bin/list-check-files:33-47`) covers `bin/`, then `*.sh` under
+`ai/ core/ fonts/ languages/ platforms/ work/`, plus a hardcoded `tools/dev/`
+clause. Nothing matches `tools/projectmux/install.sh`.
+
+Left alone, the new installer would be invisible to `bash -n`, shellcheck, and
+shfmt while `make check` still passed — the worst shape of a gap, because it
+reports success. `is_dev_tool_shell` is generalized to cover `tools/*/`, and
+`tests/check_file_discovery.bats` grows a probe proving the new path is
+discovered by all three classes. Its existing `tools/dev` probes (`:158-190`)
+continue to pass unchanged, which is the check that the generalization did not
+change behavior for the existing platform.
+
+### 3.8 The systemd unit is not a release artifact
 
 Release assets are binaries and `SHA256SUMS` only. The unit template lives at
 `contrib/systemd/projectmux-autostart.service` in the application repository. Its
@@ -150,9 +177,22 @@ half-measure §11 warns against.
 `download_verified_artifact` (`bin/common.sh:200`) downloads to a temporary file
 and **fails before installing anything** when the digest does not match. The
 verified file is then copied to a `mktemp` name *inside the destination
-directory*, `chmod 0755`, and moved over the destination with `mv -f` — a
+directory*, `chmod 0755`, and moved over the destination with `mv -Tf` — a
 same-filesystem rename, which is atomic. No reader ever observes a partial or
 non-executable binary on `PATH`.
+
+`-T` is not decoration. Plain `mv -f staged dest`, where `dest` is a symlink
+resolving to a directory, follows the symlink and deposits the staged file
+*inside* that directory, leaving the symlink installed. Verified directly:
+after `mv -f`, `dest` was still a symlink and the payload had landed at
+`realdir/staged`; `mv -Tf` replaced the symlink with the regular file as
+intended. Since local-binary mode installs a symlink, the plain form would let a
+pinned install report success while leaving the local build on `PATH` — a silent
+violation of §11's restore-the-pin requirement. Both renames therefore use
+`mv -Tf`, and §4.3's guard rejects a destination that resolves to a directory.
+
+`-T` is GNU coreutils. §4.7 refuses every non-Linux platform, so this costs no
+portability that the design has not already given up.
 
 The installed-version marker is written only after the rename succeeds, so an
 interrupted install is retried rather than recorded as complete.
@@ -173,10 +213,27 @@ State lives at `${XDG_STATE_HOME:-~/.local/state}/projectmux/installed-version`.
 
 Encoding mode in the marker rather than inspecting the destination is what makes
 restoring the pin fall out of normal control flow instead of needing a special
-case.
+case. A version tag and a `local:` prefix cannot collide: Git tags cannot contain
+a colon, so no legitimate `PROJECTMUX_VERSION` can ever equal a `local:` marker.
 
-Destination guard: the target must be absent, a regular file, or a symlink.
-A directory is refused.
+Destination guard: the target must be absent, a regular file, or a symlink that
+does **not** resolve to a directory. A directory, or a symlink to one, is
+refused rather than renamed over — see §4.2 for why that case is dangerous
+rather than merely odd.
+
+**Reconciliation invariant.** The binary and the marker are two files, so they
+are published by two renames and are not updated as a unit. Interleaved runs — a
+pinned install racing a local-mode one — can therefore pair a local symlink with
+a pinned marker. The design tolerates this instead of preventing it, because the
+short-circuit in §4.2 requires the marker to equal `PROJECTMUX_VERSION` **and**
+the destination to be a regular file. A mismatched pair fails that test, so the
+next run performs a full install and repairs the state.
+
+This is a deliberate choice against locking. A lockfile would serialize runs
+nobody is running concurrently on a single-user machine, and would introduce a
+stale-lock failure mode that is strictly worse than a state that self-heals. The
+invariant is recorded here so the compound condition in the short-circuit is
+understood as load-bearing and not simplified away later.
 
 ### 4.4 Render `defaults.yaml`; create if absent, warn on drift
 
@@ -236,16 +293,28 @@ is required to write it. The full `systemd_user_available` guard from
 `tools/dev/install.sh:30-41` therefore does not apply here — that guard exists to
 prevent `enable` and `daemon-reload` from mutating state outside a sandbox, and
 neither is invoked. Reproducing it wholesale would be ceremony guarding nothing.
-What survives is its OS test: the unit is written on Linux and skipped elsewhere,
-since a systemd unit directory is meaningless on macOS. Writing into
-`$XDG_CONFIG_HOME` is contained even when `HOME` is redirected, which is the
-reasoning the guard's own comment records.
+Its OS test is redundant too: §4.7 refuses every non-Linux platform before this
+point is reached, so by the time the unit is written the host is known to be
+Linux. Writing into `$XDG_CONFIG_HOME` is contained even when `HOME` is
+redirected, which is the reasoning the guard's own comment records.
 
 The unit is staged and renamed like every other managed file, and skipped when
 byte-identical to what is already installed. The full guard returns in §13 step
 8, which does need it.
 
-### 4.7 Register the pin, with a prerelease-aware check
+### 4.7 Linux only, refused early
+
+Supported: `x86_64`/`amd64` and `aarch64`/`arm64` on Linux. Every other OS or
+architecture is refused **before any download**, and nothing — binary,
+configuration, or unit — is installed.
+
+There is no partial-install path for other platforms. The release publishes
+`projectmux-linux-amd64` and `projectmux-linux-arm64` only, and §14 records Linux
+and WSL as the only initial platforms, so a macOS run has no binary to pin and
+no reason to render configuration for one. Refusing whole is also what makes
+`mv -Tf` (§4.2) an acceptable dependency on GNU coreutils.
+
+### 4.8 Register the pin, with a prerelease-aware check
 
 `list_pins` gains `artifact projectmux $PROJECTMUX_VERSION`, satisfying the
 canonical-manifest convention.
@@ -257,7 +326,7 @@ tooling this change reaches into; the alternative — leaving the pin unlisted a
 unchecked — was considered and rejected because pin drift would then never be
 reported.
 
-### 4.8 The installer runs no migrations
+### 4.9 The installer runs no migrations
 
 §11 assigns migrations to the application: upgrades run them before normal
 command execution and retain a backup when a migration is destructive. The
@@ -274,6 +343,9 @@ installer replaces a binary and writes configuration. It does not touch SQLite.
 | `tests/projectmux_install.bats` | Behavioral tests |
 | `bin/install` | `run_phase optional projectmux`, beside the existing `dev` phase |
 | `bin/versions` | Pin listing and prerelease-aware drift check |
+| `bin/list-check-files` | Generalize `tools/dev/` discovery to `tools/*/` (§3.7) |
+| `tests/check_file_discovery.bats` | Probe proving `tools/projectmux/` reaches all three shell gates |
+| `tests/dependency_pins.bats` | Manifest regex, `versions list` line, and the stubbed release response (§3.6) |
 
 `install.sh` follows repository convention: `set -euo pipefail`, sources
 `bin/common.sh` and `config/versions.env`, derives `DOTFILES_ROOT` from
@@ -285,22 +357,22 @@ dry run as the AI installers do.
 ```text
 main
  ├─ --check ............ report intended actions, change nothing
+ ├─ require_platform .... Linux + amd64/arm64, else refuse before anything else
  ├─ resolve mode ....... PROJECTMUX_LOCAL_BINARY set? local : pinned
  ├─ install_binary
  │   ├─ local ......... validate path → stage symlink → rename → marker "local:<path>"
  │   └─ pinned ........ marker == version && regular file? skip
- │                      detect arch → select asset + pinned digest
+ │                      select asset + pinned digest
  │                      download_verified_artifact (fails closed on mismatch)
  │                      stage in destination dir → chmod 0755 → rename → marker
  ├─ install_config ..... mkdir 0700 root + workspaces/
  │                      defaults.yaml absent? render : (differs? warn : nothing)
- └─ install_unit ....... Linux only: render template → stage → rename
+ └─ install_unit ....... render template → stage → rename
                          never enable, never daemon-reload
 ```
 
-Architectures: `x86_64`/`amd64` and `aarch64`/`arm64` on Linux. Anything else is
-refused with a clear message — §14 records Linux and WSL as the only initial
-platforms.
+The platform gate is the first thing `main` does, so every later step may assume
+Linux. See §4.7 for why the refusal is whole rather than partial.
 
 ## 7. Failure behavior
 
@@ -309,10 +381,10 @@ platforms.
 | Digest mismatch | Download rejected before install; existing binary untouched; non-zero exit |
 | Network failure | `curl` fails; nothing staged is promoted; existing binary untouched |
 | `PROJECTMUX_LOCAL_BINARY` relative, missing, non-executable, or a directory | Refuse with a message naming the path; install nothing |
-| Destination is a directory | Refuse; do not attempt a rename over it |
-| Unsupported architecture or OS | Refuse before any download |
+| Destination is a directory, or a symlink resolving to one | Refuse; do not attempt a rename over it |
+| Unsupported architecture or OS | Refuse before anything is downloaded or written — no binary, no configuration, no unit (§4.7) |
 | `defaults.yaml` exists and differs | Warn naming both paths; leave it alone; exit zero |
-| Non-Linux host | Skip the unit; log; exit zero. The binary and configuration still install |
+| Marker and destination disagree (interleaved runs) | Short-circuit fails; the next run reinstalls and repairs the pair (§4.3) |
 | Interrupted mid-install | Marker not yet written, so the next run reinstalls |
 
 The installer is an optional install phase, matching the existing `dev` phase, so
@@ -337,7 +409,12 @@ guess.
 6. A hand-edited `defaults.yaml` survives a re-run and produces a warning.
 7. Relative, missing, and directory values of `PROJECTMUX_LOCAL_BINARY` are all
    refused.
-8. `make check` — syntax, shellcheck, shfmt, bats, python, validate.
+8. `bin/list-check-files bash | tr '\0' '\n' | grep tools/projectmux/install.sh`,
+   and the same for the `shellcheck` and `shfmt` classes, each printing the path.
+   Asserting that `make check` covers the installer is not evidence; §3.7 shows
+   the discovery gap is exactly the kind that passes while checking nothing.
+9. `make check` — syntax, shellcheck, shfmt, bats, python, validate — run after
+   step 8 confirms there is something for it to check.
 
 Known limits, to be stated rather than papered over:
 
