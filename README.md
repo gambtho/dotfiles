@@ -81,9 +81,14 @@ deliberate: the map says which owners this machine *knows about*, independent
 of whether they are actually set up, so tooling can tell "unmapped and
 unrelated" apart from "known identity but not provisioned."
 
-**How routing works.** `core/git/gitconfig.symlink` carries an
-`includeIf "hasconfig:remote.*.url:..."` block per non-default owner, pulling
-in `~/.gitconfig.guarzo` only for repositories with a matching remote. That
+**How routing works.** `bin/relink` generates one
+`includeIf "hasconfig:remote.*.url:..."` block per non-default owner in the
+**active** map into the gitignored `~/.gitconfig.identity-routes`, which
+`core/git/gitconfig.symlink` includes. Generated rather than tracked because the
+map is per-machine: a hardcoded owner would name the wrong account on a machine
+that flips the roles, leaving the other identity silently unrouted. Re-run
+`bin/relink` after changing the map. Each block pulls in `~/.gitconfig.<slug>`
+only for repositories with a matching remote. That
 include path is gitignored and machine-local — the tracked template lives at
 `core/git/gitconfig.secondary.symlink.example`, which is slug-agnostic.
 `bin/bootstrap` renders it per non-`default` slug into

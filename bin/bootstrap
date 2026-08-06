@@ -204,6 +204,35 @@ setup_one_secondary_identity() {
   log_info "Next for '$slug': GH_CONFIG_DIR=\$HOME/.gh-$slug gh auth login --scopes repo,workflow"
 }
 
+# Write the conditional-include blocks that actually route each identity. Kept
+# in a generated, gitignored file rather than the tracked config because the
+# owner map is per-machine: a tracked block would name the wrong owner on a
+# machine that flips the roles, and the other identity would never be routed.
+render_identity_routes() {
+  local lib="$DOTFILES_ROOT/core/git/identity-lib.sh"
+  local out="$DOTFILES_ROOT/core/git/gitconfig.identity-routes.symlink"
+
+  [ -r "$lib" ] || return 0
+  # shellcheck source=/dev/null
+  # Bind DOTFILES so the map is read from the same root the output is written to.
+  if ! (
+    export DOTFILES="$DOTFILES_ROOT"
+    . "$lib" && identity_validate_map
+  ) >/dev/null 2>&1; then
+    log_warning "Owner map is unusable; leaving identity routing unchanged."
+    return 0
+  fi
+  # shellcheck source=/dev/null
+  if ! (
+    export DOTFILES="$DOTFILES_ROOT"
+    . "$lib" && identity_render_routes
+  ) >"$out"; then
+    log_warning "Failed to write identity routing."
+    return 0
+  fi
+  log_info "Identity routing written to $out"
+}
+
 # Machine-local owner map. The shared core/git/identity-owners encodes ROLES
 # (which account is the ambient default, which need routing), and roles differ
 # per machine: an account that is secondary here may be the default elsewhere.
@@ -526,6 +555,7 @@ main() {
   setup_gitconfig
   setup_secondary_identity
   setup_identity_map
+  render_identity_routes
   setup_profile
   # $HOME/.dotfiles, not $DOTFILES_ROOT: the latter is wherever this script was
   # run from, which may be a disposable linked worktree. The stable root must

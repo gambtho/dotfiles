@@ -84,4 +84,38 @@ if ! GH_CONFIG_DIR="$configdir" gh auth status >/dev/null 2>&1; then
   exit 4
 fi
 
+# Verify the identity is actually IN FORCE, not merely present on disk. This
+# tool previously reported OK whenever the map, the config file and the gh
+# config dir existed -- and stayed OK on a machine where no conditional include
+# routed the identity at all, so git resolved someone else's signing key. A
+# diagnostic that passes while the thing it diagnoses is broken ends the
+# investigation in the wrong place.
+exp_email="$(identity_slug_email "$slug" 2>/dev/null || true)"
+exp_key="$(identity_slug_key "$slug" 2>/dev/null || true)"
+eff_email="$(git config user.email 2>/dev/null || true)"
+eff_key="$(git config user.signingKey 2>/dev/null || true)"
+
+# An identity file that exists but defines no email is half-configured: it
+# satisfies the provisioned check above and would otherwise fall through to OK,
+# which is the "looks provisioned, fails at push time" state this design treats
+# as worse than absent.
+if [ -z "$exp_email" ]; then
+  printf 'status:   INCOMPLETE -- %s defines no user.email\n' \
+    "$(identity_slug_configfile "$slug")"
+  exit 3
+fi
+
+if [ "$exp_email" != "$eff_email" ]; then
+  printf 'status:   NOT ROUTED -- git resolves %s, identity expects %s\n' \
+    "${eff_email:-<unset>}" "$exp_email"
+  printf 'No conditional include is routing this repository. Run bin/relink.\n'
+  exit 6
+fi
+if [ -n "$exp_key" ] && [ "$exp_key" != "$eff_key" ]; then
+  printf 'status:   NOT ROUTED -- signing key is %s, identity expects %s\n' \
+    "${eff_key:-<unset>}" "$exp_key"
+  printf 'No conditional include is routing this repository. Run bin/relink.\n'
+  exit 6
+fi
+
 printf 'status:   OK\n'
