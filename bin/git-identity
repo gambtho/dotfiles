@@ -95,7 +95,17 @@ exp_key="$(identity_slug_key "$slug" 2>/dev/null || true)"
 eff_email="$(git config user.email 2>/dev/null || true)"
 eff_key="$(git config user.signingKey 2>/dev/null || true)"
 
-if [ -n "$exp_email" ] && [ "$exp_email" != "$eff_email" ]; then
+# An identity file that exists but defines no email is half-configured: it
+# satisfies the provisioned check above and would otherwise fall through to OK,
+# which is the "looks provisioned, fails at push time" state this design treats
+# as worse than absent.
+if [ -z "$exp_email" ]; then
+  printf 'status:   INCOMPLETE -- %s defines no user.email\n' \
+    "$(identity_slug_configfile "$slug")"
+  exit 3
+fi
+
+if [ "$exp_email" != "$eff_email" ]; then
   printf 'status:   NOT ROUTED -- git resolves %s, identity expects %s\n' \
     "${eff_email:-<unset>}" "$exp_email"
   printf 'No conditional include is routing this repository. Run bin/relink.\n'

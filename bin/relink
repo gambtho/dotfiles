@@ -61,8 +61,15 @@ fi
 # name the wrong owner and silently leave an identity unrouted.
 if [ -r "$DOTFILES_ROOT/core/git/identity-lib.sh" ]; then
   # shellcheck source=/dev/null
-  if (. "$DOTFILES_ROOT/core/git/identity-lib.sh" && identity_validate_map) >/dev/null 2>&1; then
+  # Bind DOTFILES: the library resolves its root from it, so without this the
+  # map is read from $HOME/.dotfiles while output goes to $DOTFILES_ROOT --
+  # silently different roots whenever relink runs outside the canonical checkout.
+  if (
+    export DOTFILES="$DOTFILES_ROOT"
+    . "$DOTFILES_ROOT/core/git/identity-lib.sh" && identity_validate_map
+  ) >/dev/null 2>&1; then
     (
+      export DOTFILES="$DOTFILES_ROOT"
       . "$DOTFILES_ROOT/core/git/identity-lib.sh"
       identity_render_routes
     ) >"$DOTFILES_ROOT/core/git/gitconfig.identity-routes.symlink"

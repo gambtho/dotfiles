@@ -110,13 +110,13 @@ EOF
 }
 
 @test "generated routes agree with the ACTIVE map as owner+slug pairs" {
-  # The predecessor of this test compared the TRACKED map against TRACKED
-  # includeIf blocks, so it passed on a machine whose machine-local map defined
-  # a slug with no routing block at all. Compare what is actually generated
-  # against the map actually in force.
+  # Assert each owner and its path as ONE adjacent block. Checking the two lines
+  # independently would pass on crossed routes -- owner A pointing at slug B's
+  # file and vice versa -- which is the same blind spot that made the previous
+  # version of this test compare only tracked-against-tracked.
   setup_routes
   printf 'guarzo default\ngambtho gambtho\nacme    acme\n' >"$DOTFILES/core/git/identity-owners.local"
-  local routes owner slug
+  local routes owner slug block
   routes="$(render_routes)"
   while read -r owner slug; do
     [ -n "$owner" ] || continue
@@ -124,8 +124,8 @@ EOF
       [[ "$routes" != *"github.com/$owner/"* ]]
       continue
     fi
-    [[ "$routes" == *"hasconfig:remote.*.url:https://github.com/$owner/**"* ]]
-    [[ "$routes" == *"path = ~/.gitconfig.$slug"* ]]
+    block="$(printf '[includeIf "hasconfig:remote.*.url:https://github.com/%s/**"]\n\tpath = ~/.gitconfig.%s' "$owner" "$slug")"
+    [[ "$routes" == *"$block"* ]]
   done < <(grep -vE '^[[:space:]]*(#|$)' "$DOTFILES/core/git/identity-owners.local")
 }
 
@@ -1050,4 +1050,38 @@ render_routes() {
 @test "the generated routes file is gitignored" {
   run git -C "$REPO_ROOT" check-ignore -q core/git/gitconfig.identity-routes.symlink
   [ "$status" -eq 0 ]
+}
+
+@test "route rendering reads the map from the same root it writes to" {
+  # The library resolves its root from $DOTFILES. Without binding it to
+  # DOTFILES_ROOT, relink/bootstrap read the map from $HOME/.dotfiles while
+  # writing output under DOTFILES_ROOT -- two different roots, silently.
+  local fake="$TEST_ROOT/rootbind"
+  mkdir -p "$fake/core/git" "$HOME/.dotfiles/core/git"
+  cp "$REPO_ROOT/core/git/identity-lib.sh" "$fake/core/git/"
+  cp "$REPO_ROOT/core/git/identity-lib.sh" "$HOME/.dotfiles/core/git/"
+  # Decoy map at $HOME/.dotfiles names a DIFFERENT owner.
+  printf 'decoy decoyslug\n' >"$HOME/.dotfiles/core/git/identity-owners"
+  printf 'guarzo default\ngambtho gambtho\n' >"$fake/core/git/identity-owners"
+  unset IDENTITY_MAP_FILE
+  run env BOOTSTRAP_SOURCE_ONLY=1 HOME="$HOME" bash -c "
+    source '$REPO_ROOT/bin/bootstrap'
+    DOTFILES_ROOT='$fake'
+    render_identity_routes
+  "
+  [ "$status" -eq 0 ]
+  run cat "$fake/core/git/gitconfig.identity-routes.symlink"
+  [[ "$output" == *"github.com/gambtho/"* ]]
+  [[ "$output" != *"decoy"* ]]
+}
+
+@test "an identity file with no email is reported incomplete, not OK" {
+  setup_shim_repo "$TEST_ROOT/inc" https://github.com/guarzo/repo.git
+  # File exists (so it counts as provisioned) but defines nothing usable.
+  printf '# empty\n' >"$HOME/.gitconfig.guarzo"
+  mkdir -p "$HOME/.gh-guarzo"
+  cd "$TEST_ROOT/inc"
+  run "$REPO_ROOT/bin/git-identity"
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"INCOMPLETE"* ]]
 }

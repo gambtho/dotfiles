@@ -214,12 +214,19 @@ render_identity_routes() {
 
   [ -r "$lib" ] || return 0
   # shellcheck source=/dev/null
-  if ! (. "$lib" && identity_validate_map) >/dev/null 2>&1; then
+  # Bind DOTFILES so the map is read from the same root the output is written to.
+  if ! (
+    export DOTFILES="$DOTFILES_ROOT"
+    . "$lib" && identity_validate_map
+  ) >/dev/null 2>&1; then
     log_warning "Owner map is unusable; leaving identity routing unchanged."
     return 0
   fi
   # shellcheck source=/dev/null
-  if ! (. "$lib" && identity_render_routes) >"$out"; then
+  if ! (
+    export DOTFILES="$DOTFILES_ROOT"
+    . "$lib" && identity_render_routes
+  ) >"$out"; then
     log_warning "Failed to write identity routing."
     return 0
   fi
