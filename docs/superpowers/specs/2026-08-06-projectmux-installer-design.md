@@ -429,7 +429,7 @@ Known limits, to be stated rather than papered over:
   `ai/vekil/install.sh` and the upstream unit's `%h/.local/bin/projectmux`.
 - `$HOME/workspace` is the repository root on this machine, matching
   `bin/dev:18`'s `DEV_REPO_ROOT` default.
-- `mv -f` within one directory is atomic. The destination directory and its
+- `mv -Tf` within one directory is atomic. The destination directory and its
   staging file always share a filesystem because staging happens inside it.
 
 ## 10. Follow-up
