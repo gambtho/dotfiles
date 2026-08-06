@@ -32,14 +32,33 @@ setup() {
   printf 'set -g status on\n' >"$DEV_CONF_FILE"
   printf '[Unit]\nDescription=probe\n' >"$DEV_UNIT_FILE"
   printf 'export PROBE=1\n' >"$DEV_ZSH_FILE"
+
+  # Probes for a tools/ subdirectory that is not tools/dev. tools/projectmux
+  # now hosts the real ProjectMux installer, but this fixture writes its own
+  # probe files there rather than relying on that installer's actual layout —
+  # that keeps the gate honest if the installer is later renamed or moved.
+  TOOL_PROBE_DIR="$REPO_ROOT/tools/projectmux"
+  TOOL_INSTALL_FILE="$TOOL_PROBE_DIR/probe-install-$BATS_TEST_NUMBER.sh"
+  TOOL_EXEC_FILE="$TOOL_PROBE_DIR/probe-exec-$BATS_TEST_NUMBER"
+  TOOL_ZSH_FILE="$TOOL_PROBE_DIR/probe-$BATS_TEST_NUMBER.zsh"
+  TOOL_YAML_FILE="$TOOL_PROBE_DIR/probe-$BATS_TEST_NUMBER.yaml"
+  mkdir -p "$TOOL_PROBE_DIR"
+  printf '#!/usr/bin/env bash\ntrue\n' >"$TOOL_INSTALL_FILE"
+  printf '#!/usr/bin/env bash\ntrue\n' >"$TOOL_EXEC_FILE"
+  printf 'export PROBE=1\n' >"$TOOL_ZSH_FILE"
+  printf 'defaults: {}\n' >"$TOOL_YAML_FILE"
 }
 
 teardown() {
   rm -f -- "$UNTRACKED_FILE" "$IGNORED_FILE" \
     "$DEV_LIB_FILE" "$DEV_CMD_FILE" "$DEV_INSTALL_FILE" "$DEV_EXEC_FILE" \
-    "$DEV_YAML_FILE" "$DEV_CONF_FILE" "$DEV_UNIT_FILE" "$DEV_ZSH_FILE"
+    "$DEV_YAML_FILE" "$DEV_CONF_FILE" "$DEV_UNIT_FILE" "$DEV_ZSH_FILE" \
+    "$TOOL_INSTALL_FILE" "$TOOL_EXEC_FILE" "$TOOL_ZSH_FILE" "$TOOL_YAML_FILE"
   rmdir "$IGNORED_DIR" 2>/dev/null || true
   rmdir "$DEV_LIB_DIR" "$DEV_CMD_DIR" 2>/dev/null || true
+  # rmdir, not rm -r: once the real installer lands here the directory is not
+  # empty and must survive the suite untouched.
+  rmdir "$TOOL_PROBE_DIR" 2>/dev/null || true
 }
 
 list_files() {
@@ -185,4 +204,33 @@ list_files() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"${DEV_ZSH_FILE#"$REPO_ROOT/"}"* ]]
   [[ "$output" != *"${DEV_LIB_FILE#"$REPO_ROOT/"}"* ]]
+}
+
+@test "tools shell sources outside tools/dev land in every bash gate" {
+  local class
+  for class in bash shellcheck shfmt; do
+    list_files "$class"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"${TOOL_INSTALL_FILE#"$REPO_ROOT/"}"* ]]
+    [[ "$output" == *"${TOOL_EXEC_FILE#"$REPO_ROOT/"}"* ]]
+  done
+}
+
+@test "tools non-shell assets outside tools/dev stay out of the bash gates" {
+  # Guard against over-widening: this passes both before and after the
+  # predicate change, and its job is to fail if the new prefix starts
+  # swallowing .zsh plugins or config data that other consumers own.
+  local class
+  for class in bash shellcheck shfmt; do
+    list_files "$class"
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"${TOOL_ZSH_FILE#"$REPO_ROOT/"}"* ]]
+    [[ "$output" != *"${TOOL_YAML_FILE#"$REPO_ROOT/"}"* ]]
+    [[ "$output" != *"tools/you-should-use.zsh"* ]]
+    [[ "$output" != *"tools/commit.msg.example"* ]]
+  done
+
+  list_files zsh
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"${TOOL_ZSH_FILE#"$REPO_ROOT/"}"* ]]
 }

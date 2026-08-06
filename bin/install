@@ -194,6 +194,7 @@ main() {
   fi
   run_phase optional work setup_work
   run_phase optional dev bash "$DOTFILES_ROOT/tools/dev/install.sh"
+  run_phase optional projectmux bash "$DOTFILES_ROOT/tools/projectmux/install.sh"
   setup_ai
 
   finish_phases || exit 1

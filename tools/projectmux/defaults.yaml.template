@@ -1,0 +1,26 @@
+# ProjectMux defaults, installed by ~/.dotfiles/tools/projectmux/install.sh.
+#
+# This file is created once and then left alone: the installer never
+# overwrites it, so local edits survive every subsequent run. To go back to
+# the shipped defaults, delete it and re-run the installer.
+version: 1
+
+repository_roots:
+@REPOSITORY_ROOTS@
+
+# Autostart stays off: the user unit this repo installs is deliberately not
+# enabled, so nothing starts a session behind the user's back.
+autostart: false
+
+devcontainer:
+  enabled: auto
+  start_timeout: 5m
+
+windows:
+  - name: agent-1
+    agent: claude
+    focus: true
+  - name: agent-2
+    agent: claude
+  - name: shell
+    shell: true
