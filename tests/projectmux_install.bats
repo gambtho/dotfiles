@@ -251,3 +251,116 @@ source_installer() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"pinned branch taken"* ]]
 }
+
+@test "pinned install publishes a regular file and records the version" {
+  run env PROJECTMUX_INSTALL_SOURCE_ONLY=1 \
+    PROJECTMUX_INSTALL_DIR="$TEST_ROOT/bin" \
+    PROJECTMUX_STATE_DIR="$TEST_ROOT/state" \
+    bash -c '
+      source "$1/tools/projectmux/install.sh"
+      download_verified_artifact() { printf "binary" >"$3"; }
+      install_pinned_binary amd64
+      printf "MARKER=%s\n" "$(cat "$MARKER_FILE")"
+    ' _ "$REPO_ROOT"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"MARKER=v0.1.0"* ]]
+  [ -f "$TEST_ROOT/bin/projectmux" ]
+  [ ! -L "$TEST_ROOT/bin/projectmux" ]
+  [ -x "$TEST_ROOT/bin/projectmux" ]
+}
+
+@test "a matching marker and a regular file skip the download entirely" {
+  mkdir -p "$TEST_ROOT/bin" "$TEST_ROOT/state"
+  printf 'installed' >"$TEST_ROOT/bin/projectmux"
+  chmod 0755 "$TEST_ROOT/bin/projectmux"
+  printf 'v0.1.0\n' >"$TEST_ROOT/state/installed-version"
+
+  # return 99 rather than a stub download: if the short-circuit fails to fire,
+  # the install errors instead of quietly succeeding with fabricated content.
+  run env PROJECTMUX_INSTALL_SOURCE_ONLY=1 \
+    PROJECTMUX_INSTALL_DIR="$TEST_ROOT/bin" \
+    PROJECTMUX_STATE_DIR="$TEST_ROOT/state" \
+    bash -c '
+      source "$1/tools/projectmux/install.sh"
+      download_verified_artifact() { return 99; }
+      install_pinned_binary amd64
+      printf "EXACT=%s\n" "$(installed_marker)"
+    ' _ "$REPO_ROOT"
+
+  [ "$status" -eq 0 ]
+  [ "$(cat "$TEST_ROOT/bin/projectmux")" = installed ]
+  # Exact equality, not a substring: the short-circuit compares installed_marker
+  # to the bare tag, so a future change that leaves stray whitespace in the
+  # marker read must fail this test rather than pass on a loose match.
+  [ "${lines[-1]}" = "EXACT=v0.1.0" ]
+}
+
+@test "a matching marker with a symlink destination still reinstalls" {
+  mkdir -p "$TEST_ROOT/bin" "$TEST_ROOT/state" "$TEST_ROOT/local"
+  printf 'local build' >"$TEST_ROOT/local/projectmux"
+  chmod 0755 "$TEST_ROOT/local/projectmux"
+  ln -s "$TEST_ROOT/local/projectmux" "$TEST_ROOT/bin/projectmux"
+  # The pathological pair the Reconciliation invariant describes: a pinned
+  # marker naming a version the destination does not actually hold.
+  printf 'v0.1.0\n' >"$TEST_ROOT/state/installed-version"
+
+  run env PROJECTMUX_INSTALL_SOURCE_ONLY=1 \
+    PROJECTMUX_INSTALL_DIR="$TEST_ROOT/bin" \
+    PROJECTMUX_STATE_DIR="$TEST_ROOT/state" \
+    bash -c '
+      source "$1/tools/projectmux/install.sh"
+      download_verified_artifact() { printf "pinned" >"$3"; }
+      install_pinned_binary amd64
+    ' _ "$REPO_ROOT"
+
+  [ "$status" -eq 0 ]
+  [ ! -L "$TEST_ROOT/bin/projectmux" ]
+  [ "$(cat "$TEST_ROOT/bin/projectmux")" = pinned ]
+  # The local build itself is untouched -- the symlink was replaced, not followed.
+  [ "$(cat "$TEST_ROOT/local/projectmux")" = "local build" ]
+}
+
+@test "a local marker cannot short-circuit, so the pin is restored" {
+  mkdir -p "$TEST_ROOT/bin" "$TEST_ROOT/state" "$TEST_ROOT/local"
+  printf 'local build' >"$TEST_ROOT/local/projectmux"
+  chmod 0755 "$TEST_ROOT/local/projectmux"
+  ln -s "$TEST_ROOT/local/projectmux" "$TEST_ROOT/bin/projectmux"
+  printf 'local:%s\n' "$TEST_ROOT/local/projectmux" >"$TEST_ROOT/state/installed-version"
+
+  run env PROJECTMUX_INSTALL_SOURCE_ONLY=1 \
+    PROJECTMUX_INSTALL_DIR="$TEST_ROOT/bin" \
+    PROJECTMUX_STATE_DIR="$TEST_ROOT/state" \
+    bash -c '
+      source "$1/tools/projectmux/install.sh"
+      download_verified_artifact() { printf "pinned" >"$3"; }
+      install_pinned_binary amd64
+      printf "MARKER=%s\n" "$(cat "$MARKER_FILE")"
+    ' _ "$REPO_ROOT"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"MARKER=v0.1.0"* ]]
+  [ -f "$TEST_ROOT/bin/projectmux" ]
+  [ ! -L "$TEST_ROOT/bin/projectmux" ]
+  [ "$(cat "$TEST_ROOT/bin/projectmux")" = pinned ]
+}
+
+@test "a failed verification leaves the installed binary untouched" {
+  mkdir -p "$TEST_ROOT/bin" "$TEST_ROOT/state"
+  printf 'previous' >"$TEST_ROOT/bin/projectmux"
+  chmod 0755 "$TEST_ROOT/bin/projectmux"
+  printf 'v0.0.9\n' >"$TEST_ROOT/state/installed-version"
+
+  run env PROJECTMUX_INSTALL_SOURCE_ONLY=1 \
+    PROJECTMUX_INSTALL_DIR="$TEST_ROOT/bin" \
+    PROJECTMUX_STATE_DIR="$TEST_ROOT/state" \
+    bash -c '
+      source "$1/tools/projectmux/install.sh"
+      download_verified_artifact() { printf "checksum mismatch\n" >&2; return 1; }
+      install_pinned_binary amd64
+    ' _ "$REPO_ROOT"
+
+  [ "$status" -ne 0 ]
+  [ "$(cat "$TEST_ROOT/bin/projectmux")" = previous ]
+  [ "$(cat "$TEST_ROOT/state/installed-version")" = v0.0.9 ]
+}

@@ -182,6 +182,62 @@ install_local_binary() {
   log_success "Using local ProjectMux build at $local_binary (pin unchanged)."
 }
 
+install_pinned_binary() {
+  local arch="$1" asset digest bin_dir
+  bin_dir=$(dirname "$PROJECTMUX_BIN")
+
+  case "$arch" in
+    amd64)
+      asset="projectmux-linux-amd64"
+      digest="$PROJECTMUX_LINUX_AMD64_SHA256"
+      ;;
+    arm64)
+      asset="projectmux-linux-arm64"
+      digest="$PROJECTMUX_LINUX_ARM64_SHA256"
+      ;;
+    *) log_error "Unsupported ProjectMux architecture: $arch" ;;
+  esac
+
+  prepare_destination_directory "$bin_dir"
+  prepare_destination_directory "$PROJECTMUX_STATE_DIR"
+  validate_install_target "$PROJECTMUX_BIN"
+
+  # Both halves of this condition are load-bearing; do not reduce it to the
+  # marker test alone. The binary and the marker are published by two separate
+  # renames, so interleaved runs can pair a local-mode symlink with a pinned
+  # marker. Requiring the destination to be a regular file as well means such a
+  # pair fails the test and the next run reinstalls and repairs it, which is
+  # what lets the installer self-heal instead of needing a lock.
+  if [[ "$(installed_marker || true)" == "$PROJECTMUX_VERSION" ]] &&
+    [[ -f "$PROJECTMUX_BIN" && ! -L "$PROJECTMUX_BIN" ]]; then
+    log_info "ProjectMux $PROJECTMUX_VERSION is already installed at $PROJECTMUX_BIN."
+    return 0
+  fi
+
+  command -v curl >/dev/null 2>&1 || log_error "curl is required to install ProjectMux."
+
+  DOWNLOAD_DIR=$(mktemp -d)
+  log_info "Downloading ProjectMux $PROJECTMUX_VERSION for linux/$arch..."
+  download_verified_artifact "$PROJECTMUX_RELEASE_BASE/$asset" "$digest" "$DOWNLOAD_DIR/$asset" 0755
+
+  STAGED_BIN=$(mktemp "$bin_dir/.projectmux.XXXXXX")
+  command cp "$DOWNLOAD_DIR/$asset" "$STAGED_BIN"
+  command chmod 0755 "$STAGED_BIN"
+
+  validate_install_target "$PROJECTMUX_BIN"
+  publish_file "$STAGED_BIN" "$PROJECTMUX_BIN"
+  STAGED_BIN=""
+
+  # Only after the binary is in place. An install interrupted before this point
+  # leaves the old marker, so the next run reinstalls rather than believing a
+  # partial install succeeded.
+  write_marker "$PROJECTMUX_VERSION"
+
+  rm -rf -- "$DOWNLOAD_DIR"
+  DOWNLOAD_DIR=""
+  log_success "Installed ProjectMux $PROJECTMUX_VERSION at $PROJECTMUX_BIN."
+}
+
 install_binary() {
   local arch="$1"
   if [[ -n "${PROJECTMUX_LOCAL_BINARY:-}" ]]; then
