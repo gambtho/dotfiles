@@ -33,9 +33,10 @@ setup() {
   printf '[Unit]\nDescription=probe\n' >"$DEV_UNIT_FILE"
   printf 'export PROBE=1\n' >"$DEV_ZSH_FILE"
 
-  # Probes for a tools/ subdirectory that is not tools/dev. The installer that
-  # motivates this class does not exist yet, so a fixture stands in for it —
-  # that also keeps the gate honest if the installer is later renamed or moved.
+  # Probes for a tools/ subdirectory that is not tools/dev. tools/projectmux
+  # now hosts the real ProjectMux installer, but this fixture writes its own
+  # probe files there rather than relying on that installer's actual layout —
+  # that keeps the gate honest if the installer is later renamed or moved.
   TOOL_PROBE_DIR="$REPO_ROOT/tools/projectmux"
   TOOL_INSTALL_FILE="$TOOL_PROBE_DIR/probe-install-$BATS_TEST_NUMBER.sh"
   TOOL_EXEC_FILE="$TOOL_PROBE_DIR/probe-exec-$BATS_TEST_NUMBER"

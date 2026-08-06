@@ -18,7 +18,7 @@ source_installer() {
     "$@"
 }
 
-@test "a non-Linux host is refused before anything is written" {
+@test "require_platform refuses a non-Linux host" {
   source_installer PROJECTMUX_OS=Darwin bash -c '
     source "$1/tools/projectmux/install.sh"
     require_platform
@@ -26,7 +26,23 @@ source_installer() {
 
   [ "$status" -ne 0 ]
   [[ "$output" == *"Linux only"* ]]
+}
+
+@test "a non-Linux host is refused before anything is written" {
+  # Goes through main (not require_platform directly) so the assertions below
+  # actually exercise the ordering the test name claims: the platform gate
+  # runs before install_binary/install_config/install_unit, so none of the
+  # published artifacts should exist afterward.
+  source_installer PROJECTMUX_OS=Darwin bash -c '
+    source "$1/tools/projectmux/install.sh"
+    main
+  ' _ "$REPO_ROOT"
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Linux only"* ]]
   [ ! -e "$TEST_ROOT/bin/projectmux" ]
+  [ ! -e "$TEST_ROOT/config/projectmux/defaults.yaml" ]
+  [ ! -e "$TEST_ROOT/home/.config/systemd/user/projectmux-autostart.service" ]
 }
 
 @test "an unsupported architecture is refused" {
