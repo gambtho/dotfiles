@@ -109,6 +109,21 @@ source_installer() {
   [ -z "$output" ]
 }
 
+@test "installed_marker preserves interior whitespace in a local path" {
+  mkdir -p "$TEST_ROOT/local/My Projects"
+  printf '#!/usr/bin/env bash\necho local\n' >"$TEST_ROOT/local/My Projects/projectmux"
+  chmod 0755 "$TEST_ROOT/local/My Projects/projectmux"
+
+  source_installer PROJECTMUX_LOCAL_BINARY="$TEST_ROOT/local/My Projects/projectmux" bash -c '
+    source "$1/tools/projectmux/install.sh"
+    install_local_binary >/dev/null
+    printf "MARKER=%s\n" "$(installed_marker)"
+  ' _ "$REPO_ROOT"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"MARKER=local:$TEST_ROOT/local/My Projects/projectmux"* ]]
+}
+
 @test "prepare_destination_directory accepts a symlinked directory" {
   mkdir -p "$TEST_ROOT/real-bin"
   # setup_dotfiles_test already created $TEST_ROOT/bin as STUB_BIN (a real

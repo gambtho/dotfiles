@@ -115,9 +115,16 @@ publish_file() {
 # Absent, unreadable, or a symlink -> no marker. A symlinked marker is treated
 # as absent rather than followed, so a planted link cannot make the installer
 # believe a version is present that is not.
+#
+# Only the trailing newline written by write_marker is stripped here (command
+# substitution does that for free); interior whitespace is preserved verbatim
+# so a local-binary marker recording a path under a space-containing directory
+# round-trips unmangled.
 installed_marker() {
   [[ -f "$MARKER_FILE" && ! -L "$MARKER_FILE" ]] || return 1
-  tr -d '[:space:]' <"$MARKER_FILE"
+  local value
+  value=$(<"$MARKER_FILE")
+  printf '%s' "$value"
 }
 
 # The marker goes through the same stage-then-rename as every other managed
