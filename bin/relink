@@ -55,6 +55,23 @@ fi
 
 # ── Step 2: Re-create symlinks from *.symlink files ───────────────────────────
 
+# Regenerate identity routing before linking, so the freshly written file is
+# picked up by the same run. Routing must follow the ACTIVE owner map: a machine
+# whose map differs from the tracked one would otherwise keep stale blocks that
+# name the wrong owner and silently leave an identity unrouted.
+if [ -r "$DOTFILES_ROOT/core/git/identity-lib.sh" ]; then
+  # shellcheck source=/dev/null
+  if (. "$DOTFILES_ROOT/core/git/identity-lib.sh" && identity_validate_map) >/dev/null 2>&1; then
+    (
+      . "$DOTFILES_ROOT/core/git/identity-lib.sh"
+      identity_render_routes
+    ) >"$DOTFILES_ROOT/core/git/gitconfig.identity-routes.symlink"
+    log_info "Regenerated identity routing from the active owner map."
+  else
+    log_warning "Owner map is unusable; leaving identity routing unchanged."
+  fi
+fi
+
 log_info "Creating symlinks for *.symlink files..."
 
 link_file() {

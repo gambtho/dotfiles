@@ -109,20 +109,24 @@ EOF
   [ "$status" -ne 0 ]
 }
 
-@test "owner map and conditional includes agree as owner+slug pairs" {
-  # Compare PAIRS, not slugs: a slug-only check passes while an owner is wired
-  # to the wrong include.
-  local config="$REPO_ROOT/core/git/gitconfig.symlink"
-  local owner slug expected
+@test "generated routes agree with the ACTIVE map as owner+slug pairs" {
+  # The predecessor of this test compared the TRACKED map against TRACKED
+  # includeIf blocks, so it passed on a machine whose machine-local map defined
+  # a slug with no routing block at all. Compare what is actually generated
+  # against the map actually in force.
+  setup_routes
+  printf 'guarzo default\ngambtho gambtho\nacme    acme\n' >"$DOTFILES/core/git/identity-owners.local"
+  local routes owner slug
+  routes="$(render_routes)"
   while read -r owner slug; do
     [ -n "$owner" ] || continue
-    [ "$slug" = default ] && continue
-    expected="[includeIf \"hasconfig:remote.*.url:https://github.com/$owner/**\"]"
-    run grep -Fq "$expected" "$config"
-    [ "$status" -eq 0 ]
-    run grep -A1 -F "$expected" "$config"
-    [[ "$output" == *"~/.gitconfig.$slug"* ]]
-  done < <(grep -v '^[[:space:]]*#' "$REPO_ROOT/core/git/identity-owners" | grep -v '^[[:space:]]*$')
+    if [ "$slug" = default ]; then
+      [[ "$routes" != *"github.com/$owner/"* ]]
+      continue
+    fi
+    [[ "$routes" == *"hasconfig:remote.*.url:https://github.com/$owner/**"* ]]
+    [[ "$routes" == *"path = ~/.gitconfig.$slug"* ]]
+  done < <(grep -vE '^[[:space:]]*(#|$)' "$DOTFILES/core/git/identity-owners.local")
 }
 
 @test "every conditional include corresponds to a mapped owner" {
@@ -966,4 +970,84 @@ run_sec_setup() {
   run_sec_setup '' true
   [ "$status" -eq 0 ]
   assert_file_absent "$SECBOOT/core/git/gitconfig.gambtho.symlink"
+}
+
+# ---- generated routing blocks ----
+
+setup_routes() {
+  export DOTFILES="$TEST_ROOT/rt"
+  mkdir -p "$DOTFILES/core/git"
+  cp "$REPO_ROOT/core/git/identity-lib.sh" "$DOTFILES/core/git/"
+  cp "$REPO_ROOT/core/git/gitconfig.symlink" "$DOTFILES/core/git/"
+  printf 'gambtho default\nguarzo  guarzo\n' >"$DOTFILES/core/git/identity-owners"
+  unset IDENTITY_MAP_FILE
+}
+
+render_routes() {
+  bash -c ". '$DOTFILES/core/git/identity-lib.sh' && identity_render_routes"
+}
+
+@test "routes are generated for every non-default slug in the ACTIVE map" {
+  setup_routes
+  run render_routes
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'hasconfig:remote.*.url:https://github.com/guarzo/**'* ]]
+  [[ "$output" == *'path = ~/.gitconfig.guarzo'* ]]
+  # The default owner never gets a routing block.
+  [[ "$output" != *'github.com/gambtho/'* ]]
+}
+
+@test "routes follow a machine-local map that flips the roles" {
+  # The case that shipped broken: identity-owners.local made gambtho a secondary
+  # slug, but the tracked includeIf still named guarzo, so gambtho was never
+  # routed and the old pair test passed anyway.
+  setup_routes
+  printf 'guarzo default\ngambtho gambtho\n' >"$DOTFILES/core/git/identity-owners.local"
+  run render_routes
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'hasconfig:remote.*.url:https://github.com/gambtho/**'* ]]
+  [[ "$output" == *'path = ~/.gitconfig.gambtho'* ]]
+  [[ "$output" != *'github.com/guarzo/'* ]]
+}
+
+@test "a map with no secondary slugs renders no routing blocks" {
+  setup_routes
+  printf 'guarzo default\n' >"$DOTFILES/core/git/identity-owners.local"
+  run render_routes
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"includeIf"* ]]
+}
+
+@test "the tracked gitconfig carries no hardcoded per-owner includeIf" {
+  # Routing must come from the generated file, or a machine whose active map
+  # differs from the tracked one silently loses routing.
+  run grep -c 'hasconfig:remote' "$REPO_ROOT/core/git/gitconfig.symlink"
+  [ "$output" -eq 0 ]
+  run grep -Fq 'path = ~/.gitconfig.identity-routes' "$REPO_ROOT/core/git/gitconfig.symlink"
+  [ "$status" -eq 0 ]
+}
+
+@test "generated routes actually route git config end to end" {
+  setup_routes
+  printf 'guarzo default\ngambtho gambtho\n' >"$DOTFILES/core/git/identity-owners.local"
+  cp "$REPO_ROOT/core/git/gitconfig.symlink" "$HOME/.gitconfig"
+  printf '[user]\n\temail = ambient@example.invalid\n' >"$HOME/.gitconfig.local"
+  printf '[user]\n\temail = gambtho@example.invalid\n\tsigningKey = /k/gambtho.pub\n' >"$HOME/.gitconfig.gambtho"
+  render_routes >"$HOME/.gitconfig.identity-routes"
+  git init -q "$TEST_ROOT/gr"
+  git -C "$TEST_ROOT/gr" remote add origin https://github.com/gambtho/thing.git
+  run git -C "$TEST_ROOT/gr" config user.email
+  [ "$output" = "gambtho@example.invalid" ]
+  run git -C "$TEST_ROOT/gr" config user.signingKey
+  [ "$output" = "/k/gambtho.pub" ]
+  # An unrelated repo stays on the ambient identity.
+  git init -q "$TEST_ROOT/other"
+  git -C "$TEST_ROOT/other" remote add origin https://github.com/kubernetes-sigs/x.git
+  run git -C "$TEST_ROOT/other" config user.email
+  [ "$output" = "ambient@example.invalid" ]
+}
+
+@test "the generated routes file is gitignored" {
+  run git -C "$REPO_ROOT" check-ignore -q core/git/gitconfig.identity-routes.symlink
+  [ "$status" -eq 0 ]
 }
