@@ -1,6 +1,6 @@
 [Unit]
 Description=Start opted-in dev workspace containers
-Documentation=file://@DOTFILES_ROOT@/docs/superpowers/specs/2026-08-03-dev-workspace-platform-design.md
+Documentation=file://@DOTFILES_ROOT@/tools/dev/README.md
 After=default.target
 
 [Service]
