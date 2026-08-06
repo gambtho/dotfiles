@@ -141,3 +141,98 @@ source_installer() {
   [ "$status" -ne 0 ]
   [[ "$output" == *"not a directory"* ]]
 }
+
+@test "a local binary is symlinked and recorded without touching the pin" {
+  mkdir -p "$TEST_ROOT/local"
+  printf '#!/usr/bin/env bash\necho local\n' >"$TEST_ROOT/local/projectmux"
+  chmod 0755 "$TEST_ROOT/local/projectmux"
+
+  source_installer PROJECTMUX_LOCAL_BINARY="$TEST_ROOT/local/projectmux" bash -c '
+    source "$1/tools/projectmux/install.sh"
+    install_local_binary
+    printf "MARKER=%s\n" "$(cat "$MARKER_FILE")"
+  ' _ "$REPO_ROOT"
+
+  [ "$status" -eq 0 ]
+  [ -L "$TEST_ROOT/bin/projectmux" ]
+  [ "$(readlink "$TEST_ROOT/bin/projectmux")" = "$TEST_ROOT/local/projectmux" ]
+  [[ "$output" == *"MARKER=local:$TEST_ROOT/local/projectmux"* ]]
+
+  # The override must never mutate the pin -- the whole point of requirement 3.
+  run git -C "$REPO_ROOT" diff --exit-code config/versions.env
+  [ "$status" -eq 0 ]
+}
+
+@test "a relative local binary path is refused" {
+  source_installer PROJECTMUX_LOCAL_BINARY=build/projectmux bash -c '
+    source "$1/tools/projectmux/install.sh"
+    install_local_binary
+  ' _ "$REPO_ROOT"
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"must be an absolute path"* ]]
+  [ ! -e "$TEST_ROOT/bin/projectmux" ]
+}
+
+@test "a missing local binary is refused" {
+  source_installer PROJECTMUX_LOCAL_BINARY="$TEST_ROOT/nope/projectmux" bash -c '
+    source "$1/tools/projectmux/install.sh"
+    install_local_binary
+  ' _ "$REPO_ROOT"
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"does not exist"* ]]
+  [ ! -e "$TEST_ROOT/bin/projectmux" ]
+}
+
+@test "a non-executable local binary is refused" {
+  mkdir -p "$TEST_ROOT/local"
+  printf 'not executable' >"$TEST_ROOT/local/projectmux"
+  chmod 0644 "$TEST_ROOT/local/projectmux"
+
+  source_installer PROJECTMUX_LOCAL_BINARY="$TEST_ROOT/local/projectmux" bash -c '
+    source "$1/tools/projectmux/install.sh"
+    install_local_binary
+  ' _ "$REPO_ROOT"
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"not executable"* ]]
+  [ ! -e "$TEST_ROOT/bin/projectmux" ]
+}
+
+@test "a directory as the local binary is refused with its own message" {
+  mkdir -p "$TEST_ROOT/local/projectmux"
+
+  source_installer PROJECTMUX_LOCAL_BINARY="$TEST_ROOT/local/projectmux" bash -c '
+    source "$1/tools/projectmux/install.sh"
+    install_local_binary
+  ' _ "$REPO_ROOT"
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"is a directory"* ]]
+}
+
+@test "install_binary dispatches on the override" {
+  mkdir -p "$TEST_ROOT/local"
+  printf '#!/usr/bin/env bash\ntrue\n' >"$TEST_ROOT/local/projectmux"
+  chmod 0755 "$TEST_ROOT/local/projectmux"
+
+  source_installer PROJECTMUX_LOCAL_BINARY="$TEST_ROOT/local/projectmux" bash -c '
+    source "$1/tools/projectmux/install.sh"
+    install_pinned_binary() { printf "pinned branch taken\n"; }
+    install_binary amd64
+  ' _ "$REPO_ROOT"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"pinned branch taken"* ]]
+  [ -L "$TEST_ROOT/bin/projectmux" ]
+
+  source_installer bash -c '
+    source "$1/tools/projectmux/install.sh"
+    install_pinned_binary() { printf "pinned branch taken\n"; }
+    install_binary amd64
+  ' _ "$REPO_ROOT"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"pinned branch taken"* ]]
+}

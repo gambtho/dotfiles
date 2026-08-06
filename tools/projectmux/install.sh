@@ -120,6 +120,70 @@ installed_marker() {
   tr -d '[:space:]' <"$MARKER_FILE"
 }
 
+# The marker goes through the same stage-then-rename as every other managed
+# file, so a concurrent reader never sees a half-written version string.
+write_marker() {
+  local value="$1"
+  prepare_destination_directory "$PROJECTMUX_STATE_DIR"
+  STAGED_MARKER=$(mktemp "$PROJECTMUX_STATE_DIR/.installed-version.XXXXXX")
+  printf '%s\n' "$value" >"$STAGED_MARKER"
+  chmod 0644 "$STAGED_MARKER"
+  publish_file "$STAGED_MARKER" "$MARKER_FILE"
+  STAGED_MARKER=""
+}
+
+# PROJECTMUX_LOCAL_BINARY points at a developer build. It is symlinked rather
+# than copied so a rebuild takes effect without re-running the installer, and
+# so `test -L` alone distinguishes override mode from a pinned install.
+install_local_binary() {
+  local local_binary="$PROJECTMUX_LOCAL_BINARY"
+
+  # Each refusal gets its own message: "not executable" and "is a directory"
+  # send the developer to very different fixes. -d is checked before -e so a
+  # directory does not fall through to the generic missing-file message.
+  if [[ "$local_binary" != /* ]]; then
+    printf 'PROJECTMUX_LOCAL_BINARY must be an absolute path: %s\n' "$local_binary" >&2
+    return 1
+  fi
+  if [[ -d "$local_binary" ]]; then
+    printf 'PROJECTMUX_LOCAL_BINARY is a directory: %s\n' "$local_binary" >&2
+    return 1
+  fi
+  if [[ ! -e "$local_binary" ]]; then
+    printf 'PROJECTMUX_LOCAL_BINARY does not exist: %s\n' "$local_binary" >&2
+    return 1
+  fi
+  if [[ ! -x "$local_binary" ]]; then
+    printf 'PROJECTMUX_LOCAL_BINARY is not executable: %s\n' "$local_binary" >&2
+    return 1
+  fi
+
+  prepare_destination_directory "$PROJECTMUX_INSTALL_DIR"
+  validate_install_target "$PROJECTMUX_BIN" || return 1
+
+  # mktemp reserves the name by creating a regular file, and ln -s refuses to
+  # write over an existing path, so the reservation has to be released before
+  # the link is made. The window is inside the destination directory and under
+  # a dot-prefixed name, never at the published name on PATH.
+  STAGED_BIN=$(mktemp "$PROJECTMUX_INSTALL_DIR/.projectmux.XXXXXX")
+  rm -f "$STAGED_BIN"
+  ln -s "$local_binary" "$STAGED_BIN"
+  publish_file "$STAGED_BIN" "$PROJECTMUX_BIN"
+  STAGED_BIN=""
+
+  write_marker "local:$local_binary"
+  log_success "Using local ProjectMux build at $local_binary (pin unchanged)."
+}
+
+install_binary() {
+  local arch="$1"
+  if [[ -n "${PROJECTMUX_LOCAL_BINARY:-}" ]]; then
+    install_local_binary
+  else
+    install_pinned_binary "$arch"
+  fi
+}
+
 report_plan() {
   printf 'ProjectMux install plan:\n'
   printf '  version:    %s\n' "$PROJECTMUX_VERSION"
