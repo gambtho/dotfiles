@@ -10,12 +10,6 @@ docs/
 docs/*
 !docs/guides/
 !docs/guides/*.md
-!docs/superpowers/
-docs/superpowers/*
-!docs/superpowers/plans/
-!docs/superpowers/plans/*.md
-!docs/superpowers/specs/
-!docs/superpowers/specs/*.md
 platforms/macos/brewfile.lock.json
 core/git/gitconfig.local.symlink
 # Machine-local secondary GitHub identities (name, email, signing key), one
