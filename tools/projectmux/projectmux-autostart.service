@@ -1,0 +1,21 @@
+# Installed by ~/.dotfiles/tools/projectmux/install.sh, which writes this unit
+# but deliberately does NOT enable it or reload the user manager.
+#
+# dev-autostart.service is still installed and enabled on these machines. Two
+# units both attaching a workspace at login would race for the same tmux
+# server, so enabling this one is an explicit, manual cutover step:
+#
+#   systemctl --user disable --now dev-autostart.service
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now projectmux-autostart.service
+[Unit]
+Description=Attach the ProjectMux workspace at login
+After=default.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=@PROJECTMUX_BIN@ autostart
+
+[Install]
+WantedBy=default.target

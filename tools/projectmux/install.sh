@@ -24,7 +24,6 @@ MARKER_FILE="$PROJECTMUX_STATE_DIR/installed-version"
 PROJECTMUX_CONFIG_ROOT="${PROJECTMUX_CONFIG_ROOT:-${XDG_CONFIG_HOME:-$HOME/.config}/projectmux}"
 DEFAULTS_TEMPLATE="$DOTFILES_ROOT/tools/projectmux/defaults.yaml.template"
 SYSTEMD_USER_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
-# shellcheck disable=SC2034 # consumed by install_unit, added in a later task
 UNIT_TEMPLATE="$DOTFILES_ROOT/tools/projectmux/projectmux-autostart.service"
 SERVICE_UNIT="$SYSTEMD_USER_DIR/projectmux-autostart.service"
 PROJECTMUX_REPOSITORY_ROOTS="${PROJECTMUX_REPOSITORY_ROOTS:-$HOME/workspace}"
@@ -285,6 +284,36 @@ install_config() {
   rm -f -- "$STAGED_CONFIG"
   STAGED_CONFIG=""
   return 0
+}
+
+# The unit is written but deliberately never enabled and the user manager is
+# never reloaded -- see the template's header. Enabling it while
+# dev-autostart.service is still enabled would put two units in a race for the
+# same tmux server at login, so cutover stays a manual, deliberate act.
+install_unit() {
+  local escaped_bin
+  prepare_destination_directory "$SYSTEMD_USER_DIR"
+
+  # Escape the replacement so an install path containing sed metacharacters
+  # (\, &, or the | delimiter) is substituted literally instead of corrupting
+  # the unit. Same escaping as tools/dev/install.sh:52-54.
+  escaped_bin=${PROJECTMUX_BIN//\\/\\\\}
+  escaped_bin=${escaped_bin//|/\\|}
+  escaped_bin=${escaped_bin//&/\\&}
+
+  STAGED_UNIT=$(mktemp "$SYSTEMD_USER_DIR/.projectmux-autostart.service.XXXXXX")
+  sed "s|@PROJECTMUX_BIN@|$escaped_bin|g" "$UNIT_TEMPLATE" >"$STAGED_UNIT"
+  chmod 0644 "$STAGED_UNIT"
+
+  if [[ -f "$SERVICE_UNIT" && ! -L "$SERVICE_UNIT" ]] && cmp -s "$STAGED_UNIT" "$SERVICE_UNIT"; then
+    rm -f -- "$STAGED_UNIT"
+    STAGED_UNIT=""
+    return 0
+  fi
+
+  publish_file "$STAGED_UNIT" "$SERVICE_UNIT"
+  STAGED_UNIT=""
+  log_info "Installed ProjectMux user unit at $SERVICE_UNIT (not enabled)."
 }
 
 install_binary() {

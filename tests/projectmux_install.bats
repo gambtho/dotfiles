@@ -432,3 +432,55 @@ source_installer() {
   # uses "  - " bullets, so an unanchored count would pass for the wrong reason.
   [ "$(grep -c "^  - '" "$TEST_ROOT/config/projectmux/defaults.yaml")" -eq 1 ]
 }
+
+@test "the user unit is written with the installed binary path" {
+  source_installer XDG_CONFIG_HOME="$TEST_ROOT/config" bash -c '
+    source "$1/tools/projectmux/install.sh"
+    install_unit
+  ' _ "$REPO_ROOT"
+
+  [ "$status" -eq 0 ]
+  local unit="$TEST_ROOT/config/systemd/user/projectmux-autostart.service"
+  [ -f "$unit" ]
+  [ ! -L "$unit" ]
+  grep -Fq "ExecStart=$TEST_ROOT/bin/projectmux autostart" "$unit"
+  [[ "$(cat "$unit")" != *"@PROJECTMUX_BIN@"* ]]
+}
+
+@test "installing the unit never invokes systemctl" {
+  # A stub that fails loudly: if install_unit ever grows a daemon-reload or an
+  # enable, this test fails instead of the change quietly mutating the user
+  # manager on every machine that runs bin/install.
+  mkdir -p "$TEST_ROOT/stub-bin"
+  printf '#!/usr/bin/env bash\nprintf "systemctl called\\n" >&2\nexit 1\n' \
+    >"$TEST_ROOT/stub-bin/systemctl"
+  chmod 0755 "$TEST_ROOT/stub-bin/systemctl"
+
+  source_installer XDG_CONFIG_HOME="$TEST_ROOT/config" \
+    PATH="$TEST_ROOT/stub-bin:$PATH" bash -c '
+    source "$1/tools/projectmux/install.sh"
+    install_unit
+  ' _ "$REPO_ROOT"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"systemctl called"* ]]
+}
+
+@test "no systemctl invocation exists anywhere in the installer" {
+  run rg -n 'systemctl' "$REPO_ROOT/tools/projectmux/install.sh"
+  [ "$status" -eq 1 ]
+}
+
+@test "rewriting an unchanged unit leaves it untouched" {
+  source_installer XDG_CONFIG_HOME="$TEST_ROOT/config" bash -c '
+    source "$1/tools/projectmux/install.sh"
+    install_unit
+    install_unit
+  ' _ "$REPO_ROOT"
+
+  [ "$status" -eq 0 ]
+  [ "$(grep -c 'Installed ProjectMux user unit' <<<"$output")" -eq 1 ]
+  run bash -c 'compgen -G "$1/.projectmux-autostart.service.*"' \
+    _ "$TEST_ROOT/config/systemd/user"
+  [ "$status" -eq 1 ]
+}
