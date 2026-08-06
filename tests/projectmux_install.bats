@@ -111,7 +111,12 @@ source_installer() {
 
 @test "prepare_destination_directory accepts a symlinked directory" {
   mkdir -p "$TEST_ROOT/real-bin"
+  # setup_dotfiles_test already created $TEST_ROOT/bin as STUB_BIN (a real
+  # directory on PATH); ln -s would drop the link inside it instead of
+  # replacing it, so clear it first to actually land the symlink here.
+  rm -rf -- "$TEST_ROOT/bin"
   ln -s "$TEST_ROOT/real-bin" "$TEST_ROOT/bin"
+  [ -L "$TEST_ROOT/bin" ]
 
   source_installer bash -c '
     source "$1/tools/projectmux/install.sh"
