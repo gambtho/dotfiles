@@ -364,3 +364,71 @@ source_installer() {
   [ "$(cat "$TEST_ROOT/bin/projectmux")" = previous ]
   [ "$(cat "$TEST_ROOT/state/installed-version")" = v0.0.9 ]
 }
+
+@test "defaults.yaml is created with the configured repository roots" {
+  source_installer PROJECTMUX_REPOSITORY_ROOTS="$TEST_ROOT/workspace:$TEST_ROOT/other" bash -c '
+    source "$1/tools/projectmux/install.sh"
+    install_config
+  ' _ "$REPO_ROOT"
+
+  [ "$status" -eq 0 ]
+  local config="$TEST_ROOT/config/projectmux/defaults.yaml"
+  [ -f "$config" ]
+  grep -Fq "  - '$TEST_ROOT/workspace'" "$config"
+  grep -Fq "  - '$TEST_ROOT/other'" "$config"
+  [[ "$(cat "$config")" != *"@REPOSITORY_ROOTS@"* ]]
+  grep -Fq 'shell: true' "$config"
+  # command: null sets zero window modes and fails v1 validation.
+  [[ "$(cat "$config")" != *"command: null"* ]]
+  [ -d "$TEST_ROOT/config/projectmux/workspaces" ]
+}
+
+@test "an existing config is never overwritten and drift is reported" {
+  mkdir -p "$TEST_ROOT/config/projectmux"
+  printf 'version: 1\n# hand edited\n' >"$TEST_ROOT/config/projectmux/defaults.yaml"
+
+  source_installer bash -c '
+    source "$1/tools/projectmux/install.sh"
+    install_config
+  ' _ "$REPO_ROOT"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"differs from the shipped defaults"* ]]
+  [ "$(cat "$TEST_ROOT/config/projectmux/defaults.yaml")" = $'version: 1\n# hand edited' ]
+}
+
+@test "a second run of an unedited config warns about nothing" {
+  source_installer bash -c '
+    source "$1/tools/projectmux/install.sh"
+    install_config
+    install_config
+  ' _ "$REPO_ROOT"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"differs from the shipped defaults"* ]]
+}
+
+@test "no staging file is left behind in the config root" {
+  source_installer bash -c '
+    source "$1/tools/projectmux/install.sh"
+    install_config
+    install_config
+  ' _ "$REPO_ROOT"
+
+  [ "$status" -eq 0 ]
+  run bash -c 'compgen -G "$1/.defaults.yaml.*"' _ "$TEST_ROOT/config/projectmux"
+  [ "$status" -eq 1 ]
+}
+
+@test "a repository root containing a space renders as one quoted entry" {
+  source_installer PROJECTMUX_REPOSITORY_ROOTS="$TEST_ROOT/my code" bash -c '
+    source "$1/tools/projectmux/install.sh"
+    install_config
+  ' _ "$REPO_ROOT"
+
+  [ "$status" -eq 0 ]
+  grep -Fq "  - '$TEST_ROOT/my code'" "$TEST_ROOT/config/projectmux/defaults.yaml"
+  # Anchored to a quoted entry: the windows list below repository_roots also
+  # uses "  - " bullets, so an unanchored count would pass for the wrong reason.
+  [ "$(grep -c "^  - '" "$TEST_ROOT/config/projectmux/defaults.yaml")" -eq 1 ]
+}

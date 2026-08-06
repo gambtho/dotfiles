@@ -22,7 +22,6 @@ PROJECTMUX_BIN="$PROJECTMUX_INSTALL_DIR/projectmux"
 PROJECTMUX_STATE_DIR="${PROJECTMUX_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/projectmux}"
 MARKER_FILE="$PROJECTMUX_STATE_DIR/installed-version"
 PROJECTMUX_CONFIG_ROOT="${PROJECTMUX_CONFIG_ROOT:-${XDG_CONFIG_HOME:-$HOME/.config}/projectmux}"
-# shellcheck disable=SC2034 # consumed by install_config, added in a later task
 DEFAULTS_TEMPLATE="$DOTFILES_ROOT/tools/projectmux/defaults.yaml.template"
 SYSTEMD_USER_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 # shellcheck disable=SC2034 # consumed by install_unit, added in a later task
@@ -236,6 +235,56 @@ install_pinned_binary() {
   rm -rf -- "$DOWNLOAD_DIR"
   DOWNLOAD_DIR=""
   log_success "Installed ProjectMux $PROJECTMUX_VERSION at $PROJECTMUX_BIN."
+}
+
+# Roots arrive PATH-style (colon-separated) and are emitted as a YAML list.
+# Each entry is single-quoted and internal quotes are doubled, so a path
+# containing a space, a colon-adjacent character, or a quote survives intact
+# rather than producing a file the v1 loader rejects.
+render_defaults() {
+  local destination="$1"
+  PROJECTMUX_RENDER_ROOTS="${PROJECTMUX_REPOSITORY_ROOTS//:/$'\n'}" awk -v q="'" '
+    $0 == "@REPOSITORY_ROOTS@" {
+      n = split(ENVIRON["PROJECTMUX_RENDER_ROOTS"], list, "\n")
+      for (i = 1; i <= n; i++) {
+        if (list[i] == "") continue
+        value = list[i]
+        gsub(q, q q, value)
+        printf "  - %s%s%s\n", q, value, q
+      }
+      next
+    }
+    { print }
+  ' "$DEFAULTS_TEMPLATE" >"$destination"
+}
+
+install_config() {
+  local config="$PROJECTMUX_CONFIG_ROOT/defaults.yaml"
+
+  prepare_destination_directory "$PROJECTMUX_CONFIG_ROOT"
+  prepare_destination_directory "$PROJECTMUX_CONFIG_ROOT/workspaces"
+  chmod 0700 "$PROJECTMUX_CONFIG_ROOT" "$PROJECTMUX_CONFIG_ROOT/workspaces"
+
+  STAGED_CONFIG=$(mktemp "$PROJECTMUX_CONFIG_ROOT/.defaults.yaml.XXXXXX")
+  render_defaults "$STAGED_CONFIG"
+  chmod 0600 "$STAGED_CONFIG"
+
+  if [[ ! -e "$config" && ! -L "$config" ]]; then
+    publish_file "$STAGED_CONFIG" "$config"
+    STAGED_CONFIG=""
+    log_success "Installed ProjectMux defaults at $config."
+    return 0
+  fi
+
+  # The config is machine-local state the user owns. Report drift and move on:
+  # overwriting would silently discard a hand edit, and failing would make an
+  # edited config break every unrelated phase of bin/install.
+  if ! cmp -s "$STAGED_CONFIG" "$config"; then
+    log_warning "$config differs from the shipped defaults; leaving it as-is."
+  fi
+  rm -f -- "$STAGED_CONFIG"
+  STAGED_CONFIG=""
+  return 0
 }
 
 install_binary() {
