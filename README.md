@@ -85,9 +85,11 @@ unrelated" apart from "known identity but not provisioned."
 `includeIf "hasconfig:remote.*.url:..."` block per non-default owner, pulling
 in `~/.gitconfig.guarzo` only for repositories with a matching remote. That
 include path is gitignored and machine-local — the tracked template lives at
-`core/git/gitconfig.guarzo.symlink.example`. Copy it to
-`core/git/gitconfig.guarzo.symlink` (relinked to `~/.gitconfig.guarzo`) and
-fill in the real name, email, and signing key.
+`core/git/gitconfig.secondary.symlink.example`, which is slug-agnostic.
+`bin/bootstrap` renders it per non-`default` slug into
+`core/git/gitconfig.<slug>.symlink` (relinked to `~/.gitconfig.<slug>`); to do
+it by hand, copy the template, replace `IDENTITY_SLUG` with the slug, and fill
+in the real name, email, and absolute signing-key path.
 
 `bin/gh` is a PATH shim (installed ahead of the real `gh`, see the symlink
 table below) that resolves the current repository's remote owner and exports
@@ -177,7 +179,12 @@ prevent. List every owner the machine should know — one you leave out becomes
 unmapped, so nothing routes it and nothing blocks it.
 
 `bin/bootstrap` offers to write the local map, or copy
-`identity-owners.local.example` by hand. `bin/git-identity` prints the map
+`identity-owners.local.example` by hand. It then offers to provision each
+non-`default` slug the map names, rendering
+`gitconfig.secondary.symlink.example` into `core/git/gitconfig.<slug>.symlink`
+(gitignored) and pointing you at `GH_CONFIG_DIR=$HOME/.gh-<slug> gh auth login`.
+Which account is secondary differs per machine, so the prompts follow the map
+rather than a fixed account name. `bin/git-identity` prints the map
 actually in effect, which is the first thing to check when routing surprises you
 on a particular machine.
 
