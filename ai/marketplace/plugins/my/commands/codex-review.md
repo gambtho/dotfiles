@@ -2,7 +2,7 @@
 name: codex-review
 description: Get a second opinion from Codex on a spec or implementation plan — reviews the doc you have been working on, against the actual code
 argument-hint: "[path — defaults to the doc most recently discussed in this session] [--with-spec | --with-plan]"
-allowed-tools: Bash(codex --version), Bash(codex exec:*), Bash(git rev-parse:*), Bash(git branch:*), Bash(ls:*), Bash(mktemp:*), Bash(rm -rf /tmp/codex-review-*), Read, Write, Edit, Glob, Grep
+allowed-tools: Bash(codex --version), Bash(codex exec:*), Bash(git rev-parse:*), Bash(git branch:*), Bash(git status:*), Bash(ls:*), Bash(test:*), Bash(bwrap:*), Bash(sha256sum:*), Bash(mktemp:*), Bash(rm -rf /tmp/codex-review-*), Read, Write, Edit, Glob, Grep
 ---
 
 # Codex Review — Second Opinion on a Spec or Plan
@@ -52,6 +52,48 @@ Two things follow:
 
 To review a doc in a *different* worktree than the session's, pass its path explicitly and set `ROOT` to that worktree's root — not the session's. Reviewing a plan from tree A against the code in tree B is the one failure mode here that produces confidently wrong findings.
 
+### 0e: Select the Sandbox Mode
+
+Decide the sandbox **before** building the prompt. Codex's Linux sandbox is
+bubblewrap, which needs an unprivileged user namespace; many containers forbid
+`clone(CLONE_NEWUSER)`. Discovering that by running a full review wastes minutes
+and tokens and returns nothing usable, so determine it up front.
+
+**First, is this a container?** Stop at the first hit:
+
+1. `$REMOTE_CONTAINERS` or `$CODESPACES` is non-empty — VS Code Dev Containers
+   and Codespaces respectively. Checked first because they name a devcontainer
+   specifically.
+2. `/.dockerenv` exists — Docker.
+3. `/run/.containerenv` exists — Podman.
+
+A plain `docker run` also trips markers 2 and 3. That is correct: the same
+namespace policy applies, so the same decision follows.
+
+**If and only if it is a container, probe bubblewrap:**
+
+```
+bwrap --ro-bind / / --dev /dev true
+```
+
+This returns in milliseconds and costs no tokens. A missing `bwrap` binary counts as a failed probe, not an error. Codex bundles its own copy, so the system binary's absence tells you about the environment rather than blocking the run.
+
+Set `SANDBOX_MODE`:
+
+| Container | `bwrap` probe | `SANDBOX_MODE` |
+|-----------|---------------|----------------|
+| no        | not run       | `read-only` |
+| yes       | exit 0        | `read-only` |
+| yes       | non-zero or absent | `danger-full-access` |
+
+Outside a container the probe never runs and `SANDBOX_MODE` is `read-only`.
+
+Do **not** prompt before escalating. In a container the escalation is automatic
+by design: the container is the external isolation boundary, which is the case
+Codex's unsandboxed mode exists for. Announce the mode in Phase 1c so the choice
+is visible, and run the Phase 2e integrity guard so a write cannot pass
+unnoticed.
+
 ---
 
 ## Phase 1: Resolve the Target
@@ -94,8 +136,9 @@ If the flag is given and no sibling is found, say so and review the single doc r
 
 ```
 Codex review — {MODE}
-  tree: {ROOT}  {"(worktree {name}, branch {branch})" if under .claude/worktrees/}
-  doc:  {path}   {"— picked from this session" | "— newest on disk (guess)"}
+  tree:    {ROOT}  {"(worktree {name}, branch {branch})" if under .claude/worktrees/}
+  sandbox: {SANDBOX_MODE} ({why})
+  doc:     {path}   {"— picked from this session" | "— newest on disk (guess)"}
   {"spec:/plan:" lines instead, in PAIR mode}
 ```
 
@@ -197,14 +240,16 @@ Severity is `Blocking` (would produce wrong or broken work), `Concern` (worth re
 ## Phase 3: Run Codex
 
 ```
-codex exec --sandbox read-only -C "$ROOT" --color never -o "$WORKDIR/review.md" - < "$PROMPT_FILE"
+codex exec --sandbox "$SANDBOX_MODE" -C "$ROOT" --color never -o "$WORKDIR/review.md" - < "$PROMPT_FILE"
 ```
 
 Store `"$WORKDIR/review.md"` as `OUT_FILE`.
 
 **Quote every path substitution**, as above. `ROOT` is a worktree path and can contain spaces; unquoted it breaks `-C`, `-o`, and the input redirect — and unquoted cleanup in Phase 5 then targets the wrong thing.
 
-- `--sandbox read-only` — Codex can read the whole repo but cannot modify it. Do **not** loosen this; a reviewer has no reason to write.
+- `--sandbox "$SANDBOX_MODE"` — `read-only` unless Phase 0e determined that this
+  container cannot initialize bubblewrap. Do **not** hand-edit this to
+  `danger-full-access`; let Phase 0e decide, so the integrity guard runs with it.
 - `-C "$ROOT"` — pins the working root to the current checkout/worktree.
 - `-o` — writes only the final message, so you get the review without the reasoning transcript.
 - `-` — reads the prompt from stdin, avoiding shell-quoting problems with a long prompt.
@@ -219,7 +264,10 @@ This takes a few minutes on a substantial plan. If the Bash call times out, say 
 | Connection refused to `172.17.0.1:1337` | Vekil proxy is down | Tell the user; do not fall back to a direct API call |
 | Codex reports `main` as the branch, or can't find the doc | `-C` pointed at the main checkout, not the worktree (Phase 0d) | Re-derive `ROOT` and re-run |
 | Git commands fail inside Codex, in a worktree only | Sandbox can't reach `.git/worktrees/` in the main checkout | Re-run with `--add-dir {main checkout}/.git`; report if that's needed, it's a regression |
+| `bwrap: No permissions to create a new namespace`, or `bwrap: Creating new namespace failed` | The container forbids user namespaces; Codex's Linux sandbox cannot initialize | Phase 0e should have selected `danger-full-access` — if you see this, detection missed the container. Report it and re-run with `--sandbox danger-full-access` |
 | Non-zero exit, no output file | Run failed | Report the stderr tail verbatim; do not fabricate a review |
+
+bwrap's wording varies by build, so both observed forms are listed. Phase 0e keys off the probe's **exit status**, never the message text.
 
 Then read `OUT_FILE` with the Read tool.
 
