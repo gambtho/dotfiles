@@ -96,6 +96,13 @@ setup() {
   [ "$status" -eq 0 ]
   run grep -F 'Do **not** re-run with a hand-edited `--sandbox` flag' "$CODEX_REVIEW"
   [ "$status" -eq 0 ]
+  # Steps 4-5 are what make the re-entry safe rather than merely re-decided:
+  # re-running unchanged is why the flag never gets hand-edited, and the POST_
+  # captures are the half of the guard that detects a write.
+  run grep -F 'Re-run the Phase 3 command **unchanged**' "$CODEX_REVIEW"
+  [ "$status" -eq 0 ]
+  run grep -F 'Capture `POST_STATUS` and `POST_HASHES`, and report any difference through' "$CODEX_REVIEW"
+  [ "$status" -eq 0 ]
 }
 
 @test "codex-review treats any non-zero exit as a failed run" {
