@@ -47,3 +47,27 @@ setup() {
   run grep -F 'never the message text' "$CODEX_REVIEW"
   [ "$status" -eq 0 ]
 }
+
+@test "codex-review guards document integrity only when unsandboxed" {
+  run grep -F '## Phase 2e: Integrity Guard (danger-full-access only)' "$CODEX_REVIEW"
+  [ "$status" -eq 0 ]
+  run grep -F 'Skip this phase entirely when `SANDBOX_MODE` is `read-only`' "$CODEX_REVIEW"
+  [ "$status" -eq 0 ]
+}
+
+@test "codex-review hashes reviewed docs around an unsandboxed run" {
+  run grep -F 'sha256sum' "$CODEX_REVIEW"
+  [ "$status" -eq 0 ]
+  run grep -F 'git status --short' "$CODEX_REVIEW"
+  [ "$status" -eq 0 ]
+}
+
+@test "codex-review explains why git checkout is not the safety net" {
+  run grep -F 'cannot restore an uncommitted document' "$CODEX_REVIEW"
+  [ "$status" -eq 0 ]
+}
+
+@test "codex-review leads the report with any detected write" {
+  run grep -F 'lead the report with it — above the verdict, above the findings' "$CODEX_REVIEW"
+  [ "$status" -eq 0 ]
+}

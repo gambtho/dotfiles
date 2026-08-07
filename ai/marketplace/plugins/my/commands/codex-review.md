@@ -235,6 +235,36 @@ SUMMARY:
 
 Severity is `Blocking` (would produce wrong or broken work), `Concern` (worth resolving before starting), or `Nit` (author's discretion). Confidence is `HIGH` / `MEDIUM` / `LOW`. Tell Codex to **prefer few high-confidence findings over many speculative ones**, and to cite `file:line` for every claim about existing code.
 
+## Phase 2e: Integrity Guard (danger-full-access only)
+
+Skip this phase entirely when `SANDBOX_MODE` is `read-only` — a read-only
+sandbox cannot write, so there is nothing to guard.
+
+Under `danger-full-access` the prompt is the only thing telling Codex not to
+write. That is probably enough; this phase makes "probably" checkable.
+
+**Before running Codex**, capture both:
+
+```
+git status --short
+sha256sum {each document resolved in Phase 1}
+```
+
+Store them as `PRE_STATUS` and `PRE_HASHES`.
+
+**After the run**, capture the same two into `POST_STATUS` and `POST_HASHES`
+and compare.
+
+Why hashes and not `git checkout`: Phase 0d has Codex read the **working tree**,
+so reviewing a document before it is committed is the normal path here. `git
+checkout --` cannot restore an uncommitted document, and in a devcontainer the
+workspace is usually a bind mount from the host, so a write is not confined by
+the container boundary either. The container bounds what Codex reaches *outside*
+the repo — the smaller half of the exposure.
+
+A mismatch in either capture is reported in Phase 4a. Do not repair, revert, or
+stage anything: report it and let the user decide.
+
 ---
 
 ## Phase 3: Run Codex
@@ -276,6 +306,16 @@ Then read `OUT_FILE` with the Read tool.
 ## Phase 4: Report and Offer to Apply
 
 ### 4a: Report
+
+**If the Phase 2e integrity guard found a difference**, lead the report with it — above the verdict, above the findings — naming every path whose status or hash changed:
+
+```
+WARNING: files changed during an unsandboxed review run.
+  {path}  {status change or hash mismatch}
+Codex was asked to review, not modify. Inspect these before trusting the review.
+```
+
+Then continue with the normal report. A clean guard needs no mention.
 
 Present Codex's review in the conversation, grouped by severity, Blocking first. Keep its wording for the findings themselves — the value here is an independent voice, not your paraphrase.
 
