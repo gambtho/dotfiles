@@ -2,7 +2,7 @@
 name: codex-review
 description: Get a second opinion from Codex on a spec or implementation plan — reviews the doc you have been working on, against the actual code
 argument-hint: "[path — defaults to the doc most recently discussed in this session] [--with-spec | --with-plan]"
-allowed-tools: Bash(codex --version), Bash(codex exec:*), Bash(git rev-parse:*), Bash(git branch:*), Bash(git status:*), Bash(ls:*), Bash(test:*), Bash(bwrap --ro-bind / / --dev /dev true), Bash(sha256sum:*), Bash(mktemp:*), Bash(rm -rf /tmp/codex-review-*), Read, Write, Edit, Glob, Grep
+allowed-tools: Bash(codex --version), Bash(codex exec:*), Bash(git rev-parse:*), Bash(git branch:*), Bash(git status:*), Bash(git diff:*), Bash(ls:*), Bash(test:*), Bash(bwrap --ro-bind / / --dev /dev true), Bash(sha256sum:*), Bash(mktemp:*), Bash(rm -rf /tmp/codex-review-*), Read, Write, Edit, Glob, Grep
 ---
 
 # Codex Review — Second Opinion on a Spec or Plan
@@ -261,19 +261,23 @@ sandbox cannot write, so there is nothing to guard.
 Under `danger-full-access` the prompt is the only thing telling Codex not to
 write. That is probably enough; this phase makes "probably" checkable.
 
-**Before running Codex**, capture both:
+**Before running Codex**, capture all three:
 
 ```
 git status --short
+git diff HEAD
 sha256sum {absolute path of each document resolved in Phase 1, quoted}
 ```
 
 Run this Bash call with `ROOT` as its working directory, and give `sha256sum` absolute quoted paths — never bare relative ones. Phase 0d supports reviewing a doc in a *different* worktree than the session's, and there a bare `git status` in the session's directory reports on the wrong checkout, and the guard reports clean no matter what Codex wrote. Do **not** reach for `git -C` instead: this command's frontmatter grants `Bash(git status:*)`, which `git -C ...` does not match, so it would prompt.
 
-Store them as `PRE_STATUS` and `PRE_HASHES`.
+Store them as `PRE_STATUS`, `PRE_DIFF`, and `PRE_HASHES`.
 
-**After the run**, capture the same two the same way — same working directory,
-same absolute paths — into `POST_STATUS` and `POST_HASHES` and compare.
+`git diff HEAD` is not redundant with `git status --short`. Status reports a tracked file's *state*, not its contents: a file already modified before the run shows ` M path` both before and after, so a write by Codex into an already-dirty file is invisible to a status comparison. Reviews normally run mid-feature against a dirty worktree, so that is the common case, not an edge case. Comparing `PRE_DIFF` to `POST_DIFF` catches it. You do not need to echo the diff — only whether it changed.
+
+**After the run**, capture the same three the same way — same working directory,
+same absolute paths — into `POST_STATUS`, `POST_DIFF`, and `POST_HASHES` and
+compare.
 
 Why hashes and not `git checkout`: Phase 0d has Codex read the **working tree**,
 so reviewing a document before it is committed is the normal path here. `git
@@ -282,8 +286,14 @@ workspace is usually a bind mount from the host, so a write is not confined by
 the container boundary either. The container bounds what Codex reaches *outside*
 the repo — the smaller half of the exposure.
 
-A mismatch in either capture is reported in Phase 4a. Do not repair, revert, or
-stage anything: report it and let the user decide.
+A mismatch in any of the three captures is reported in Phase 4a. Do not repair,
+revert, or stage anything: report it and let the user decide.
+
+One gap remains by choice: a file that was already untracked before the run
+shows `?? path` in both captures and is not covered by `git diff HEAD`, so a
+write into a pre-existing untracked file is invisible. Closing it means hashing
+every file under `ROOT` twice per review. Untracked files *appearing* or
+*disappearing* are caught by the status comparison.
 
 ---
 
@@ -324,14 +334,14 @@ bwrap's wording varies by build, so both observed forms are listed. Phase 0e key
 
 Match the specific rows before the general one: `Non-zero exit` is the fallback for a failure none of the rows above describe. A non-zero exit means the output is not a review, whether or not `review.md` exists. A run that fails partway can leave a partial or stale `review.md` behind; do not read it as findings, do not group it by severity, and do not add a verdict to it.
 
-**Re-entry after a missed container.** The bwrap rows fire exactly when Phase 0e chose `read-only` for a container that cannot initialize bubblewrap — so Phase 2e was skipped and no `PRE_STATUS`/`PRE_HASHES` exist. Do **not** re-run with a hand-edited `--sandbox` flag: that runs Codex unsandboxed against a bind-mounted working tree with no integrity guard, which is the one case the guard exists for. Instead:
+**Re-entry after a missed container.** The bwrap rows fire exactly when Phase 0e chose `read-only` for a container that cannot initialize bubblewrap — so Phase 2e was skipped and no pre-run captures exist. Do **not** re-run with a hand-edited `--sandbox` flag: that runs Codex unsandboxed against a bind-mounted working tree with no integrity guard, which is the one case the guard exists for. Instead:
 
 1. Report that detection missed the container, and say which markers you checked.
 2. Set `SANDBOX_MODE` to `danger-full-access`.
-3. Re-enter at **Phase 2e** and capture `PRE_STATUS` and `PRE_HASHES`.
+3. Re-enter at **Phase 2e** and take all three pre-run captures.
 4. Re-run the Phase 3 command **unchanged** — `--sandbox "$SANDBOX_MODE"` now
    resolves to `danger-full-access` on its own.
-5. Capture `POST_STATUS` and `POST_HASHES`, and report any difference through
+5. Take the matching post-run captures, and report any difference through
    Phase 4a like any other unsandboxed run.
 
 Re-decide `SANDBOX_MODE` once. If the same error recurs under
