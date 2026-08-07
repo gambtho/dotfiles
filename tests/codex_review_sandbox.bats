@@ -8,8 +8,10 @@ setup() {
 }
 
 @test "codex-review may run the bubblewrap capability probe" {
-  run grep -F 'Bash(bwrap:*)' "$CODEX_REVIEW"
+  run grep -F 'Bash(bwrap --ro-bind / / --dev /dev true)' "$CODEX_REVIEW"
   [ "$status" -eq 0 ]
+  run grep -F 'Bash(bwrap:*)' "$CODEX_REVIEW"
+  [ "$status" -ne 0 ]
 }
 
 @test "codex-review detects containers before choosing a sandbox" {
@@ -30,6 +32,22 @@ setup() {
 
 @test "codex-review keeps read-only outside containers" {
   run grep -F 'Outside a container the probe never runs and `SANDBOX_MODE` is `read-only`.' "$CODEX_REVIEW"
+  [ "$status" -eq 0 ]
+}
+
+@test "codex-review passes the selected sandbox mode to codex exec" {
+  run grep -F 'codex exec --sandbox "$SANDBOX_MODE"' "$CODEX_REVIEW"
+  [ "$status" -eq 0 ]
+  run grep -F 'codex exec --sandbox read-only' "$CODEX_REVIEW"
+  [ "$status" -ne 0 ]
+}
+
+@test "codex-review escalates only the container-without-bubblewrap row" {
+  run grep -F '| yes       | non-zero or absent | `danger-full-access` |' "$CODEX_REVIEW"
+  [ "$status" -eq 0 ]
+  run grep -F '| yes       | exit 0        | `read-only` |' "$CODEX_REVIEW"
+  [ "$status" -eq 0 ]
+  run grep -F '| no        | not run       | `read-only` |' "$CODEX_REVIEW"
   [ "$status" -eq 0 ]
 }
 
@@ -56,9 +74,34 @@ setup() {
 }
 
 @test "codex-review hashes reviewed docs around an unsandboxed run" {
-  run grep -F 'sha256sum' "$CODEX_REVIEW"
+  run grep -F 'sha256sum {absolute path of each document resolved in Phase 1, quoted}' "$CODEX_REVIEW"
   [ "$status" -eq 0 ]
   run grep -F 'git status --short' "$CODEX_REVIEW"
+  [ "$status" -eq 0 ]
+}
+
+@test "codex-review anchors the integrity captures to the reviewed tree" {
+  run grep -F 'Run this Bash call with `ROOT` as its working directory' "$CODEX_REVIEW"
+  [ "$status" -eq 0 ]
+  run grep -F 'reports on the wrong checkout, and the guard reports clean no matter what Codex wrote' "$CODEX_REVIEW"
+  [ "$status" -eq 0 ]
+}
+
+@test "codex-review re-enters Phase 2e instead of hand-editing the sandbox flag" {
+  run grep -F '**Re-entry after a missed container.**' "$CODEX_REVIEW"
+  [ "$status" -eq 0 ]
+  run grep -F 'Set `SANDBOX_MODE` to `danger-full-access`.' "$CODEX_REVIEW"
+  [ "$status" -eq 0 ]
+  run grep -F 'Re-enter at **Phase 2e** and capture `PRE_STATUS` and `PRE_HASHES`.' "$CODEX_REVIEW"
+  [ "$status" -eq 0 ]
+  run grep -F 'Do **not** re-run with a hand-edited `--sandbox` flag' "$CODEX_REVIEW"
+  [ "$status" -eq 0 ]
+}
+
+@test "codex-review treats any non-zero exit as a failed run" {
+  run grep -F '| Non-zero exit | Run failed |' "$CODEX_REVIEW"
+  [ "$status" -eq 0 ]
+  run grep -F 'A non-zero exit means the output is not a review, whether or not `review.md` exists.' "$CODEX_REVIEW"
   [ "$status" -eq 0 ]
 }
 

@@ -2,7 +2,7 @@
 name: codex-review
 description: Get a second opinion from Codex on a spec or implementation plan — reviews the doc you have been working on, against the actual code
 argument-hint: "[path — defaults to the doc most recently discussed in this session] [--with-spec | --with-plan]"
-allowed-tools: Bash(codex --version), Bash(codex exec:*), Bash(git rev-parse:*), Bash(git branch:*), Bash(git status:*), Bash(ls:*), Bash(test:*), Bash(bwrap:*), Bash(sha256sum:*), Bash(mktemp:*), Bash(rm -rf /tmp/codex-review-*), Read, Write, Edit, Glob, Grep
+allowed-tools: Bash(codex --version), Bash(codex exec:*), Bash(git rev-parse:*), Bash(git branch:*), Bash(git status:*), Bash(ls:*), Bash(test:*), Bash(bwrap --ro-bind / / --dev /dev true), Bash(sha256sum:*), Bash(mktemp:*), Bash(rm -rf /tmp/codex-review-*), Read, Write, Edit, Glob, Grep
 ---
 
 # Codex Review — Second Opinion on a Spec or Plan
@@ -59,13 +59,17 @@ bubblewrap, which needs an unprivileged user namespace; many containers forbid
 `clone(CLONE_NEWUSER)`. Discovering that by running a full review wastes minutes
 and tokens and returns nothing usable, so determine it up front.
 
-**First, is this a container?** Stop at the first hit:
+**First, is this a container?** Run these exact checks and stop at the first hit:
 
-1. `$REMOTE_CONTAINERS` or `$CODESPACES` is non-empty — VS Code Dev Containers
-   and Codespaces respectively. Checked first because they name a devcontainer
-   specifically.
-2. `/.dockerenv` exists — Docker.
-3. `/run/.containerenv` exists — Podman.
+1. `test -n "$REMOTE_CONTAINERS"` or `test -n "$CODESPACES"` — VS Code Dev
+   Containers and Codespaces respectively. Checked first because they name a
+   devcontainer specifically.
+2. `test -f /.dockerenv` — Docker.
+3. `test -f /run/.containerenv` — Podman.
+
+Use those forms. `env | grep`, `printenv`, and `echo` are not covered by this
+command's `Bash(test:*)` grant and stall an otherwise silent preflight on a
+permission prompt.
 
 A plain `docker run` also trips markers 2 and 3. That is correct: the same
 namespace policy applies, so the same decision follows.
@@ -87,6 +91,10 @@ Set `SANDBOX_MODE`:
 | yes       | non-zero or absent | `danger-full-access` |
 
 Outside a container the probe never runs and `SANDBOX_MODE` is `read-only`.
+
+The `{why}` in the Phase 1c confirmation names the row that fired, one string per
+row, top to bottom: `no container`, `container detected; bwrap probe succeeded`,
+`container detected; bwrap probe failed`. A run always prints one of the three.
 
 Do **not** prompt before escalating. In a container the escalation is automatic
 by design: the container is the external isolation boundary, which is the case
@@ -243,6 +251,8 @@ A verdict you cannot support by reading the code is worse than no verdict.
 
 Severity is `Blocking` (would produce wrong or broken work), `Concern` (worth resolving before starting), or `Nit` (author's discretion). Confidence is `HIGH` / `MEDIUM` / `LOW`. Tell Codex to **prefer few high-confidence findings over many speculative ones**, and to cite `file:line` for every claim about existing code.
 
+---
+
 ## Phase 2e: Integrity Guard (danger-full-access only)
 
 Skip this phase entirely when `SANDBOX_MODE` is `read-only` — a read-only
@@ -255,13 +265,15 @@ write. That is probably enough; this phase makes "probably" checkable.
 
 ```
 git status --short
-sha256sum {each document resolved in Phase 1}
+sha256sum {absolute path of each document resolved in Phase 1, quoted}
 ```
+
+Run this Bash call with `ROOT` as its working directory, and give `sha256sum` absolute quoted paths — never bare relative ones. Phase 0d supports reviewing a doc in a *different* worktree than the session's, and there a bare `git status` in the session's directory reports on the wrong checkout, and the guard reports clean no matter what Codex wrote. Do **not** reach for `git -C` instead: this command's frontmatter grants `Bash(git status:*)`, which `git -C ...` does not match, so it would prompt.
 
 Store them as `PRE_STATUS` and `PRE_HASHES`.
 
-**After the run**, capture the same two into `POST_STATUS` and `POST_HASHES`
-and compare.
+**After the run**, capture the same two the same way — same working directory,
+same absolute paths — into `POST_STATUS` and `POST_HASHES` and compare.
 
 Why hashes and not `git checkout`: Phase 0d has Codex read the **working tree**,
 so reviewing a document before it is committed is the normal path here. `git
@@ -288,6 +300,9 @@ Store `"$WORKDIR/review.md"` as `OUT_FILE`.
 - `--sandbox "$SANDBOX_MODE"` — `read-only` unless Phase 0e determined that this
   container cannot initialize bubblewrap. Do **not** hand-edit this to
   `danger-full-access`; let Phase 0e decide, so the integrity guard runs with it.
+  If the run fails because detection missed, the re-entry procedure below
+  re-decides `SANDBOX_MODE` and re-enters Phase 2e — the flag on this line still
+  stays as written.
 - `-C "$ROOT"` — pins the working root to the current checkout/worktree.
 - `-o` — writes only the final message, so you get the review without the reasoning transcript.
 - `-` — reads the prompt from stdin, avoiding shell-quoting problems with a long prompt.
@@ -302,10 +317,25 @@ This takes a few minutes on a substantial plan. If the Bash call times out, say 
 | Connection refused to `172.17.0.1:1337` | Vekil proxy is down | Tell the user; do not fall back to a direct API call |
 | Codex reports `main` as the branch, or can't find the doc | `-C` pointed at the main checkout, not the worktree (Phase 0d) | Re-derive `ROOT` and re-run |
 | Git commands fail inside Codex, in a worktree only | Sandbox can't reach `.git/worktrees/` in the main checkout | Re-run with `--add-dir {main checkout}/.git`; report if that's needed, it's a regression |
-| `bwrap: No permissions to create a new namespace`, or `bwrap: Creating new namespace failed` | The container forbids user namespaces; Codex's Linux sandbox cannot initialize | Phase 0e should have selected `danger-full-access` — if you see this, detection missed the container. Report it and re-run with `--sandbox danger-full-access` |
-| Non-zero exit, no output file | Run failed | Report the stderr tail verbatim; do not fabricate a review |
+| `bwrap: No permissions to create a new namespace`, or `bwrap: Creating new namespace failed` | The container forbids user namespaces; Codex's Linux sandbox cannot initialize | Detection missed the container. Follow **Re-entry after a missed container** below |
+| Non-zero exit | Run failed | Report the stderr tail verbatim; do not fabricate a review |
 
 bwrap's wording varies by build, so both observed forms are listed. Phase 0e keys off the probe's **exit status**, never the message text.
+
+Match the specific rows before the general one: `Non-zero exit` is the fallback for a failure none of the rows above describe. A non-zero exit means the output is not a review, whether or not `review.md` exists. A run that fails partway can leave a partial or stale `review.md` behind; do not read it as findings, do not group it by severity, and do not add a verdict to it.
+
+**Re-entry after a missed container.** The bwrap rows fire exactly when Phase 0e chose `read-only` for a container that cannot initialize bubblewrap — so Phase 2e was skipped and no `PRE_STATUS`/`PRE_HASHES` exist. Do **not** re-run with a hand-edited `--sandbox` flag: that runs Codex unsandboxed against a bind-mounted working tree with no integrity guard, which is the one case the guard exists for. Instead:
+
+1. Report that detection missed the container, and say which markers you checked.
+2. Set `SANDBOX_MODE` to `danger-full-access`.
+3. Re-enter at **Phase 2e** and capture `PRE_STATUS` and `PRE_HASHES`.
+4. Re-run the Phase 3 command **unchanged** — `--sandbox "$SANDBOX_MODE"` now
+   resolves to `danger-full-access` on its own.
+5. Capture `POST_STATUS` and `POST_HASHES`, and report any difference through
+   Phase 4a like any other unsandboxed run.
+
+Re-decide `SANDBOX_MODE` once. If the same error recurs under
+`danger-full-access`, stop and report it — that is a different failure.
 
 Then read `OUT_FILE` with the Read tool.
 
@@ -323,7 +353,7 @@ WARNING: files changed during an unsandboxed review run.
 Codex was asked to review, not modify. Inspect these before trusting the review.
 ```
 
-Then continue with the normal report. A clean guard needs no mention.
+Then continue with the report. A clean guard needs no mention.
 
 **If the review begins `STATUS: INCOMPLETE`**, it is not a review. Report it as an environment failure, quote the `REASON:` verbatim, and state that no design conclusion follows:
 
