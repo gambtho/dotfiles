@@ -8,9 +8,8 @@ it verifies against a committed digest, and that it lands atomically. It holds
 no workspace logic. Migrating existing state is the application's job, not the
 installer's.
 
-ProjectMux is the intended replacement for the Bash tmux platform in
-`tools/dev/`. Installing it changes nothing about `bin/dev` — the two coexist
-until you perform the cutover below.
+ProjectMux replaced the Bash tmux platform that used to live in `tools/dev/`
+(design §13). `bin/dev` is now a thin `exec projectmux "$@"` wrapper.
 
 ## Setup
 
@@ -73,24 +72,34 @@ An existing config is **never overwritten**; drift from the shipped template is
 reported as a warning and left alone.
 
 `repository_roots` is rendered from `PROJECTMUX_REPOSITORY_ROOTS` (a `:`
-separated list). Unset, it falls back to `DEV_REPO_ROOT` — the same variable
-`tools/dev/` resolves workspace names under — and then to `~/workspace`.
+separated list). Unset, it falls back to `DEV_REPO_ROOT` — the variable the
+retired Bash platform resolved workspace names under, still honoured so a
+machine that has moved its checkouts need not set a second one — and then to
+`~/workspace`.
 
 ## The autostart unit
 
 `projectmux-autostart.service` is written to `$XDG_CONFIG_HOME/systemd/user/`
-but is **deliberately not enabled**, and the installer never runs
-`systemctl --user daemon-reload`. `dev-autostart.service` is still enabled on
-these machines, and two units attaching a workspace at login would race for the
-same tmux server.
+but is **deliberately not enabled** by the installer, which never runs
+`systemctl --user daemon-reload`. Enabling it is the migration's job, because
+the old `dev-autostart.service` has to be disabled first — two units attaching
+a workspace at login would race for the same tmux server.
 
-Cutover is a manual, deliberate step:
+## Migrating off the Bash platform
+
+Removing `tools/dev/` deleted the sources. It did not remove what they
+installed: the `dev-autostart` user unit, the event hooks resident in a running
+tmux server, and `~/.local/state/dev`. Run once per machine:
 
 ```bash
-systemctl --user disable --now dev-autostart.service
-systemctl --user daemon-reload
-systemctl --user enable --now projectmux-autostart.service
+bash tools/projectmux/migrate-from-dev.sh
 ```
+
+It disables and removes the old unit, enables `projectmux-autostart.service`,
+unsets each `dev-event` hook that is still the managed command — warning and
+preserving anything you replaced — and renames the old state directory to a
+dated `.bak-` backup. No data is migrated out of it; delete the backup yourself
+once you are satisfied. The script is idempotent.
 
 ## Environment overrides
 

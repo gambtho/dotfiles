@@ -26,10 +26,9 @@ DEFAULTS_TEMPLATE="$DOTFILES_ROOT/tools/projectmux/defaults.yaml.template"
 SYSTEMD_USER_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 UNIT_TEMPLATE="$DOTFILES_ROOT/tools/projectmux/projectmux-autostart.service"
 SERVICE_UNIT="$SYSTEMD_USER_DIR/projectmux-autostart.service"
-# DEV_REPO_ROOT is where the existing tmux platform resolves workspace names
-# (tools/dev/lib/resolve.sh:4). A machine that has moved its checkouts told us
-# so through that variable already, so honour it rather than making the same
-# machine set a second one.
+# DEV_REPO_ROOT is where the retired Bash platform resolved workspace names. A
+# machine that has moved its checkouts told us so through that variable
+# already, so honour it rather than making the same machine set a second one.
 PROJECTMUX_REPOSITORY_ROOTS="${PROJECTMUX_REPOSITORY_ROOTS:-${DEV_REPO_ROOT:-$HOME/workspace}}"
 
 # Staging paths, cleared as soon as each is published. cleanup removes whatever
@@ -290,10 +289,10 @@ install_config() {
   return 0
 }
 
-# The unit is written but deliberately never enabled and the user manager is
-# never reloaded -- see the template's header. Enabling it while
-# dev-autostart.service is still enabled would put two units in a race for the
-# same tmux server at login, so cutover stays a manual, deliberate act.
+# The unit is written but deliberately never enabled here, and the user manager
+# is never reloaded -- see the template's header. Enabling it is
+# migrate-from-dev.sh's job, which disables dev-autostart.service first: two
+# units racing for the same tmux server at login is the failure this avoids.
 install_unit() {
   local escaped_bin
   prepare_destination_directory "$SYSTEMD_USER_DIR"
@@ -310,8 +309,7 @@ install_unit() {
   escaped_bin=${escaped_bin//\$/\$\$}
 
   # Second, sed: \, & and the | delimiter are replacement metacharacters, so
-  # they are substituted literally instead of corrupting the unit. Same
-  # escaping as tools/dev/install.sh:52-54, applied to the systemd-safe value.
+  # they are substituted literally instead of corrupting the unit.
   escaped_bin=${escaped_bin//\\/\\\\}
   escaped_bin=${escaped_bin//|/\\|}
   escaped_bin=${escaped_bin//&/\\&}

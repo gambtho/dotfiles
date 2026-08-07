@@ -483,7 +483,7 @@ ensure_stable_link_root() {
 # Derive the slug a directory belongs to. Normally that is the directory's own
 # name, but a linked git worktree is named after its branch, so the primary
 # working tree's name is used instead (git lists it first in --porcelain
-# output). Shared with tools/dev so the overlay claude-link-project writes and
+# output). Shared with ProjectMux so the overlay claude-link-project writes and
 # the overlay `dev` reads are always the same directory.
 dev_slug_for_path() {
   local dir="$1" resolved slug main_root

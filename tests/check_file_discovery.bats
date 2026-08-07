@@ -11,52 +11,41 @@ setup() {
   printf '#!/usr/bin/env bash\ntrue\n' >"$UNTRACKED_FILE"
   printf '#!/usr/bin/env bash\nfalse\n' >"$IGNORED_FILE"
 
-  # Throwaway probes for the tools/dev discovery classes. They are untracked,
-  # so they exercise the same --others path the bin/ probe above does.
-  DEV_LIB_DIR="$REPO_ROOT/tools/dev/lib"
-  DEV_CMD_DIR="$REPO_ROOT/tools/dev/commands"
-  DEV_LIB_FILE="$DEV_LIB_DIR/probe-$BATS_TEST_NUMBER.sh"
-  DEV_CMD_FILE="$DEV_CMD_DIR/probe-$BATS_TEST_NUMBER.sh"
-  DEV_INSTALL_FILE="$REPO_ROOT/tools/dev/probe-install-$BATS_TEST_NUMBER.sh"
-  DEV_EXEC_FILE="$REPO_ROOT/tools/dev/probe-exec-$BATS_TEST_NUMBER"
-  DEV_YAML_FILE="$REPO_ROOT/tools/dev/probe-$BATS_TEST_NUMBER.yaml"
-  DEV_CONF_FILE="$REPO_ROOT/tools/dev/probe-$BATS_TEST_NUMBER.tmux.conf"
-  DEV_UNIT_FILE="$REPO_ROOT/tools/dev/probe-$BATS_TEST_NUMBER.service"
-  DEV_ZSH_FILE="$REPO_ROOT/tools/dev/probe-$BATS_TEST_NUMBER.zsh"
-  mkdir -p "$DEV_LIB_DIR" "$DEV_CMD_DIR"
-  printf 'probe_lib() { :; }\n' >"$DEV_LIB_FILE"
-  printf 'dev_cmd_probe() { :; }\n' >"$DEV_CMD_FILE"
-  printf '#!/usr/bin/env bash\ntrue\n' >"$DEV_INSTALL_FILE"
-  printf '#!/usr/bin/env bash\ntrue\n' >"$DEV_EXEC_FILE"
-  printf 'windows: []\n' >"$DEV_YAML_FILE"
-  printf 'set -g status on\n' >"$DEV_CONF_FILE"
-  printf '[Unit]\nDescription=probe\n' >"$DEV_UNIT_FILE"
-  printf 'export PROBE=1\n' >"$DEV_ZSH_FILE"
-
-  # Probes for a tools/ subdirectory that is not tools/dev. tools/projectmux
-  # now hosts the real ProjectMux installer, but this fixture writes its own
-  # probe files there rather than relying on that installer's actual layout —
-  # that keeps the gate honest if the installer is later renamed or moved.
+  # Probes for a tools/ subdirectory. tools/projectmux hosts the real
+  # ProjectMux installer, but this fixture writes its own probe files there
+  # rather than relying on that installer's actual layout — that keeps the gate
+  # honest if the installer is later renamed or moved.
+  #
+  # These probes previously lived in tools/dev/ as a second, parallel set.
+  # tools/dev/ is gone (design §13 step 8) and the discovery rules were never
+  # keyed on it (bin/list-check-files:40-52 matches tools/*), so one set covers
+  # the same predicate.
   TOOL_PROBE_DIR="$REPO_ROOT/tools/projectmux"
+  TOOL_SUB_DIR="$TOOL_PROBE_DIR/probe-lib-$BATS_TEST_NUMBER"
   TOOL_INSTALL_FILE="$TOOL_PROBE_DIR/probe-install-$BATS_TEST_NUMBER.sh"
   TOOL_EXEC_FILE="$TOOL_PROBE_DIR/probe-exec-$BATS_TEST_NUMBER"
+  TOOL_SUB_FILE="$TOOL_SUB_DIR/probe-$BATS_TEST_NUMBER.sh"
   TOOL_ZSH_FILE="$TOOL_PROBE_DIR/probe-$BATS_TEST_NUMBER.zsh"
   TOOL_YAML_FILE="$TOOL_PROBE_DIR/probe-$BATS_TEST_NUMBER.yaml"
-  mkdir -p "$TOOL_PROBE_DIR"
+  TOOL_CONF_FILE="$TOOL_PROBE_DIR/probe-$BATS_TEST_NUMBER.tmux.conf"
+  TOOL_UNIT_FILE="$TOOL_PROBE_DIR/probe-$BATS_TEST_NUMBER.service"
+  mkdir -p "$TOOL_PROBE_DIR" "$TOOL_SUB_DIR"
   printf '#!/usr/bin/env bash\ntrue\n' >"$TOOL_INSTALL_FILE"
   printf '#!/usr/bin/env bash\ntrue\n' >"$TOOL_EXEC_FILE"
+  printf 'probe_lib() { :; }\n' >"$TOOL_SUB_FILE"
   printf 'export PROBE=1\n' >"$TOOL_ZSH_FILE"
   printf 'defaults: {}\n' >"$TOOL_YAML_FILE"
+  printf 'set -g status on\n' >"$TOOL_CONF_FILE"
+  printf '[Unit]\nDescription=probe\n' >"$TOOL_UNIT_FILE"
 }
 
 teardown() {
   rm -f -- "$UNTRACKED_FILE" "$IGNORED_FILE" \
-    "$DEV_LIB_FILE" "$DEV_CMD_FILE" "$DEV_INSTALL_FILE" "$DEV_EXEC_FILE" \
-    "$DEV_YAML_FILE" "$DEV_CONF_FILE" "$DEV_UNIT_FILE" "$DEV_ZSH_FILE" \
-    "$TOOL_INSTALL_FILE" "$TOOL_EXEC_FILE" "$TOOL_ZSH_FILE" "$TOOL_YAML_FILE"
+    "$TOOL_INSTALL_FILE" "$TOOL_EXEC_FILE" "$TOOL_SUB_FILE" "$TOOL_ZSH_FILE" \
+    "$TOOL_YAML_FILE" "$TOOL_CONF_FILE" "$TOOL_UNIT_FILE"
   rmdir "$IGNORED_DIR" 2>/dev/null || true
-  rmdir "$DEV_LIB_DIR" "$DEV_CMD_DIR" 2>/dev/null || true
-  # rmdir, not rm -r: once the real installer lands here the directory is not
+  rmdir "$TOOL_SUB_DIR" 2>/dev/null || true
+  # rmdir, not rm -r: the real installer lives here, so the directory is not
   # empty and must survive the suite untouched.
   rmdir "$TOOL_PROBE_DIR" 2>/dev/null || true
 }
@@ -174,58 +163,32 @@ list_files() {
   [[ "$output" == *"must run inside a Git checkout"* ]]
 }
 
-@test "dev platform shell sources land in every bash gate" {
-  local class
-  for class in bash shellcheck shfmt; do
-    list_files "$class"
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"${DEV_LIB_FILE#"$REPO_ROOT/"}"* ]]
-    [[ "$output" == *"${DEV_CMD_FILE#"$REPO_ROOT/"}"* ]]
-    [[ "$output" == *"${DEV_INSTALL_FILE#"$REPO_ROOT/"}"* ]]
-    [[ "$output" == *"${DEV_EXEC_FILE#"$REPO_ROOT/"}"* ]]
-  done
-}
-
-@test "dev platform non-shell assets stay out of the bash gates" {
-  local class
-  for class in bash shellcheck shfmt; do
-    list_files "$class"
-    [ "$status" -eq 0 ]
-    [[ "$output" != *"${DEV_YAML_FILE#"$REPO_ROOT/"}"* ]]
-    [[ "$output" != *"${DEV_CONF_FILE#"$REPO_ROOT/"}"* ]]
-    [[ "$output" != *"${DEV_UNIT_FILE#"$REPO_ROOT/"}"* ]]
-    [[ "$output" != *"${DEV_ZSH_FILE#"$REPO_ROOT/"}"* ]]
-  done
-}
-
-@test "dev platform zsh sources stay in the zsh gate" {
-  list_files zsh
-
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"${DEV_ZSH_FILE#"$REPO_ROOT/"}"* ]]
-  [[ "$output" != *"${DEV_LIB_FILE#"$REPO_ROOT/"}"* ]]
-}
-
-@test "tools shell sources outside tools/dev land in every bash gate" {
+@test "tools shell sources land in every bash gate, at any depth" {
   local class
   for class in bash shellcheck shfmt; do
     list_files "$class"
     [ "$status" -eq 0 ]
     [[ "$output" == *"${TOOL_INSTALL_FILE#"$REPO_ROOT/"}"* ]]
     [[ "$output" == *"${TOOL_EXEC_FILE#"$REPO_ROOT/"}"* ]]
+    [[ "$output" == *"${TOOL_SUB_FILE#"$REPO_ROOT/"}"* ]]
   done
 }
 
-@test "tools non-shell assets outside tools/dev stay out of the bash gates" {
+@test "tools non-shell assets stay out of the bash gates" {
   # Guard against over-widening: this passes both before and after the
   # predicate change, and its job is to fail if the new prefix starts
   # swallowing .zsh plugins or config data that other consumers own.
+  #
+  # .tmux.conf and .service are asserted here because tools/ still ships both
+  # kinds; the assertions moved from the retired tools/dev probes.
   local class
   for class in bash shellcheck shfmt; do
     list_files "$class"
     [ "$status" -eq 0 ]
     [[ "$output" != *"${TOOL_ZSH_FILE#"$REPO_ROOT/"}"* ]]
     [[ "$output" != *"${TOOL_YAML_FILE#"$REPO_ROOT/"}"* ]]
+    [[ "$output" != *"${TOOL_CONF_FILE#"$REPO_ROOT/"}"* ]]
+    [[ "$output" != *"${TOOL_UNIT_FILE#"$REPO_ROOT/"}"* ]]
     [[ "$output" != *"tools/you-should-use.zsh"* ]]
     [[ "$output" != *"tools/commit.msg.example"* ]]
   done
@@ -233,4 +196,5 @@ list_files() {
   list_files zsh
   [ "$status" -eq 0 ]
   [[ "$output" == *"${TOOL_ZSH_FILE#"$REPO_ROOT/"}"* ]]
+  [[ "$output" != *"${TOOL_SUB_FILE#"$REPO_ROOT/"}"* ]]
 }
