@@ -33,15 +33,12 @@ list_phases() {
   [[ "$output" == *"optional projectmux"* ]]
 }
 
-@test "the projectmux phase runs after the dev phase" {
+@test "the dev phase is gone" {
+  # tools/dev/ was removed in design §13 step 8; a phase pointing at a deleted
+  # installer would fail every install as an "optional phase failed" warning.
   list_phases
   [ "$status" -eq 0 ]
-  local dev_line projectmux_line
-  dev_line=$(grep -n 'optional dev$' <<<"$output" | cut -d: -f1)
-  projectmux_line=$(grep -n 'optional projectmux$' <<<"$output" | cut -d: -f1)
-  [ -n "$dev_line" ]
-  [ -n "$projectmux_line" ]
-  [ "$projectmux_line" -gt "$dev_line" ]
+  [[ "$output" != *"optional dev"* ]]
 }
 
 @test "the phase points at the installer this repo ships" {
