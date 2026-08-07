@@ -231,9 +231,6 @@ COVERAGE GAPS:            (PAIR mode only; omit the section otherwise)
 
 SUMMARY:
 {3-5 sentences: is this doc ready to build from, and what is the biggest risk}
-```
-
-Severity is `Blocking` (would produce wrong or broken work), `Concern` (worth resolving before starting), or `Nit` (author's discretion). Confidence is `HIGH` / `MEDIUM` / `LOW`. Tell Codex to **prefer few high-confidence findings over many speculative ones**, and to cite `file:line` for every claim about existing code.
 
 If you cannot read the repository — sandbox failure, missing files, any
 environmental block — do NOT return a VERDICT line. Return exactly:
@@ -242,6 +239,9 @@ STATUS: INCOMPLETE
 REASON: {what blocked you}
 
 A verdict you cannot support by reading the code is worse than no verdict.
+```
+
+Severity is `Blocking` (would produce wrong or broken work), `Concern` (worth resolving before starting), or `Nit` (author's discretion). Confidence is `HIGH` / `MEDIUM` / `LOW`. Tell Codex to **prefer few high-confidence findings over many speculative ones**, and to cite `file:line` for every claim about existing code.
 
 ## Phase 2e: Integrity Guard (danger-full-access only)
 
@@ -336,7 +336,7 @@ either way about the document.
 Skip Phase 4b entirely; there are no findings to apply. Do not group it by
 severity, do not add "My take", and never present it as a verdict.
 
-Present Codex's review in the conversation, grouped by severity, Blocking first. Keep its wording for the findings themselves — the value here is an independent voice, not your paraphrase.
+Otherwise, for a normal (non-INCOMPLETE) review, present Codex's review in the conversation, grouped by severity, Blocking first. Keep its wording for the findings themselves — the value here is an independent voice, not your paraphrase.
 
 Then add your own short assessment, clearly separated:
 
