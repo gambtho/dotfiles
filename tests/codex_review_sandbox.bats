@@ -71,3 +71,17 @@ setup() {
   run grep -F 'lead the report with it — above the verdict, above the findings' "$CODEX_REVIEW"
   [ "$status" -eq 0 ]
 }
+
+@test "codex-review offers a non-verdict outcome for blocked runs" {
+  run grep -F 'STATUS: INCOMPLETE' "$CODEX_REVIEW"
+  [ "$status" -eq 0 ]
+  run grep -F 'do NOT return a VERDICT line' "$CODEX_REVIEW"
+  [ "$status" -eq 0 ]
+  run grep -F 'A verdict you cannot support by reading the code is worse than no verdict.' "$CODEX_REVIEW"
+  [ "$status" -eq 0 ]
+}
+
+@test "codex-review never reports an incomplete run as a design signal" {
+  run grep -F 'no design conclusion follows' "$CODEX_REVIEW"
+  [ "$status" -eq 0 ]
+}

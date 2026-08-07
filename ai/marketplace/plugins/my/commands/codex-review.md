@@ -235,6 +235,14 @@ SUMMARY:
 
 Severity is `Blocking` (would produce wrong or broken work), `Concern` (worth resolving before starting), or `Nit` (author's discretion). Confidence is `HIGH` / `MEDIUM` / `LOW`. Tell Codex to **prefer few high-confidence findings over many speculative ones**, and to cite `file:line` for every claim about existing code.
 
+If you cannot read the repository — sandbox failure, missing files, any
+environmental block — do NOT return a VERDICT line. Return exactly:
+
+STATUS: INCOMPLETE
+REASON: {what blocked you}
+
+A verdict you cannot support by reading the code is worse than no verdict.
+
 ## Phase 2e: Integrity Guard (danger-full-access only)
 
 Skip this phase entirely when `SANDBOX_MODE` is `read-only` — a read-only
@@ -316,6 +324,17 @@ Codex was asked to review, not modify. Inspect these before trusting the review.
 ```
 
 Then continue with the normal report. A clean guard needs no mention.
+
+**If the review begins `STATUS: INCOMPLETE`**, it is not a review. Report it as an environment failure, quote the `REASON:` verbatim, and state that no design conclusion follows:
+
+```
+Codex could not complete this review: {REASON}
+Nothing was inspected, so no design conclusion follows — this is not a signal
+either way about the document.
+```
+
+Skip Phase 4b entirely; there are no findings to apply. Do not group it by
+severity, do not add "My take", and never present it as a verdict.
 
 Present Codex's review in the conversation, grouped by severity, Blocking first. Keep its wording for the findings themselves — the value here is an independent voice, not your paraphrase.
 
