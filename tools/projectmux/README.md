@@ -89,7 +89,10 @@ a workspace at login would race for the same tmux server.
 
 Removing `tools/dev/` deleted the sources. It did not remove what they
 installed: the `dev-autostart` user unit, the event hooks resident in a running
-tmux server, and `~/.local/state/dev`. Run once per machine:
+tmux server, and `~/.local/state/dev`. Run once per machine, from a checkout
+that already has this change — the removal of the `dev-workspace-config` marker
+block from `tools/tmux/tmux.conf.symlink` is what stops new tmux servers from
+re-registering the hooks the script unsets:
 
 ```bash
 bash tools/projectmux/migrate-from-dev.sh

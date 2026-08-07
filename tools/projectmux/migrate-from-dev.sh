@@ -11,10 +11,15 @@
 # directory -- a script cannot ship inside the tree it removes -- and because
 # the new application is the right owner of the migration off the old one.
 #
-# Idempotent, and safe to run before or after the deletion lands: nothing here
-# tests for a tools/dev/ file. Hooks are matched by the `dev-event` command
-# string they still carry, which is the only evidence that survives in a
-# server started weeks ago.
+# Idempotent, but ORDER MATTERS: run it only from a checkout that no longer
+# has the `dev-workspace-config` marker block in tools/tmux/tmux.conf.symlink.
+# While that block is present, every new tmux server sources dev.tmux.conf and
+# re-registers the hooks, so unsetting them here is undone by the next server
+# start. Nothing in this script tests for a tools/dev/ file, so it cannot
+# detect that situation for you.
+#
+# Hooks are matched by the `dev-event` command string they still carry, which
+# is the only evidence that survives in a server started weeks ago.
 
 set -euo pipefail
 
@@ -72,7 +77,17 @@ systemd_user_available() {
 # server at login, and a window where both are enabled is a race.
 migrate_service() {
   if ! systemd_user_available; then
-    log_info "No systemd user manager available; skipping unit migration."
+    if [[ -e "$DEV_UNIT" ]]; then
+      # Deliberately left in place. Deleting the unit file while unable to
+      # `systemctl --user disable` it strands the enablement symlink in
+      # default.target.wants/, which then fails on every login pointing at a
+      # unit that no longer exists. Keeping the pair intact keeps the machine
+      # consistent and this script re-runnable.
+      log_warning "No systemd user manager available; $DEV_UNIT_NAME left in place."
+      log_warning "Re-run from a session with a user manager to finish the unit migration."
+    else
+      log_info "No systemd user manager available; skipping unit migration."
+    fi
     return 0
   fi
 

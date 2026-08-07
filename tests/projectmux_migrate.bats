@@ -13,6 +13,10 @@ setup() {
   setup_dotfiles_test
   export PATH="$STUB_BIN:/usr/bin:/bin"
   export DEV_SKIP_SERVICE=1
+  # The script derives the unit path from XDG_CONFIG_HOME, which the helper
+  # does not sandbox. An inherited value would aim these tests at the real
+  # ~/.config/systemd/user.
+  export XDG_CONFIG_HOME="$TEST_ROOT/config"
   export DEV_STATE_ROOT="$TEST_ROOT/state/dev"
   export MIGRATE_BACKUP_SUFFIX="20260807"
   export PROJECTMUX_TMUX_SOCKET="pmxmigrate-$$-$BATS_TEST_NUMBER"
@@ -131,4 +135,20 @@ managed_hook() {
   run "$MIGRATE"
   [ "$status" -eq 0 ]
   [[ "$output" == *"No systemd user manager available"* ]]
+}
+
+@test "an installed legacy unit is preserved, with a warning, when systemd is unreachable" {
+  # Removing the unit file without being able to disable it would strand the
+  # default.target.wants/ symlink pointing at a unit that no longer exists,
+  # failing on every login. Preserving both keeps the pair consistent and the
+  # script re-runnable -- but the run is incomplete, so it must say so.
+  mkdir -p "$XDG_CONFIG_HOME/systemd/user"
+  local unit="$XDG_CONFIG_HOME/systemd/user/dev-autostart.service"
+  printf 'installed\n' >"$unit"
+
+  run "$MIGRATE"
+  [ "$status" -eq 0 ]
+  [ -f "$unit" ]
+  [[ "$output" == *"left in place"* ]]
+  [[ "$output" == *"Re-run"* ]]
 }
