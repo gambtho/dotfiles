@@ -19,8 +19,8 @@ source "$DOTFILES_ROOT/config/versions.env"
 
 PROJECTMUX_INSTALL_DIR="${PROJECTMUX_INSTALL_DIR:-$HOME/.local/bin}"
 PROJECTMUX_BIN="$PROJECTMUX_INSTALL_DIR/projectmux"
-PROJECTMUX_STATE_DIR="${PROJECTMUX_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/projectmux}"
-MARKER_FILE="$PROJECTMUX_STATE_DIR/installed-version"
+PROJECTMUX_STATE_ROOT="${PROJECTMUX_STATE_ROOT:-${XDG_STATE_HOME:-$HOME/.local/state}/projectmux}"
+MARKER_FILE="$PROJECTMUX_STATE_ROOT/installed-version"
 PROJECTMUX_CONFIG_ROOT="${PROJECTMUX_CONFIG_ROOT:-${XDG_CONFIG_HOME:-$HOME/.config}/projectmux}"
 DEFAULTS_TEMPLATE="$DOTFILES_ROOT/tools/projectmux/defaults.yaml.template"
 SYSTEMD_USER_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
@@ -133,8 +133,8 @@ installed_marker() {
 # file, so a concurrent reader never sees a half-written version string.
 write_marker() {
   local value="$1"
-  prepare_destination_directory "$PROJECTMUX_STATE_DIR"
-  STAGED_MARKER=$(mktemp "$PROJECTMUX_STATE_DIR/.installed-version.XXXXXX")
+  prepare_destination_directory "$PROJECTMUX_STATE_ROOT"
+  STAGED_MARKER=$(mktemp "$PROJECTMUX_STATE_ROOT/.installed-version.XXXXXX")
   printf '%s\n' "$value" >"$STAGED_MARKER"
   chmod 0644 "$STAGED_MARKER"
   publish_file "$STAGED_MARKER" "$MARKER_FILE"
@@ -201,7 +201,7 @@ install_pinned_binary() {
   esac
 
   prepare_destination_directory "$bin_dir"
-  prepare_destination_directory "$PROJECTMUX_STATE_DIR"
+  prepare_destination_directory "$PROJECTMUX_STATE_ROOT"
   validate_install_target "$PROJECTMUX_BIN"
 
   # Both halves of this condition are load-bearing; do not reduce it to the
@@ -344,7 +344,7 @@ report_plan() {
   printf 'ProjectMux install plan:\n'
   printf '  version:    %s\n' "$PROJECTMUX_VERSION"
   printf '  binary:     %s\n' "$PROJECTMUX_BIN"
-  printf '  state:      %s\n' "$PROJECTMUX_STATE_DIR"
+  printf '  state:      %s\n' "$PROJECTMUX_STATE_ROOT"
   printf '  config:     %s\n' "$PROJECTMUX_CONFIG_ROOT"
   printf '  unit:       %s (written, not enabled)\n' "$SERVICE_UNIT"
   printf '  installed:  %s\n' "$(installed_marker || printf '(none)')"

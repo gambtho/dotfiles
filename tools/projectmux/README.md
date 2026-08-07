@@ -98,7 +98,7 @@ systemctl --user enable --now projectmux-autostart.service
 |---|---|---|
 | `PROJECTMUX_LOCAL_BINARY` | unset | Symlink this build instead of installing the pin |
 | `PROJECTMUX_INSTALL_DIR` | `~/.local/bin` | Where the binary is published |
-| `PROJECTMUX_STATE_DIR` | `$XDG_STATE_HOME/projectmux` | Holds `installed-version` |
+| `PROJECTMUX_STATE_ROOT` | `$XDG_STATE_HOME/projectmux` | Holds `installed-version` |
 | `PROJECTMUX_CONFIG_ROOT` | `$XDG_CONFIG_HOME/projectmux` | Holds `defaults.yaml` and `workspaces/` |
 | `PROJECTMUX_REPOSITORY_ROOTS` | `$DEV_REPO_ROOT`, else `~/workspace` | `:`-separated roots written into `defaults.yaml` |
 

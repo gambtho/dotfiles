@@ -13,7 +13,7 @@ setup() {
 source_installer() {
   run env PROJECTMUX_INSTALL_SOURCE_ONLY=1 \
     PROJECTMUX_INSTALL_DIR="$TEST_ROOT/bin" \
-    PROJECTMUX_STATE_DIR="$TEST_ROOT/state" \
+    PROJECTMUX_STATE_ROOT="$TEST_ROOT/state" \
     PROJECTMUX_CONFIG_ROOT="$TEST_ROOT/config/projectmux" \
     "$@"
 }
@@ -271,7 +271,7 @@ source_installer() {
 @test "pinned install publishes a regular file and records the version" {
   run env PROJECTMUX_INSTALL_SOURCE_ONLY=1 \
     PROJECTMUX_INSTALL_DIR="$TEST_ROOT/bin" \
-    PROJECTMUX_STATE_DIR="$TEST_ROOT/state" \
+    PROJECTMUX_STATE_ROOT="$TEST_ROOT/state" \
     bash -c '
       source "$1/tools/projectmux/install.sh"
       download_verified_artifact() { printf "binary" >"$3"; }
@@ -280,7 +280,7 @@ source_installer() {
     ' _ "$REPO_ROOT"
 
   [ "$status" -eq 0 ]
-  [[ "$output" == *"MARKER=v0.1.0"* ]]
+  [[ "$output" == *"MARKER=v0.2.0"* ]]
   [ -f "$TEST_ROOT/bin/projectmux" ]
   [ ! -L "$TEST_ROOT/bin/projectmux" ]
   [ -x "$TEST_ROOT/bin/projectmux" ]
@@ -290,13 +290,13 @@ source_installer() {
   mkdir -p "$TEST_ROOT/bin" "$TEST_ROOT/state"
   printf 'installed' >"$TEST_ROOT/bin/projectmux"
   chmod 0755 "$TEST_ROOT/bin/projectmux"
-  printf 'v0.1.0\n' >"$TEST_ROOT/state/installed-version"
+  printf 'v0.2.0\n' >"$TEST_ROOT/state/installed-version"
 
   # return 99 rather than a stub download: if the short-circuit fails to fire,
   # the install errors instead of quietly succeeding with fabricated content.
   run env PROJECTMUX_INSTALL_SOURCE_ONLY=1 \
     PROJECTMUX_INSTALL_DIR="$TEST_ROOT/bin" \
-    PROJECTMUX_STATE_DIR="$TEST_ROOT/state" \
+    PROJECTMUX_STATE_ROOT="$TEST_ROOT/state" \
     bash -c '
       source "$1/tools/projectmux/install.sh"
       download_verified_artifact() { return 99; }
@@ -309,7 +309,7 @@ source_installer() {
   # Exact equality, not a substring: the short-circuit compares installed_marker
   # to the bare tag, so a future change that leaves stray whitespace in the
   # marker read must fail this test rather than pass on a loose match.
-  [ "${lines[-1]}" = "EXACT=v0.1.0" ]
+  [ "${lines[-1]}" = "EXACT=v0.2.0" ]
 }
 
 @test "a matching marker with a symlink destination still reinstalls" {
@@ -319,11 +319,11 @@ source_installer() {
   ln -s "$TEST_ROOT/local/projectmux" "$TEST_ROOT/bin/projectmux"
   # The pathological pair the Reconciliation invariant describes: a pinned
   # marker naming a version the destination does not actually hold.
-  printf 'v0.1.0\n' >"$TEST_ROOT/state/installed-version"
+  printf 'v0.2.0\n' >"$TEST_ROOT/state/installed-version"
 
   run env PROJECTMUX_INSTALL_SOURCE_ONLY=1 \
     PROJECTMUX_INSTALL_DIR="$TEST_ROOT/bin" \
-    PROJECTMUX_STATE_DIR="$TEST_ROOT/state" \
+    PROJECTMUX_STATE_ROOT="$TEST_ROOT/state" \
     bash -c '
       source "$1/tools/projectmux/install.sh"
       download_verified_artifact() { printf "pinned" >"$3"; }
@@ -346,7 +346,7 @@ source_installer() {
 
   run env PROJECTMUX_INSTALL_SOURCE_ONLY=1 \
     PROJECTMUX_INSTALL_DIR="$TEST_ROOT/bin" \
-    PROJECTMUX_STATE_DIR="$TEST_ROOT/state" \
+    PROJECTMUX_STATE_ROOT="$TEST_ROOT/state" \
     bash -c '
       source "$1/tools/projectmux/install.sh"
       download_verified_artifact() { printf "pinned" >"$3"; }
@@ -355,7 +355,7 @@ source_installer() {
     ' _ "$REPO_ROOT"
 
   [ "$status" -eq 0 ]
-  [[ "$output" == *"MARKER=v0.1.0"* ]]
+  [[ "$output" == *"MARKER=v0.2.0"* ]]
   [ -f "$TEST_ROOT/bin/projectmux" ]
   [ ! -L "$TEST_ROOT/bin/projectmux" ]
   [ "$(cat "$TEST_ROOT/bin/projectmux")" = pinned ]
@@ -369,7 +369,7 @@ source_installer() {
 
   run env PROJECTMUX_INSTALL_SOURCE_ONLY=1 \
     PROJECTMUX_INSTALL_DIR="$TEST_ROOT/bin" \
-    PROJECTMUX_STATE_DIR="$TEST_ROOT/state" \
+    PROJECTMUX_STATE_ROOT="$TEST_ROOT/state" \
     bash -c '
       source "$1/tools/projectmux/install.sh"
       download_verified_artifact() { printf "checksum mismatch\n" >&2; return 1; }

@@ -27,7 +27,7 @@ setup() {
   [[ "$output" == *"artifact yq v4.45.1"* ]]
   [[ "$output" == *"artifact win32yank v0.1.1"* ]]
   [[ "$output" == *"artifact vekil v0.14.0"* ]]
-  [[ "$output" == *"artifact projectmux v0.1.0"* ]]
+  [[ "$output" == *"artifact projectmux v0.2.0"* ]]
   [[ "$output" == *"artifact nerd-fonts v3.4.0"* ]]
   [[ "$output" == *"artifact nerd-font-cascadia-mono v3.4.0 $NERD_FONT_CASCADIA_MONO_SHA256"* ]]
   [[ "$output" == *"artifact nerd-font-hack v3.4.0 $NERD_FONT_HACK_SHA256"* ]]
@@ -112,7 +112,7 @@ case "$url" in
     printf 'curl: (22) The requested URL returned error: 404\n' >&2
     exit 22
     ;;
-  *gambtho/projectmux/releases) printf '[{"tag_name":"v0.1.0","prerelease":true}]\n' ;;
+  *gambtho/projectmux/releases) printf '[{"tag_name":"v0.2.0","prerelease":true}]\n' ;;
 esac
 SCRIPT
   chmod +x "$STUB_BIN/curl"
@@ -125,7 +125,7 @@ SCRIPT
   [[ "$output" == *"current artifact yq v4.45.1"* ]]
   [[ "$output" == *"current artifact win32yank v0.1.1"* ]]
   [[ "$output" == *"current artifact vekil v0.14.0"* ]]
-  [[ "$output" == *"current artifact projectmux v0.1.0"* ]]
+  [[ "$output" == *"current artifact projectmux v0.2.0"* ]]
   [[ "$output" == *"current artifact nerd-fonts v3.4.0"* ]]
 }
 
