@@ -2,7 +2,7 @@
 name: codex-review
 description: Get a second opinion from Codex on a spec or implementation plan — reviews the doc you have been working on, against the actual code
 argument-hint: "[path — defaults to the doc most recently discussed in this session] [--with-spec | --with-plan]"
-allowed-tools: Bash(codex --version), Bash(codex exec:*), Bash(git rev-parse:*), Bash(git branch:*), Bash(git status:*), Bash(git diff:*), Bash(ls:*), Bash(test:*), Bash(bwrap --ro-bind / / --dev /dev true), Bash(sha256sum:*), Bash(mktemp:*), Bash(rm -rf /tmp/codex-review-*), Read, Write, Edit, Glob, Grep
+allowed-tools: Bash(codex --version), Bash(codex exec:*), Bash(cd:*), Bash(git rev-parse:*), Bash(git branch:*), Bash(git status:*), Bash(git diff:*), Bash(ls:*), Bash(test:*), Bash(bwrap --ro-bind / / --dev /dev true), Bash(sha256sum:*), Bash(mktemp:*), Bash(rm -rf /tmp/codex-review-*), Read, Write, Edit, Glob, Grep
 ---
 
 # Codex Review — Second Opinion on a Spec or Plan
@@ -269,7 +269,7 @@ git diff HEAD
 sha256sum {absolute path of each document resolved in Phase 1, quoted}
 ```
 
-Run this Bash call with `ROOT` as its working directory, and give `sha256sum` absolute quoted paths — never bare relative ones. Phase 0d supports reviewing a doc in a *different* worktree than the session's, and there a bare `git status` in the session's directory reports on the wrong checkout, and the guard reports clean no matter what Codex wrote. Do **not** reach for `git -C` instead: this command's frontmatter grants `Bash(git status:*)`, which `git -C ...` does not match, so it would prompt.
+Run all three from `ROOT`, as `cd "$ROOT" && {command}`, and give `sha256sum` absolute quoted paths — never bare relative ones. Phase 0d supports reviewing a doc in a *different* worktree than the session's, and there a bare `git status` in the session's directory reports on the wrong checkout, and the guard reports clean no matter what Codex wrote. `cd` is the form to use because it is the only way to set a Bash call's working directory, and this command's frontmatter grants `Bash(cd:*)` for it. Do **not** reach for `git -C` instead: the frontmatter grants `Bash(git status:*)`, which `git -C ...` does not match, so it would prompt.
 
 Store them as `PRE_STATUS`, `PRE_DIFF`, and `PRE_HASHES`.
 
@@ -289,11 +289,13 @@ the repo — the smaller half of the exposure.
 A mismatch in any of the three captures is reported in Phase 4a. Do not repair,
 revert, or stage anything: report it and let the user decide.
 
-One gap remains by choice: a file that was already untracked before the run
+Two gaps remain by choice. A file that was already untracked before the run
 shows `?? path` in both captures and is not covered by `git diff HEAD`, so a
-write into a pre-existing untracked file is invisible. Closing it means hashing
-every file under `ROOT` twice per review. Untracked files *appearing* or
-*disappearing* are caught by the status comparison.
+write into a pre-existing untracked file is invisible. A file matched by
+`.gitignore` is absent from all three captures entirely, so a write into an
+ignored file is invisible whether or not it existed before. Closing either
+means hashing every file under `ROOT` twice per review. Untracked files
+*appearing* or *disappearing* are still caught by the status comparison.
 
 ---
 
@@ -327,14 +329,14 @@ This takes a few minutes on a substantial plan. If the Bash call times out, say 
 | Connection refused to `172.17.0.1:1337` | Vekil proxy is down | Tell the user; do not fall back to a direct API call |
 | Codex reports `main` as the branch, or can't find the doc | `-C` pointed at the main checkout, not the worktree (Phase 0d) | Re-derive `ROOT` and re-run |
 | Git commands fail inside Codex, in a worktree only | Sandbox can't reach `.git/worktrees/` in the main checkout | Re-run with `--add-dir {main checkout}/.git`; report if that's needed, it's a regression |
-| `bwrap: No permissions to create a new namespace`, or `bwrap: Creating new namespace failed` | The container forbids user namespaces; Codex's Linux sandbox cannot initialize | Detection missed the container. Follow **Re-entry after a missed container** below |
+| Any `bwrap:` error, or any message about creating, entering, or having permission for a namespace — e.g. `bwrap: No permissions to create a new namespace`, `bwrap: Creating new namespace failed` | The container forbids user namespaces; Codex's Linux sandbox cannot initialize | Detection missed the container. Follow **Re-entry after a missed container** below |
 | Non-zero exit | Run failed | Report the stderr tail verbatim; do not fabricate a review |
 
-bwrap's wording varies by build, so both observed forms are listed. Phase 0e keys off the probe's **exit status**, never the message text.
+bwrap's wording varies by build, so match the *shape* of the failure rather than either exact string — the two above are the observed forms, not the whole set, and a wording that falls through to `Non-zero exit` loses the re-entry that makes the review possible at all. Phase 0e's probe has no such problem: it keys off the **exit status**, never the message text.
 
 Match the specific rows before the general one: `Non-zero exit` is the fallback for a failure none of the rows above describe. A non-zero exit means the output is not a review, whether or not `review.md` exists. A run that fails partway can leave a partial or stale `review.md` behind; do not read it as findings, do not group it by severity, and do not add a verdict to it.
 
-**Re-entry after a missed container.** The bwrap rows fire exactly when Phase 0e chose `read-only` for a container that cannot initialize bubblewrap — so Phase 2e was skipped and no pre-run captures exist. Do **not** re-run with a hand-edited `--sandbox` flag: that runs Codex unsandboxed against a bind-mounted working tree with no integrity guard, which is the one case the guard exists for. Instead:
+**Re-entry after a missed container.** The bwrap row fires exactly when Phase 0e chose `read-only` for a container that cannot initialize bubblewrap — so Phase 2e was skipped and no pre-run captures exist. Do **not** re-run with a hand-edited `--sandbox` flag: that runs Codex unsandboxed against a bind-mounted working tree with no integrity guard, which is the one case the guard exists for. Instead:
 
 1. Report that detection missed the container, and say which markers you checked.
 2. Set `SANDBOX_MODE` to `danger-full-access`.

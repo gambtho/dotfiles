@@ -100,8 +100,36 @@ setup() {
   [ "$status" -eq 0 ]
 }
 
+@test "codex-review can cd to the reviewed tree without prompting" {
+  # The captures must run from ROOT, and `cd` is the only way to set a Bash
+  # call's working directory -- so the grant has to be there or the guard
+  # stops for a permission prompt mid-preflight.
+  # Pinned with a frontmatter neighbour: the prose below also names
+  # `Bash(cd:*)`, so a bare substring match survives deleting the grant.
+  run grep -F 'Bash(codex exec:*), Bash(cd:*),' "$CODEX_REVIEW"
+  [ "$status" -eq 0 ]
+  run grep -F 'as `cd "$ROOT" && {command}`' "$CODEX_REVIEW"
+  [ "$status" -eq 0 ]
+}
+
+@test "codex-review matches any bwrap namespace failure, not two exact strings" {
+  # A third bwrap wording falling through to the generic `Non-zero exit` row
+  # loses the re-entry -- the whole point of the branch.
+  run grep -F 'Any `bwrap:` error, or any message about creating, entering, or having permission for a namespace' "$CODEX_REVIEW"
+  [ "$status" -eq 0 ]
+  run grep -F 'the two above are the observed forms, not the whole set' "$CODEX_REVIEW"
+  [ "$status" -eq 0 ]
+}
+
+@test "codex-review names the ignored-file gap in the integrity guard" {
+  run grep -F 'A file matched by' "$CODEX_REVIEW"
+  [ "$status" -eq 0 ]
+  run grep -F 'is absent from all three captures entirely' "$CODEX_REVIEW"
+  [ "$status" -eq 0 ]
+}
+
 @test "codex-review anchors the integrity captures to the reviewed tree" {
-  run grep -F 'Run this Bash call with `ROOT` as its working directory' "$CODEX_REVIEW"
+  run grep -F 'Run all three from `ROOT`' "$CODEX_REVIEW"
   [ "$status" -eq 0 ]
   run grep -F 'reports on the wrong checkout, and the guard reports clean no matter what Codex wrote' "$CODEX_REVIEW"
   [ "$status" -eq 0 ]
