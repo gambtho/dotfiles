@@ -32,6 +32,13 @@ bind j select-pane -D
 bind k select-pane -U
 bind l select-pane -R
 
+# prefix U: copy the URL out of the current pane, reassembling it from the
+# screen lines a full-screen TUI wrapped it across. Mouse selection cannot do
+# this -- see bin/tmux-copy-url for why. Bound here rather than in
+# agent-teams-extras.conf because that file is sourced only when win32yank is
+# present, while this works on any host (buffer-only without a clipboard tool).
+bind-key U run-shell '~/.dotfiles/bin/tmux-copy-url "#{pane_id}"'
+
 # Optional: status bar on top (uncomment if preferred)
 # set -g status-position top
 
