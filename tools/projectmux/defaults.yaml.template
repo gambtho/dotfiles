@@ -16,11 +16,33 @@ devcontainer:
   enabled: auto
   start_timeout: 5m
 
+# Every pane runs through an interactive login zsh rather than the default.
+#
+# ProjectMux execs container panes as `sh -lc '<command>'`, and /bin/sh is dash.
+# Vekil is sourced from ~/.zshrc, which zsh only reads when *interactive* -- so
+# neither `sh -lc` nor `zsh -lc` loads it, and the agent would talk straight to
+# Anthropic instead of the proxy. The failure is silent: the agent runs fine,
+# just against the wrong endpoint.
+#
+# `zsh -lic` loads the full dotfiles, letting ai/vekil/env.zsh compute the
+# endpoint itself -- host.docker.internal inside a container, the proxy-host
+# state file outside -- rather than freezing a host and port here. It also sets
+# the VEKIL_MANAGED_* pair that `claude-direct` needs to opt back out.
+#
+# Do not use `agent: claude` or `shell: true`: the first renders a bare `claude`
+# argv and the second an empty command, and both land the pane in dash. The
+# secondary pane must be declared explicitly, because ProjectMux otherwise
+# injects a `{shell: true}` pane of its own (its two-pane-windows default).
+#
+# `exec` replaces the shell so no extra process sits between tmux and the agent.
+#
+# One window, one agent, one shell, split 50/50 side-by-side. A ProjectMux
+# session is already scoped to a single worktree, so working several worktrees
+# at once means several sessions rather than several windows.
 windows:
-  - name: agent-1
-    agent: claude
+  - name: agent
+    command: zsh -lic 'exec claude'
     focus: true
-  - name: agent-2
-    agent: claude
-  - name: shell
-    shell: true
+    panes:
+      - name: shell
+        command: exec zsh -li

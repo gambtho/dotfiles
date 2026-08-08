@@ -393,7 +393,18 @@ source_installer() {
   grep -Fq "  - '$TEST_ROOT/workspace'" "$config"
   grep -Fq "  - '$TEST_ROOT/other'" "$config"
   [[ "$(cat "$config")" != *"@REPOSITORY_ROOTS@"* ]]
-  grep -Fq 'shell: true' "$config"
+  # Every pane command must reach an *interactive* login zsh. ProjectMux execs
+  # container panes as `sh -lc '<command>'` and /bin/sh is dash, so vekil --
+  # sourced from ~/.zshrc, which only runs when interactive -- never loads and
+  # the agent silently talks straight to Anthropic instead of the proxy.
+  grep -Fq "    command: zsh -lic 'exec claude'" "$config"
+  grep -Fq "        command: exec zsh -li" "$config"
+  # The two forms that reintroduce that bug: `agent:` renders as a bare
+  # `claude` argv, and `shell: true` renders an empty command, landing the pane
+  # in dash either way. Anchored to a YAML key at line start -- an unanchored
+  # substring also matches the template comment warning against these forms.
+  ! grep -Eq "^[[:space:]]*-?[[:space:]]*agent:" "$config"
+  ! grep -Eq "^[[:space:]]*-?[[:space:]]*shell:[[:space:]]*true" "$config"
   # command: null sets zero window modes and fails v1 validation.
   [[ "$(cat "$config")" != *"command: null"* ]]
   [ -d "$TEST_ROOT/config/projectmux/workspaces" ]
