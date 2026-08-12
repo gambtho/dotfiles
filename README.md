@@ -246,6 +246,43 @@ lockfile. To intentionally update Neovim plugins, open Neovim and run
 `config/nvim/lazy-lock.json`, and commit it once you're satisfied with the
 change.
 
+## Terminal Theme (WSL)
+
+On WSL, `bin/install` applies the Tokyo Night color scheme to Windows Terminal
+(`platforms/windows/wt-color-scheme.sh`), so the terminal matches Herdr's UI
+theme and Neovim's `tokyonight-night`. Windows Terminal ships no Tokyo Night
+built-in and otherwise falls back to Campbell.
+
+The scheme becomes the default for every profile. Profiles that set their own
+`colorScheme` keep it, and the script names them when it finishes. It is
+idempotent — re-runs exit early once applied — and it backs up `settings.json`
+before rewriting it. A `settings.json` containing comments is refused rather
+than mangled, since `jq` cannot round-trip JSONC.
+
+Run it by hand with `--dry-run` to preview the diff, or `--check` to test
+whether it has been applied:
+
+```bash
+platforms/windows/wt-color-scheme.sh --check
+```
+
+If several directories exist under `/mnt/c/Users` (Entra-joined machines
+usually carry service-account directories alongside the real one), discovery is
+ambiguous. Pick one with `--win-user NAME`, or set `WT_WINDOWS_USER` in
+`~/.localrc` (sourced by `core/shell/load-custom.zsh`) so the install phase
+resolves it unattended:
+
+```bash
+echo 'export WT_WINDOWS_USER=yourname' >> ~/.localrc
+```
+
+Without it, the install phase warns and is skipped rather than prompting.
+
+`platforms/windows/setup-wt-claude-profiles.sh` — which adds Windows Terminal
+profiles for the Claude + tmux workflow — is a separate manual step. It prompts
+per project, so it is a decision to make once rather than an unattended part of
+every install.
+
 ## Runtime Manager
 
 All language runtimes are managed by [mise](https://mise.jdx.dev/). Versions are defined

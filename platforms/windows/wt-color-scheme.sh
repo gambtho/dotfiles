@@ -13,15 +13,25 @@
 # Run from inside WSL.
 #
 # Usage:
-#   ./wt-color-scheme.sh              # install and set as default
-#   ./wt-color-scheme.sh --dry-run    # print the diff, write nothing
-#   ./wt-color-scheme.sh --check      # exit 0 if already applied, 1 if not
+#   ./wt-color-scheme.sh                      # install and set as default
+#   ./wt-color-scheme.sh --dry-run            # print the diff, write nothing
+#   ./wt-color-scheme.sh --check              # exit 0 if applied, 1 if not
+#   ./wt-color-scheme.sh --win-user thgamble  # skip Windows-user discovery
 #
 # Idempotent: the scheme is matched by name, so re-runs replace it in place
 # rather than appending duplicates.
 #
 # Profiles that set their own "colorScheme" are left alone -- an explicit
 # per-profile choice outranks the default. The "Tmux" profile is one of these.
+#
+# Windows user: a single directory under /mnt/c/Users is used automatically.
+# When several exist -- an Entra/AzureAD machine typically carries a couple of
+# service-account directories alongside the real one -- pick with --win-user or
+# $WT_WINDOWS_USER (the same variable the profiles script reads). Only when
+# neither is supplied *and* stdin is a terminal does this prompt. A
+# non-interactive run fails with that instruction rather than tripping over the
+# unset variable `select` leaves behind, which is what lets bin/install call
+# this unattended.
 #
 # Testing hook: WT_SETTINGS_PATH overrides settings.json discovery.
 
@@ -39,16 +49,43 @@ SCHEME_NAME="Tokyo Night"
 
 DRY_RUN=0
 CHECK_ONLY=0
-for arg in "$@"; do
-  case "$arg" in
+# Seeded from the environment so --win-user can override it below. Same
+# variable name the profiles script uses, so one export covers both.
+WIN_USER_CHOICE="${WT_WINDOWS_USER:-}"
+
+# A Windows username is neither empty nor option-like, and accepting either
+# silently loses the flag that followed: `--win-user --check` took --check as
+# the username and then *wrote* settings.json instead of checking it. An empty
+# value is just as quiet -- it falls through to discovery as if the flag were
+# never passed.
+validate_win_user() {
+  [[ -n "$1" && "$1" != -* ]] || die "--win-user requires a value."
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
     --dry-run) DRY_RUN=1 ;;
     --check) CHECK_ONLY=1 ;;
+    --win-user)
+      [[ $# -ge 2 ]] || die "--win-user requires a value."
+      validate_win_user "$2"
+      WIN_USER_CHOICE="$2"
+      shift
+      ;;
+    --win-user=*)
+      validate_win_user "${1#*=}"
+      WIN_USER_CHOICE="${1#*=}"
+      ;;
     -h | --help)
-      sed -n '2,26p' "${BASH_SOURCE[0]}"
+      # Print the leading comment block rather than a hardcoded line range:
+      # the range silently starts truncating the help the first time anyone
+      # adds a line to the header.
+      awk 'NR > 1 && /^#/ { print; next } NR > 1 { exit }' "${BASH_SOURCE[0]}"
       exit 0
       ;;
-    *) die "Unknown argument: $arg" ;;
+    *) die "Unknown argument: $1" ;;
   esac
+  shift
 done
 
 command -v jq >/dev/null || die "jq is required (sudo apt install jq)."
@@ -63,20 +100,34 @@ if [[ -n "${WT_SETTINGS_PATH:-}" ]]; then
 else
   [[ -n "${WSL_DISTRO_NAME:-}" ]] || die "Not inside WSL (\$WSL_DISTRO_NAME unset). Run this from a WSL shell."
 
-  declare -a CANDIDATES=()
-  while IFS= read -r -d '' name; do
-    CANDIDATES+=("$name")
-  done < <(
-    find /mnt/c/Users -mindepth 1 -maxdepth 1 -type d \
-      -not -iname Public -not -iname Default -not -iname 'Default User' -not -iname 'All Users' \
-      -printf '%f\0' 2>/dev/null
-  )
-  [[ ${#CANDIDATES[@]} -gt 0 ]] || die "No Windows user directory found under /mnt/c/Users."
-  if [[ ${#CANDIDATES[@]} -eq 1 ]]; then
-    WIN_USER="${CANDIDATES[0]}"
+  if [[ -n "$WIN_USER_CHOICE" ]]; then
+    WIN_USER="$WIN_USER_CHOICE"
+    [[ -d "/mnt/c/Users/$WIN_USER" ]] ||
+      die "No such Windows user directory: /mnt/c/Users/$WIN_USER"
   else
-    echo "Multiple Windows users found:"
-    select WIN_USER in "${CANDIDATES[@]}"; do [[ -n "$WIN_USER" ]] && break; done
+    declare -a CANDIDATES=()
+    while IFS= read -r -d '' name; do
+      CANDIDATES+=("$name")
+    done < <(
+      find /mnt/c/Users -mindepth 1 -maxdepth 1 -type d \
+        -not -iname Public -not -iname Default -not -iname 'Default User' -not -iname 'All Users' \
+        -printf '%f\0' 2>/dev/null
+    )
+    [[ ${#CANDIDATES[@]} -gt 0 ]] || die "No Windows user directory found under /mnt/c/Users."
+    if [[ ${#CANDIDATES[@]} -eq 1 ]]; then
+      WIN_USER="${CANDIDATES[0]}"
+    elif [[ ! -t 0 ]]; then
+      # `select` on a closed stdin returns immediately without assigning, and
+      # under `set -u` the next expansion of WIN_USER aborts with an unbound
+      # variable -- an error that says nothing about the actual problem. Fail
+      # here instead, naming the choices and the flag that resolves them.
+      die "Multiple Windows users found (${CANDIDATES[*]}). Re-run with --win-user NAME or set \$WT_WINDOWS_USER; stdin is not a terminal, so there is nothing to prompt."
+    else
+      echo "Multiple Windows users found:"
+      select WIN_USER in "${CANDIDATES[@]}"; do [[ -n "$WIN_USER" ]] && break; done
+      # A bare EOF (ctrl-D) at the prompt breaks the loop with WIN_USER unset.
+      [[ -n "${WIN_USER:-}" ]] || die "No Windows user selected."
+    fi
   fi
 
   LOCAL_PKGS="/mnt/c/Users/$WIN_USER/AppData/Local/Packages"
