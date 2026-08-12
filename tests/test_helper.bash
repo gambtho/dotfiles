@@ -5,7 +5,33 @@ setup_dotfiles_test() {
   export HOME="$TEST_ROOT/home"
   export STUB_BIN="$TEST_ROOT/bin"
   mkdir -p "$HOME" "$STUB_BIN"
-  export PATH="$STUB_BIN:/usr/bin:/bin"
+
+  # Resolve tools the sandbox needs but cannot assume are in a system
+  # directory, while the ambient PATH is still intact. bin/setup-agent-teams
+  # installs yq to /usr/local/bin and GitHub's runner image ships it in
+  # /usr/bin, so the sandbox PATH below finds it in CI and on a machine this
+  # repo provisioned -- but a yq installed any other way (mise, ~/.local/bin,
+  # Homebrew on Linux) is invisible to it, and every test exercising a
+  # yq-dependent script fails with "yq is required" on a machine that has yq
+  # right there on PATH.
+  #
+  # Symlink each tool into a dedicated directory rather than appending the
+  # directory it was found in. ~/.local/bin holds yq on this machine, but it
+  # also holds claude, codex, and herdr -- and putting all of that on the
+  # sandbox PATH resurrects the very binaries tests deliberately hide (there
+  # is a test asserting what happens when the claude CLI is *missing*). A
+  # symlink farm exposes exactly the named tools and nothing adjacent to them.
+  export SANDBOX_TOOL_BIN="$TEST_ROOT/tool-bin"
+  mkdir -p "$SANDBOX_TOOL_BIN"
+  local tool tool_path
+  for tool in yq; do
+    tool_path="$(command -v "$tool" 2>/dev/null)" || continue
+    ln -sf "$tool_path" "$SANDBOX_TOOL_BIN/$tool"
+  done
+
+  # $SANDBOX_TOOL_BIN goes last, after $STUB_BIN and the system directories,
+  # so a stub still shadows the real binary it is meant to replace.
+  export PATH="$STUB_BIN:/usr/bin:/bin:$SANDBOX_TOOL_BIN"
   # Sanitizing PATH is not enough on a machine where the interactive shell ran
   # `mise activate` (languages/mise/env.zsh). That exports mise's session state,
   # including __MISE_ORIG_PATH -- the real login PATH. Tests that source zshrc

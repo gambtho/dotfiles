@@ -4,7 +4,7 @@ load test_helper
 
 setup() {
   setup_dotfiles_test
-  export PATH="$STUB_BIN:/usr/local/bin:/usr/bin:/bin"
+  export PATH="$STUB_BIN:/usr/local/bin:/usr/bin:/bin:$SANDBOX_TOOL_BIN"
   HELPER="$REPO_ROOT/bin/claude-merge-compose-override"
   OVERRIDE="$TEST_ROOT/docker-compose.override.yml"
   SEED_FILE="$TEST_ROOT/local-seed.sh"

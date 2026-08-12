@@ -6,7 +6,7 @@ SCRIPT_PATH() { printf '%s\n' "$REPO_ROOT/platforms/windows/wt-color-scheme.sh";
 
 setup() {
   setup_dotfiles_test
-  export PATH="$STUB_BIN:/usr/local/bin:/usr/bin:/bin"
+  export PATH="$STUB_BIN:/usr/local/bin:/usr/bin:/bin:$SANDBOX_TOOL_BIN"
   SETTINGS="$TEST_ROOT/settings.json"
 }
 
