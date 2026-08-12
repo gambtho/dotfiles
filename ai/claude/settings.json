@@ -124,7 +124,7 @@
     "atomic-agents@claude-plugins-official": false,
     "superpowers@claude-plugins-official": true,
     "coderabbit@claude-plugins-official": true,
-    "supabase@claude-plugins-official": true,
+    "supabase@claude-plugins-official": false,
     "chrome-devtools-mcp@claude-plugins-official": false,
     "my@guarzo": true,
     "linear@claude-plugins-official": true,
