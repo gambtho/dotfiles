@@ -6,7 +6,7 @@ SCRIPT_PATH() { printf '%s\n' "$REPO_ROOT/platforms/windows/setup-wt-claude-prof
 
 setup() {
   setup_dotfiles_test
-  export PATH="$STUB_BIN:/usr/local/bin:/usr/bin:/bin"
+  export PATH="$STUB_BIN:/usr/local/bin:/usr/bin:/bin:$SANDBOX_TOOL_BIN"
 }
 
 @test "sourcing with WT_PROFILES_SOURCE_ONLY=1 skips host discovery outside WSL" {

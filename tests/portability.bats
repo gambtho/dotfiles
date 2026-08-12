@@ -28,6 +28,33 @@ setup() {
   [ "$status" -eq 1 ]
 }
 
+@test "the sandbox finds yq wherever it is installed" {
+  # yq lands in /usr/local/bin when bin/setup-agent-teams installs it and in
+  # /usr/bin on GitHub's runners, but a hand-installed one (mise, ~/.local/bin,
+  # Homebrew) is in neither. Without the tool-bin symlink farm every test that
+  # drives a yq-dependent script fails with "yq is required" on a machine that
+  # has yq on PATH, which is a property of the machine rather than the code.
+  if ! command -v yq >/dev/null 2>&1; then
+    skip "yq is not installed on this machine at all"
+  fi
+  run command -v yq
+  [ "$status" -eq 0 ]
+}
+
+@test "the sandbox exposes only the named tools, not their neighbours" {
+  # The tool-bin is a symlink farm rather than the directory yq was found in,
+  # because that directory is typically ~/.local/bin -- which also holds
+  # claude, codex, and herdr. Putting it on PATH wholesale un-hides binaries
+  # that tests deliberately hide; project_claude_setup_seed.bats has a case
+  # asserting behaviour when the claude CLI is *missing*, and it fails outright
+  # when the sandbox leaks a real claude.
+  run ls "$SANDBOX_TOOL_BIN"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"claude"* ]]
+  [[ "$output" != *"codex"* ]]
+  [[ "$output" != *"herdr"* ]]
+}
+
 @test "repository shell tooling avoids Bash-4-only mapfile" {
   run rg -n '(^|[[:space:]])mapfile([[:space:]]|$)' "$REPO_ROOT/bin" \
     "$REPO_ROOT"/ai/*/install.sh "$REPO_ROOT/fonts/install.sh" "$REPO_ROOT/work/install.sh"
