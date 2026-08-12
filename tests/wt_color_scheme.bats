@@ -157,6 +157,39 @@ JSON
   [[ "$output" == *"requires a value"* ]]
 }
 
+@test "--win-user rejects an empty value rather than ignoring the flag" {
+  # An empty username silently fell through to host discovery, behaving as if
+  # the flag had never been passed.
+  write_bare_settings
+
+  run env WT_SETTINGS_PATH="$SETTINGS" bash "$(SCRIPT_PATH)" --win-user "" --check
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"requires a value"* ]]
+
+  run env WT_SETTINGS_PATH="$SETTINGS" bash "$(SCRIPT_PATH)" --win-user= --check
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"requires a value"* ]]
+}
+
+@test "--win-user rejects an option-like value instead of swallowing the flag" {
+  # The sharp case: `--win-user --check` consumed --check as the username, so
+  # the run lost its read-only flag and wrote settings.json instead. Assert the
+  # file is untouched, not merely that the exit status is non-zero.
+  write_bare_settings
+  local before
+  before="$(md5sum <"$SETTINGS")"
+
+  run env WT_SETTINGS_PATH="$SETTINGS" bash "$(SCRIPT_PATH)" --win-user --check
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"requires a value"* ]]
+  [[ "$(md5sum <"$SETTINGS")" == "$before" ]]
+
+  run env WT_SETTINGS_PATH="$SETTINGS" bash "$(SCRIPT_PATH)" --win-user=--dry-run
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"requires a value"* ]]
+  [[ "$(md5sum <"$SETTINGS")" == "$before" ]]
+}
+
 @test "an unknown argument is still rejected" {
   run env WT_SETTINGS_PATH="$SETTINGS" bash "$(SCRIPT_PATH)" --nonsense
   [ "$status" -ne 0 ]

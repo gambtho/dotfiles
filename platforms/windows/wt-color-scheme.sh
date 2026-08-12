@@ -52,16 +52,30 @@ CHECK_ONLY=0
 # Seeded from the environment so --win-user can override it below. Same
 # variable name the profiles script uses, so one export covers both.
 WIN_USER_CHOICE="${WT_WINDOWS_USER:-}"
+
+# A Windows username is neither empty nor option-like, and accepting either
+# silently loses the flag that followed: `--win-user --check` took --check as
+# the username and then *wrote* settings.json instead of checking it. An empty
+# value is just as quiet -- it falls through to discovery as if the flag were
+# never passed.
+validate_win_user() {
+  [[ -n "$1" && "$1" != -* ]] || die "--win-user requires a value."
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run) DRY_RUN=1 ;;
     --check) CHECK_ONLY=1 ;;
     --win-user)
       [[ $# -ge 2 ]] || die "--win-user requires a value."
+      validate_win_user "$2"
       WIN_USER_CHOICE="$2"
       shift
       ;;
-    --win-user=*) WIN_USER_CHOICE="${1#*=}" ;;
+    --win-user=*)
+      validate_win_user "${1#*=}"
+      WIN_USER_CHOICE="${1#*=}"
+      ;;
     -h | --help)
       # Print the leading comment block rather than a hardcoded line range:
       # the range silently starts truncating the help the first time anyone
