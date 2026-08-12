@@ -1,0 +1,20 @@
+{
+  "name": "my",
+  "version": "0.1.0",
+  "description": "Personal Pi skills shared from the local AI marketplace plugin",
+  "keywords": ["pi-package"],
+  "author": "guarzo",
+  "private": true,
+  "pi": {
+    "skills": [
+      "./skills/blindspot-pass/SKILL.md",
+      "./skills/change-explainer/SKILL.md",
+      "./skills/implementation-plan/SKILL.md",
+      "./skills/improve/SKILL.md",
+      "./skills/jekyll-media-gallery/SKILL.md",
+      "./skills/overnight-improve/SKILL.md",
+      "./skills/polish-core/SKILL.md",
+      "./skills/project-claude-setup/SKILL.md"
+    ]
+  }
+}

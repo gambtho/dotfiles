@@ -1,0 +1,246 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
+PINS_FILE="$ROOT/config/versions.env"
+MISE_FILE="$ROOT/config/mise/config.toml"
+export MISE_CONFIG_DIR="$ROOT/config/mise"
+source "$ROOT/bin/common.sh"
+
+# shellcheck source=config/versions.env
+source "$PINS_FILE"
+
+usage() {
+  echo "Usage: bin/versions {list|check|update}" >&2
+}
+
+list_mise() {
+  awk '
+    function trim(value) {
+      sub(/^[[:space:]]+/, "", value)
+      sub(/[[:space:]]+$/, "", value)
+      return value
+    }
+
+    /^\[tools\]$/ { in_tools=1; next }
+    /^\[/ { in_tools=0 }
+    in_tools && /^[[:space:]]*[^#].*=/ {
+      key=$0
+      value=$0
+      sub(/=.*/, "", key)
+      sub(/^[^=]+=[[:space:]]*/, "", value)
+      sub(/[[:space:]]+#.*$/, "", value)
+      key=trim(key)
+      value=trim(value)
+      gsub(/^"|"$/, "", key)
+      gsub(/^"|"$/, "", value)
+      print "mise", key, value
+    }
+  ' "$MISE_FILE"
+}
+
+list_pins() {
+  list_mise
+  printf 'git prezto %s\n' "$PREZTO_REF"
+  printf 'git zsh-defer %s\n' "$ZSH_DEFER_REF"
+  printf 'channel kubernetes %s\n' "$KUBERNETES_CHANNEL"
+  printf 'artifact mise %s\n' "$MISE_VERSION"
+  printf 'artifact krew %s\n' "$KREW_VERSION"
+  printf 'artifact yq %s\n' "$YQ_VERSION"
+  printf 'artifact win32yank %s\n' "$WIN32YANK_VERSION"
+  printf 'artifact vekil %s\n' "$VEKIL_VERSION"
+  printf 'artifact herdr %s\n' "$HERDR_VERSION"
+  printf 'npm codex %s\n' "$CODEX_VERSION"
+  printf 'artifact nerd-fonts %s\n' "$NERD_FONTS_VERSION"
+  printf 'artifact nerd-font-cascadia-mono %s %s\n' "$NERD_FONTS_VERSION" "$NERD_FONT_CASCADIA_MONO_SHA256"
+  printf 'artifact nerd-font-hack %s %s\n' "$NERD_FONTS_VERSION" "$NERD_FONT_HACK_SHA256"
+  printf 'artifact nerd-font-meslo %s %s\n' "$NERD_FONTS_VERSION" "$NERD_FONT_MESLO_SHA256"
+}
+
+with_mise_config() {
+  local mode="$1"
+  shift
+  local config_dir
+  config_dir="$(mktemp -d)"
+  cp "$MISE_FILE" "$config_dir/config.toml"
+
+  if ! MISE_CONFIG_DIR="$config_dir" mise "$@"; then
+    rm -rf "$config_dir"
+    return 1
+  fi
+
+  if [[ "$mode" == write ]]; then
+    cp "$config_dir/config.toml" "$MISE_FILE"
+  fi
+  rm -rf "$config_dir"
+}
+
+check_git_ref() {
+  local name="$1" repo="$2" current="$3" latest
+  latest="$(git ls-remote "$repo" HEAD | awk 'NR == 1 { print $1 }')"
+  if [[ "$current" == "$latest" ]]; then
+    printf 'current git %s %s\n' "$name" "$current"
+  else
+    printf 'outdated git %s %s -> %s\n' "$name" "$current" "$latest"
+  fi
+}
+
+latest_kubernetes_channel() {
+  local stable
+  # Return curl's status explicitly. `set -e` does not reach this assignment:
+  # bash unsets errexit inside command-substitution subshells unless
+  # `inherit_errexit` is on, and every caller invokes this as `$(...)`. Without
+  # the `|| return` the trailing printf would run anyway and hand the caller an
+  # empty channel with status 0.
+  stable="$(curl "${CURL_DOWNLOAD_ARGS[@]}" --silent https://dl.k8s.io/release/stable.txt)" || return
+  printf '%s\n' "${stable%.*}"
+}
+
+latest_artifact_release() {
+  local repository="$1" response
+  response=$(curl "${CURL_DOWNLOAD_ARGS[@]}" --silent "https://api.github.com/repos/$repository/releases/latest") || return
+  jq -er '.tag_name' <<<"$response"
+}
+
+report_artifact_release() {
+  local name="$1" current="$2" latest="$3"
+  if [[ "$current" == "$latest" ]]; then
+    printf 'current artifact %s %s\n' "$name" "$current"
+  else
+    printf 'outdated artifact %s %s -> %s\n' "$name" "$current" "$latest"
+  fi
+}
+
+check_artifact_release() {
+  local name="$1" repository="$2" current="$3" latest
+  latest=$(latest_artifact_release "$repository") || {
+    printf 'error artifact %s: unable to query latest release for %s\n' "$name" "$repository" >&2
+    return 1
+  }
+  report_artifact_release "$name" "$current" "$latest"
+}
+
+latest_npm_package() {
+  local package="$1" response
+  response=$(curl "${CURL_DOWNLOAD_ARGS[@]}" --silent "https://registry.npmjs.org/$package/latest") || return
+  jq -er '.version' <<<"$response"
+}
+
+check_npm_package() {
+  local name="$1" package="$2" current="$3" latest
+  latest=$(latest_npm_package "$package") || {
+    printf 'error npm %s: unable to query latest version for %s\n' "$name" "$package" >&2
+    return 1
+  }
+  if [[ "$current" == "$latest" ]]; then
+    printf 'current npm %s %s\n' "$name" "$current"
+  else
+    printf 'outdated npm %s %s -> %s\n' "$name" "$current" "$latest"
+  fi
+}
+
+check_pins() {
+  with_mise_config read outdated --bump
+  check_git_ref prezto "$PREZTO_REPO" "$PREZTO_REF"
+  check_git_ref zsh-defer "$ZSH_DEFER_REPO" "$ZSH_DEFER_REF"
+  local latest_channel
+  latest_channel="$(latest_kubernetes_channel)" || {
+    printf 'error channel kubernetes: unable to query upstream stable channel\n' >&2
+    return 1
+  }
+  # Same shape check update_pins applies before it writes. curl can exit 0 on a
+  # truncated transfer, and comparing KUBERNETES_CHANNEL against that garbage
+  # reports "outdated ... -> <html>" — a check that says the pin is stale when
+  # nothing upstream moved.
+  [[ "$latest_channel" =~ ^v[0-9]+\.[0-9]+$ ]] || {
+    printf 'error channel kubernetes: unable to query upstream stable channel\n' >&2
+    return 1
+  }
+  if [[ "$KUBERNETES_CHANNEL" == "$latest_channel" ]]; then
+    printf 'current channel kubernetes %s\n' "$KUBERNETES_CHANNEL"
+  else
+    printf 'outdated channel kubernetes %s -> %s\n' "$KUBERNETES_CHANNEL" "$latest_channel"
+  fi
+  check_artifact_release mise jdx/mise "$MISE_VERSION"
+  check_artifact_release krew kubernetes-sigs/krew "$KREW_VERSION"
+  check_artifact_release yq mikefarah/yq "$YQ_VERSION"
+  check_artifact_release win32yank equalsraf/win32yank "$WIN32YANK_VERSION"
+  check_artifact_release vekil sozercan/vekil "$VEKIL_VERSION"
+  check_npm_package codex "@openai/codex" "$CODEX_VERSION"
+  check_artifact_release nerd-fonts ryanoasis/nerd-fonts "$NERD_FONTS_VERSION"
+  check_artifact_release herdr herdrdev/herdr "$HERDR_VERSION"
+}
+
+update_pin() {
+  local key="$1" value="$2" temporary
+  temporary="$(mktemp "${PINS_FILE}.XXXXXX")"
+  awk -F= -v key="$key" -v value="$value" '
+    $1 == key { print key "=" value; next }
+    { print }
+  ' "$PINS_FILE" >"$temporary"
+  mv "$temporary" "$PINS_FILE"
+}
+
+# Resolve a remote's HEAD into a validated full commit SHA. `git ls-remote |
+# awk` in an argument position cannot fail the caller: the pipeline's status is
+# awk's, and a dead network simply yields an empty field. Returning the value
+# through here instead lets update_pins abort before it writes an empty pin.
+resolve_remote_head() {
+  local repo="$1" sha
+  sha="$(git ls-remote "$repo" HEAD | awk 'NR == 1 { print $1 }')" || return 1
+  [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || return 1
+  printf '%s\n' "$sha"
+}
+
+update_pins() {
+  # Resolve the upstream channel BEFORE any pin is written, and gate on the
+  # lookup's exit status as well as its shape. A truncated or retried transfer
+  # can still leave something that matches the regex on stdout, so a non-zero
+  # curl must reject the run on its own -- otherwise the mise upgrade and the two
+  # Git pin writes below would land against an unverified channel report.
+  local latest_channel
+  latest_channel="$(latest_kubernetes_channel)" || {
+    printf 'error: upstream Kubernetes channel lookup failed; no pins were updated\n' >&2
+    exit 1
+  }
+  [[ "$latest_channel" =~ ^v[0-9]+\.[0-9]+$ ]] || {
+    printf 'error: unable to resolve upstream Kubernetes channel; no pins were updated\n' >&2
+    exit 1
+  }
+
+  # Both remotes resolve before either pin is written, for the same reason the
+  # channel does: a half-updated versions.env pins one dependency to a fresh
+  # HEAD and the other to an empty string, and an empty PREZTO_REF is a clone
+  # that checks out whatever the default branch happens to be that day.
+  local prezto_head zsh_defer_head
+  prezto_head="$(resolve_remote_head "$PREZTO_REPO")" || {
+    printf 'error: unable to resolve %s HEAD; no pins were updated\n' "$PREZTO_REPO" >&2
+    exit 1
+  }
+  zsh_defer_head="$(resolve_remote_head "$ZSH_DEFER_REPO")" || {
+    printf 'error: unable to resolve %s HEAD; no pins were updated\n' "$ZSH_DEFER_REPO" >&2
+    exit 1
+  }
+
+  with_mise_config write upgrade --bump --interactive
+  update_pin PREZTO_REF "$prezto_head"
+  update_pin ZSH_DEFER_REF "$zsh_defer_head"
+  printf 'operator-managed Kubernetes channel: current: %s upstream: %s\n' \
+    "$KUBERNETES_CHANNEL" "$latest_channel"
+  printf '%s\n' 'select a cluster-compatible minor manually if upstream has moved'
+  printf '%s\n' 'artifact versions unchanged: checksum-reviewed manual update required'
+  "$0" list
+  make -C "$ROOT" check
+  git -C "$ROOT" diff -- "$PINS_FILE" "$MISE_FILE"
+}
+
+case "${1:-}" in
+  list) list_pins ;;
+  check) check_pins ;;
+  update) update_pins ;;
+  *)
+    usage
+    exit 2
+    ;;
+esac

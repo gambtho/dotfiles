@@ -1,0 +1,15 @@
+#!/bin/sh
+# Stock git-lfs hook, adapted for a GLOBAL core.hooksPath. git-lfs writes these
+# per-repo, where a missing binary really is an error worth `exit 2`. The
+# dotfiles point core.hooksPath here for EVERY repo, so that exit code turns any
+# machine without git-lfs into one where clone and checkout fail outright —
+# including the repos that never touched LFS. Devcontainer images are the common
+# case: it breaks lazy.nvim's plugin clones with an error naming LFS, not the
+# container. Warn and step aside instead. A genuine LFS repo still checks out,
+# just with pointer files, which is the best available outcome without the
+# binary — and far better than no checkout at all.
+command -v git-lfs >/dev/null 2>&1 || {
+  printf >&2 '%s\n' "git-lfs not found - skipping 'git lfs post-checkout'; any LFS files are left as pointers."
+  exit 0
+}
+git lfs post-checkout "$@"

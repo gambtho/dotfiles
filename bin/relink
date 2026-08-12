@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+# bin/relink — Remove stale dotfile symlinks and re-create them from current repo layout.
+#
+# Run this after pulling a restructure branch that moved .symlink files to new
+# directories. It will:
+#   1. Find all $HOME dotfile symlinks that point into ~/.dotfiles/
+#   2. Remove any that point to paths that no longer exist (dead symlinks)
+#   3. Re-create all symlinks from *.symlink files found in the repo (excluding archived/)
+#   4. Re-create config/ directory symlinks to ~/.config/<name>
+
+set -euo pipefail
+
+source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
+
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+DOTFILES_ROOT=$(pwd -P)
+
+log_info "Relinking dotfiles from $DOTFILES_ROOT"
+
+# $HOME/.dotfiles, not $DOTFILES_ROOT: relink is frequently run from a linked
+# worktree, and pointing the stable root at one would make every project
+# overlay link resolve through a directory that gets deleted.
+ensure_stable_link_root "$HOME/.dotfiles"
+
+# Destinations skipped because a real file/dir occupies them. Collected rather
+# than aborted on, so one conflict does not block every remaining link, and
+# reported as a hard failure at exit — a warning alone is how ~/.git-hooks sat
+# uninstalled for weeks while `relink` still reported success.
+SKIPPED_DESTINATIONS=()
+
+# ── Step 1: Remove dead symlinks in $HOME pointing into this dotfiles repo ────
+
+log_info "Scanning $HOME for stale dotfiles symlinks..."
+
+removed=0
+while IFS= read -r -d '' link; do
+  target=$(readlink "$link")
+  # Only touch symlinks that point into this dotfiles repo
+  if [[ "$target" != "$DOTFILES_ROOT/"* ]]; then
+    continue
+  fi
+  # If the target no longer exists, remove the symlink
+  if [ ! -e "$link" ]; then
+    log_warning "Removing dead symlink: $link -> $target"
+    rm "$link"
+    ((removed++)) || true
+  fi
+done < <(find "$HOME" -maxdepth 1 -type l -print0)
+
+if [ "$removed" -eq 0 ]; then
+  log_info "No dead symlinks found."
+else
+  log_success "Removed $removed dead symlink(s)."
+fi
+
+# ── Step 2: Re-create symlinks from *.symlink files ───────────────────────────
+
+# Regenerate identity routing before linking, so the freshly written file is
+# picked up by the same run. Routing must follow the ACTIVE owner map: a machine
+# whose map differs from the tracked one would otherwise keep stale blocks that
+# name the wrong owner and silently leave an identity unrouted.
+routes_status=0
+regenerate_identity_routes "$DOTFILES_ROOT" || routes_status=$?
+case "$routes_status" in
+  0) log_info "Regenerated identity routing from the active owner map." ;;
+  2) log_warning "Owner map is unusable; leaving identity routing unchanged." ;;
+  *) log_error "Failed to regenerate identity routing; previous routes left in place." ;;
+esac
+
+log_info "Creating symlinks for *.symlink files..."
+
+link_managed_pairs "$DOTFILES_ROOT" "$HOME" replace-symlinks
+
+if [ ${#SKIPPED_DESTINATIONS[@]} -gt 0 ]; then
+  # log_error exits on its own, so the per-path list is emitted as warnings and
+  # the single terminating log_error comes last.
+  log_warning "Relink incomplete — ${#SKIPPED_DESTINATIONS[@]} destination(s) left UNLINKED because a real file or directory occupies them:"
+  for dst in "${SKIPPED_DESTINATIONS[@]}"; do
+    log_warning "  $dst"
+  done
+  log_error "Remove or move each path above, then re-run bin/relink."
+fi
+
+# ── Step 3: git feature gates ─────────────────────────────────────────────────
+
+# gitconfig.symlink sets worktree.useRelativePaths. Git older than 2.48 does
+# not know the key and silently ignores it, which is indistinguishable from it
+# working until a worktree fails inside a container. Warn rather than fail:
+# relink must still finish on an old machine, and the setting is inert there.
+# The key also implies extensions.relativeWorktrees, which bumps a repository
+# to core.repositoryformatversion=1 -- so a repository that has created one
+# relative worktree is unreadable by a git older than 2.48 anywhere, including
+# inside a container image. That is why the floor is reported, not assumed.
+check_relative_worktree_support() {
+  local want=2.48.0 have
+  have=$(git --version | awk '{print $3}')
+  if [ "$(printf '%s\n%s\n' "$want" "$have" | sort -V | head -1)" != "$want" ]; then
+    log_warning "git $have is older than $want; worktree.useRelativePaths is ignored."
+    log_warning "New worktrees keep absolute gitdir paths and will fail inside containers."
+    return 0
+  fi
+  log_info "git $have honors worktree.useRelativePaths."
+}
+
+check_relative_worktree_support
+
+log_success "Relink complete."

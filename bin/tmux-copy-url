@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+# Copy a line-wrapped URL out of a tmux pane into the Windows clipboard.
+#
+# Full-screen TUIs (Claude Code's login prompt, for one) draw a long URL as
+# several padded screen lines rather than one soft-wrapped line. tmux copies
+# what is on screen, so a drag-selection yields those lines joined by newlines
+# -- a broken URL. Worse, such TUIs usually enable mouse reporting, which sets
+# #{mouse_any_flag} and makes tmux forward the drag to the application instead
+# of starting a selection at all, so there is frequently nothing to copy.
+#
+# Reassemble from the pane contents instead: start at the first line opening a
+# URL, stop at the first blank line, and concatenate what lies between with the
+# trailing padding stripped.
+#
+# The copy is also left in the tmux buffer. A status-line message is not
+# reliable feedback here: a TUI repaints over it immediately, so `tmux
+# show-buffer` is the only way to confirm after the fact.
+
+pane="${1:?usage: tmux-copy-url <pane-id>}"
+
+url=$(
+  tmux capture-pane -p -t "$pane" |
+    sed 's/[[:space:]]*$//' |
+    awk '
+      /^[[:space:]]*https?:\/\// { found = 1 }
+      found && NF == 0           { exit }
+      found                      { gsub(/^[[:space:]]+/, ""); printf "%s", $0 }
+    '
+)
+
+if [[ -z "$url" ]]; then
+  tmux display-message "copy-url: no URL visible in this pane"
+  exit 0
+fi
+
+# The buffer is set unconditionally; piping to win32yank is best-effort so that
+# a host without it (a Linux box rather than WSL) still gets a usable copy.
+printf '%s' "$url" | tmux load-buffer -
+
+if command -v win32yank >/dev/null 2>&1; then
+  printf '%s' "$url" | win32yank -i --crlf
+fi
+
+tmux display-message "copy-url: copied ${#url} chars"

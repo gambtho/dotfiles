@@ -1,0 +1,205 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
+
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+DOTFILES_ROOT=$(pwd -P)
+
+# Determine active profile
+PROFILE="personal"
+if [[ -f "$HOME/.dotfiles-profile" ]]; then
+  PROFILE=$(tr -d '[:space:]' <"$HOME/.dotfiles-profile")
+fi
+
+log_info "Running install for profile: $PROFILE"
+
+# ── Phase 1: OS packages ──────────────────────────────────────────────────────
+
+update_homebrew() {
+  log_info "Updating Homebrew packages..."
+  brew update &&
+    brew upgrade &&
+    brew cleanup &&
+    brew bundle --file="$DOTFILES_ROOT/platforms/macos/brewfile" &&
+    brew bundle dump --all --force --file="$DOTFILES_ROOT/tmp/brewfile"
+}
+
+compose_apt_packages() {
+  local platform_file profile_file
+
+  case "$OS" in
+    Ubuntu) platform_file="$DOTFILES_ROOT/platforms/linux/packages/ubuntu_apt" ;;
+    WSL) platform_file="$DOTFILES_ROOT/platforms/linux/packages/wsl_apt" ;;
+    *) return 2 ;;
+  esac
+  profile_file="$DOTFILES_ROOT/profiles/packages/${PROFILE}_apt"
+  [[ -f "$profile_file" ]] || return 2
+  awk 'NF' "$DOTFILES_ROOT/platforms/linux/packages/base_apt" "$platform_file" "$profile_file" | sort -u
+}
+
+install_apt_packages() {
+  local package package_list
+  local -a apt_packages=()
+
+  log_info "Updating composed APT packages for $OS/$PROFILE..."
+  setup_package_repositories || return
+  sudo apt update >/dev/null || return
+  package_list=$(compose_apt_packages) || return
+  [[ -n "$package_list" ]] || return 1
+  while IFS= read -r package; do
+    [[ -n "$package" ]] && apt_packages+=("$package")
+  done <<<"$package_list"
+  sudo apt install -y "${apt_packages[@]}" >/dev/null || return
+  sudo apt upgrade -y >/dev/null || return
+  sudo apt autoremove -y >/dev/null || return
+  sudo apt autoclean -y >/dev/null
+}
+
+setup_package_repositories() {
+  [[ "$PROFILE" == work ]] || return 0
+  WORK_INSTALL_SOURCE_ONLY=1 source "$DOTFILES_ROOT/work/install.sh"
+  setup_work_apt_repositories
+}
+
+install_platform_packages() {
+  case "$OS" in
+    macOS)
+      update_homebrew
+      ;;
+    Ubuntu)
+      install_apt_packages
+      ;;
+    WSL)
+      install_apt_packages
+      ;;
+    *)
+      log_warning "Unsupported OS: $OS"
+      return 1
+      ;;
+  esac
+}
+
+check_unsaved_apt_packages() {
+  local audit_file manifest_file count
+  mkdir -p "$DOTFILES_ROOT/tmp"
+  audit_file="$DOTFILES_ROOT/tmp/unmanaged-apt-${OS,,}-${PROFILE}.txt"
+  manifest_file=$(mktemp "$DOTFILES_ROOT/tmp/managed-apt.XXXXXX")
+  compose_apt_packages >"$manifest_file" || {
+    rm -f -- "$manifest_file"
+    return 1
+  }
+  comm -23 <(apt-mark showmanual | sort -u) "$manifest_file" >"$audit_file"
+  count=$(wc -l <"$audit_file")
+  count=${count//[[:space:]]/}
+  log_info "Unmanaged manual APT packages: $count (details: $audit_file)"
+  rm -f -- "$manifest_file"
+}
+
+# ── Phase 2: Runtime tools ────────────────────────────────────────────────────
+
+install_languages() {
+  log_info "Installing language runtimes via mise..."
+  DOTFILES_PROFILE="$PROFILE" bash "$DOTFILES_ROOT/languages/mise/install.sh"
+}
+
+# ── Phase 3: Shell setup ──────────────────────────────────────────────────────
+
+setup_shell() {
+  bash "$DOTFILES_ROOT/core/shell/install.sh"
+}
+
+# ── Phase 4: Git setup ────────────────────────────────────────────────────────
+
+setup_git() {
+  bash "$DOTFILES_ROOT/core/git/install.sh"
+}
+
+# ── Phase 5: Neovim ───────────────────────────────────────────────────────────
+
+setup_neovim() {
+  if ! command_exists nvim; then
+    log_warning "neovim not installed. Skipping neovim plugin bootstrap."
+    return
+  fi
+  log_info "Bootstrapping neovim plugins..."
+  nvim --headless "+Lazy! restore" +qa 2>/dev/null || return
+  log_success "Neovim plugins restored from the tracked lockfile."
+}
+
+# ── Phase 6: Fonts ────────────────────────────────────────────────────────────
+
+setup_fonts() {
+  if [ -f "$DOTFILES_ROOT/fonts/install.sh" ]; then
+    bash "$DOTFILES_ROOT/fonts/install.sh"
+  fi
+}
+
+# ── Phase 7: Work tools (if work profile) ────────────────────────────────────
+
+setup_work() {
+  if [[ "$PROFILE" == "work" ]]; then
+    log_info "Running work profile install..."
+    if [ -f "$DOTFILES_ROOT/work/install.sh" ]; then
+      bash "$DOTFILES_ROOT/work/install.sh"
+    fi
+  fi
+}
+
+# ── Phase 8: Platform-specific extras ────────────────────────────────────────
+
+setup_flatpak() {
+  flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+}
+
+# ── Phase 9: AI tools ────────────────────────────────────────────────────────
+
+setup_ai() {
+  log_info "Setting up AI tools..."
+  for installer in "$DOTFILES_ROOT/ai"/*/install.sh; do
+    [ -f "$installer" ] || continue
+    local tool_name
+    tool_name=$(basename "$(dirname "$installer")")
+    run_phase optional "ai-$tool_name" bash "$installer"
+  done
+  log_success "AI tools setup complete."
+}
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+
+main() {
+  detect_os
+
+  run_phase required packages install_platform_packages
+
+  case "$OS" in
+    Ubuntu)
+      run_phase optional package-audit check_unsaved_apt_packages
+      if [[ "$PROFILE" != "server" ]]; then
+        run_phase optional flatpak setup_flatpak
+      fi
+      ;;
+    WSL)
+      run_phase optional package-audit check_unsaved_apt_packages
+      ;;
+  esac
+
+  run_phase required shell setup_shell
+  run_phase required git setup_git
+  run_phase required runtimes install_languages
+  run_phase optional neovim setup_neovim
+  if [[ "$PROFILE" != "server" ]]; then
+    run_phase optional fonts setup_fonts
+  fi
+  run_phase optional work setup_work
+  run_phase optional herdr bash "$DOTFILES_ROOT/tools/herdr/install.sh"
+  setup_ai
+
+  finish_phases || exit 1
+  log_success "Install complete."
+}
+
+if [[ "${INSTALL_SOURCE_ONLY:-0}" != 1 ]]; then
+  main "$@"
+fi

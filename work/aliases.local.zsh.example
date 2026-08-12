@@ -1,0 +1,11 @@
+# Machine-local work aliases and environment — employer-specific names,
+# subscription IDs, and internal hosts live here, never in a tracked file.
+#
+# Copy to work/aliases.local.zsh (gitignored). profiles/work.zsh sources every
+# work/*.zsh on disk, so the copy loads automatically when the work profile is
+# active. Keep the same guard so a personal profile never loads it.
+[[ -z "$WORK_PROFILE" ]] && return
+
+# alias corpid='kinit USER@EXAMPLE.CORP.COM && open -a safari https://internal-host/'
+# alias devsub='az account set -s 00000000-0000-0000-0000-000000000000'
+# export PATH=$PATH:$GOPATH/src/internal.example/team/repo/bin

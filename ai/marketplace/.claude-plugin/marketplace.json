@@ -1,0 +1,15 @@
+{
+  "name": "guarzo",
+  "owner": { "name": "guarzo" },
+  "metadata": {
+    "description": "Personal Claude Code plugins (custom commands, skills, agents)"
+  },
+  "plugins": [
+    {
+      "name": "my",
+      "description": "Personal commands, skills, and agents promoted from dotfiles and slabledger",
+      "source": "./plugins/my",
+      "category": "productivity"
+    }
+  ]
+}

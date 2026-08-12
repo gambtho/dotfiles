@@ -1,0 +1,156 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+# Follow symlinks to the real bin/seed-drift before deriving directories.
+# Before the lib split this only skewed the default template/doc paths; now a
+# symlinked invocation would look for lib/seed-drift/ beside the LINK and fail
+# to load the engine at all. `cd … && pwd -P` below still resolves directory
+# symlinks; this loop handles the file itself, relative link targets included.
+SD_SELF="${BASH_SOURCE[0]}"
+while [ -L "$SD_SELF" ]; do
+  SD_SELF_DIR="$(cd "$(dirname "$SD_SELF")" && pwd -P)"
+  SD_SELF="$(readlink "$SD_SELF")"
+  case "$SD_SELF" in
+    /*) ;;
+    *) SD_SELF="$SD_SELF_DIR/$SD_SELF" ;;
+  esac
+done
+SD_SELF_DIR="$(cd "$(dirname "$SD_SELF")" && pwd -P)"
+SD_REPO_ROOT="${SD_SELF_DIR%/bin}"
+SD_SKILL_DIR="$SD_REPO_ROOT/ai/marketplace/plugins/my/skills/project-claude-setup"
+SD_TEMPLATE_DEFAULT="$SD_SKILL_DIR/templates/local-seed.sh"
+SD_DOC_DEFAULT="$SD_SKILL_DIR/catch-up-local-seed.md"
+
+sd_usage() {
+  cat <<'SDUSAGE'
+Usage: bin/seed-drift [--template PATH] [--doc PATH] [--help] [CANDIDATE...]
+
+Reports, per project and per documented block, whether a project's
+.devcontainer/local-seed.sh is behind, ahead of, or diverged from the
+project-claude-setup template.
+
+  --template PATH  template to compare against
+  --doc PATH       catch-up doc holding the block table
+  --help           show this message
+
+With no CANDIDATE, candidates are ${SEED_DRIFT_ROOT:-$HOME/workspace}/*/.
+Exit: 0 clean, 1 drift, 2 usage/template/doc/extraction error.
+SDUSAGE
+}
+
+# The engine lives in bin/lib/seed-drift/, split by layer so the part that
+# actually churns (normalization) can be read and reviewed on its own:
+#   extract.sh    doc/table parsing, scan awk, anchor windows, temp files
+#   normalize.sh  the normalization pipeline
+#   verdict.sh    ordered diffs and the behind/ahead verdict
+#   report.sh     per-seed checks, reporting, and candidate traversal
+# Sourcing THIS file still defines every sd_* function and sets the shell
+# options — the contract tests/seed_drift.bats relies on via
+# SEED_DRIFT_SOURCE_ONLY=1.
+source "$SD_SELF_DIR/lib/seed-drift/extract.sh"
+source "$SD_SELF_DIR/lib/seed-drift/normalize.sh"
+source "$SD_SELF_DIR/lib/seed-drift/verdict.sh"
+source "$SD_SELF_DIR/lib/seed-drift/report.sh"
+
+sd_main() {
+  local template="$SD_TEMPLATE_DEFAULT" doc="$SD_DOC_DEFAULT"
+  SD_CANDIDATES=()
+  # Counted alongside the array because Task 6 must ask "were any candidates
+  # given?" without expanding an empty array under `set -u` — the bash 3.2
+  # pitfall bin/common.sh:392 calls out. macOS ships bash 3.2.
+  SD_CANDIDATE_COUNT=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --template | --doc)
+        if [ $# -lt 2 ]; then
+          printf 'seed-drift: %s needs a PATH\n' "$1" >&2
+          sd_usage >&2
+          return 2
+        fi
+        if [ "$1" = --template ]; then template="$2"; else doc="$2"; fi
+        shift 2
+        ;;
+      --help | -h)
+        sd_usage
+        return 0
+        ;;
+      --)
+        shift
+        SD_CANDIDATES+=("$@")
+        SD_CANDIDATE_COUNT=$((SD_CANDIDATE_COUNT + $#))
+        break
+        ;;
+      -*)
+        printf 'seed-drift: unknown option %s\n' "$1" >&2
+        sd_usage >&2
+        return 2
+        ;;
+      *)
+        SD_CANDIDATES+=("$1")
+        SD_CANDIDATE_COUNT=$((SD_CANDIDATE_COUNT + 1))
+        shift
+        ;;
+    esac
+  done
+
+  if [ ! -r "$template" ]; then
+    printf 'seed-drift: cannot read template %s\n' "$template" >&2
+    return 2
+  fi
+  if [ ! -r "$doc" ]; then
+    printf 'seed-drift: cannot read doc %s\n' "$doc" >&2
+    return 2
+  fi
+
+  if ! bash -n "$template" 2>/dev/null; then
+    printf 'seed-drift: template does not parse: %s\n' "$template" >&2
+    return 2
+  fi
+
+  local blocks name anchor absent=0
+  # shellcheck disable=SC2034  # read by lib/seed-drift/report.sh
+  SD_TEMPLATE="$template"
+  # shellcheck disable=SC2034  # read by lib/seed-drift/report.sh
+  SD_DOC="$doc"
+  SD_TEMPLATE_SCAN=""
+  if ! sd_tmp SD_TEMPLATE_SCAN; then
+    printf 'seed-drift: cannot create a temporary file\n' >&2
+    return 2
+  fi
+  if ! sd_scan "$template" >"$SD_TEMPLATE_SCAN"; then
+    printf 'seed-drift: cannot scan template %s\n' "$template" >&2
+    return 2
+  fi
+  if ! blocks=$(sd_parse_doc "$doc"); then
+    printf 'seed-drift: no block table found in %s\n' "$doc" >&2
+    return 2
+  fi
+  while IFS=$'\t' read -r name anchor; do
+    # Against the scan, not `grep -qF "$anchor" "$template"`. Anchors name
+    # code, and the scan's C records are comment-stripped — so an anchor that
+    # survives only inside a comment now fails validation instead of passing
+    # and then extracting nothing.
+    if [ -z "$(sd_paras_with_anchor "$SD_TEMPLATE_SCAN" "$anchor")" ]; then
+      printf 'seed-drift: anchor %s (block: %s) is absent from %s\n' \
+        "$anchor" "$name" "$template" >&2
+      absent=1
+    fi
+  done <<<"$blocks"
+  if [ "$absent" -ne 0 ]; then
+    return 2
+  fi
+  local vrc=0
+  # `|| vrc=$?`, not a bare call: sd_visit_candidates now returns 2 when
+  # discovery finds nothing, and an uncaptured non-zero status here would
+  # trip `set -e` and exit before sd_summary ever runs — silently dropping
+  # the summary line the "discovery finds nothing" report depends on.
+  sd_visit_candidates || vrc=$?
+  sd_worst "$vrc"
+  sd_summary
+  return "$SD_WORST"
+}
+
+if [ "${SEED_DRIFT_SOURCE_ONLY:-0}" != 1 ]; then
+  sd_main "$@"
+fi

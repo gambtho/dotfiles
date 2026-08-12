@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# claude-devcontainer-up
+#
+# Bring up the devcontainer in the current directory and attach to a tmux
+# session named "claude" inside it. Works around a `devcontainer exec` bug
+# on compose-based setups by docker-exec'ing directly with the containerId
+# reported by `devcontainer up`.
+#
+# Usage: cd into a project with .devcontainer/, then run this.
+
+set -euo pipefail
+
+command -v devcontainer >/dev/null || {
+  echo "devcontainer CLI not on PATH" >&2
+  exit 127
+}
+command -v docker >/dev/null || {
+  echo "docker not on PATH" >&2
+  exit 127
+}
+command -v jq >/dev/null || {
+  echo "jq not on PATH (sudo apt install jq)" >&2
+  exit 127
+}
+
+[[ -f .devcontainer/devcontainer.json || -f .devcontainer.json ]] ||
+  {
+    echo "No .devcontainer/ here ($(pwd))" >&2
+    exit 1
+  }
+
+# devcontainer up prints banner lines followed by a single JSON line.
+# Echo the banner to the terminal when we have one; otherwise capture silently
+# (the script is normally launched from a Windows Terminal profile, but guard
+# against headless invocation so the pipeline doesn't fail on a missing tty).
+if [[ -t 1 ]]; then
+  out=$(devcontainer up --workspace-folder . | tee /dev/tty)
+else
+  out=$(devcontainer up --workspace-folder .)
+fi
+json=$(printf '%s\n' "$out" | tail -n 1)
+jq empty <<<"$json" 2>/dev/null ||
+  {
+    echo "Failed to parse JSON from devcontainer up output" >&2
+    exit 1
+  }
+
+cid=$(jq -r '.containerId' <<<"$json")
+user=$(jq -r '.remoteUser // "root"' <<<"$json")
+wd=$(jq -r '.remoteWorkspaceFolder // "/workspace"' <<<"$json")
+
+[[ -n "$cid" && "$cid" != "null" ]] || {
+  echo "Failed to parse containerId from devcontainer up output" >&2
+  exit 1
+}
+
+# tmux is no longer installed into the image: the dev workspace platform runs a
+# single tmux server on the host and execs panes into containers (ADR-6), so
+# nothing here needs to mutate the image. An image without tmux fails at the
+# exec below; `dev open` is the supported path.
+exec docker exec -it -u "$user" -w "$wd" "$cid" tmux new -A -s claude

@@ -1,0 +1,517 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
+
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+DOTFILES_ROOT=$(pwd -P)
+
+BOOTSTRAP_PROFILE=""
+NON_INTERACTIVE=false
+BOOTSTRAP_GIT_NAME=""
+BOOTSTRAP_GIT_EMAIL=""
+
+# sudo -v  # disabled: prompts on passwordless accounts; NOPASSWD sudoers covers later calls
+
+parse_bootstrap_args() {
+  while (($# > 0)); do
+    case "$1" in
+      --allow-remote-installers)
+        export ALLOW_REMOTE_INSTALLERS=1
+        ;;
+      --profile)
+        if (($# < 2)); then
+          printf '%s\n' "--profile requires personal, work, or server." >&2
+          return 2
+        fi
+        case "$2" in
+          personal | work | server)
+            BOOTSTRAP_PROFILE="$2"
+            ;;
+          *)
+            printf 'Unsupported profile: %s\n' "$2" >&2
+            return 2
+            ;;
+        esac
+        shift
+        ;;
+      --non-interactive)
+        NON_INTERACTIVE=true
+        ;;
+      *)
+        printf 'Unknown bootstrap option: %s\n' "$1" >&2
+        return 2
+        ;;
+    esac
+    shift
+  done
+}
+
+validate_bootstrap_options() {
+  if [[ "$NON_INTERACTIVE" != true ]]; then
+    return 0
+  fi
+  if [[ -z "$BOOTSTRAP_PROFILE" ]]; then
+    printf '%s\n' "--profile is required with --non-interactive." >&2
+    return 1
+  fi
+  if [[ -f "$DOTFILES_ROOT/core/git/gitconfig.local.symlink" ]]; then
+    return 0
+  fi
+  BOOTSTRAP_GIT_NAME=$(git config --global --get user.name 2>/dev/null || true)
+  BOOTSTRAP_GIT_EMAIL=$(git config --global --get user.email 2>/dev/null || true)
+  if [[ -z "$BOOTSTRAP_GIT_NAME" || -z "$BOOTSTRAP_GIT_EMAIL" ]]; then
+    printf '%s\n' "Git user.name and user.email are required before non-interactive bootstrap." >&2
+    return 1
+  fi
+}
+
+setup_gitconfig() {
+  if ! [ -f "$DOTFILES_ROOT/core/git/gitconfig.local.symlink" ]; then
+    log_info "Setting up gitconfig"
+    local git_authorname
+    local git_authoremail
+    if [[ "$NON_INTERACTIVE" == true ]]; then
+      git_authorname="$BOOTSTRAP_GIT_NAME"
+      git_authoremail="$BOOTSTRAP_GIT_EMAIL"
+    else
+      log_info " - What is your GitHub author name?"
+      read -r -e git_authorname
+      log_info " - What is your GitHub author email?"
+      read -r -e git_authoremail
+    fi
+
+    sed -e "s|AUTHORNAME|$git_authorname|g" \
+      -e "s|AUTHOREMAIL|$git_authoremail|g" \
+      "$DOTFILES_ROOT/core/git/gitconfig.local.symlink.example" >"$DOTFILES_ROOT/core/git/gitconfig.local.symlink"
+
+    log_success "Gitconfig setup completed"
+  else
+    log_info "Gitconfig already set up"
+  fi
+}
+
+# Optional secondary GitHub identities, one per non-default slug in the owner
+# map (see core/git/identity-owners). Driven by the map rather than hardcoded to
+# one account: which account is secondary differs per machine, so a fixed slug
+# here would offer the wrong identity on any machine but the one it was written
+# for.
+#
+# --non-interactive NEVER prompts and NEVER partially creates these files, the
+# same contract bootstrap enforces for the primary identity. A half-populated
+# identity file is worse than none: it looks provisioned to the pre-push guard
+# and then fails at push time.
+setup_secondary_identity() {
+  local template="$DOTFILES_ROOT/core/git/gitconfig.secondary.symlink.example"
+  local slugs slug reply
+
+  [ -f "$template" ] || return 0
+
+  # Ask the library which slugs the resolved map defines, so this honours the
+  # machine-local and per-profile maps rather than re-reading the shared one.
+  slugs="$(DOTFILES="$DOTFILES_ROOT" bash -c \
+    '. "$1/core/git/identity-lib.sh" && identity_slugs' _ "$DOTFILES_ROOT" 2>/dev/null |
+    grep -v '^default$' || true)"
+
+  if [ -z "$slugs" ]; then
+    log_info "Owner map defines no secondary identities; nothing to configure."
+    return 0
+  fi
+
+  for slug in $slugs; do
+    setup_one_secondary_identity "$slug" "$template" || true
+  done
+}
+
+# Provision a single identity slug. Returns 0 on every path -- bootstrap runs
+# under `set -e` and an OPTIONAL identity must never abort the run before
+# install_dotfiles, which would leave the machine with no symlinks at all.
+setup_one_secondary_identity() {
+  local slug="$1" template="$2"
+  local target="$DOTFILES_ROOT/core/git/gitconfig.$slug.symlink"
+  local name email keypath reply temp
+  local esc_name esc_email esc_keypath
+
+  if [ -f "$target" ]; then
+    log_info "Secondary identity '$slug' already configured."
+    return 0
+  fi
+  if [ -e "$target" ] || [ -L "$target" ]; then
+    log_warning "$target exists but is not a regular file; leaving identity '$slug' alone."
+    return 0
+  fi
+
+  if [ "${NON_INTERACTIVE:-false}" = true ]; then
+    log_info "Skipping optional secondary identity '$slug' (non-interactive)."
+    return 0
+  fi
+
+  printf "Configure the '%s' GitHub identity? [y/N] " "$slug"
+  read -r reply
+  case "$reply" in
+    [Yy]*) : ;;
+    *) return 0 ;;
+  esac
+
+  printf 'Account name: '
+  read -r name
+  printf 'Account email: '
+  read -r email
+  printf 'Absolute path to its SSH signing public key: '
+  read -r keypath
+
+  if [ -z "$name" ] || [ -z "$email" ] || [ -z "$keypath" ]; then
+    log_warning "Incomplete answers; leaving identity '$slug' unconfigured."
+    return 0
+  fi
+
+  # git does not expand ~ for user.signingKey on every platform, so a relative
+  # or tilde path silently yields an unusable signing configuration.
+  case "$keypath" in
+    /*) : ;;
+    *)
+      log_warning "Signing key path must be absolute; leaving identity '$slug' unconfigured."
+      return 0
+      ;;
+  esac
+
+  # Escape sed replacement metacharacters (\ & and the | delimiter) so an answer
+  # containing them substitutes literally instead of corrupting the file.
+  esc_name=$(printf '%s' "$name" | sed -e 's/[\\&|]/\\&/g')
+  esc_email=$(printf '%s' "$email" | sed -e 's/[\\&|]/\\&/g')
+  esc_keypath=$(printf '%s' "$keypath" | sed -e 's/[\\&|]/\\&/g')
+
+  # Render to a temporary file beside the target and rename only on success: a
+  # plain redirect truncates $target before sed runs, and a partial file looks
+  # provisioned to the pre-push guard while failing at push time.
+  if ! temp="$(mktemp "$DOTFILES_ROOT/core/git/.gitconfig.$slug.XXXXXX")"; then
+    log_warning "Could not create a temporary file; leaving identity '$slug' unconfigured."
+    return 0
+  fi
+
+  if ! sed -e "s|IDENTITY_SLUG|$slug|g" \
+    -e "s|YOUR_ACCOUNT_NAME|$esc_name|" \
+    -e "s|you@example.com|$esc_email|" \
+    -e "s|/home/YOUR_USER/.ssh/id_ed25519_$slug.pub|$esc_keypath|" \
+    "$template" >"$temp" || ! mv "$temp" "$target"; then
+    rm -f "$temp"
+    log_warning "Failed to render identity '$slug'; leaving it unconfigured."
+    return 0
+  fi
+
+  log_success "Identity '$slug' written to $target"
+  log_info "Next for '$slug': GH_CONFIG_DIR=\$HOME/.gh-$slug gh auth login --scopes repo,workflow"
+}
+
+# Write the conditional-include blocks that actually route each identity. Kept
+# in a generated, gitignored file rather than the tracked config because the
+# owner map is per-machine: a tracked block would name the wrong owner on a
+# machine that flips the roles, and the other identity would never be routed.
+render_identity_routes() {
+  local out="$DOTFILES_ROOT/core/git/gitconfig.identity-routes.symlink"
+  local status=0
+
+  regenerate_identity_routes "$DOTFILES_ROOT" || status=$?
+  case "$status" in
+    0) log_info "Identity routing written to $out" ;;
+    2) log_warning "Owner map is unusable; leaving identity routing unchanged." ;;
+    # The previous routes file survives a failed render (the write is atomic),
+    # so continuing here degrades to stale-but-consistent routing rather than
+    # none at all.
+    *) log_warning "Failed to write identity routing; previous routes left in place." ;;
+  esac
+  return 0
+}
+
+# Machine-local owner map. The shared core/git/identity-owners encodes ROLES
+# (which account is the ambient default, which need routing), and roles differ
+# per machine: an account that is secondary here may be the default elsewhere.
+# Writing a local map is how a machine states its own arrangement.
+#
+# Like the secondary identity above, --non-interactive never prompts and never
+# writes a partial file: it skips unless one already exists.
+setup_identity_map() {
+  local example="$DOTFILES_ROOT/core/git/identity-owners.local.example"
+  local target="$DOTFILES_ROOT/core/git/identity-owners.local"
+  local shared="$DOTFILES_ROOT/core/git/identity-owners"
+  local reply default_owner secondaries owner temp
+
+  [ -f "$example" ] || return 0
+
+  if [ -f "$target" ]; then
+    log_info "Machine-local owner map already configured."
+    return 0
+  fi
+
+  # Something that is not a regular file occupies the path: a directory would
+  # swallow the mv below while reporting success, and the library rejects it at
+  # validation time anyway. Say so instead of installing into it.
+  if [ -e "$target" ] || [ -L "$target" ]; then
+    log_warning "$target exists but is not a regular file; leaving the machine-local map alone."
+    return 0
+  fi
+
+  if [ "${NON_INTERACTIVE:-false}" = true ]; then
+    log_info "Skipping optional machine-local owner map (non-interactive)."
+    return 0
+  fi
+
+  log_info "Shared owner map (used unless this machine overrides it):"
+  grep -vE '^[[:space:]]*(#|$)' "$shared" 2>/dev/null | sed 's/^/    /'
+  # Any role may differ, not just the default: a machine can share the default
+  # account and still need a different set of routed secondaries.
+  printf 'Does this machine need a different owner map? [y/N] '
+  read -r reply
+  case "$reply" in
+    [Yy]*) : ;;
+    *) return 0 ;;
+  esac
+
+  printf "This machine's default GitHub account (ambient gh login): "
+  read -r default_owner
+  printf 'Other GitHub accounts needing their own identity (space separated, blank for none): '
+  read -r secondaries
+
+  if [ -z "$default_owner" ]; then
+    log_warning "No default account given; leaving the machine-local map unconfigured."
+    return 0
+  fi
+
+  if ! temp="$(mktemp "$DOTFILES_ROOT/core/git/.identity-owners.XXXXXX")"; then
+    log_warning "Could not create a temporary file; leaving the machine-local map unconfigured."
+    return 0
+  fi
+
+  {
+    printf '# Machine-local owner map, written by bin/bootstrap.\n'
+    printf '# Replaces the shared map entirely; see identity-owners.local.example.\n'
+    printf '%s default\n' "$default_owner"
+    # Disable pathname expansion while splitting the answer: an unquoted `*`
+    # would otherwise expand to filenames in the current directory.
+    set -f
+    for owner in $secondaries; do
+      printf '%s %s\n' "$owner" "$owner"
+    done
+    set +f
+  } >"$temp"
+
+  # Validate with the library itself rather than re-implementing its rules, in a
+  # subshell so sourcing cannot disturb bootstrap's own environment. This catches
+  # malformed names and duplicate owners BEFORE the file is installed -- an
+  # invalid local map replaces the shared one and then fails closed everywhere,
+  # which would be a confusing way to end a bootstrap.
+  if ! (. "$DOTFILES_ROOT/core/git/identity-lib.sh" && identity_validate_map "$temp"); then
+    rm -f "$temp"
+    log_warning "Rejected the answers; leaving the machine-local map unconfigured."
+    return 0
+  fi
+
+  if ! mv "$temp" "$target"; then
+    rm -f "$temp"
+    log_warning "Failed to install the machine-local owner map."
+    return 0
+  fi
+
+  log_success "Machine-local owner map written to $target"
+  for owner in $secondaries; do
+    log_info "Next for '$owner': GH_CONFIG_DIR=\$HOME/.gh-$owner gh auth login, then create core/git/gitconfig.$owner.symlink"
+  done
+}
+
+setup_profile() {
+  if [[ -n "$BOOTSTRAP_PROFILE" ]]; then
+    printf '%s\n' "$BOOTSTRAP_PROFILE" >"$HOME/.dotfiles-profile"
+    log_success "Profile set to: $BOOTSTRAP_PROFILE"
+    return
+  fi
+
+  if [ -f "$HOME/.dotfiles-profile" ]; then
+    log_info "Profile already set to: $(cat "$HOME/.dotfiles-profile")"
+    return
+  fi
+
+  log_info "Select a profile:"
+  log_info "  1) personal"
+  log_info "  2) work"
+  log_info "  3) server  (headless/VPS, no GUI)"
+  read -r -e -p "Enter choice [1/2/3]: " profile_choice
+
+  case "$profile_choice" in
+    1 | personal)
+      echo "personal" >"$HOME/.dotfiles-profile"
+      log_success "Profile set to: personal"
+      ;;
+    2 | work)
+      echo "work" >"$HOME/.dotfiles-profile"
+      log_success "Profile set to: work"
+      ;;
+    3 | server)
+      echo "server" >"$HOME/.dotfiles-profile"
+      log_success "Profile set to: server"
+      ;;
+    *)
+      echo "personal" >"$HOME/.dotfiles-profile"
+      log_warning "Unknown choice, defaulting to: personal"
+      ;;
+  esac
+}
+
+setup_projects_overlay() {
+  # Per-project Claude overlays live in a separate private repository, cloned to
+  # the canonical checkout so bin/claude-link-project and the /opt/dotfiles
+  # stable link root find them at the path they already expect. This is never
+  # fatal: a machine without overlays is a working machine, it just has no
+  # project links.
+  local overlay_dir="$HOME/.dotfiles/projects"
+  local remote_file="$HOME/.dotfiles-projects-remote"
+  local remote
+
+  if [ -d "$overlay_dir/.git" ]; then
+    log_info "Project overlays already attached at $overlay_dir"
+    return 0
+  fi
+
+  if [ -d "$overlay_dir" ] && [ -n "$(ls -A "$overlay_dir" 2>/dev/null)" ]; then
+    log_warning "$overlay_dir exists, is not a git repo, and is not empty -- leaving it alone"
+    log_warning "Move it aside and re-run bootstrap to attach the private overlay repo"
+    return 0
+  fi
+
+  # The remote lives in an untracked file rather than in this repo: this repo is
+  # public, and the overlay repo's name is itself worth withholding.
+  if [ ! -f "$remote_file" ]; then
+    log_info "No project overlay repo configured; skipping"
+    log_info "To attach one: printf '%s\\n' '<clone-url>' > $remote_file"
+    return 0
+  fi
+
+  remote="$(tr -d '[:space:]' <"$remote_file")"
+  if [ -z "$remote" ]; then
+    log_warning "$remote_file is empty; skipping project overlay clone"
+    return 0
+  fi
+
+  if git clone "$remote" "$overlay_dir"; then
+    log_success "Project overlays attached at $overlay_dir"
+  else
+    log_warning "Could not clone the project overlay repo; continuing without overlays"
+  fi
+  return 0
+}
+
+install_dotfiles() {
+  log_info "Installing dotfiles symlinks"
+
+  mkdir -p "$DOTFILES_ROOT/tmp"
+  touch "$DOTFILES_ROOT/tmp/brewfile"
+
+  # Dynamically scoped: common.sh's link_managed_file reads the sticky prompt
+  # answers and appends unlinked destinations here.
+  # shellcheck disable=SC2034  # consumed by the dynamically scoped callee
+  local overwrite_all=false backup_all=false skip_all="$NON_INTERACTIVE"
+  local -a SKIPPED_DESTINATIONS=()
+
+  link_managed_pairs "$DOTFILES_ROOT" "$HOME" interactive
+
+  if [ ${#SKIPPED_DESTINATIONS[@]} -gt 0 ]; then
+    log_warning "${#SKIPPED_DESTINATIONS[@]} destination(s) left UNLINKED because a real file or directory occupies them:"
+    for dst in "${SKIPPED_DESTINATIONS[@]}"; do
+      log_warning "  $dst"
+    done
+    log_warning "Remove or move each path above, then re-run bin/relink."
+    return 1
+  fi
+
+  log_success "Symlinks installed"
+}
+
+linux_prep() {
+  log_info "Preparing Linux environment"
+
+  sudo apt update
+  sudo apt-get install -y ca-certificates curl gnupg build-essential \
+    libssl-dev libreadline-dev zlib1g-dev libyaml-dev
+
+  sudo install -m 0755 -d /etc/apt/keyrings
+
+  if ! command_exists zsh; then
+    log_info "Installing zsh"
+    sudo apt install -y zsh
+    log_success "zsh installed"
+  else
+    log_info "zsh already installed"
+  fi
+
+  if ! command_exists mise; then
+    install_pinned_mise "$HOME/.local/bin/mise" || return
+    export PATH="$HOME/.local/bin:$PATH"
+  else
+    log_info "mise already installed"
+  fi
+}
+
+mac_prep() {
+  log_info "Preparing macOS environment"
+
+  if ! command_exists brew; then
+    log_info "Installing Homebrew"
+    run_remote_installer https://raw.githubusercontent.com/Homebrew/install/master/install.sh /bin/bash
+    log_success "Homebrew installed"
+  else
+    log_info "Homebrew already installed"
+  fi
+
+  if ! command_exists zsh; then
+    log_info "Installing zsh"
+    brew install zsh
+    log_success "zsh installed"
+  else
+    log_info "zsh already installed"
+  fi
+
+  if ! command_exists mise; then
+    log_info "Installing mise"
+    brew install mise
+    log_success "mise installed"
+  else
+    log_info "mise already installed"
+  fi
+}
+
+main() {
+  parse_bootstrap_args "$@"
+  validate_bootstrap_options
+  detect_os
+
+  case "$OS" in
+    macOS)
+      mac_prep
+      ;;
+    Ubuntu | WSL)
+      linux_prep
+      ;;
+    *)
+      log_warning "Unsupported operating system: $OS"
+      exit 1
+      ;;
+  esac
+
+  setup_gitconfig
+  setup_secondary_identity
+  setup_identity_map
+  render_identity_routes
+  setup_profile
+  # $HOME/.dotfiles, not $DOTFILES_ROOT: the latter is wherever this script was
+  # run from, which may be a disposable linked worktree. The stable root must
+  # name the canonical checkout.
+  ensure_stable_link_root "$HOME/.dotfiles"
+  setup_projects_overlay
+  install_dotfiles
+
+  log_success "Bootstrap complete. Run 'bin/install' to complete setup."
+}
+
+if [[ "${BOOTSTRAP_SOURCE_ONLY:-0}" != 1 ]]; then
+  main "$@"
+fi

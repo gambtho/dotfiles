@@ -1,0 +1,755 @@
+#!/usr/bin/env bash
+# bin/claude-link-project — symlink personal claude overlays into a project tree.
+#
+# Looks up an overlay at ~/.dotfiles/projects/<basename(project-dir)>/
+# and symlinks CLAUDE.md and .claude/ into the project. The global gitignore
+# excludes those paths, so the project repo stays clean.
+#
+# Usage:
+#   claude-link-project <project-dir>          # link
+#   claude-link-project --unlink <project-dir> # remove symlinks (overlay stays)
+#   claude-link-project --create <project-dir> # scaffold overlay then link
+#   claude-link-project --local-md <project-dir>        # write CLAUDE.local.md import shim (project tracks its own CLAUDE.md)
+#   claude-link-project --local-md --agents-md <dir>    # also write AGENTS.local.md import shim
+#   claude-link-project --no-claude-md <project-dir>    # skip CLAUDE.md symlink entirely
+#   claude-link-project --claude-dir-per-file <project-dir>
+#       Symlink overlay's .claude/ contents into project's .claude/.
+#       skills/ and agents/ are linked as whole directories; other files
+#       are linked individually so collisions with tracked project files
+#       are still caught. settings.local.json gets merged via jq.
+#   claude-link-project --slug <name> <project-dir>
+#       Use overlay <name> instead of the project directory's basename.
+#       Defaults to the primary working tree's name, so linked git
+#       worktrees (named after their branch) resolve automatically.
+#
+# Example:
+#   mkdir -p ~/.dotfiles/projects/slabledger/.claude
+#   echo "# slabledger notes" > ~/.dotfiles/projects/slabledger/CLAUDE.md
+#   claude-link-project ~/workspace/slabledger
+
+set -euo pipefail
+
+# Sourced for stable_link_root(), so the root path is defined in exactly one
+# place — duplicating it here is the same drift risk this change exists to fix.
+# Sourcing is silent and defines only log_*/phase helpers, none of which collide
+# with this script's info/ok/warn/die.
+source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
+
+DOTFILES="${DOTFILES:-$HOME/.dotfiles}"
+# A nested private repository, not a directory of this one: overlays describe
+# non-public codebases, so bin/bootstrap clones them here from a separate
+# private remote. The path is deliberately unchanged -- where the stable root
+# /opt/dotfiles is published, existing symlinks point through
+# /opt/dotfiles/projects/; where it is not, they fall back to $HOME-absolute
+# targets under this path. Either way the overlay location they resolve to is
+# the same, so the split needs no relink.
+OVERLAY_ROOT="$DOTFILES/projects"
+
+MODE="link"
+PROJECT_DIR=""
+SKIP_CLAUDE_MD=0
+MODE_LOCAL_MD=0
+SKIP_AGENTS_MD=1 # default: skip AGENTS.local.md (opt-in)
+MODE_CLAUDE_PER_FILE=0
+SLUG=""
+
+usage() {
+  sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//'
+  exit "${1:-0}"
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -u | --unlink)
+      MODE="unlink"
+      shift
+      ;;
+    -c | --create)
+      MODE="create"
+      shift
+      ;;
+    --no-claude-md)
+      SKIP_CLAUDE_MD=1
+      shift
+      ;;
+    --local-md)
+      MODE_LOCAL_MD=1
+      shift
+      ;;
+    --agents-md)
+      SKIP_AGENTS_MD=0
+      shift
+      ;;
+    --claude-dir-per-file)
+      MODE_CLAUDE_PER_FILE=1
+      shift
+      ;;
+    --slug)
+      SLUG="${2:-}"
+      [[ -n "$SLUG" ]] || {
+        echo "--slug requires a value" >&2
+        usage 1
+      }
+      shift 2
+      ;;
+    -h | --help) usage 0 ;;
+    -*)
+      echo "unknown flag: $1" >&2
+      usage 1
+      ;;
+    *)
+      PROJECT_DIR="$1"
+      shift
+      ;;
+  esac
+done
+
+[[ -n "$PROJECT_DIR" ]] || {
+  echo "missing project dir" >&2
+  usage 1
+}
+PROJECT_DIR="$(cd "$PROJECT_DIR" && pwd -P)" || {
+  echo "no such dir: $PROJECT_DIR" >&2
+  exit 1
+}
+# The overlay is normally keyed on the project directory's name. That breaks
+# for a linked git worktree, whose directory is named after the branch, so
+# --slug lets the caller name the overlay explicitly. When it isn't given,
+# dev_slug_for_path (bin/common.sh) applies the shared worktree-aware rule.
+if [[ -n "$SLUG" ]]; then
+  NAME="$SLUG"
+else
+  NAME="$(dev_slug_for_path "$PROJECT_DIR")" || exit 1
+fi
+OVERLAY="$OVERLAY_ROOT/$NAME"
+
+if [[ -t 1 ]]; then
+  C_INFO=$'\033[36m'
+  C_OK=$'\033[32m'
+  C_WARN=$'\033[33m'
+  C_ERR=$'\033[31m'
+  C_OFF=$'\033[0m'
+else
+  C_INFO=""
+  C_OK=""
+  C_WARN=""
+  C_ERR=""
+  C_OFF=""
+fi
+info() { printf '%s%s%s\n' "$C_INFO" "$*" "$C_OFF"; }
+ok() { printf '%s%s%s\n' "$C_OK" "$*" "$C_OFF"; }
+warn() { printf '%s%s%s\n' "$C_WARN" "$*" "$C_OFF" >&2; }
+die() {
+  printf '%s%s%s\n' "$C_ERR" "$*" "$C_OFF" >&2
+  exit 1
+}
+
+# ── Link targets ─────────────────────────────────────────────────────────────
+# The string stored IN a symlink is not the same as the path we read the overlay
+# FROM. A project's working tree gets bind-mounted into devcontainers under a
+# different $HOME, so a $HOME-absolute target dangles there — and on any second
+# machine whose username differs. Writing links through a stable root that each
+# environment points at its own checkout fixes it everywhere at once.
+#
+# Use that root only when it genuinely resolves to THIS checkout; otherwise we
+# would cheerfully write links through a root aimed somewhere else. When it is
+# absent, fall back to the old $HOME-absolute behaviour so a machine that has
+# not run bin/bootstrap keeps working exactly as before.
+STABLE_ROOT="$(stable_link_root)"
+if [[ -d "$STABLE_ROOT" ]] &&
+  [[ "$(cd "$STABLE_ROOT" && pwd -P)" == "$(cd "$DOTFILES" && pwd -P)" ]]; then
+  LINK_ROOT="$STABLE_ROOT"
+else
+  LINK_ROOT="$DOTFILES"
+  warn "Stable link root $STABLE_ROOT is missing or points elsewhere."
+  warn "Links will use \$HOME-absolute targets, which dangle inside containers"
+  warn "and on machines with a different username. Run 'bin/relink' to fix."
+fi
+
+# Map a real overlay path to the string we store in the symlink.
+link_target() {
+  printf '%s' "$LINK_ROOT/${1#"$DOTFILES"/}"
+}
+
+# Do two symlink targets name the same overlay item, regardless of which root or
+# $HOME produced them? Compares the home-independent "projects/<slug>/..." tail —
+# the same technique migrate_legacy_per_file_dir uses, and for the same reason:
+# an absolute comparison never matches the cross-environment case, which is the
+# only case worth repairing.
+overlay_target_matches() {
+  local current="$1" want="$2"
+  [[ "$current" == "$want" ]] && return 0
+  local cur_tail="${current#*/projects/}"
+  local want_tail="${want#*/projects/}"
+  [[ "$cur_tail" != "$current" ]] || return 1
+  [[ "$want_tail" != "$want" ]] || return 1
+  [[ "$cur_tail" == "$want_tail" ]]
+}
+
+# ── unlink ───────────────────────────────────────────────────────────────────
+owned_overlay_target() {
+  local target="$1" expected_suffix="$2"
+  [[ "$target" == *"/$expected_suffix" ]]
+}
+
+link_ownership_target() {
+  local link="$1" target
+  if target="$(readlink -m -- "$link" 2>/dev/null)" && [[ -n "$target" ]]; then
+    printf '%s\n' "$target"
+    return
+  fi
+  target="$(readlink -- "$link")" || return
+  [[ "$target" == /* ]] || target="$(dirname "$link")/$target"
+  printf '%s\n' "$target"
+}
+
+unlink_one() {
+  local link="$1" expected_suffix="$2" target
+  if [[ -L "$link" ]]; then
+    target="$(link_ownership_target "$link")" || return
+    if owned_overlay_target "$target" "$expected_suffix"; then
+      rm "$link"
+      ok "removed symlink: $link"
+    else
+      warn "skipping $link — symlink is not owned by overlay '$NAME'. Leave it as-is."
+    fi
+  elif [[ -e "$link" ]]; then
+    warn "skipping $link — not a symlink (real file). Leave it as-is."
+  fi
+}
+
+# Remove a .local.md import shim ONLY if its content is exactly the
+# 1-line @~/ import this script would have written. Anything else (user
+# additions, hand-edited content) is left in place.
+unlink_local_md_shim() {
+  local dst="$1" expected_suffix="$2"
+  [[ -e "$dst" && ! -L "$dst" ]] || return 0 # nothing to do
+  local first_line import_target
+  first_line="$(head -n1 "$dst" 2>/dev/null || true)"
+  local line_count
+  line_count="$(wc -l <"$dst" 2>/dev/null || echo 0)"
+  # BSD/macOS `wc` pads its count with leading spaces, so a string compare
+  # against "1" fails on exactly the shims this is meant to remove. Strip the
+  # padding once, here, so both the test and the warning see a bare integer.
+  line_count="${line_count//[^0-9]/}"
+  line_count="${line_count:-0}"
+  import_target="${first_line#@}"
+  # Expected shim: exactly one @ import line whose target ends in this
+  # overlay's exact slug and managed file. The home prefix is intentionally
+  # irrelevant so a host-created shim can be removed from a container home.
+  if [[ "$line_count" -eq 1 && "$first_line" == @* ]] &&
+    owned_overlay_target "$import_target" "$expected_suffix"; then
+    rm "$dst"
+    ok "removed import shim: $dst"
+  else
+    warn "skipping $dst — not a generated import shim (has $line_count lines or different content). Leave it as-is."
+  fi
+}
+
+# Walk <project>/.claude/ and remove any symlinks pointing into our
+# overlay. Skips real files (project's own). Removes now-empty
+# directories on the way back up so we don't leave bare empty trees.
+unlink_claude_dir_per_file() {
+  local project_dir="$1" # <project>/.claude
+  [[ -d "$project_dir" ]] || return 0
+
+  # Phase 1: remove every symlink whose target ends in the exact managed path
+  # for this overlay, regardless of which home created it.
+  while IFS= read -r -d '' link; do
+    # Ownership is decided by an exact managed SUFFIX, not by comparing against
+    # a list of roots. That is deliberately root-agnostic: it matches the
+    # $HOME-absolute targets written before the stable link root existed and the
+    # $LINK_ROOT ones written after, without either root having to be
+    # enumerated here or kept in sync as more are added.
+    local target rel expected_suffix
+    target="$(link_ownership_target "$link")" || continue
+    rel="${link#"$project_dir"/}"
+    expected_suffix="projects/$NAME/.claude/$rel"
+    if owned_overlay_target "$target" "$expected_suffix"; then
+      rm "$link"
+      ok "removed symlink: $link"
+    else
+      warn "skipping $link — symlink is not owned by overlay '$NAME'. Leave it as-is."
+    fi
+  done < <(find "$project_dir" -type l -print0)
+
+  # Phase 2: prune now-empty dirs (rmdir, no -p, so it fails silently on
+  # non-empty ones; -depth makes us process children first).
+  find "$project_dir" -depth -type d -empty -not -path "$project_dir" -exec rmdir {} \; 2>/dev/null || true
+}
+
+if [[ "$MODE" == "unlink" ]]; then
+  unlink_one "$PROJECT_DIR/CLAUDE.md" "projects/$NAME/CLAUDE.md"
+  unlink_local_md_shim "$PROJECT_DIR/CLAUDE.local.md" "projects/$NAME/CLAUDE.md"
+  unlink_local_md_shim "$PROJECT_DIR/AGENTS.local.md" "projects/$NAME/AGENTS.md"
+  # If .claude/ is itself a symlink to our overlay (legacy mode), remove it.
+  # Otherwise treat it as per-file mode and walk for our symlinks.
+  if [[ -L "$PROJECT_DIR/.claude" ]]; then
+    unlink_one "$PROJECT_DIR/.claude" "projects/$NAME/.claude"
+  else
+    unlink_claude_dir_per_file "$PROJECT_DIR/.claude"
+  fi
+  ok "Unlinked overlay from $PROJECT_DIR (overlay still at $OVERLAY)."
+  exit 0
+fi
+
+# ── create scaffold ──────────────────────────────────────────────────────────
+if [[ "$MODE" == "create" ]]; then
+  # Refuse to scaffold/link a personal CLAUDE.md if the project already has
+  # one (unless --no-claude-md skips that part). The symlink would clobber.
+  # AGENTS.md is also checked since some projects use it instead.
+  if ((!SKIP_CLAUDE_MD && !MODE_LOCAL_MD)); then
+    for f in CLAUDE.md AGENTS.md; do
+      target="$PROJECT_DIR/$f"
+      if [[ -e "$target" && ! -L "$target" ]]; then
+        die "$target already exists as a real file. Re-run with --no-claude-md to skip the CLAUDE.md symlink (the overlay's .claude/ dir will still be linked), or move/rename the project's file first."
+      fi
+    done
+  fi
+
+  if [[ -d "$OVERLAY" ]]; then
+    info "Overlay already exists at $OVERLAY"
+  else
+    mkdir -p "$OVERLAY/.claude"
+    # CLAUDE.md is intentionally empty — the project-claude-setup skill defers
+    # CLAUDE.md content generation to `/init`, which reads the codebase. We
+    # only create the file so the symlink target exists.
+    : >"$OVERLAY/CLAUDE.md"
+    cat >"$OVERLAY/.claude/settings.json" <<'EOF'
+{
+  "permissions": {
+    "allow": []
+  }
+}
+EOF
+    ok "Scaffolded overlay at $OVERLAY"
+  fi
+fi
+
+# ── link ─────────────────────────────────────────────────────────────────────
+[[ -d "$OVERLAY" ]] || die "No overlay found at $OVERLAY. Run with --create to scaffold one."
+
+link_one() {
+  local src="$1" dst="$2"
+  local want
+  want="$(link_target "$src")"
+  [[ -e "$src" ]] || {
+    warn "skip: $src does not exist in overlay"
+    return
+  }
+  if [[ -L "$dst" ]]; then
+    local cur
+    cur="$(readlink "$dst")"
+    if [[ "$cur" == "$want" ]]; then
+      ok "already linked: $dst"
+      return
+    fi
+    # Same overlay item reached through a different root or $HOME — created on
+    # another machine, or by an older version of this script. The link is ours
+    # either way, and leaving it is exactly what makes the overlay invisible
+    # inside a container.
+    if overlay_target_matches "$cur" "$want"; then
+      rm -f "$dst"
+      ln -s "$want" "$dst"
+      ok "repointed: $dst -> $want (was $cur)"
+      return
+    fi
+    # A dangling link is broken by definition, so it cannot be a
+    # deliberate choice worth preserving. The usual cause is a link
+    # created under a different $HOME — the host's /home/<user> seen
+    # from a container running as root, or the reverse — which leaves
+    # the overlay silently invisible. Repoint it.
+    if [[ ! -e "$dst" ]]; then
+      rm -f "$dst"
+      ln -s "$want" "$dst"
+      ok "repaired dangling link: $dst -> $want (was $cur)"
+      return
+    fi
+    warn "$dst already a symlink to $cur — leave it alone (remove manually if you want to relink)"
+    return
+  elif [[ -e "$dst" ]]; then
+    case "$(basename "$dst")" in
+      CLAUDE.md | AGENTS.md)
+        die "$dst exists as a real file (project tracks it). Re-run with --local-md to write a CLAUDE.local.md import shim alongside it instead."
+        ;;
+      *)
+        die "$dst exists as a real file/dir. Move or delete it first."
+        ;;
+    esac
+  fi
+  ln -s "$want" "$dst"
+  ok "linked: $dst -> $want"
+}
+
+# Write a 1-line .local.md import shim that pulls in the overlay's master
+# file via Claude Code's @~/ import syntax. Idempotent: if the file
+# already exists with the correct import line, do nothing.
+write_import_shim() {
+  local overlay_path="$1" # e.g. ~/.dotfiles/projects/foo/CLAUDE.md
+  local dst="$2"          # e.g. <project>/CLAUDE.local.md
+
+  # Refuse to write a shim pointing at a source that doesn't exist (or
+  # is a broken symlink). `-e` resolves through symlinks, so a dangling
+  # link returns false — exactly the behavior we want.
+  if [[ ! -e "$overlay_path" ]]; then
+    warn "skip: overlay source $overlay_path does not exist; not writing $dst"
+    return
+  fi
+
+  # Convert overlay_path to a @~/-prefixed form for portability across machines.
+  local home_prefix="$HOME/"
+  local import_target
+  if [[ "$overlay_path" == "$home_prefix"* ]]; then
+    import_target="@~/${overlay_path#$home_prefix}"
+  else
+    import_target="@${overlay_path}"
+  fi
+  local desired="${import_target}"
+
+  if [[ -L "$dst" ]]; then
+    warn "$dst is a symlink — leaving as-is. (Remove it manually if you want a .local.md import shim instead.)"
+    return
+  fi
+  if [[ -e "$dst" ]]; then
+    if grep -qxF "$desired" "$dst"; then
+      ok "already has import: $dst"
+      return
+    fi
+    warn "$dst exists and doesn't contain the expected import line. Leaving as-is. Add this manually if you want it:"
+    warn "  $desired"
+    return
+  fi
+
+  printf '%s\n' "$desired" >"$dst"
+  ok "wrote import shim: $dst -> $desired"
+}
+
+# Merge personal allowlist entries from overlay's settings.local.json
+# into the project's settings.local.json. jq dedupes the merged allow
+# array while preserving insertion order. If the project file is
+# tracked, the merge still happens but the function warns that the
+# change will appear in 'git diff'.
+merge_settings_local_json() {
+  local src="$1" # overlay master
+  local dst="$2" # project file (may not exist)
+
+  if [[ ! -f "$src" ]]; then
+    info "no overlay settings.local.json at $src, skipping"
+    return
+  fi
+
+  if [[ ! -e "$dst" ]]; then
+    # No project file — just copy. We don't symlink because the project
+    # may want to maintain its own settings.local.json independently.
+    # Normalize through jq so the bytes match what the merge below
+    # produces; a verbatim copy of a compact overlay file would differ
+    # from jq's pretty-printed output on every later run and prompt for
+    # a semantically empty change.
+    if jq . "$src" >"$dst" 2>/dev/null; then
+      ok "wrote: $dst (copied from overlay)"
+    else
+      cp "$src" "$dst"
+      warn "wrote: $dst (copied verbatim; overlay file is not valid JSON)"
+    fi
+    return
+  fi
+
+  # Both exist. Detect tracked.
+  local proj_root tracked=0
+  proj_root="$(git -C "$(dirname "$dst")" rev-parse --show-toplevel 2>/dev/null || true)"
+  if [[ -n "$proj_root" ]] && git -C "$proj_root" ls-files --error-unmatch -- "${dst#$proj_root/}" >/dev/null 2>&1; then
+    tracked=1
+  fi
+
+  # Merge: deep-merge top-level, then dedupe permissions.allow.
+  local merged
+  merged=$(mktemp)
+  jq -s '
+    .[0] as $dst | .[1] as $src |
+    (($dst // {}) * ($src // {})) |
+    .permissions = ((.permissions // {}) | . + {
+      allow: ((($dst.permissions.allow // []) + ($src.permissions.allow // []))
+              | reduce .[] as $x ([]; if index($x) then . else . + [$x] end))
+    })
+  ' "$dst" "$src" >"$merged" || {
+    rm -f "$merged"
+    die "jq merge failed for $dst"
+  }
+  jq -e . "$merged" >/dev/null 2>&1 || {
+    rm -f "$merged"
+    die "jq produced invalid JSON merging $dst"
+  }
+
+  # Compare canonically: the merge is a no-op whenever the project file
+  # already carries the same JSON *values*, regardless of how it happens
+  # to be formatted. A byte comparison here would prompt for
+  # indentation-only differences and, with no TTY, abort the run.
+  if jq -e -s '.[0] == .[1]' "$dst" "$merged" >/dev/null 2>&1; then
+    ok "$dst already up to date"
+    rm -f "$merged"
+    return
+  fi
+
+  info "──── proposed diff (settings.local.json) ────"
+  diff -u "$dst" "$merged" || true
+  echo
+  if ((tracked)); then
+    warn "Note: $dst is tracked in git — this change will appear in 'git diff' in the project."
+    warn "Decide whether to commit, stash, or revert after reviewing."
+  fi
+  read -r -p "Apply merge to $dst? [y/N] " a
+  if [[ "${a:-N}" =~ ^[Yy]$ ]]; then
+    cp "$dst" "${dst}.backup-$(date -u +%Y%m%dT%H%M%SZ)"
+    cp "$merged" "$dst"
+    ok "Updated: $dst"
+  else
+    warn "Skipped merge into $dst."
+  fi
+  rm -f "$merged"
+}
+
+# For each file under <overlay>/.claude/, create a per-file symlink at
+# the analogous path inside <project>/.claude/, creating intermediate
+# directories as needed. Skips files that already exist at the target
+# unless they're symlinks pointing into our overlay (idempotent re-run).
+#
+# settings.local.json is special-cased: merged (via jq) instead of
+# symlinked, because the project may have its own untracked
+# settings.local.json the user wants preserved.
+#
+# skills/ and agents/ are linked as whole DIRECTORIES, not per-file.
+# Claude Code documents directory-level symlinks as supported for a
+# <skill-name> entry ("can be a symlink to a directory elsewhere on
+# disk") but says nothing about a symlinked SKILL.md inside a real
+# directory. A per-file tree also silently drops non-file payloads a
+# skill needs — scripts/, references/ — and makes each new overlay file
+# require a re-run to appear. Directory links avoid all three.
+DIR_LINK_SUBDIRS=(skills agents references)
+
+# Replace a legacy per-file symlink tree with a single directory link.
+#
+# Earlier versions of --claude-dir-per-file symlinked each leaf, so an
+# existing skills/ or agents/ directory is a real dir full of links into
+# the overlay. link_one would die on it and abort the whole run, leaving
+# the rest of the overlay unlinked.
+#
+# Only migrate when EVERY entry underneath is a symlink that points at
+# the corresponding path in SOME home's copy of this overlay. The match
+# is on the "projects/<slug>/.claude/<sub>/..." suffix, deliberately NOT
+# on the absolute prefix: the breakage this repairs is a link created
+# under a different $HOME (host /home/user vs container /root), where an
+# absolute comparison never matches and the repair would silently skip
+# the one case it exists for. Dangling links are fine for the same
+# reason. Any real file, or a link whose suffix doesn't line up, means
+# the directory holds content we did not create, so we leave it alone
+# and let link_one report the collision.
+migrate_legacy_per_file_dir() {
+  local overlay_sub="$1" # <overlay>/.claude/skills
+  local dst="$2"         # <project>/.claude/skills
+
+  [[ -d "$dst" && ! -L "$dst" ]] || return 1
+
+  # The home-independent tail, e.g. projects/wanderer/.claude/skills
+  local suffix="${overlay_sub#*/projects/}"
+  suffix="projects/$suffix"
+
+  local entry target rel found=0
+  while IFS= read -r -d '' entry; do
+    found=1
+    [[ -L "$entry" ]] || return 1
+    # Resolve without requiring existence; dangling cross-home links are the
+    # primary migration case. Reuse unlink's ownership resolver and suffix
+    # predicate so the two paths cannot disagree about what this overlay owns.
+    target="$(link_ownership_target "$entry")" || return 1
+    rel="${entry#"$dst"/}"
+    owned_overlay_target "$target" "$suffix/$rel" || return 1
+  done < <(find "$dst" -mindepth 1 \! -type d -print0)
+
+  ((found)) || return 1
+
+  rm -rf "$dst"
+  ok "migrated legacy per-file tree: $dst (now a directory symlink)"
+  return 0
+}
+
+# Repoint one managed destination when it is our own link reached through a
+# different root or a different $HOME. Anything else is a silent no-op: a
+# foreign link at a managed destination is left for the linking pass to report,
+# so this pre-pass never changes what the user is told.
+repoint_if_ours() {
+  local dst="$1" src="$2"
+  [[ -L "$dst" ]] || return 0
+  local cur want
+  cur="$(readlink "$dst")"
+  want="$(link_target "$src")"
+  [[ "$cur" != "$want" ]] || return 0
+  overlay_target_matches "$cur" "$want" || return 0
+  rm -f "$dst"
+  ln -s "$want" "$dst"
+  ok "repointed: $dst -> $want (was $cur)"
+}
+
+# Pre-pass: retarget already-existing overlay links onto $LINK_ROOT before any
+# linking runs.
+#
+# Enumeration is driven by the OVERLAY, not the project: we derive the set of
+# destinations this tool manages and inspect only those. A project-wide scan of
+# <project>/.claude would sweep in links we did not create — wanderer alone has
+# ~80 under .claude/worktrees/ — and warn about them on every run. Enumerating
+# managed destinations makes unrelated links invisible by construction.
+#
+# Both the directory form and the per-file form of each DIR_LINK_SUBDIRS entry
+# are enumerated. The per-file form is not redundant: when such a directory
+# holds our links *and* real project files, migrate_legacy_per_file_dir bails
+# and link_claude_dir_per_file warns and prunes the subtree from its walk, so
+# nothing else would ever reach those links.
+migrate_overlay_links() {
+  repoint_if_ours "$PROJECT_DIR/CLAUDE.md" "$OVERLAY/CLAUDE.md"
+  repoint_if_ours "$PROJECT_DIR/.claude" "$OVERLAY/.claude"
+
+  [[ -d "$OVERLAY/.claude" ]] || return 0
+
+  local sub
+  for sub in "${DIR_LINK_SUBDIRS[@]}"; do
+    [[ -d "$OVERLAY/.claude/$sub" ]] || continue
+    repoint_if_ours "$PROJECT_DIR/.claude/$sub" "$OVERLAY/.claude/$sub"
+  done
+
+  # settings.local.json is merged rather than linked, so it has no managed
+  # link destination.
+  local src rel
+  while IFS= read -r -d '' src; do
+    rel="${src#"$OVERLAY"/.claude/}"
+    [[ "$rel" != "settings.local.json" ]] || continue
+    repoint_if_ours "$PROJECT_DIR/.claude/$rel" "$OVERLAY/.claude/$rel"
+  done < <(find "$OVERLAY/.claude" -type f -print0)
+}
+
+link_claude_dir_per_file() {
+  local overlay_dir="$1" # ~/.dotfiles/projects/<slug>/.claude
+  local project_dir="$2" # <project>/.claude
+
+  [[ -d "$overlay_dir" ]] || {
+    warn "no overlay .claude/ at $overlay_dir, nothing to link"
+    return
+  }
+  command -v jq >/dev/null || die "jq required for --claude-dir-per-file (settings.local.json merge)"
+
+  mkdir -p "$project_dir"
+
+  local proj_root
+  proj_root="$(git -C "$(dirname "$project_dir")" rev-parse --show-toplevel 2>/dev/null || true)"
+
+  # Directory-level links first, so the per-file walk below can skip
+  # anything living underneath them.
+  local sub
+  local find_prune=()
+  for sub in "${DIR_LINK_SUBDIRS[@]}"; do
+    [[ -d "$overlay_dir/$sub" ]] || continue
+    migrate_legacy_per_file_dir "$overlay_dir/$sub" "$project_dir/$sub" || true
+    # link_one dies on a real file/dir in the way, which is right for
+    # CLAUDE.md but not here: the rest of the overlay (commands/,
+    # settings.local.json) is independent of this one subdirectory and
+    # should still be linked. Match the per-file walk's behaviour and
+    # warn instead, leaving the user's content untouched.
+    if [[ ! -L "$project_dir/$sub" && -e "$project_dir/$sub" ]]; then
+      if [[ -n "$proj_root" ]] &&
+        git -C "$proj_root" ls-files --error-unmatch \
+          -- "${project_dir#"$proj_root"/}/$sub" >/dev/null 2>&1; then
+        die "Collision: $project_dir/$sub is tracked in git. Rename your overlay item and re-run."
+      fi
+      warn "$project_dir/$sub exists (untracked, not a symlink). Skipping — move or remove it manually if you want to link the overlay version."
+      # Prune anyway: without this the per-file walk would descend into
+      # the overlay's skills/ and scatter links inside the user's own
+      # directory, which is the content we just decided not to touch.
+      find_prune+=(-path "$overlay_dir/$sub" -prune -o)
+      continue
+    fi
+    link_one "$overlay_dir/$sub" "$project_dir/$sub"
+    find_prune+=(-path "$overlay_dir/$sub" -prune -o)
+  done
+
+  # Walk overlay's .claude tree, link each remaining regular file individually.
+  while IFS= read -r -d '' src <&3; do
+    local rel="${src#$overlay_dir/}"
+    local dst="$project_dir/$rel"
+
+    # settings.local.json: merge, don't symlink.
+    if [[ "$rel" == "settings.local.json" ]]; then
+      merge_settings_local_json "$src" "$dst"
+      continue
+    fi
+
+    mkdir -p "$(dirname "$dst")"
+
+    local want
+    want="$(link_target "$src")"
+
+    if [[ -L "$dst" ]]; then
+      local cur
+      cur="$(readlink "$dst")"
+      if [[ "$cur" == "$want" ]]; then
+        ok "already linked: $dst"
+        continue
+      fi
+      # Ours, reached through a different root or $HOME. Repoint rather than
+      # warn — this is the path that carries per-file links (commands/, and
+      # agent files inside a directory we could not convert to a dir link).
+      if overlay_target_matches "$cur" "$want"; then
+        rm -f "$dst"
+        ln -s "$want" "$dst"
+        ok "repointed: $dst -> $want (was $cur)"
+        continue
+      fi
+      warn "$dst is a symlink to $cur — leaving as-is."
+      continue
+    fi
+    if [[ -e "$dst" ]]; then
+      # Real file at the target. If it's tracked in git, that's a
+      # collision the user must resolve by renaming their overlay item.
+      if [[ -n "$proj_root" ]] && git -C "$proj_root" ls-files --error-unmatch -- "${dst#$proj_root/}" >/dev/null 2>&1; then
+        die "Collision: $dst is tracked in git. Rename your overlay item ($src) and re-run."
+      fi
+      warn "$dst exists (untracked, not a symlink). Skipping — move or remove it manually if you want to link the overlay version."
+      continue
+    fi
+    ln -s "$want" "$dst"
+    ok "linked: $dst -> $src"
+  done 3< <(find "$overlay_dir" "${find_prune[@]}" -type f -print0)
+}
+
+# Retarget any pre-existing overlay links before linking, so the passes below
+# see them as already correct instead of as foreign links to warn about.
+migrate_overlay_links
+
+# CLAUDE.md handling: three paths.
+#   --local-md   → write CLAUDE.local.md import shim (project tracks its own CLAUDE.md)
+#   --no-claude-md → skip entirely (legacy; equivalent to "user doesn't want a personal CLAUDE.md")
+#   default      → symlink overlay's CLAUDE.md into project (no tracked file in the way)
+if ((MODE_LOCAL_MD)); then
+  write_import_shim "$OVERLAY/CLAUDE.md" "$PROJECT_DIR/CLAUDE.local.md"
+elif ((SKIP_CLAUDE_MD)); then
+  info "Skipping CLAUDE.md symlink (--no-claude-md). Project keeps its own."
+else
+  link_one "$OVERLAY/CLAUDE.md" "$PROJECT_DIR/CLAUDE.md"
+fi
+
+# AGENTS.md handling: only when --local-md AND user opted into AGENTS too.
+# Default off — most users don't keep an AGENTS overlay separately.
+if ((MODE_LOCAL_MD && !SKIP_AGENTS_MD)); then
+  if [[ -f "$OVERLAY/AGENTS.md" ]]; then
+    write_import_shim "$OVERLAY/AGENTS.md" "$PROJECT_DIR/AGENTS.local.md"
+  else
+    info "Skipping AGENTS.local.md — no overlay AGENTS.md at $OVERLAY/AGENTS.md."
+  fi
+fi
+if ((MODE_CLAUDE_PER_FILE)); then
+  link_claude_dir_per_file "$OVERLAY/.claude" "$PROJECT_DIR/.claude"
+else
+  link_one "$OVERLAY/.claude" "$PROJECT_DIR/.claude"
+fi
+
+echo
+info "Reminder: the global gitignore (~/.dotfiles/core/git/gitignore.symlink)"
+info "ignores CLAUDE.md, CLAUDE.local.md, AGENTS.local.md and .claude/, so"
+info "none of these will show up in git status inside the project."

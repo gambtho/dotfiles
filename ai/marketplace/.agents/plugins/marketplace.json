@@ -1,0 +1,20 @@
+{
+  "name": "guarzo",
+  "interface": {
+    "displayName": "Guarzo"
+  },
+  "plugins": [
+    {
+      "name": "my",
+      "source": {
+        "source": "local",
+        "path": "./plugins/my"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+# Herdr configuration, installed by tools/herdr/install.sh.
+#
+# Herdr keeps runtime state in this same directory (herdr.sock, herdr-server.log,
+# session.json), so this file is copied here rather than symlinked out of the
+# dotfiles repo. Edit it freely: the installer never overwrites an existing
+# config, it only warns that it differs from the shipped default.
+#
+# Apply changes to a running server without dropping panes:
+#   herdr server reload-config
+
+[theme]
+# Matches Neovim's tokyonight-night (folke/tokyonight.nvim) and the "Tokyo Night"
+# Windows Terminal scheme in platforms/windows/wt-color-scheme.sh.
+# Built-ins: catppuccin, terminal, tokyo-night, dracula, nord, gruvbox,
+#            one-dark, solarized, kanagawa, rose-pine, vesper
+name = "tokyo-night"
+
+[update]
+# The binary is pinned in config/versions.env and verified against a committed
+# digest. A background updater would move it out from under that pin, so new
+# releases are noticed by `make pins-check` instead.
+version_check = false

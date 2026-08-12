@@ -1,0 +1,33 @@
+[Unit]
+Description=Vekil AI model proxy (Claude Code + Codex)
+Documentation=file://@DOTFILES_ROOT@/ai/vekil/README.md
+After=default.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+
+# vekil-proxy binds to the Docker bridge so devcontainers can reach the proxy
+# via host.docker.internal. If Docker has not published the bridge yet, the
+# helper falls back to loopback-only and devcontainer access silently breaks.
+# Docker runs as a system service, so a user unit cannot order itself after it;
+# poll for the bridge instead, bounded, then start anyway on loopback.
+ExecStartPre=/usr/bin/env bash -c 'for _ in $(seq 1 30); do docker network inspect bridge >/dev/null 2>&1 && exit 0; sleep 1; done; exit 0'
+
+ExecStart=@DOTFILES_ROOT@/bin/vekil-proxy start
+ExecStop=@DOTFILES_ROOT@/bin/vekil-proxy stop
+
+# vekil-proxy waits for /readyz itself (VEKIL_START_TIMEOUT, default 90s).
+TimeoutStartSec=180
+
+# vekil-proxy owns termination: it signals, waits VEKIL_STOP_TIMEOUT (15s),
+# escalates to SIGKILL, then confirms for VEKIL_KILL_CONFIRM_TIMEOUT (2s). If
+# it cannot confirm the process is gone it preserves ownership state and exits
+# nonzero. KillMode=none keeps systemd from SIGKILLing the cgroup afterwards,
+# which would destroy that evidence and mask a genuinely stuck proxy. The stop
+# budget must exceed the helper's own worst case so systemd does not pre-empt it.
+KillMode=none
+TimeoutStopSec=45
+
+[Install]
+WantedBy=default.target

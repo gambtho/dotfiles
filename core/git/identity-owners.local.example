@@ -1,0 +1,16 @@
+# Machine-local GitHub owner -> identity slug map.
+#
+# Copy to core/git/identity-owners.local (gitignored) when THIS machine assigns
+# different roles than the shared map. It REPLACES the shared map completely --
+# list every owner this machine should know, not just the differences. An owner
+# you leave out becomes unmapped: nothing routes it and nothing blocks it.
+#
+# The slug `default` means the stock ~/.config/gh and ~/.gitconfig.local. Any
+# other slug requires ~/.gitconfig.<slug> and ~/.gh-<slug>.
+#
+# Example -- a machine whose ambient account is guarzo, with gambtho secondary:
+#   guarzo  default
+#   gambtho gambtho
+#
+# Owners and slugs must be lowercase [a-z0-9-]; lookups are case-folded, so an
+# uppercase entry here would never match anything.
