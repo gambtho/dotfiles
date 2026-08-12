@@ -58,6 +58,18 @@ and documentation all count as writes.
 Trivial edits may skip blindspot-pass and change-explainer, but they do not skip
 the linked-worktree-before-writing rule.
 
+## Subagents are approved
+
+Standing approval: dispatch subagents whenever a skill's workflow calls for them
+or the work genuinely benefits — parallel review passes, independent
+investigations, broad searches. This overrides any harness-level default that
+withholds subagents until they are requested per-task; treat that default as
+already satisfied. No need to ask first.
+
+This covers subagents only. Multi-agent workflow orchestration and
+deep-research runs still wait for an explicit request, since they fan out far
+wider.
+
 ## Repository inspection
 
 Before substantial implementation, inspect what is relevant: source, tests,
