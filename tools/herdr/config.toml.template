@@ -20,3 +20,19 @@ name = "tokyo-night"
 # digest. A background updater would move it out from under that pin, so new
 # releases are noticed by `make pins-check` instead.
 version_check = false
+
+# Dev Container plugin (herdr-devcontainer). Remove this block to unbind.
+[[keys.command]]
+key = "prefix+d"
+type = "plugin_action"
+command = "devcontainer.open-shell"
+description = "dev container shell"
+
+[[keys.command]]
+key = "prefix+shift+s"
+type = "plugin_action"
+command = "devcontainer.open-stop"
+description = "stop dev container"
+
+[ui]
+agent_panel_sort = "spaces"

@@ -199,6 +199,7 @@ source_installer() {
 
   [ "$status" -eq 0 ]
   [[ "$output" == *"v0.8.0"* ]]
+  [[ "$output" == *"gambtho/herdr-devcontainer@v0.1.0"* ]]
   [[ "$output" == *"(none)"* ]]
   [ ! -e "$TEST_ROOT/bin/herdr" ]
   [ ! -e "$TEST_ROOT/config/herdr/config.toml" ]
@@ -210,4 +211,108 @@ source_installer() {
   run cat "$REPO_ROOT/tools/herdr/config.toml.template"
   [ "$status" -eq 0 ]
   [[ "$output" == *"version_check = false"* ]]
+}
+
+@test "the shipped config binds the Dev Container plugin it installs" {
+  # Two dead keys otherwise: the config binds actions the plugin phase provides.
+  run cat "$REPO_ROOT/tools/herdr/config.toml.template"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"devcontainer.open-shell"* ]]
+  [[ "$output" == *"devcontainer.open-stop"* ]]
+
+  # prefix+shift+d is Herdr's built-in close_workspace; stop must not sit under
+  # a mis-key of it.
+  [[ "$output" != *'key = "prefix+shift+d"'* ]]
+}
+
+# A fake herdr: enough of `plugin list --json` to drive install_plugin, plus a
+# log of every other plugin subcommand so a test can assert what was invoked.
+# A fake cargo goes alongside it so the build-hook guard does not turn these
+# into silent skips on a host without a Rust toolchain.
+fake_herdr() {
+  local list_json="$1"
+  mkdir -p "$TEST_ROOT/bin"
+  cat >"$TEST_ROOT/bin/herdr" <<EOF
+#!/usr/bin/env bash
+if [[ "\$1 \$2" == "plugin list" ]]; then
+  printf '%s\n' '$list_json'
+  exit 0
+fi
+printf '%s\n' "\$*" >>"$TEST_ROOT/plugin-calls"
+exit \${FAKE_HERDR_STATUS:-0}
+EOF
+  chmod 0755 "$TEST_ROOT/bin/herdr"
+  printf '#!/usr/bin/env bash\nexit 0\n' >"$TEST_ROOT/bin/cargo"
+  chmod 0755 "$TEST_ROOT/bin/cargo"
+}
+
+run_install_plugin() {
+  source_installer PATH="$TEST_ROOT/bin:$PATH" bash -c '
+    source "$1/tools/herdr/install.sh"
+    install_plugin
+  ' _ "$REPO_ROOT"
+}
+
+@test "the plugin is installed at the pinned ref when absent" {
+  fake_herdr '{"result":{"plugins":[]}}'
+
+  run_install_plugin
+
+  [ "$status" -eq 0 ]
+  run cat "$TEST_ROOT/plugin-calls"
+  [[ "$output" == *"plugin install gambtho/herdr-devcontainer --ref v0.1.0 --yes"* ]]
+}
+
+@test "a locally linked plugin is left alone" {
+  # Someone developing the plugin has it linked from a checkout; replacing that
+  # with a tagged release would drop their working tree out of the pane path.
+  fake_herdr '{"result":{"plugins":[{"plugin_id":"devcontainer","source":{"kind":"local"}}]}}'
+
+  run_install_plugin
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"linked from a local checkout"* ]]
+  [ ! -e "$TEST_ROOT/plugin-calls" ]
+}
+
+@test "a plugin already at the pinned ref is not reinstalled" {
+  fake_herdr '{"result":{"plugins":[{"plugin_id":"devcontainer","source":{"kind":"github","requested_ref":"v0.1.0"}}]}}'
+
+  run_install_plugin
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"already installed"* ]]
+  [ ! -e "$TEST_ROOT/plugin-calls" ]
+}
+
+@test "a plugin pinned to a different ref is uninstalled before reinstalling" {
+  fake_herdr '{"result":{"plugins":[{"plugin_id":"devcontainer","source":{"kind":"github","requested_ref":"v0.0.9"}}]}}'
+
+  run_install_plugin
+
+  [ "$status" -eq 0 ]
+  run cat "$TEST_ROOT/plugin-calls"
+  [[ "$output" == *"plugin uninstall devcontainer"* ]]
+  [[ "$output" == *"plugin install gambtho/herdr-devcontainer --ref v0.1.0 --yes"* ]]
+}
+
+@test "a failed plugin install warns without failing the phase" {
+  # Plugin registration goes through the running server's socket API, so a first
+  # bootstrap cannot register anything -- and must not take down bin/install.
+  fake_herdr '{"result":{"plugins":[]}}'
+
+  source_installer PATH="$TEST_ROOT/bin:$PATH" FAKE_HERDR_STATUS=1 bash -c '
+    source "$1/tools/herdr/install.sh"
+    install_plugin
+  ' _ "$REPO_ROOT"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"rerun after Herdr has started once"* ]]
+}
+
+@test "a missing herdr binary skips the plugin instead of failing" {
+  run_install_plugin
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"skipping the devcontainer plugin"* ]]
 }

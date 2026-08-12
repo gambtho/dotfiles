@@ -32,6 +32,9 @@ MARKER_FILE="$HERDR_STATE_ROOT/installed-version"
 # and logs into a git checkout.
 HERDR_CONFIG_ROOT="${HERDR_CONFIG_ROOT:-${XDG_CONFIG_HOME:-$HOME/.config}/herdr}"
 CONFIG_TEMPLATE="$DOTFILES_ROOT/tools/herdr/config.toml.template"
+# The shipped config binds prefix+d and prefix+shift+s to this plugin's actions,
+# so a machine with the config but not the plugin has two dead keys.
+HERDR_PLUGIN_ID="devcontainer"
 
 STAGED_BIN=""
 STAGED_MARKER=""
@@ -208,12 +211,85 @@ install_config() {
   return 0
 }
 
+# Herdr's own plugin registry is the authority on what is installed, so this
+# reads it instead of keeping a marker file. A marker can disagree with reality
+# after a hand `herdr plugin uninstall` -- exactly the desync that forces
+# install_pinned_binary to re-check the binary alongside its version file.
+plugin_source_field() {
+  local field="$1"
+  "$HERDR_BIN" plugin list --json 2>/dev/null |
+    jq -r --arg id "$HERDR_PLUGIN_ID" --arg field "$field" \
+      '.result.plugins[]? | select(.plugin_id == $id) | .source[$field] // empty' \
+      2>/dev/null || true
+}
+
+# Unlike the binary, this cannot be verified against a committed digest: Herdr
+# resolves the ref to a commit and builds it from source on this machine. The
+# tag is the pin, which is why config/versions.env records a ref and no SHA.
+install_plugin() {
+  local kind ref
+
+  if [[ ! -x "$HERDR_BIN" ]]; then
+    log_warning "Herdr is not installed at $HERDR_BIN; skipping the $HERDR_PLUGIN_ID plugin."
+    return 0
+  fi
+
+  if ! command -v jq >/dev/null 2>&1; then
+    log_warning "jq is required to inspect installed Herdr plugins; skipping $HERDR_PLUGIN_ID."
+    return 0
+  fi
+
+  kind=$(plugin_source_field kind)
+  ref=$(plugin_source_field requested_ref)
+
+  # A linked checkout is someone developing the plugin. Replacing it with a
+  # tagged release would silently discard their working tree from the pane path,
+  # and the bootstrap has no business making that call.
+  if [[ "$kind" == "local" ]]; then
+    log_info "$HERDR_PLUGIN_ID is linked from a local checkout; leaving it alone."
+    return 0
+  fi
+
+  if [[ "$kind" == "github" && "$ref" == "$HERDR_DEVCONTAINER_REF" ]]; then
+    log_info "$HERDR_PLUGIN_ID $HERDR_DEVCONTAINER_REF is already installed."
+    return 0
+  fi
+
+  # Only needed on the install path: the plugin manifest's build hook runs
+  # `cargo build --release`, so there is no prebuilt artifact to fall back to.
+  if ! command -v cargo >/dev/null 2>&1; then
+    log_warning "cargo is required to build the $HERDR_PLUGIN_ID plugin; skipping."
+    return 0
+  fi
+
+  # Replacing an install pinned to a different ref: uninstall first rather than
+  # relying on install-over-existing semantics. The plugin keeps its own config
+  # under ~/.config/herdr-devcontainer, so nothing the user set is discarded.
+  if [[ -n "$kind" ]]; then
+    log_info "Replacing $HERDR_PLUGIN_ID (${ref:-$kind}) with $HERDR_DEVCONTAINER_REF..."
+    "$HERDR_BIN" plugin uninstall "$HERDR_PLUGIN_ID" >/dev/null 2>&1 || true
+  fi
+
+  # Never fatal. Plugin commands go through the running Herdr server's socket
+  # API, so a first bootstrap that has not started Herdr yet cannot register
+  # anything -- and that must not take down every later phase of bin/install.
+  log_info "Installing $HERDR_DEVCONTAINER_REPO $HERDR_DEVCONTAINER_REF..."
+  if "$HERDR_BIN" plugin install "$HERDR_DEVCONTAINER_REPO" \
+    --ref "$HERDR_DEVCONTAINER_REF" --yes; then
+    log_success "Installed $HERDR_PLUGIN_ID $HERDR_DEVCONTAINER_REF."
+  else
+    log_warning "Could not install $HERDR_PLUGIN_ID; rerun after Herdr has started once."
+  fi
+  return 0
+}
+
 report_plan() {
   printf 'Herdr install plan:\n'
   printf '  version:    %s\n' "$HERDR_VERSION"
   printf '  binary:     %s\n' "$HERDR_BIN"
   printf '  state:      %s\n' "$HERDR_STATE_ROOT"
   printf '  config:     %s\n' "$HERDR_CONFIG_ROOT/config.toml"
+  printf '  plugin:     %s@%s\n' "$HERDR_DEVCONTAINER_REPO" "$HERDR_DEVCONTAINER_REF"
   printf '  installed:  %s\n' "$(installed_marker || printf '(none)')"
 }
 
@@ -231,6 +307,7 @@ main() {
 
   install_pinned_binary "$arch"
   install_config
+  install_plugin
 }
 
 if [[ "${HERDR_INSTALL_SOURCE_ONLY:-0}" != "1" ]]; then

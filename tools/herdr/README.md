@@ -26,8 +26,41 @@ already has it.
 4. Copies `config.toml.template` to `~/.config/herdr/config.toml` if that file
    does not exist. An existing config is never overwritten — drift is reported
    and the file is left alone.
+5. Installs the `devcontainer` plugin at the ref pinned in
+   `config/versions.env`, because the shipped config binds two keys to it.
 
 `bash tools/herdr/install.sh --check` prints the plan and writes nothing.
+
+## The Dev Container plugin
+
+The shipped config binds `prefix+d` to a shell inside the repository's Dev
+Container and `prefix+shift+s` to stopping it. Those actions come from
+[gambtho/herdr-devcontainer](https://github.com/gambtho/herdr-devcontainer), so
+the installer registers the plugin rather than leaving two dead keys on a fresh
+machine.
+
+`prefix+shift+s` and not `prefix+shift+d`: the latter is Herdr's built-in
+`close_workspace`, and stopping a container is destructive enough that it should
+not sit under a mis-key of an equally destructive built-in.
+
+This pin works differently from the binary's. There is no digest to commit —
+`herdr plugin install` resolves the ref to a commit and builds it from source
+here — so `HERDR_DEVCONTAINER_REF` is itself the pin, and a Rust toolchain is
+required at install time. Move it by editing that value; the installer
+uninstalls the old ref before installing the new one.
+
+Three things it deliberately will not do:
+
+- **Replace a local link.** A plugin showing as `local:` is someone's
+  development checkout, and swapping it for a tagged release would drop their
+  working tree out of the pane path.
+- **Fail the phase.** Plugin registration goes through the running Herdr
+  server's socket API, so a first bootstrap that has not started Herdr yet
+  cannot register anything. That warns and continues; rerun the phase once
+  Herdr has run.
+- **Keep its own marker file.** Herdr's plugin registry is the authority, read
+  through `herdr plugin list --json`. A marker would disagree with reality after
+  a hand `herdr plugin uninstall`.
 
 ## Why the config is copied, not symlinked
 
