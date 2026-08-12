@@ -130,3 +130,44 @@ JSON
   [ "$status" -ne 0 ]
   [[ "$output" == *"does not exist"* ]]
 }
+
+# ── Argument handling ────────────────────────────────────────────────────────
+# The Windows-user selection itself resolves against the real /mnt/c/Users, so
+# it cannot be faked here. What these cover is the parsing around it: the flag
+# is accepted in both spellings, a missing value is caught rather than
+# swallowing the next flag, and the help text stays in sync with the header.
+
+@test "--win-user is accepted in both spellings" {
+  write_bare_settings
+
+  run env WT_SETTINGS_PATH="$SETTINGS" bash "$(SCRIPT_PATH)" --win-user someone --check
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"Not applied"* ]]
+
+  run env WT_SETTINGS_PATH="$SETTINGS" bash "$(SCRIPT_PATH)" --win-user=someone --check
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"Not applied"* ]]
+}
+
+@test "--win-user without a value is rejected" {
+  # Without the arity check the following flag becomes the username, and the
+  # script goes looking for /mnt/c/Users/--check.
+  run env WT_SETTINGS_PATH="$SETTINGS" bash "$(SCRIPT_PATH)" --win-user
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"requires a value"* ]]
+}
+
+@test "an unknown argument is still rejected" {
+  run env WT_SETTINGS_PATH="$SETTINGS" bash "$(SCRIPT_PATH)" --nonsense
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Unknown argument"* ]]
+}
+
+@test "--help documents --win-user" {
+  # The help text is derived from the leading comment block rather than a fixed
+  # line range, so a header edit cannot silently truncate it.
+  run bash "$(SCRIPT_PATH)" --help
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"--win-user"* ]]
+  [[ "$output" == *"WT_SETTINGS_PATH"* ]]
+}

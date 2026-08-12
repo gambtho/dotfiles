@@ -261,9 +261,19 @@ main() {
       WIN_USER="${CANDIDATES[0]}"
     elif [[ ${#CANDIDATES[@]} -eq 0 ]]; then
       die "No Windows user directory found under /mnt/c/Users."
+    elif [[ ! -t 0 ]]; then
+      # `select` on a closed stdin returns without assigning, and the next
+      # expansion aborts under `set -u` with an unbound-variable message that
+      # explains nothing. Name the real problem instead. (Discovery has no
+      # single-variable override here on purpose: WT_WINDOWS_USER is half of
+      # the all-or-nothing fixture contract above, and honoring it alone would
+      # let a partial fixture silently mix with host discovery.)
+      die "Multiple Windows users found (${CANDIDATES[*]}). This script prompts for the choice, so run it from a terminal."
     else
       echo "Multiple Windows users found:"
       select WIN_USER in "${CANDIDATES[@]}"; do [[ -n "$WIN_USER" ]] && break; done
+      # A bare EOF (ctrl-D) at the prompt breaks the loop with WIN_USER unset.
+      [[ -n "${WIN_USER:-}" ]] || die "No Windows user selected."
     fi
     info "Windows user: $WIN_USER"
 
