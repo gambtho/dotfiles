@@ -4,6 +4,15 @@ load test_helper
 
 setup() {
   setup_dotfiles_test
+  # Read the pin rather than restating it. These assertions used to hardcode
+  # the version, so every bump to config/versions.env left four tests failing
+  # against a value nothing in the installer still used.
+  DEVCONTAINER_REF="$(
+    # shellcheck source=config/versions.env
+    source "$REPO_ROOT/config/versions.env"
+    printf '%s' "$HERDR_DEVCONTAINER_REF"
+  )"
+  export DEVCONTAINER_REF
 }
 
 # Every test sources the installer instead of executing it, matching the
@@ -199,7 +208,7 @@ source_installer() {
 
   [ "$status" -eq 0 ]
   [[ "$output" == *"v0.8.0"* ]]
-  [[ "$output" == *"gambtho/herdr-devcontainer@v0.1.0"* ]]
+  [[ "$output" == *"gambtho/herdr-devcontainer@$DEVCONTAINER_REF"* ]]
   [[ "$output" == *"(none)"* ]]
   [ ! -e "$TEST_ROOT/bin/herdr" ]
   [ ! -e "$TEST_ROOT/config/herdr/config.toml" ]
@@ -260,7 +269,7 @@ run_install_plugin() {
 
   [ "$status" -eq 0 ]
   run cat "$TEST_ROOT/plugin-calls"
-  [[ "$output" == *"plugin install gambtho/herdr-devcontainer --ref v0.1.0 --yes"* ]]
+  [[ "$output" == *"plugin install gambtho/herdr-devcontainer --ref $DEVCONTAINER_REF --yes"* ]]
 }
 
 @test "a locally linked plugin is left alone" {
@@ -276,7 +285,7 @@ run_install_plugin() {
 }
 
 @test "a plugin already at the pinned ref is not reinstalled" {
-  fake_herdr '{"result":{"plugins":[{"plugin_id":"devcontainer","source":{"kind":"github","requested_ref":"v0.1.0"}}]}}'
+  fake_herdr "{\"result\":{\"plugins\":[{\"plugin_id\":\"devcontainer\",\"source\":{\"kind\":\"github\",\"requested_ref\":\"$DEVCONTAINER_REF\"}}]}}"
 
   run_install_plugin
 
@@ -293,7 +302,7 @@ run_install_plugin() {
   [ "$status" -eq 0 ]
   run cat "$TEST_ROOT/plugin-calls"
   [[ "$output" == *"plugin uninstall devcontainer"* ]]
-  [[ "$output" == *"plugin install gambtho/herdr-devcontainer --ref v0.1.0 --yes"* ]]
+  [[ "$output" == *"plugin install gambtho/herdr-devcontainer --ref $DEVCONTAINER_REF --yes"* ]]
 }
 
 @test "a failed plugin install warns without failing the phase" {
