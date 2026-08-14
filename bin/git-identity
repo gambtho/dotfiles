@@ -108,16 +108,38 @@ if [ -z "$exp_email" ]; then
   exit 3
 fi
 
+# NOT ROUTED has two causes and they need opposite repairs, so name the one
+# that actually applies: a repo-local value beats every include, and bin/relink
+# cannot dislodge it.
+explain_not_routed() {
+  local key="$1" scope
+  # $DOTFILES decides which identity-lib.sh gets sourced, so this script can be
+  # newer than the library backing it -- running it out of a linked worktree
+  # does exactly that. Degrade to the generic advice instead of leaking a
+  # "command not found" over the diagnostic.
+  if ! command -v identity_config_override_scope >/dev/null 2>&1; then
+    printf 'No conditional include is routing this repository. Run bin/relink.\n'
+    return 0
+  fi
+  if scope="$(identity_config_override_scope "$key")"; then
+    printf 'A %s-scope %s in this repository overrides the conditional include.\n' \
+      "$scope" "$key"
+    printf 'Run: git config --%s --unset %s\n' "$scope" "$key"
+  else
+    printf 'No conditional include is routing this repository. Run bin/relink.\n'
+  fi
+}
+
 if [ "$exp_email" != "$eff_email" ]; then
   printf 'status:   NOT ROUTED -- git resolves %s, identity expects %s\n' \
     "${eff_email:-<unset>}" "$exp_email"
-  printf 'No conditional include is routing this repository. Run bin/relink.\n'
+  explain_not_routed user.email
   exit 6
 fi
 if [ -n "$exp_key" ] && [ "$exp_key" != "$eff_key" ]; then
   printf 'status:   NOT ROUTED -- signing key is %s, identity expects %s\n' \
     "${eff_key:-<unset>}" "$exp_key"
-  printf 'No conditional include is routing this repository. Run bin/relink.\n'
+  explain_not_routed user.signingKey
   exit 6
 fi
 

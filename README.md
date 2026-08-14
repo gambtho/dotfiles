@@ -124,6 +124,13 @@ yet linked into `$HOME`, `bin/bootstrap` when it hasn't been authored at all,
 and `GH_CONFIG_DIR=$HOME/.gh-<slug> gh auth login --scopes repo,workflow` for a
 missing `gh` config dir.
 
+`NOT ROUTED` — the identity is provisioned but git resolves a different
+`user.email` or `user.signingKey` — has two causes with opposite repairs, and
+the diagnostic names whichever applies: a missing conditional include (fixed by
+`bin/relink`), or a `local`/`worktree`-scope value set in the repository itself,
+which outranks every include and is fixed by `git config --local --unset
+user.email`. The pre-push guard names the same cause when it blocks.
+
 A global `pre-push` hook (`core/git/git-hooks.symlink/pre-push`) double-checks
 before every push: if the destination owner resolves to a provisioned
 identity, it blocks the push when the effective `user.email` or

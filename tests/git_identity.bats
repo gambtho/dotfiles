@@ -300,6 +300,103 @@ EOF
   [ -z "$output" ]
 }
 
+# NOT ROUTED has two causes with different repairs. A missing conditional
+# include is repaired by bin/relink; a repo-local user.email is not -- local
+# scope beats every include, so relink runs, changes nothing, and the report
+# is identical the second time.
+
+@test "not-routed blames the repo-local override that actually wins" {
+  setup_shim_repo "$TEST_ROOT/r" https://github.com/guarzo/repo.git
+  provision_guarzo_files
+  git -C "$TEST_ROOT/r" config user.email someone-else@example.invalid
+  cd "$TEST_ROOT/r"
+  run "$REPO_ROOT/bin/git-identity"
+  [ "$status" -eq 6 ]
+  [[ "$output" == *"NOT ROUTED"* ]]
+  [[ "$output" == *"git config --local --unset user.email"* ]]
+  [[ "$output" != *"bin/relink"* ]]
+}
+
+@test "not-routed still points at relink when no local override exists" {
+  setup_shim_repo "$TEST_ROOT/r" https://github.com/guarzo/repo.git
+  provision_guarzo_files
+  cd "$TEST_ROOT/r"
+  run "$REPO_ROOT/bin/git-identity"
+  [ "$status" -eq 6 ]
+  [[ "$output" == *"NOT ROUTED"* ]]
+  [[ "$output" == *"bin/relink"* ]]
+}
+
+@test "not-routed names the signing key override separately from the email" {
+  setup_shim_repo "$TEST_ROOT/r" https://github.com/guarzo/repo.git
+  provision_guarzo_files
+  git -C "$TEST_ROOT/r" config user.email guarzo@example.invalid
+  git -C "$TEST_ROOT/r" config user.signingKey /keys/wrong.pub
+  cd "$TEST_ROOT/r"
+  run "$REPO_ROOT/bin/git-identity"
+  [ "$status" -eq 6 ]
+  [[ "$output" == *"git config --local --unset user.signingKey"* ]]
+}
+
+@test "pre-push guard names the local override behind an identity mismatch" {
+  setup_guard
+  provision_guarzo
+  git -C "$GUARD_REPO" config user.email someone-else@example.invalid
+  cd "$GUARD_REPO"
+  run "$HOOK" origin https://github.com/guarzo/repo.git </dev/null
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"git config --local --unset user.email"* ]]
+}
+
+# $DOTFILES selects the library, so these scripts can run against one that
+# predates them -- invoking them from a linked worktree does exactly that.
+@test "not-routed degrades quietly against a library without the helper" {
+  setup_shim_repo "$TEST_ROOT/r" https://github.com/guarzo/repo.git
+  provision_guarzo_files
+  # Stand in for an older library by unsetting the helper at the end of the
+  # one that gets sourced -- textually deleting the function risks producing a
+  # file that fails for an unrelated reason.
+  cp "$REPO_ROOT/core/git/identity-lib.sh" "$DOTFILES/core/git/identity-lib.sh"
+  printf 'unset -f identity_config_override_scope\n' \
+    >>"$DOTFILES/core/git/identity-lib.sh"
+  git -C "$TEST_ROOT/r" config user.email someone-else@example.invalid
+  cd "$TEST_ROOT/r"
+  run "$REPO_ROOT/bin/git-identity"
+  [ "$status" -eq 6 ]
+  [[ "$output" == *"bin/relink"* ]]
+  [[ "$output" != *"command not found"* ]]
+}
+
+@test "override scope is empty when the value comes from an include" {
+  setup_shim_repo "$TEST_ROOT/r" https://github.com/guarzo/repo.git
+  cat >"$HOME/.gitconfig" <<'EOF'
+[user]
+	email = from-global@example.invalid
+EOF
+  cd "$TEST_ROOT/r"
+  run bash -c "source '$DOTFILES/core/git/identity-lib.sh'; identity_config_override_scope user.email"
+  [ "$status" -eq 1 ]
+  [ -z "$output" ]
+}
+
+# `git config --worktree` ACTS LIKE --local when extensions.worktreeConfig is
+# off, so probing it unconditionally names a scope the repository does not
+# have -- and prints an --unset command that fails.
+@test "override scope reports worktree only when worktree config is enabled" {
+  setup_shim_repo "$TEST_ROOT/r" https://github.com/guarzo/repo.git
+  git -C "$TEST_ROOT/r" config user.email local-only@example.invalid
+  cd "$TEST_ROOT/r"
+  run bash -c "source '$DOTFILES/core/git/identity-lib.sh'; identity_config_override_scope user.email"
+  [ "$status" -eq 0 ]
+  [ "$output" = "local" ]
+
+  git -C "$TEST_ROOT/r" config extensions.worktreeConfig true
+  git -C "$TEST_ROOT/r" config --worktree user.email wt@example.invalid
+  run bash -c "source '$DOTFILES/core/git/identity-lib.sh'; identity_config_override_scope user.email"
+  [ "$status" -eq 0 ]
+  [ "$output" = "worktree" ]
+}
+
 @test "shim refuses when the owner map is invalid" {
   setup_shim_repo "$TEST_ROOT/r" https://github.com/guarzo/repo.git
   printf 'guarzo guarzo\nguarzo default\n' >"$DOTFILES/core/git/identity-owners"

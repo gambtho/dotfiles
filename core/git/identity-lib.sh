@@ -270,13 +270,46 @@ identity_slug_provision_hint() {
   return 0
 }
 
+# Which config scope is supplying $1, when that scope is one no conditional
+# include can lose to. git resolves command < system < global < local <
+# worktree, and an includeIf block is inlined at ITS file's level -- so a value
+# set in the repository's own config always beats a routed identity.
+#
+# This is the second cause of NOT ROUTED, and it needs the opposite repair from
+# the first: bin/relink fixes a missing include, but re-linking cannot dislodge
+# a repo-local value, so a diagnostic that names only the include sends you
+# round the same loop twice.
+#
+# Prints the scope name (local or worktree) and returns 0 when one is
+# overriding; returns 1 when the value comes from anywhere an include competes
+# with on equal terms.
+#
+# The worktree scope is only consulted when extensions.worktreeConfig is on:
+# with it off, `git config --worktree` silently ACTS LIKE --local, so probing
+# it unconditionally reports every ordinary repo-local value as worktree-scoped
+# and prints an --unset command naming a scope the repo does not have.
+identity_config_override_scope() {
+  local key="$1" scope value scopes="local"
+
+  if [ "$(git config --bool extensions.worktreeConfig 2>/dev/null)" = true ]; then
+    scopes="worktree local"
+  fi
+
+  for scope in $scopes; do
+    value="$(git config --"$scope" --get "$key" 2>/dev/null)" || continue
+    [ -n "$value" ] || continue
+    printf '%s\n' "$scope"
+    return 0
+  done
+  return 1
+}
+
 identity_slug_email() {
   local file
   file="$(identity_slug_configfile "$1")"
   [ -r "$file" ] || return 1
   git config --file "$file" user.email 2>/dev/null
 }
-
 identity_slug_key() {
   local file
   file="$(identity_slug_configfile "$1")"
