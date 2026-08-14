@@ -41,6 +41,23 @@ The attach step is deliberately non-fatal. Bootstrap skips it and continues if:
 A machine without overlays is a working machine. Only the overlay links are
 missing.
 
+### Private https remotes
+
+A private `https://github.com/...` overlay remote authenticates through the
+`gh` credential helper, so the owning identity must be provisioned before the
+clone can succeed. Two consequences:
+
+- The attach step runs **after** bootstrap installs its symlinks, because the
+  helper needs the `~/.gitconfig.<slug>` include that the symlink step creates.
+- The clone runs with `GIT_TERMINAL_PROMPT=0`. Without it, an unprovisioned
+  identity turns the clone into an interactive `Username for
+  'https://github.com':` prompt, and the `^C` that answers it kills the whole
+  bootstrap run — including the steps that would have fixed the problem.
+
+If the clone fails for that reason, bootstrap prints the provisioning commands
+for the remote's own owner (not the current directory's). Run them, then re-run
+bootstrap or clone by hand.
+
 ## Layout
 
 ```text

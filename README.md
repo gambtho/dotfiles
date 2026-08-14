@@ -117,8 +117,12 @@ per identity.
 `bin/git-identity` is the diagnostic: run it inside a repository to see which
 owner/identity applies and whether it's usable (provisioned, token valid,
 transport supported). It's the fastest way to check "why is this behaving
-oddly" and is what both `bin/gh` and the pre-push guard point you at on
-failure.
+oddly". When an identity is mapped but not provisioned, it — like `bin/gh` and
+the pre-push guard — prints the commands that finish provisioning rather than
+just naming the gap: `bin/relink` when the identity file is authored but not
+yet linked into `$HOME`, `bin/bootstrap` when it hasn't been authored at all,
+and `GH_CONFIG_DIR=$HOME/.gh-<slug> gh auth login --scopes repo,workflow` for a
+missing `gh` config dir.
 
 A global `pre-push` hook (`core/git/git-hooks.symlink/pre-push`) double-checks
 before every push: if the destination owner resolves to a provisioned
@@ -197,6 +201,14 @@ Which account is secondary differs per machine, so the prompts follow the map
 rather than a fixed account name. `bin/git-identity` prints the map
 actually in effect, which is the first thing to check when routing surprises you
 on a particular machine.
+
+Provisioning is two independent halves, and an identity is only usable with
+both: the git include (`core/git/gitconfig.<slug>.symlink`, authored by
+`bin/bootstrap` and linked into `$HOME` by its symlink step — `bin/relink`
+re-links it on its own) and the `gh` config dir (`$HOME/.gh-<slug>`, created
+only by that `gh auth login`). Bootstrap authoring the file does not link it,
+so a run interrupted between those two steps leaves an identity that exists in
+the repo but not in `$HOME`.
 
 ## Routine Updates
 

@@ -460,3 +460,47 @@ run_setup_projects_overlay() {
   [[ "$output" == *"is empty"* ]]
   [ ! -e "$HOME/.dotfiles/projects" ]
 }
+
+# Cloning a private https overlay repo authenticates through the gh credential
+# helper, which needs ~/.gitconfig.<slug> -- a symlink only install_dotfiles
+# creates. Attaching first made the clone prompt for a username on a fresh
+# machine, and the ^C that answers that prompt kills bootstrap before any
+# symlink is installed.
+@test "bootstrap installs symlinks before attaching the overlay repo" {
+  local install_line overlay_line
+  install_line="$(grep -n '^  install_dotfiles$' "$REPO_ROOT/bin/bootstrap" | cut -d: -f1)"
+  overlay_line="$(grep -n '^  setup_projects_overlay$' "$REPO_ROOT/bin/bootstrap" | cut -d: -f1)"
+  [ -n "$install_line" ]
+  [ -n "$overlay_line" ]
+  [ "$install_line" -lt "$overlay_line" ]
+}
+
+# A clone that blocks on "Username for 'https://github.com':" turns a
+# non-fatal attach step into a hung bootstrap.
+@test "overlay attach fails fast instead of prompting for credentials" {
+  printf '%s\n' "https://github.com/example/overlays.git" \
+    >"$HOME/.dotfiles-projects-remote"
+  stub_command git 'printf "clone GIT_TERMINAL_PROMPT=[${GIT_TERMINAL_PROMPT:-unset}]\n"; exit 128'
+
+  run_setup_projects_overlay
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"GIT_TERMINAL_PROMPT=[0]"* ]]
+  [[ "$output" == *"continuing without overlays"* ]]
+}
+
+# The clone that failed is the one the user has to repair, so the remaining
+# step must be named for the REMOTE's owner -- not for whichever identity the
+# directory bootstrap happens to be running from resolves to.
+@test "a failed clone names the unprovisioned identity the remote needs" {
+  printf '%s\n' "https://github.com/guarzo/overlays.git" \
+    >"$HOME/.dotfiles-projects-remote"
+  printf 'gambtho default\nguarzo guarzo\n' >"$TEST_ROOT/overlay-owner-map"
+  stub_command git 'exit 128'
+
+  run env BOOTSTRAP_SOURCE_ONLY=1 HOME="$HOME" \
+    IDENTITY_MAP_FILE="$TEST_ROOT/overlay-owner-map" \
+    bash -c 'source "$1/bin/bootstrap"; setup_projects_overlay' _ "$REPO_ROOT"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"GH_CONFIG_DIR=$HOME/.gh-guarzo gh auth login"* ]]
+}

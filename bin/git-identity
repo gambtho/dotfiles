@@ -57,6 +57,9 @@ if ! identity_slug_provisioned "$slug"; then
     printf '  missing: %s\n' "$(identity_slug_configfile "$slug")"
   [ -d "$(identity_slug_configdir "$slug")" ] ||
     printf '  missing: %s\n' "$(identity_slug_configdir "$slug")"
+  # This tool is where bin/gh and the pre-push guard send you, so it is the one
+  # place that must not stop at naming the gap.
+  identity_slug_provision_hint "$slug" '  '
   exit 3
 fi
 

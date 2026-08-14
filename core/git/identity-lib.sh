@@ -229,6 +229,47 @@ identity_slug_provisioned() {
   return 0
 }
 
+# The commands that actually finish provisioning a secondary identity, one line
+# per missing half, each prefixed with $2 so a caller can keep its own voice.
+#
+# Every consumer used to end at "run bin/git-identity", which only DIAGNOSES:
+# it restates NOT PROVISIONED and exits 3. Following that instruction returns
+# you to where you started, and the two halves need different commands anyway.
+#
+# Which command repairs the git include depends on how far provisioning got.
+# Bootstrap authors core/git/gitconfig.<slug>.symlink, and install_dotfiles
+# links it into $HOME as a separate later step -- so an authored-but-unlinked
+# identity needs bin/relink. Sending it to bin/bootstrap instead is a second
+# dead end: bootstrap sees the authored file, reports "already configured",
+# and never re-links.
+identity_slug_provision_hint() {
+  local slug="$1" prefix="${2:-}"
+  local configfile configdir authored
+
+  [ "$slug" = default ] && return 0
+
+  configfile="$(identity_slug_configfile "$slug")"
+  configdir="$(identity_slug_configdir "$slug")"
+  authored="$IDENTITY_DOTFILES_ROOT/core/git/gitconfig.$slug.symlink"
+
+  if [ ! -e "$configfile" ]; then
+    if [ -e "$authored" ]; then
+      printf '%s%s is authored but not linked -- run: %s/bin/relink\n' \
+        "$prefix" "$authored" "$IDENTITY_DOTFILES_ROOT"
+    else
+      printf '%sno identity file authored yet -- run: %s/bin/bootstrap (prompts for "%s")\n' \
+        "$prefix" "$IDENTITY_DOTFILES_ROOT" "$slug"
+    fi
+  fi
+
+  if [ ! -d "$configdir" ]; then
+    printf '%srun: GH_CONFIG_DIR=%s gh auth login --scopes repo,workflow\n' \
+      "$prefix" "$configdir"
+  fi
+
+  return 0
+}
+
 identity_slug_email() {
   local file
   file="$(identity_slug_configfile "$1")"

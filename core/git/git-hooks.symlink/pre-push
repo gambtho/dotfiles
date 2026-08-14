@@ -42,8 +42,9 @@ identity_guard() {
   if [ "$dest" != default ]; then
     if ! identity_slug_provisioned "$dest"; then
       printf 'pre-push: BLOCKED -- pushing to %s but identity "%s" is not provisioned.\n' "$owner" "$dest" >&2
-      printf 'pre-push: expected %s and %s. Run bin/git-identity.\n' \
+      printf 'pre-push: expected %s and %s.\n' \
         "$(identity_slug_configfile "$dest")" "$(identity_slug_configdir "$dest")" >&2
+      identity_slug_provision_hint "$dest" 'pre-push: ' >&2
       return 1
     fi
 
