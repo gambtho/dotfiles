@@ -229,6 +229,174 @@ EOF
   [[ "$output" == *"not provisioned"* ]]
 }
 
+# The shim, the guard, and git-identity all used to end at "run bin/git-identity",
+# which only DIAGNOSES -- it restates "NOT PROVISIONED" and exits. Following the
+# instruction returned you to where you started, so each consumer must name the
+# command that actually provisions the missing half.
+
+@test "shim names the gh login command rather than pointing at the diagnostic" {
+  setup_shim_repo "$TEST_ROOT/r" https://github.com/guarzo/repo.git
+  cd "$TEST_ROOT/r"
+  run "$REPO_ROOT/bin/gh" pr list
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"GH_CONFIG_DIR=$HOME/.gh-guarzo gh auth login"* ]]
+  [[ "$output" != *"run bin/git-identity for the remaining steps"* ]]
+}
+
+@test "git-identity names the provisioning commands instead of only the gap" {
+  setup_shim_repo "$TEST_ROOT/r" https://github.com/guarzo/repo.git
+  cd "$TEST_ROOT/r"
+  run "$REPO_ROOT/bin/git-identity"
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"NOT PROVISIONED"* ]]
+  [[ "$output" == *"GH_CONFIG_DIR=$HOME/.gh-guarzo gh auth login"* ]]
+}
+
+@test "pre-push guard names the provisioning commands" {
+  setup_guard
+  cd "$GUARD_REPO"
+  run "$HOOK" origin https://github.com/guarzo/repo.git </dev/null
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"GH_CONFIG_DIR=$HOME/.gh-guarzo gh auth login"* ]]
+  [[ "$output" != *"Run bin/git-identity."* ]]
+}
+
+# The state that produced the dead end: bootstrap authored the identity, then
+# died before install_dotfiles linked it. "Run bootstrap" is wrong advice there
+# -- it reports the identity as already configured and does not re-link.
+@test "hint says relink when the identity is authored but not linked" {
+  setup_shim_repo "$TEST_ROOT/r" https://github.com/guarzo/repo.git
+  printf '[user]\n\temail = guarzo@example.invalid\n' \
+    >"$DOTFILES/core/git/gitconfig.guarzo.symlink"
+  run bash -c "source '$DOTFILES/core/git/identity-lib.sh'; identity_slug_provision_hint guarzo"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"bin/relink"* ]]
+  [[ "$output" != *"bin/bootstrap"* ]]
+}
+
+@test "hint says bootstrap when no identity file has been authored yet" {
+  setup_shim_repo "$TEST_ROOT/r" https://github.com/guarzo/repo.git
+  run bash -c "source '$DOTFILES/core/git/identity-lib.sh'; identity_slug_provision_hint guarzo"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"bin/bootstrap"* ]]
+  [[ "$output" != *"bin/relink"* ]]
+}
+
+@test "hint reports only the half that is missing" {
+  setup_shim_repo "$TEST_ROOT/r" https://github.com/guarzo/repo.git
+  provision_guarzo_files
+  rm -rf "$HOME/.gh-guarzo"
+  run bash -c "source '$DOTFILES/core/git/identity-lib.sh'; identity_slug_provision_hint guarzo"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"gh auth login"* ]]
+  [[ "$output" != *"bin/relink"* ]]
+  [[ "$output" != *"bin/bootstrap"* ]]
+}
+
+@test "hint is silent for the default identity" {
+  setup_shim_repo "$TEST_ROOT/r" https://github.com/guarzo/repo.git
+  run bash -c "source '$DOTFILES/core/git/identity-lib.sh'; identity_slug_provision_hint default"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+# NOT ROUTED has two causes with different repairs. A missing conditional
+# include is repaired by bin/relink; a repo-local user.email is not -- local
+# scope beats every include, so relink runs, changes nothing, and the report
+# is identical the second time.
+
+@test "not-routed blames the repo-local override that actually wins" {
+  setup_shim_repo "$TEST_ROOT/r" https://github.com/guarzo/repo.git
+  provision_guarzo_files
+  git -C "$TEST_ROOT/r" config user.email someone-else@example.invalid
+  cd "$TEST_ROOT/r"
+  run "$REPO_ROOT/bin/git-identity"
+  [ "$status" -eq 6 ]
+  [[ "$output" == *"NOT ROUTED"* ]]
+  [[ "$output" == *"git config --local --unset user.email"* ]]
+  [[ "$output" != *"bin/relink"* ]]
+}
+
+@test "not-routed still points at relink when no local override exists" {
+  setup_shim_repo "$TEST_ROOT/r" https://github.com/guarzo/repo.git
+  provision_guarzo_files
+  cd "$TEST_ROOT/r"
+  run "$REPO_ROOT/bin/git-identity"
+  [ "$status" -eq 6 ]
+  [[ "$output" == *"NOT ROUTED"* ]]
+  [[ "$output" == *"bin/relink"* ]]
+}
+
+@test "not-routed names the signing key override separately from the email" {
+  setup_shim_repo "$TEST_ROOT/r" https://github.com/guarzo/repo.git
+  provision_guarzo_files
+  git -C "$TEST_ROOT/r" config user.email guarzo@example.invalid
+  git -C "$TEST_ROOT/r" config user.signingKey /keys/wrong.pub
+  cd "$TEST_ROOT/r"
+  run "$REPO_ROOT/bin/git-identity"
+  [ "$status" -eq 6 ]
+  [[ "$output" == *"git config --local --unset user.signingKey"* ]]
+}
+
+@test "pre-push guard names the local override behind an identity mismatch" {
+  setup_guard
+  provision_guarzo
+  git -C "$GUARD_REPO" config user.email someone-else@example.invalid
+  cd "$GUARD_REPO"
+  run "$HOOK" origin https://github.com/guarzo/repo.git </dev/null
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"git config --local --unset user.email"* ]]
+}
+
+# $DOTFILES selects the library, so these scripts can run against one that
+# predates them -- invoking them from a linked worktree does exactly that.
+@test "not-routed degrades quietly against a library without the helper" {
+  setup_shim_repo "$TEST_ROOT/r" https://github.com/guarzo/repo.git
+  provision_guarzo_files
+  # Stand in for an older library by unsetting the helper at the end of the
+  # one that gets sourced -- textually deleting the function risks producing a
+  # file that fails for an unrelated reason.
+  cp "$REPO_ROOT/core/git/identity-lib.sh" "$DOTFILES/core/git/identity-lib.sh"
+  printf 'unset -f identity_config_override_scope\n' \
+    >>"$DOTFILES/core/git/identity-lib.sh"
+  git -C "$TEST_ROOT/r" config user.email someone-else@example.invalid
+  cd "$TEST_ROOT/r"
+  run "$REPO_ROOT/bin/git-identity"
+  [ "$status" -eq 6 ]
+  [[ "$output" == *"bin/relink"* ]]
+  [[ "$output" != *"command not found"* ]]
+}
+
+@test "override scope is empty when the value comes from an include" {
+  setup_shim_repo "$TEST_ROOT/r" https://github.com/guarzo/repo.git
+  cat >"$HOME/.gitconfig" <<'EOF'
+[user]
+	email = from-global@example.invalid
+EOF
+  cd "$TEST_ROOT/r"
+  run bash -c "source '$DOTFILES/core/git/identity-lib.sh'; identity_config_override_scope user.email"
+  [ "$status" -eq 1 ]
+  [ -z "$output" ]
+}
+
+# `git config --worktree` ACTS LIKE --local when extensions.worktreeConfig is
+# off, so probing it unconditionally names a scope the repository does not
+# have -- and prints an --unset command that fails.
+@test "override scope reports worktree only when worktree config is enabled" {
+  setup_shim_repo "$TEST_ROOT/r" https://github.com/guarzo/repo.git
+  git -C "$TEST_ROOT/r" config user.email local-only@example.invalid
+  cd "$TEST_ROOT/r"
+  run bash -c "source '$DOTFILES/core/git/identity-lib.sh'; identity_config_override_scope user.email"
+  [ "$status" -eq 0 ]
+  [ "$output" = "local" ]
+
+  git -C "$TEST_ROOT/r" config extensions.worktreeConfig true
+  git -C "$TEST_ROOT/r" config --worktree user.email wt@example.invalid
+  run bash -c "source '$DOTFILES/core/git/identity-lib.sh'; identity_config_override_scope user.email"
+  [ "$status" -eq 0 ]
+  [ "$output" = "worktree" ]
+}
+
 @test "shim refuses when the owner map is invalid" {
   setup_shim_repo "$TEST_ROOT/r" https://github.com/guarzo/repo.git
   printf 'guarzo guarzo\nguarzo default\n' >"$DOTFILES/core/git/identity-owners"

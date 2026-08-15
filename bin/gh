@@ -117,7 +117,7 @@ if ! identity_slug_provisioned "$slug"; then
   printf 'gh: identity "%s" is mapped but not provisioned.\n' "$slug" >&2
   printf 'gh: expected %s and %s.\n' \
     "$(identity_slug_configfile "$slug")" "$(identity_slug_configdir "$slug")" >&2
-  printf 'gh: run bin/git-identity for the remaining steps.\n' >&2
+  identity_slug_provision_hint "$slug" 'gh: ' >&2
   exit 4
 fi
 

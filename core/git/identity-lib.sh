@@ -229,13 +229,87 @@ identity_slug_provisioned() {
   return 0
 }
 
+# The commands that actually finish provisioning a secondary identity, one line
+# per missing half, each prefixed with $2 so a caller can keep its own voice.
+#
+# Every consumer used to end at "run bin/git-identity", which only DIAGNOSES:
+# it restates NOT PROVISIONED and exits 3. Following that instruction returns
+# you to where you started, and the two halves need different commands anyway.
+#
+# Which command repairs the git include depends on how far provisioning got.
+# Bootstrap authors core/git/gitconfig.<slug>.symlink, and install_dotfiles
+# links it into $HOME as a separate later step -- so an authored-but-unlinked
+# identity needs bin/relink. Sending it to bin/bootstrap instead is a second
+# dead end: bootstrap sees the authored file, reports "already configured",
+# and never re-links.
+identity_slug_provision_hint() {
+  local slug="$1" prefix="${2:-}"
+  local configfile configdir authored
+
+  [ "$slug" = default ] && return 0
+
+  configfile="$(identity_slug_configfile "$slug")"
+  configdir="$(identity_slug_configdir "$slug")"
+  authored="$IDENTITY_DOTFILES_ROOT/core/git/gitconfig.$slug.symlink"
+
+  if [ ! -e "$configfile" ]; then
+    if [ -e "$authored" ]; then
+      printf '%s%s is authored but not linked -- run: %s/bin/relink\n' \
+        "$prefix" "$authored" "$IDENTITY_DOTFILES_ROOT"
+    else
+      printf '%sno identity file authored yet -- run: %s/bin/bootstrap (prompts for "%s")\n' \
+        "$prefix" "$IDENTITY_DOTFILES_ROOT" "$slug"
+    fi
+  fi
+
+  if [ ! -d "$configdir" ]; then
+    printf '%srun: GH_CONFIG_DIR=%s gh auth login --scopes repo,workflow\n' \
+      "$prefix" "$configdir"
+  fi
+
+  return 0
+}
+
+# Which config scope is supplying $1, when that scope is one no conditional
+# include can lose to. git resolves command < system < global < local <
+# worktree, and an includeIf block is inlined at ITS file's level -- so a value
+# set in the repository's own config always beats a routed identity.
+#
+# This is the second cause of NOT ROUTED, and it needs the opposite repair from
+# the first: bin/relink fixes a missing include, but re-linking cannot dislodge
+# a repo-local value, so a diagnostic that names only the include sends you
+# round the same loop twice.
+#
+# Prints the scope name (local or worktree) and returns 0 when one is
+# overriding; returns 1 when the value comes from anywhere an include competes
+# with on equal terms.
+#
+# The worktree scope is only consulted when extensions.worktreeConfig is on:
+# with it off, `git config --worktree` silently ACTS LIKE --local, so probing
+# it unconditionally reports every ordinary repo-local value as worktree-scoped
+# and prints an --unset command naming a scope the repo does not have.
+identity_config_override_scope() {
+  local key="$1" scope value scopes="local"
+
+  if [ "$(git config --bool extensions.worktreeConfig 2>/dev/null)" = true ]; then
+    scopes="worktree local"
+  fi
+
+  for scope in $scopes; do
+    value="$(git config --"$scope" --get "$key" 2>/dev/null)" || continue
+    [ -n "$value" ] || continue
+    printf '%s\n' "$scope"
+    return 0
+  done
+  return 1
+}
+
 identity_slug_email() {
   local file
   file="$(identity_slug_configfile "$1")"
   [ -r "$file" ] || return 1
   git config --file "$file" user.email 2>/dev/null
 }
-
 identity_slug_key() {
   local file
   file="$(identity_slug_configfile "$1")"
