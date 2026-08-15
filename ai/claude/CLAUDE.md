@@ -58,6 +58,13 @@ and documentation all count as writes.
 Trivial edits may skip blindspot-pass and change-explainer, but they do not skip
 the linked-worktree-before-writing rule.
 
+This rule is enforced, not advisory: a PreToolUse hook
+(`ai/claude/hooks/worktree-guard.sh`) denies Edit/Write/NotebookEdit whose
+target resolves into a primary checkout. A denial there means "move to a
+worktree", not "find another way to write the file". Repos listed in
+`~/.claude/worktree-guard-allow` are exempt, and `CLAUDE_WORKTREE_GUARD=off`
+disables the guard entirely — both are my call to make, not yours to assume.
+
 ## Repository inspection
 
 Before substantial implementation, inspect what is relevant: source, tests,
@@ -76,17 +83,10 @@ silently choosing:
 
 ## Blind-spot analysis
 
-For substantial or unfamiliar work, examine: assumptions in the request,
-assumptions you are making, constraints that could invalidate the obvious
-solution, reference code that should be followed, architecture/ownership
-boundaries, data lifecycle and migration, backward compatibility, security and
-privacy, concurrency and failure behavior, deployment/operational effects,
-observability needs, test limitations, UX edge cases, and accidental scope
-expansion.
-
-Separate findings into **confirmed facts**, **reasonable inferences**, and
-**unresolved decisions**. For deliberate, on-demand analysis, use the
-`blindspot-pass` skill.
+For substantial or unfamiliar work, run `my:blindspot-pass` — it carries the
+checklist and the report format. However the analysis happens, keep **confirmed
+facts**, **reasonable inferences**, and **unresolved decisions** separate;
+collapsing them is the failure this phase exists to prevent.
 
 ## When to ask vs. proceed
 
@@ -115,28 +115,16 @@ uncertainty, not required steps.
 
 ## Planning
 
-Before substantial implementation, produce a concise, evidence-based plan
-(use the `implementation-plan` skill for the full form). Lead with the decisions
-most likely to need review, and keep routine mechanical edits last:
+Before substantial implementation, produce a concise, evidence-based plan;
+`my:implementation-plan` carries the full form and the review-risk ordering.
+Do not follow a plan mechanically once repository evidence disproves its
+assumptions.
 
-1. Observable behavior and UX.
-2. Architecture and boundaries.
-3. Data models and interfaces.
-4. Compatibility and migration.
-5. Security and failure handling.
-6. Deployment and operations.
-7. Testing and verification.
-
-A plan covers: intended outcome, repository evidence and constraints, important
-decisions and alternatives, ordered steps, verification strategy, assumptions
-that may change, and explicit exclusions. Do not follow a plan mechanically once
-repository evidence disproves its assumptions.
-
-Before saving a plan, run the project's formatter over every code block the
-plan embeds, and paste back the formatted result. Implementers transcribe plan
-blocks verbatim, so an unformatted block becomes an unformatted commit in every
-task that copies it — and the formatter check usually sits at the final gate,
-long after the last transcription.
+Run the project's formatter over every code block a plan embeds, and paste back
+the formatted result. Implementers transcribe plan blocks verbatim, so an
+unformatted block becomes an unformatted commit in every task that copies it —
+and the formatter check usually sits at the final gate, long after the last
+transcription.
 
 ## Implementation notes
 
@@ -159,26 +147,40 @@ into the repository's normal design doc / ADR / PR format.
 - Preserve useful error context; follow existing observability conventions.
 - Avoid unnecessary dependencies.
 - Comment intent and tradeoffs, not a restatement of the code.
-- Never claim a command passed unless you actually ran it. Never hide
-  uncertainty behind confident wording.
+- Never hide uncertainty behind confident wording.
 
 ## Verification before claiming completion
 
-1. Inspect the final diff.
-2. Compare the result against the original request.
-3. Compare it against repository constraints.
-4. Run relevant focused tests; run broader tests when justified.
-5. Run applicable formatting, linting, type checking, static analysis, and build.
-6. Check for accidental scope expansion.
-7. Check for placeholders, dead code, debug output, and incomplete paths.
-8. Review implementation notes and unresolved assumptions.
+`superpowers:verification-before-completion` governs the core rule: never claim
+a command passed unless you actually ran it, and no completion claim without
+fresh evidence. Beyond running the tests, linting, type checking, static
+analysis, and build that apply:
+
+1. Inspect the final diff, and compare it against both the original request and
+   the repository's own constraints.
+2. Check for accidental scope expansion.
+3. Check for placeholders, dead code, debug output, and incomplete paths.
+4. Review implementation notes and unresolved assumptions.
 
 When a check cannot be run, state which one, why, and what uncertainty remains.
 
 ## Completion explanation
 
-For non-trivial changes, explain: what changed, how the main path works,
-important design decisions, discoveries and deviations from the plan, edge cases
-and failure behavior, the exact verification performed, unresolved risks or
-follow-up, and where reviewers should focus. The `change-explainer` skill
-produces this form on demand.
+For non-trivial changes, run `my:change-explainer` — it produces the
+reviewer-facing write-up: what changed, how the main path works, important
+decisions, deviations, edge cases, the verification actually performed, and
+where reviewers should focus.
+
+## Standing authorization: subagents, workflows, research tools
+
+I authorize subagent dispatch, multi-agent workflows, and research tooling as a
+**standing request**, for every session and every project. This file is that
+request. When a skill's own procedure calls for dispatching subagents — for
+example the parallel review phase of `my:polish-core`, or
+`superpowers:dispatching-parallel-agents` — dispatch them. Do not skip the
+phase, do not degrade to a local check, and do not ask again or narrate the
+permission question back to me.
+
+This is authorization, not instruction: normal judgment about cost and scope
+still applies, and a one-file lookup does not need a subagent. It means the
+question of whether you *may* is already answered.
