@@ -392,10 +392,29 @@ setup_projects_overlay() {
     return 0
   fi
 
-  if git clone "$remote" "$overlay_dir"; then
+  # GIT_TERMINAL_PROMPT=0 so an unauthenticated https remote fails immediately
+  # instead of blocking bootstrap on "Username for 'https://github.com':". That
+  # prompt is answered with ^C, which kills the whole run -- an optional step
+  # taking the machine down with it.
+  if GIT_TERMINAL_PROMPT=0 git clone "$remote" "$overlay_dir"; then
     log_success "Project overlays attached at $overlay_dir"
   else
     log_warning "Could not clone the project overlay repo; continuing without overlays"
+    # Name the identity the REMOTE needs, not whichever one the current
+    # directory happens to route to: the overlay repo is frequently owned by a
+    # different account than the checkout bootstrap is running from.
+    (
+      # Source the library from the running checkout, but leave $DOTFILES alone
+      # so the hint names the paths the gh shim and the pre-push guard will
+      # actually consult later. Pinning it to $DOTFILES_ROOT would print a
+      # bin/relink under a disposable linked worktree when bootstrap was run
+      # from one.
+      . "$DOTFILES_ROOT/core/git/identity-lib.sh" 2>/dev/null || exit 0
+      owner="$(identity_url_owner "$remote" 2>/dev/null)" || exit 0
+      slug="$(identity_owner_slug "$owner" 2>/dev/null)" || exit 0
+      identity_slug_provisioned "$slug" && exit 0
+      identity_slug_provision_hint "$slug" '  [ INFO ] '
+    ) || true
   fi
   return 0
 }
@@ -506,8 +525,11 @@ main() {
   # run from, which may be a disposable linked worktree. The stable root must
   # name the canonical checkout.
   ensure_stable_link_root "$HOME/.dotfiles"
-  setup_projects_overlay
   install_dotfiles
+  # AFTER install_dotfiles, not before: a private https overlay remote
+  # authenticates through the gh credential helper, which needs the identity
+  # include that install_dotfiles links into $HOME.
+  setup_projects_overlay
 
   log_success "Bootstrap complete. Run 'bin/install' to complete setup."
 }

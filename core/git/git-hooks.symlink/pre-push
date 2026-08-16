@@ -16,6 +16,24 @@
 
 remote_url="${2:-}"
 
+# A repo-local user.email or user.signingKey outranks every conditional
+# include, so "the identity does not match" is frequently a value set right
+# here rather than routing that never fired. Naming the scope turns a blocked
+# push into a one-line repair. Defined before the guard because the guard
+# sources identity-lib.sh at call time.
+guard_explain_mismatch() {
+  local key="$1" scope
+  # The hook can outrun the library it sources (see bin/git-identity); the
+  # mismatch above is already reported, so add nothing rather than fail.
+  command -v identity_config_override_scope >/dev/null 2>&1 || return 0
+  if scope="$(identity_config_override_scope "$key")"; then
+    printf 'pre-push: a %s-scope %s in this repository overrides the routed identity.\n' \
+      "$scope" "$key" >&2
+    printf 'pre-push: run: git config --%s --unset %s\n' "$scope" "$key" >&2
+  fi
+  return 0
+}
+
 identity_guard() {
   local url="$1"
   local root owner dest eff exp_email exp_key eff_email eff_key
@@ -42,8 +60,9 @@ identity_guard() {
   if [ "$dest" != default ]; then
     if ! identity_slug_provisioned "$dest"; then
       printf 'pre-push: BLOCKED -- pushing to %s but identity "%s" is not provisioned.\n' "$owner" "$dest" >&2
-      printf 'pre-push: expected %s and %s. Run bin/git-identity.\n' \
+      printf 'pre-push: expected %s and %s.\n' \
         "$(identity_slug_configfile "$dest")" "$(identity_slug_configdir "$dest")" >&2
+      identity_slug_provision_hint "$dest" 'pre-push: ' >&2
       return 1
     fi
 
@@ -59,11 +78,13 @@ identity_guard() {
     if [ "$exp_email" != "$eff_email" ]; then
       printf 'pre-push: BLOCKED -- pushing to %s as %s, but identity "%s" is %s.\n' \
         "$owner" "$eff_email" "$dest" "$exp_email" >&2
+      guard_explain_mismatch user.email
       return 1
     fi
     if [ -n "$exp_key" ] && [ "$exp_key" != "$eff_key" ]; then
       printf 'pre-push: BLOCKED -- signing key %s does not match identity "%s" (%s).\n' \
         "${eff_key:-<unset>}" "$dest" "$exp_key" >&2
+      guard_explain_mismatch user.signingKey
       return 1
     fi
     return 0

@@ -79,7 +79,7 @@
       "mcp__plugin_playwright_playwright",
       "mcp__plugin_linear_linear"
     ],
-    "defaultMode": "acceptEdits"
+    "defaultMode": "auto"
   },
   "model": "opus[1m]",
   "hooks": {
