@@ -66,12 +66,13 @@ These rules cover Bash only. Direct file writes remain governed by the worktree 
 The tracked `ai/pi/permissions.json` adds a conservative global allow policy for common inspection commands:
 
 - `rg` and `fd` when they do not invoke preprocessors or executors;
-- `jq` and non-in-place `yq` without shell control or redirection;
+- direct `jq`, non-in-place `yq`, and one-stage `... | jq ...` pipelines from file readers or approved read-only Git/GitHub commands, without redirection or additional shell control;
 - read-only Git metadata (`rev-parse`, `merge-base`, remote display, and worktree listing);
 - read-only GitHub views and lists;
+- direct `bats` test-suite and trusted project `make` invocations;
 - path and checksum utilities.
 
-It deliberately does not blanket-allow `git`, `gh`, package managers, language runtimes, shells, or project scripts. Mutating and compound variants fall through to pi-amplike's built-in rules, which ask or deny. Project-specific rules can be added under `.agents/settings.json`.
+It deliberately does not blanket-allow `git`, `gh`, package managers, language runtimes, shells, or arbitrary project scripts. `make` is the explicit exception: a trusted repository's Makefile is treated as trusted executable workflow. Mutating and compound variants fall through to pi-amplike's built-in rules, which ask or deny. Project-specific rules can be added under `.agents/settings.json`.
 
 ### Second opinion versus Oracle
 

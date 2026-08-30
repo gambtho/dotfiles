@@ -40,6 +40,16 @@ setup() {
   [ "$status" -eq 0 ]
 }
 
+@test "PR review batches are partitioned by mode" {
+  local prompt="$REPO_ROOT/ai/marketplace/plugins/my/prompts/review-prs.md"
+  run grep -F 'partition the selected PRs into `rush`, `smart`, and `deep` groups' "$prompt"
+  [ "$status" -eq 0 ]
+  run grep -F 'never mix PRs requiring different modes in the same call' "$prompt"
+  [ "$status" -eq 0 ]
+  run grep -F 'up to 2 tasks when `RATE_LIMITED=true`' "$prompt"
+  [ "$status" -eq 0 ]
+}
+
 @test "personal workflows route through named modes instead of hard-coded routine models" {
   run rg -n 'mode `smart`' \
     "$REPO_ROOT/ai/marketplace/plugins/my/prompts/fix-pr.md" \

@@ -276,7 +276,7 @@ If any exist, remove them with `git worktree remove` (for any registered worktre
 
 **Goal**: Deep code review of each PR using parallel agents.
 
-Launch review subagents in batches of up to 5 at a time (or 2 if RATE_LIMITED) using the `subagent` tool. Make one parallel tool call per batch. Select the **mode per PR based on size category**; `ai/pi/modes.json` centrally controls the corresponding model and thinking level:
+Select the **mode per PR based on size category**; `ai/pi/modes.json` centrally controls the corresponding model and thinking level:
 
 | Size Category | Mode | Rationale |
 |---------------|------|-----------|
@@ -285,6 +285,8 @@ Launch review subagents in batches of up to 5 at a time (or 2 if RATE_LIMITED) u
 | Medium | `smart` | Good balance of depth and speed |
 | Large | `deep` | Needs careful analysis of impactful files |
 | Very Large | `deep` | Summary-only mode with deeper reasoning |
+
+Before invoking `subagent`, partition the selected PRs into `rush`, `smart`, and `deep` groups according to this table. Preserve the selected PR order within each group. Process every group in batches of up to 5 tasks, or up to 2 tasks when `RATE_LIMITED=true`. Make one parallel `subagent` call per batch with that group's mode, and never mix PRs requiring different modes in the same call.
 
 **Agent timeout guidance**: Give each agent a reasonable scope. If an agent has not returned after 5 minutes, do NOT block the pipeline — mark that PR as "review incomplete — agent timed out" in the report and continue with other results.
 
