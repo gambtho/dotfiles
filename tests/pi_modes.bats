@@ -60,7 +60,7 @@ setup() {
     "$REPO_ROOT/ai/marketplace/plugins/my/skills/improve/references/platforms.md"
   [ "$status" -eq 0 ]
 
-  run rg -n 'github-copilot/(claude-(haiku|sonnet)|gpt-5\\.6)' \
+  run rg -n 'github-copilot/(claude-(haiku|sonnet)|gpt-5\.6)' \
     "$REPO_ROOT/ai/marketplace/plugins/my/prompts" \
     "$REPO_ROOT/ai/marketplace/plugins/my/skills"
   [ "$status" -eq 1 ]
