@@ -106,7 +106,7 @@ Walk the detection table against the repo root. Assemble the final checklist as 
    ```
    Filter to those that actually have reviews with comments (not just approvals).
 
-2. For the top 15 with comments (or top 5 if learnings already exist), use the `subagent` tool with mode `rush` and model `github-copilot/claude-haiku-4.5` (2-5 at a time, or 2 if RATE_LIMITED) to fetch and analyze review comments. Launch each batch in one parallel call. Each subagent should fetch and analyze 3-5 PRs via:
+2. For the top 15 with comments (or top 5 if learnings already exist), use the `subagent` tool with mode `rush` (2-5 at a time, or 2 if RATE_LIMITED) to fetch and analyze review comments. Launch each batch in one parallel call. Each subagent should fetch and analyze 3-5 PRs via:
    ```
    gh api repos/{OWNER}/{REPO}/pulls/{number}/reviews
    gh api repos/{OWNER}/{REPO}/pulls/{number}/comments
@@ -276,15 +276,15 @@ If any exist, remove them with `git worktree remove` (for any registered worktre
 
 **Goal**: Deep code review of each PR using parallel agents.
 
-Launch review subagents in batches of up to 5 at a time (or 2 if RATE_LIMITED) using the `subagent` tool. Make one parallel tool call per batch. Select the **mode and GitHub Copilot model per PR based on size category**:
+Launch review subagents in batches of up to 5 at a time (or 2 if RATE_LIMITED) using the `subagent` tool. Make one parallel tool call per batch. Select the **mode per PR based on size category**; `ai/pi/modes.json` centrally controls the corresponding model and thinking level:
 
-| Size Category | Mode | Model | Rationale |
-|---------------|------|-------|-----------|
-| Lockfile-only | `rush` | `github-copilot/claude-haiku-4.5` | Trivial changes, just check version sanity |
-| Small | `rush` | `github-copilot/claude-haiku-4.5` | Fast and sufficient for small diffs |
-| Medium | `smart` | `github-copilot/claude-sonnet-4.6` | Good balance of depth and speed |
-| Large | `deep` | `github-copilot/claude-sonnet-4.6` | Needs careful analysis of impactful files |
-| Very Large | `deep` | `github-copilot/claude-sonnet-4.6` | Summary-only mode, sonnet sufficient |
+| Size Category | Mode | Rationale |
+|---------------|------|-----------|
+| Lockfile-only | `rush` | Trivial changes, just check version sanity |
+| Small | `rush` | Fast and sufficient for small diffs |
+| Medium | `smart` | Good balance of depth and speed |
+| Large | `deep` | Needs careful analysis of impactful files |
+| Very Large | `deep` | Summary-only mode with deeper reasoning |
 
 **Agent timeout guidance**: Give each agent a reasonable scope. If an agent has not returned after 5 minutes, do NOT block the pipeline — mark that PR as "review incomplete — agent timed out" in the report and continue with other results.
 

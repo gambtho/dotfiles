@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "currentMode": "smart",
+  "modes": {
+    "rush": {
+      "provider": "github-copilot",
+      "modelId": "claude-haiku-4.5",
+      "thinkingLevel": "low",
+      "color": "green"
+    },
+    "smart": {
+      "provider": "github-copilot",
+      "modelId": "claude-sonnet-4.6",
+      "thinkingLevel": "medium",
+      "color": "blue"
+    },
+    "deep": {
+      "provider": "github-copilot",
+      "modelId": "claude-opus-4.7",
+      "thinkingLevel": "high",
+      "color": "yellow"
+    },
+    "review": {
+      "provider": "github-copilot",
+      "modelId": "gpt-5.4",
+      "thinkingLevel": "medium",
+      "color": "purple"
+    }
+  }
+}

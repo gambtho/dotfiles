@@ -53,7 +53,9 @@ SCRIPT
   [[ "$output" == *"$HOME/.pi/agent/settings.json"* ]]
   [[ "$output" == *"$HOME/.pi/agent/AGENTS.md"* ]]
   [[ "$output" == *"$HOME/.pi/agent/keybindings.json"* ]]
+  [[ "$output" == *"$HOME/.pi/agent/modes.json"* ]]
   [[ "$output" == *"$HOME/.pi/agent/extensions"* ]]
+  [[ "$output" == *"$HOME/.config/amp/settings.json"* ]]
   [[ "$output" == *"reconcile Pi packages"* ]]
 }
 
@@ -69,7 +71,9 @@ SCRIPT
   assert_symlink_target "$HOME/.pi/agent/settings.json" "$REPO_ROOT/ai/pi/settings.json"
   assert_symlink_target "$HOME/.pi/agent/AGENTS.md" "$REPO_ROOT/ai/pi/AGENTS.md"
   assert_symlink_target "$HOME/.pi/agent/keybindings.json" "$REPO_ROOT/ai/pi/keybindings.json"
+  assert_symlink_target "$HOME/.pi/agent/modes.json" "$REPO_ROOT/ai/pi/modes.json"
   assert_symlink_target "$HOME/.pi/agent/extensions" "$REPO_ROOT/ai/pi/extensions"
+  assert_symlink_target "$HOME/.config/amp/settings.json" "$REPO_ROOT/ai/pi/permissions.json"
   [ "$(cat "$HOME/pi-invocation")" = "update --extensions" ]
 }
 

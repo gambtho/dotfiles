@@ -39,12 +39,14 @@ main() {
   fi
 
   if [[ "$check_only" != true ]]; then
-    mkdir -p "$HOME/.pi/agent"
+    mkdir -p "$HOME/.pi/agent" "$HOME/.config/amp"
   fi
   link_pi_file "$ROOT/ai/pi/settings.json" "$HOME/.pi/agent/settings.json" settings
   link_pi_file "$ROOT/ai/pi/AGENTS.md" "$HOME/.pi/agent/AGENTS.md" "global AGENTS.md"
   link_pi_file "$ROOT/ai/pi/keybindings.json" "$HOME/.pi/agent/keybindings.json" keybindings
+  link_pi_file "$ROOT/ai/pi/modes.json" "$HOME/.pi/agent/modes.json" modes
   link_pi_file "$ROOT/ai/pi/extensions" "$HOME/.pi/agent/extensions" extensions
+  link_pi_file "$ROOT/ai/pi/permissions.json" "$HOME/.config/amp/settings.json" permissions
 
   if [[ "$check_only" == true ]]; then
     log_info "[dry-run] Would reconcile Pi packages from settings.json"

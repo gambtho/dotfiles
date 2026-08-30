@@ -1,0 +1,68 @@
+{
+  "amp.permissions": [
+    {
+      "tool": "Bash",
+      "matches": {
+        "cmd": "/^rg(?!.*(?:--pre(?:-glob)?|[;&|><`]|\\$\\()).*$/"
+      },
+      "action": "allow"
+    },
+    {
+      "tool": "Bash",
+      "matches": {
+        "cmd": "/^fd(?!.*(?:--exec(?:-batch)?|\\s-[xX](?:\\s|$)|[;&|><`]|\\$\\()).*$/"
+      },
+      "action": "allow"
+    },
+    {
+      "tool": "Bash",
+      "matches": {
+        "cmd": "/^jq(?!.*[;&|><`]|.*\\$\\().*$/"
+      },
+      "action": "allow"
+    },
+    {
+      "tool": "Bash",
+      "matches": {
+        "cmd": "/^yq(?!.*(?:\\s(?:-i|--inplace)(?:\\s|$)|[;&|><`]|\\$\\()).*$/"
+      },
+      "action": "allow"
+    },
+    {
+      "tool": "Bash",
+      "matches": {
+        "cmd": [
+          "git rev-parse *",
+          "git merge-base *",
+          "git worktree list*",
+          "git remote -v"
+        ]
+      },
+      "action": "allow"
+    },
+    {
+      "tool": "Bash",
+      "matches": {
+        "cmd": [
+          "gh auth status*",
+          "gh repo view *",
+          "gh pr list *",
+          "gh pr view *",
+          "gh pr checks *",
+          "gh issue list *",
+          "gh issue view *",
+          "gh run list *",
+          "gh run view *"
+        ]
+      },
+      "action": "allow"
+    },
+    {
+      "tool": "Bash",
+      "matches": {
+        "cmd": "/^(basename|dirname|readlink|realpath|sha256sum|md5sum)(?:\\s+[^;&|><`]+)?$/"
+      },
+      "action": "allow"
+    }
+  ]
+}

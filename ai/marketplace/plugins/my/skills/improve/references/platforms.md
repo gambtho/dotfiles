@@ -19,7 +19,7 @@ Read `.pi/memory/improve_findings.md` from the project root. If it does not exis
 
 Use one `subagent` tool call with a `tasks` array of three prompts: semantic/architectural, correctness/quality, and surface/dependencies. Each task must be self-contained because subagents do not share the parent conversation. Repeat the required priming reads, Phase 1 data, finding format, and output contract in every task.
 
-Use mode `deep` and a strong GitHub Copilot model. The correctness/quality task should read the applicable language file from the installed `polish-core/rules/` directory.
+Use mode `deep`; the global Pi modes configuration selects its model and thinking level. The correctness/quality task should read the applicable language file from the installed `polish-core/rules/` directory.
 
 ## Persist findings
 

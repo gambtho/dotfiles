@@ -9,7 +9,9 @@ This repository manages Pi as the coding-agent harness under `ai/`:
 ```text
 ai/
   pi/
-    settings.json             # GitHub Copilot provider, packages, and extensions
+    settings.json             # GitHub Copilot provider and package inventory
+    permissions.json          # Conservative pi-amplike Bash allow policy
+    modes.json                # Central subagent model/thinking routing
     keybindings.json          # Global Pi shortcuts
     AGENTS.md                 # Global working agreement
     extensions/

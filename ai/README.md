@@ -21,6 +21,7 @@ Existing Pi packages own generic runtime mechanisms. The local `my` package rema
 |---|---|---|
 | Authentication, model selection, sessions, branching, compaction, and trust | Use native Pi | `@earendil-works/pi-coding-agent` |
 | Subagents and cross-session handoff | Use existing | `pi-amplike` |
+| Subagent model and thinking routing | Manage centrally | `ai/pi/modes.json` |
 | Auto-allow, ask, or deny Bash commands | Use existing | `pi-amplike` permissions in enabled mode |
 | Plan-mode enforcement and persistent plan state | Use existing | `shitty-extensions/extensions/plan-mode.ts` |
 | Planning quality and blind-spot analysis | Keep custom | `implementation-plan`, `blindspot-pass` |
@@ -41,11 +42,36 @@ Existing Pi packages own generic runtime mechanisms. The local `my` package rema
 | Interactive browser automation | Add only when needed | No default dependency |
 | Claude project overlays and devcontainer seeding | Remove without replacement | These workflows are not in active use |
 
+### Subagent model routing
+
+`ai/pi/modes.json` gives workflows stable task-oriented names without scattering model IDs through every prompt:
+
+| Mode | Model | Thinking | Use |
+|---|---|---|---|
+| `rush` | GitHub Copilot Claude Haiku 4.5 | low | Bounded searches, inventories, and mechanical checks |
+| `smart` | GitHub Copilot Claude Sonnet 4.6 | medium | Normal code review and implementation subtasks |
+| `deep` | GitHub Copilot Claude Opus 4.7 | high | Architecture, security, diagnosis, and broad analysis |
+| `review` | GitHub Copilot GPT-5.4 | medium | Independent second opinions from another model family |
+
+A subagent inherits the current session's model and thinking when neither `mode` nor `model` is supplied. An explicit `model` overrides the model selected by a mode. One `subagent` call applies the same mode/model to every task in that batch, so tasks requiring different models must use separate calls.
+
+Project-local `.pi/modes.json` entries take precedence over these global modes. Use that only when a repository genuinely needs different routing.
+
 ### Permission mode
 
 Pi's built-in tools run without Claude-style permission prompts. The `pi-amplike` permissions extension supplies the closest equivalent to Auto Mode for Bash: known low-risk commands are allowed, risky or unmatched commands ask, and explicit deny rules block. `/permissions` toggles between `enabled` and unrestricted `yolo`; keep `enabled` as the default. The choice persists in machine-local `~/.pi/agent/amplike.json`.
 
 These rules cover Bash only. Direct file writes remain governed by the worktree guard described below.
+
+The tracked `ai/pi/permissions.json` adds a conservative global allow policy for common inspection commands:
+
+- `rg` and `fd` when they do not invoke preprocessors or executors;
+- `jq` and non-in-place `yq` without shell control or redirection;
+- read-only Git metadata (`rev-parse`, `merge-base`, remote display, and worktree listing);
+- read-only GitHub views and lists;
+- path and checksum utilities.
+
+It deliberately does not blanket-allow `git`, `gh`, package managers, language runtimes, shells, or project scripts. Mutating and compound variants fall through to pi-amplike's built-in rules, which ask or deny. Project-specific rules can be added under `.agents/settings.json`.
 
 ### Second opinion versus Oracle
 
@@ -81,6 +107,8 @@ ai/
   pi/
     AGENTS.md
     settings.json
+    permissions.json
+    modes.json
     keybindings.json
     extensions/
       worktree-guard.ts

@@ -20,16 +20,16 @@ Review one document by default. Pair a spec and plan only when two paths or `--w
 
 ## Select an independent model
 
-Use the model supplied by `--model` when present. Otherwise choose a GitHub Copilot model from a different family than the current model:
+Use the model supplied by `--model` when present. Otherwise choose a model from a different family than the current model:
 
-- Current model is Claude/Gemini/Grok: use `github-copilot/gpt-5.4`.
-- Current model is GPT: use `github-copilot/claude-opus-4.7`.
+- Current model is Claude/Gemini/Grok: use mode `review` (centrally mapped in `ai/pi/modes.json`).
+- Current model is GPT: use mode `deep` (mapped to the Claude Opus family).
 
 State the target document, repository root, current model, and reviewer model before dispatching.
 
 ## Dispatch
 
-Use the `subagent` tool once with mode `deep`. Give it the repository root, selected document paths, repository instructions, and this role:
+Use the `subagent` tool once with the mode or explicit model selected above. Give it the repository root, selected document paths, repository instructions, and this role:
 
 - Act only as a reviewer; do not modify files.
 - Read the documents and repository code needed to verify claims.
