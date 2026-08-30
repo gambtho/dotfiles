@@ -59,7 +59,7 @@ fi
 #
 # Symlinks are dropped: Prettier hard-errors on one named explicitly ("is a
 # symbolic link", exit 2) rather than skipping it, and repos that symlink a
-# tracked CLAUDE.md or AGENTS.md into a dotfiles checkout would otherwise be
+# tracked repository instruction files into a dotfiles checkout would otherwise be
 # unable to commit that file at all. Whatever the link points at gets formatted
 # in the repo that actually owns it.
 #

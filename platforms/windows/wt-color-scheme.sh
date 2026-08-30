@@ -39,10 +39,38 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 
-# Source the profiles script for its atomic publish_settings/next_backup_path
-# helpers and log functions. Its documented source-only hook loads definitions
-# without running main.
-WT_PROFILES_SOURCE_ONLY=1 source "$SCRIPT_DIR/setup-wt-claude-profiles.sh"
+source "$SCRIPT_DIR/../../bin/common.sh"
+
+info() { log_info "$*"; }
+ok() { log_success "$*"; }
+warn() { log_warning "$*"; }
+die() {
+  log_error "$*"
+  exit 1
+}
+dim() { printf '%s\n' "$*"; }
+
+publish_settings() {
+  local merged=$1 destination=$2 backup stage mode
+
+  backup=$(next_backup_path "$destination") || return 1
+  stage=$(mktemp "${destination}.stage.XXXXXX") || return 1
+  if ! cp -- "$merged" "$stage"; then
+    rm -f -- "$stage"
+    return 1
+  fi
+  if mode=$(stat -c '%a' "$destination" 2>/dev/null); then
+    chmod "$mode" -- "$stage" || true
+  fi
+  if ! cp -p -- "$destination" "$backup"; then
+    rm -f -- "$stage"
+    return 1
+  fi
+  if ! mv -- "$stage" "$destination"; then
+    rm -f -- "$stage"
+    return 1
+  fi
+}
 
 SCHEME_FILE="$SCRIPT_DIR/tokyo-night.wt-scheme.json"
 SCHEME_NAME="Tokyo Night"

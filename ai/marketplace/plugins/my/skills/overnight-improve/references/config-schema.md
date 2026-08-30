@@ -1,11 +1,11 @@
 # overnight-improve config schema
 
-The skill reads `.claude/overnight-config.yaml` from the repo root. All fields are required unless marked optional.
+The skill reads `.pi/overnight-config.yaml` from the repo root. All fields are required unless marked optional.
 
 ## Schema
 
 ```yaml
-improve_skill: my:improve          # required — fully-qualified skill name to invoke each iteration
+improve_skill: improve             # required — available Pi skill name to load each iteration
 max_iterations: 15                 # required — total iterations before PHASE 2 wrap-up fires
 max_wrap_iterations: 3             # required — max CodeRabbit autofix rounds in PHASE 2
 branch_prefix: overnight-improvements  # required — the loop creates branch `<prefix>-YYYY-MM-DD`
@@ -21,7 +21,7 @@ do_nots:                           # optional — appended to per-iteration prom
 ## Example: Go + React project
 
 ```yaml
-improve_skill: my:improve
+improve_skill: improve
 max_iterations: 15
 max_wrap_iterations: 3
 branch_prefix: overnight-improvements
@@ -44,7 +44,7 @@ do_nots:
 ## Example: Python project
 
 ```yaml
-improve_skill: my:improve
+improve_skill: improve
 max_iterations: 10
 max_wrap_iterations: 3
 branch_prefix: overnight-improvements
@@ -64,4 +64,4 @@ do_nots:
 - `gates` run sequentially in the order listed; the loop fails on the first non-zero exit.
 - Use absolute paths or `cd` prefixes when a gate runs in a subdirectory (e.g. `cd web && npm test`).
 - `do_nots` are appended verbatim to the per-iteration prompt; phrase them as imperative sentences.
-- The loop creates `.claude/overnight-run-state.md` automatically; ensure `.claude/` is in `.gitignore` (or commit the state file as an audit trail — your call).
+- The loop creates `.pi/overnight-run-state.md` automatically; ensure `.pi/overnight-run-state.md` is ignored unless it is intentionally retained as an audit trail.

@@ -1,11 +1,18 @@
 {
   "name": "my",
   "version": "0.1.0",
-  "description": "Personal Pi skills shared from the local AI marketplace plugin",
+  "description": "Personal Pi prompts and skills",
   "keywords": ["pi-package"],
   "author": "guarzo",
   "private": true,
   "pi": {
+    "prompts": [
+      "./prompts/fix-pr.md",
+      "./prompts/polish-pr.md",
+      "./prompts/polish.md",
+      "./prompts/review-prs.md",
+      "./prompts/second-opinion.md"
+    ],
     "skills": [
       "./skills/blindspot-pass/SKILL.md",
       "./skills/change-explainer/SKILL.md",
@@ -13,8 +20,7 @@
       "./skills/improve/SKILL.md",
       "./skills/jekyll-media-gallery/SKILL.md",
       "./skills/overnight-improve/SKILL.md",
-      "./skills/polish-core/SKILL.md",
-      "./skills/project-claude-setup/SKILL.md"
+      "./skills/polish-core/SKILL.md"
     ]
   }
 }

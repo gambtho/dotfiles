@@ -13,17 +13,14 @@ setup() {
   # deliberate, not backlog:
   #   sourced libraries    run in the caller's shell and must not mutate its
   #                        options (bin/common.sh, bin/log-helper, bin/lib/*,
-  #                        core/git/identity-lib.sh, ai/vekil/token-lib.sh)
-  #   fail-open hooks      an unexpected condition must allow the action,
-  #                        so -e is wrong by design (ai/claude/hooks/*)
+  #                        core/git/identity-lib.sh)
   #   status-branching CLIs  bin/gh and bin/git-identity branch on non-zero
   #                        statuses throughout and pin `set -uo pipefail`
   local file lax=""
   while IFS= read -r -d '' file; do
     case "$file" in
       bin/common.sh | bin/log-helper | core/git/identity-lib.sh) continue ;;
-      bin/lib/* | ai/vekil/token-lib.sh) continue ;;
-      ai/claude/hooks/*) continue ;;
+      bin/lib/*) continue ;;
       bin/gh | bin/git-identity)
         grep -q '^set -uo pipefail$' "$REPO_ROOT/$file" || lax="$lax $file"
         continue
@@ -90,9 +87,8 @@ setup() {
 }
 
 @test "the public repository tracks nothing under projects/" {
-  # Per-project Claude overlays describe non-public codebases and live in a
-  # separate private repo cloned to ~/.dotfiles/projects. This repo is public,
-  # so anything tracked under projects/ is a leak -- whether it arrives via
+  # Retired per-project overlays contain details about non-public codebases.
+  # This repo is public, so anything tracked under projects/ is a leak -- whether it arrives via
   # `git add -f`, a mistaken merge-conflict resolution, or a future .gitignore
   # edit that reopens the path.
   run git -C "$REPO_ROOT" ls-files projects/

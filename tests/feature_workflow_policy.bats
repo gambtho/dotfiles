@@ -4,24 +4,15 @@ load test_helper
 
 setup() {
   setup_dotfiles_test
-  CLAUDE_GUIDANCE="$REPO_ROOT/ai/claude/CLAUDE.md"
-  CODEX_GUIDANCE="$REPO_ROOT/ai/codex/AGENTS.md"
+  PI_GUIDANCE="$REPO_ROOT/ai/pi/AGENTS.md"
   BLINDSPOT_SKILL="$REPO_ROOT/ai/marketplace/plugins/my/skills/blindspot-pass/SKILL.md"
   POLISH_SKILL="$REPO_ROOT/ai/marketplace/plugins/my/skills/polish-core/SKILL.md"
   EXPLAINER_SKILL="$REPO_ROOT/ai/marketplace/plugins/my/skills/change-explainer/SKILL.md"
-  CLAUDE_SETTINGS="$REPO_ROOT/ai/claude/settings.json"
 }
 
-@test "Claude settings register the linked-worktree edit guard" {
-  run jq -e '
-    .hooks.PreToolUse[]
-    | select(.matcher == "Edit|Write|NotebookEdit")
-    | .hooks[]
-    | select(
-        .type == "command"
-        and .command == "$HOME/.dotfiles/ai/claude/hooks/worktree-guard.sh"
-      )
-  ' "$CLAUDE_SETTINGS"
+@test "Pi configuration ships the linked-worktree edit guard" {
+  [ -f "$REPO_ROOT/ai/pi/extensions/worktree-guard.ts" ]
+  run grep -F '"$ROOT/ai/pi/extensions" "$HOME/.pi/agent/extensions"' "$REPO_ROOT/ai/pi/install.sh"
   [ "$status" -eq 0 ]
 }
 
@@ -50,24 +41,18 @@ setup() {
   [ "$status" -eq 0 ]
 }
 
-extract_workflow() {
-  awk '
-    found && /^## / { exit }
-    /^## Automatic feature workflow$/ { found = 1 }
-    found { print }
-  ' "$1"
+@test "overnight runtime state is globally ignored" {
+  run grep -Fx '.pi/overnight-run-state.md' "$REPO_ROOT/core/git/gitignore.symlink"
+  [ "$status" -eq 0 ]
 }
 
-@test "Claude and Codex share the automatic feature workflow policy" {
-  claude_workflow=$(extract_workflow "$CLAUDE_GUIDANCE")
-  codex_workflow=$(extract_workflow "$CODEX_GUIDANCE")
-
-  [ -n "$claude_workflow" ]
-  [ "$claude_workflow" = "$codex_workflow" ]
-  [[ "$claude_workflow" == *"linked worktree before the first feature-related write"* ]]
-  [[ "$claude_workflow" == *"During discovery, before the design is locked in"* ]]
-  [[ "$claude_workflow" == *"Pause only when unresolved high-impact decisions"* ]]
-  [[ "$claude_workflow" == *'`my:polish-core --fix`'* ]]
-  [[ "$claude_workflow" == *"re-run the affected verification"* ]]
-  [[ "$claude_workflow" == *"knowledge-check questions only for substantial changes"* ]]
+@test "Pi global guidance defines the automatic worktree workflow" {
+  run grep -F "create or reuse a linked worktree before the first repository write" "$PI_GUIDANCE"
+  [ "$status" -eq 0 ]
+  run grep -F "load \`blindspot-pass\` before implementation" "$PI_GUIDANCE"
+  [ "$status" -eq 0 ]
+  run grep -F "run \`polish-core --fix\` after implementation" "$PI_GUIDANCE"
+  [ "$status" -eq 0 ]
+  run grep -F "use \`change-explainer\`" "$PI_GUIDANCE"
+  [ "$status" -eq 0 ]
 }

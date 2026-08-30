@@ -1,34 +1,31 @@
-# my — personal Claude Code plugin
+# my — personal Pi package
 
-Custom commands and skills promoted from `~/.dotfiles/ai/` and `~/workspace/slabledger`.
+Personal prompt templates and skills loaded directly from this dotfiles repository.
 
-## Contents
+## Prompt templates
 
-### Commands
-- `/codex-review` — hands the spec or plan you're working on to Codex for an independent review against the actual code; pairing a plan with its spec is opt-in, then offers to fold accepted findings back into the doc
-- `/fix-pr` — analyzes PR comments + failing CI; produces a prioritized implementation plan
-- `/polish` — auto-fixes high-confidence issues across changed code, dispatches sub-agents for the rest (thin wrapper over the `polish-core` skill)
-- `/polish-pr` — worktree/PR-lifecycle orchestration around polish
-- `/review-prs` — batch PR review with cross-run learning
+- `/fix-pr` — collect unresolved PR feedback and failing CI, then write an implementation plan.
+- `/polish` — apply high-confidence cleanups through `polish-core` and report the rest.
+- `/polish-pr` — run the conservative polish workflow in an isolated PR worktree.
+- `/review-prs` — batch-review open PRs and retain repository-specific learnings.
+- `/second-opinion` — ask a different GitHub Copilot model to review a spec or plan against the repository.
 
-### Skills
-- `my:improve` — holistic codebase audit; up to 10 ranked findings (architecture drift, duplicate logic, smells, tests, UX). Reads project conventions from CLAUDE.md or AGENTS.md.
-- `my:overnight-improve` — autonomous overnight loop wrapped around `my:improve` + `ralph-loop:ralph-loop`. Reads per-project `.claude/overnight-config.yaml`.
-- `my:polish-core` — shared engine behind `/polish`: change-detection, per-language idiom rules (`rules/*.md`), and confidence-classified fixes.
-- `my:project-claude-setup` — scaffolds per-project CLAUDE.md / devcontainer AI config.
+## Skills
 
-## Install
+- `blindspot-pass` — pre-implementation risk and uncertainty pass.
+- `change-explainer` — reviewer-facing explanation of a completed change.
+- `implementation-plan` — evidence-based implementation planning.
+- `improve` — holistic codebase audit with ranked findings.
+- `jekyll-media-gallery` — Jekyll media-gallery workflow.
+- `overnight-improve` — iterative improvement loop using Pi Ralph tooling.
+- `polish-core` — shared review and conservative auto-fix engine.
+
+## Installation
 
 From the dotfiles root:
 
 ```bash
 make ai
-# or just this plugin:
-bash ~/.dotfiles/ai/marketplace/install.sh
 ```
 
-The install adds the `guarzo` marketplace and installs the `my` plugin. Local edits to files under `~/.dotfiles/ai/marketplace/plugins/my/` take effect on the next Claude session — no reinstall needed.
-
-## Source
-
-`~/.dotfiles/ai/marketplace/plugins/my/`
+`ai/pi/settings.json` loads this directory as a local Pi package. Edits take effect after `/reload` or in the next Pi session; no package publication or marketplace registration is needed.

@@ -1,14 +1,14 @@
 ---
 name: improve
-description: Holistic codebase review focused on architecture drift, duplicate logic across packages, code smells, quality, tests, and UX — returns up to 10 high-impact improvements (sharp over padded). Reads project conventions from CLAUDE.md/AGENTS.md before the review. Use when the user asks about tech debt, what to refactor, code audit, codebase health, what needs fixing, improvement opportunities, or general code quality review.
+description: Holistic codebase review focused on architecture drift, duplicate logic across packages, code smells, quality, tests, and UX — returns up to 10 high-impact improvements (sharp over padded). Reads project conventions from AGENTS.md or a CLAUDE.md fallback before the review. Use when the user asks about tech debt, what to refactor, code audit, codebase health, what needs fixing, improvement opportunities, or general code quality review.
 argument-hint: "[backend | frontend | diff | since:<date> | <package-or-path>]"
 ---
 
 # Codebase Improvement Review
 
-Perform a holistic codebase review and produce a ranked list (up to 10) of the highest-impact improvements. **Before running, read the project's `CLAUDE.md` or `AGENTS.md`** to learn its architecture rules, language stack, and project-specific conventions — these inform what counts as architectural drift in Phase 2.
+Perform a holistic codebase review and produce a ranked list (up to 10) of the highest-impact improvements. **Before running, read the project's `AGENTS.md` or `CLAUDE.md` fallback** to learn its architecture rules, language stack, and project-specific conventions — these inform what counts as architectural drift in Phase 2.
 
-This skill runs on Claude Code, OpenCode, and Pi. For per-platform substitutions (memory paths, agent dispatch, supporting-skill paths), see `references/platforms.md` — read it before the steps that touch memory or spawn agents.
+This skill uses Pi subagents and project-local memory. Read `references/platforms.md` before the steps that touch memory or spawn agents.
 
 ## What this skill is for (read before every run)
 
@@ -65,7 +65,7 @@ Run all available tooling to establish a factual baseline. Execute commands in p
 
 **Parallelism:** issue these as parallel Bash tool calls in a single message — do not use shell `&` backgrounding, and do not run them serially. Capture each command's output; failures are findings, not blockers.
 
-Read `CLAUDE.md` or the project's Makefile to discover the right commands. Common patterns:
+Read `AGENTS.md`, a `CLAUDE.md` fallback, or the project's Makefile to discover the right commands. Common patterns:
 
 ```bash
 # Go projects: typically a 'make check' target plus race-tested coverage
@@ -120,8 +120,8 @@ Capture any findings — unused modules or vulnerabilities are findings, not blo
 
 Use Glob and Grep to gather:
 
-1. **File sizes** — find source files (excluding tests and generated mocks) and count lines. Flag files that exceed the project's size guideline (commonly 500 lines for Go, but read CLAUDE.md to check).
-2. **Coverage by package** — use the `tail -1` total from above and the `sort -k3 -n | head -40` slice for least-covered functions. Flag any 0%-coverage functions in packages CLAUDE.md identifies as critical (auth, payments, core domain logic). If CLAUDE.md doesn't list critical packages, treat any package containing money math, auth, persistence, or scheduled jobs as critical.
+1. **File sizes** — find source files (excluding tests and generated mocks) and count lines. Flag files that exceed the project's size guideline (commonly 500 lines for Go, but read the project instructions to check).
+2. **Coverage by package** — use the `tail -1` total from above and the `sort -k3 -n | head -40` slice for least-covered functions. Flag any 0%-coverage functions in packages the project instructions identify as critical (auth, payments, core domain logic). If they do not list critical packages, treat any package containing money math, auth, persistence, or scheduled jobs as critical.
 3. **Test file gaps** — list packages with no `_test.go` files at all.
 4. **LOC distribution** — count lines per top-level package.
 5. **Silent-failure pattern** (Go projects) — grep for `return nil, nil` in non-test Go files. Each match is a potential silent failure (a function hands back a nil result with no error context). Capture file:line list and count; Phase 2 Category 4 triages which are legitimate (e.g. cache miss) vs. bugs.
@@ -143,7 +143,7 @@ Spawn 3 explore agents in parallel in a single message — see `references/platf
 
 ### Agent roles and targets
 
-- **Agent 1 — Semantic & architectural (the one that matters most)**: Categories 1, 3, 6. **Prime this agent** by having it read the project's architecture docs first (look for `docs/ARCHITECTURE.md`, `ARCHITECTURE.md` at repo root, or the architecture section of `CLAUDE.md`) so it has a mental model of the intended layering before it looks for drift. **Target 3 findings by default**, up to 5 if all 5 would independently earn a top-10 slot. Returning 2 excellent findings beats 5 mixed ones; the orchestrator backfills Low-severity spots from other agents if needed.
+- **Agent 1 — Semantic & architectural (the one that matters most)**: Categories 1, 3, 6. **Prime this agent** by having it read the project's architecture docs first (look for `docs/ARCHITECTURE.md`, `ARCHITECTURE.md` at repo root, or the architecture section of the project instructions) so it has a mental model of the intended layering before it looks for drift. **Target 3 findings by default**, up to 5 if all 5 would independently earn a top-10 slot. Returning 2 excellent findings beats 5 mixed ones; the orchestrator backfills Low-severity spots from other agents if needed.
 - **Agent 2 — Correctness & quality**: Categories 2, 4, 5, 9. **Target 3 findings**, up to 5 if warranted. **Prime this agent** by reading the language idiom rules that match the scope (the `code-simplifier` rule files — paths in `references/platforms.md`). If unavailable, proceed without — the agent's value is what linters miss regardless. **Don't re-surface findings that `make check`/`golangci-lint` already flagged.** **Evidence-verification rule**: before reporting anything as dead code or "unused export", grep for the identifier across the whole repo (including `cmd/`, `internal/`, and `*_test.go`) and confirm no callers exist. Coverage gaps for wiring code are expected — they are not evidence of dead code. Dead-code claims require grep evidence, not intuition.
 - **Agent 3 — Surface & dependencies**: Categories 7, 8, 10. **Target 2 findings, max 3** — this category often produces low-impact noise, so keep the budget tight. Return 0 if nothing warrants a top-10 slot.
 

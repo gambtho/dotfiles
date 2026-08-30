@@ -1,0 +1,78 @@
+{
+  "amp.permissions": [
+    {
+      "tool": "Bash",
+      "matches": {
+        "cmd": "/^rg(?=$|\\s)(?![\\s\\S]*(?:--pre(?:-glob)?(?:=|\\s)|[;&|><`\\r\\n]|\\$\\())[\\s\\S]*$/"
+      },
+      "action": "allow"
+    },
+    {
+      "tool": "Bash",
+      "matches": {
+        "cmd": "/^fd(?=$|\\s)(?![\\s\\S]*(?:--exec(?:-batch)?(?:=|\\s)|\\s-[xX]\\S*|[;&|><`\\r\\n]|\\$\\())[\\s\\S]*$/"
+      },
+      "action": "allow"
+    },
+    {
+      "tool": "Bash",
+      "matches": {
+        "cmd": "/^jq(?=$|\\s)(?:\\s+(?:'[^']*'|\"(?![^\"]*(?:\\$\\(|`))[^\"]*\"|[^\\s;&|><`$]+))*\\s*$/"
+      },
+      "action": "allow"
+    },
+    {
+      "tool": "Bash",
+      "matches": {
+        "cmd": "/^yq(?=$|\\s)(?![\\s\\S]*(?:\\s(?:-i|--inplace)(?:=|\\s|$)|[;&|><`\\r\\n]|\\$\\())[\\s\\S]*$/"
+      },
+      "action": "allow"
+    },
+    {
+      "tool": "Bash",
+      "matches": {
+        "cmd": [
+          "/^(?![\\s\\S]*\\$\\()(?:cat|head|tail)\\s+[^;&|><`\\r\\n]+\\s*\\|\\s*jq(?=$|\\s)(?:\\s+(?:'[^']*'|\"(?![^\"]*(?:\\$\\(|`))[^\"]*\"|[^\\s;&|><`$]+))*\\s*$/",
+          "/^git\\s+(?![\\s\\S]*(?:[;&><`\\r\\n]|\\$\\())(?:status|show|diff|log|grep|rev-parse|merge-base|worktree\\s+list|remote\\s+-v)(?:\\s+[^;&|><`\\r\\n]*)?\\s*\\|\\s*jq(?=$|\\s)(?:\\s+(?:'[^']*'|\"(?![^\"]*(?:\\$\\(|`))[^\"]*\"|[^\\s;&|><`$]+))*\\s*$/",
+          "/^gh\\s+(?![\\s\\S]*(?:[;&><`\\r\\n]|\\$\\())(?:auth\\s+status|repo\\s+view|pr\\s+(?:list|view|checks)|issue\\s+(?:list|view)|run\\s+(?:list|view))(?:\\s+[^;&|><`\\r\\n]*)?\\s*\\|\\s*jq(?=$|\\s)(?:\\s+(?:'[^']*'|\"(?![^\"]*(?:\\$\\(|`))[^\"]*\"|[^\\s;&|><`$]+))*\\s*$/"
+        ]
+      },
+      "action": "allow"
+    },
+    {
+      "tool": "Bash",
+      "matches": {
+        "cmd": "/^bats(?=$|\\s)(?![\\s\\S]*(?:[;&|><`\\r\\n]|\\$\\())[\\s\\S]*$/"
+      },
+      "action": "allow"
+    },
+    {
+      "tool": "Bash",
+      "matches": {
+        "cmd": "/^make(?=$|\\s)(?![\\s\\S]*(?:[;&|><`\\r\\n]|\\$\\())[\\s\\S]*$/"
+      },
+      "action": "allow"
+    },
+    {
+      "tool": "Bash",
+      "matches": {
+        "cmd": "/^git\\s+(?![\\s\\S]*(?:[;&|><`\\r\\n]|\\$\\())(?:(?:rev-parse|merge-base)\\s+.+|worktree\\s+list(?:\\s+.*)?|remote\\s+-v)$/"
+      },
+      "action": "allow"
+    },
+    {
+      "tool": "Bash",
+      "matches": {
+        "cmd": "/^gh\\s+(?![\\s\\S]*(?:[;&|><`\\r\\n]|\\$\\())(?:auth\\s+status|repo\\s+view|pr\\s+(?:list|view|checks)|issue\\s+(?:list|view)|run\\s+(?:list|view))(?:\\s+.*)?$/"
+      },
+      "action": "allow"
+    },
+    {
+      "tool": "Bash",
+      "matches": {
+        "cmd": "/^(basename|dirname|readlink|realpath|sha256sum|md5sum)(?:\\s+[^;&|><`]+)?$/"
+      },
+      "action": "allow"
+    }
+  ]
+}

@@ -7,24 +7,17 @@ setup_dotfiles_test() {
   mkdir -p "$HOME" "$STUB_BIN"
 
   # Resolve tools the sandbox needs but cannot assume are in a system
-  # directory, while the ambient PATH is still intact. bin/setup-agent-teams
-  # installs yq to /usr/local/bin and GitHub's runner image ships it in
-  # /usr/bin, so the sandbox PATH below finds it in CI and on a machine this
-  # repo provisioned -- but a yq installed any other way (mise, ~/.local/bin,
-  # Homebrew on Linux) is invisible to it, and every test exercising a
-  # yq-dependent script fails with "yq is required" on a machine that has yq
-  # right there on PATH.
+  # directory while the ambient PATH is still intact. A tool installed through
+  # mise, Homebrew, or another user-level manager may otherwise disappear when
+  # tests sanitize PATH.
   #
-  # Symlink each tool into a dedicated directory rather than appending the
-  # directory it was found in. ~/.local/bin holds yq on this machine, but it
-  # also holds claude, codex, and herdr -- and putting all of that on the
-  # sandbox PATH resurrects the very binaries tests deliberately hide (there
-  # is a test asserting what happens when the claude CLI is *missing*). A
-  # symlink farm exposes exactly the named tools and nothing adjacent to them.
+  # Symlink each tool into a dedicated directory rather than appending its
+  # containing directory. The symlink farm exposes exactly the named tools and
+  # nothing installed beside them.
   export SANDBOX_TOOL_BIN="$TEST_ROOT/tool-bin"
   mkdir -p "$SANDBOX_TOOL_BIN"
   local tool tool_path
-  for tool in yq; do
+  for tool in yq node; do
     tool_path="$(command -v "$tool" 2>/dev/null)" || continue
     ln -sf "$tool_path" "$SANDBOX_TOOL_BIN/$tool"
   done

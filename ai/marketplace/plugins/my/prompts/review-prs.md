@@ -1,1 +1,515 @@
-../commands/review-prs.md
+---
+name: review-prs
+description: Review open PRs with no human comments — learns from past reviews and accumulates knowledge across runs
+argument-hint: "[number of PRs to review, default 10]"
+---
+
+# PR Review Pipeline
+
+You are reviewing open pull requests for the current repository that have not yet received human review comments. You will learn from existing review patterns, then produce detailed reviews saved to a local markdown file.
+
+**Number of PRs to review**: $ARGUMENTS (default: 10 if not specified)
+
+---
+
+## Phase 0: Detect Repository & Preflight Checks
+
+**Goal**: Identify the GitHub repository, verify auth, and check API quota.
+
+### 0a: Verify GitHub Auth
+
+Run: `gh auth status`
+- If this fails, print this error and **STOP**:
+  ```
+  ERROR: GitHub CLI is not authenticated. Please run 'gh auth login' first.
+  ```
+
+### 0b: Detect Repository
+
+1. Run: `gh repo view --json owner,name,url --jq '{owner: .owner.login, name: .name, url: .url}'`
+2. If this fails, try: `git remote get-url origin` and parse `{OWNER}/{REPO}` from the URL (handles both SSH `git@github.com:owner/repo.git` and HTTPS `https://github.com/owner/repo.git` formats)
+3. If both fail, print this error and **STOP** — do not proceed:
+   ```
+   ERROR: Could not detect a GitHub repository from the current directory.
+   Please run this command from within a cloned GitHub repository.
+   This command requires a GitHub-hosted repository (GitLab, Bitbucket, etc. are not supported).
+   ```
+4. Store these values for use in ALL subsequent phases:
+   - `OWNER` — the repository owner (e.g., `kubernetes-sigs`)
+   - `REPO` — the repository name (e.g., `headlamp`)
+   - `REPO_URL` — the full GitHub URL (e.g., `https://github.com/kubernetes-sigs/headlamp`)
+5. Set the output directory: `~/.pi/pr-reviews/{OWNER}/{REPO}/`
+   - Create it with `mkdir -p` if it does not exist
+6. Print: **"Reviewing PRs for: {OWNER}/{REPO}"**
+
+### 0c: One-Time Migration
+
+If `~/.pi/pr-reviews/learnings.md` exists at the old flat path AND `~/.pi/pr-reviews/{OWNER}/{REPO}/learnings.md` does NOT exist, move all files from the old path into `~/.pi/pr-reviews/{OWNER}/{REPO}/`. Print a note that migration was performed.
+
+### 0d: Rate Limit Check
+
+Run: `gh api rate_limit --jq '.rate.remaining'`
+- If remaining < 100, warn the user and set `RATE_LIMITED=true` — reduce all parallel agent batches to 2 instead of 5 for the rest of the run.
+- If remaining < 20, warn the user and **STOP** — not enough quota to proceed.
+
+---
+
+## Phase 1: Load Persistent Learnings
+
+**Goal**: Bootstrap from accumulated knowledge of previous review runs.
+
+### 1a: Load Learnings
+
+1. Read `~/.pi/pr-reviews/{OWNER}/{REPO}/learnings.md` (if it exists)
+2. If it exists and has substantial content:
+   - Note the review style guidance, common issues, and false positive patterns
+   - Extract the **Previously Reviewed PRs** list — store as a set of PR numbers to skip. Also store any HEAD SHAs recorded alongside them (for re-review detection in Phase 4).
+   - Check the "Review Style Guide" section: if it has **8+ bullet points** AND the "Last updated" date is **within the last 7 days**, set `SKIP_STYLE_LEARNING=true` (Phase 3 will be skipped entirely)
+   - Otherwise, reduce the number of merged PRs studied in Phase 3 to 5
+3. If it does not exist, proceed with full style learning
+
+### 1b: Load Project Config (Optional)
+
+Read `~/.pi/pr-reviews/{OWNER}/{REPO}/config.md` if it exists. This file contains user-defined review conventions that supplement the auto-detected checklist:
+- Commit message format requirements
+- License header expectations
+- Additional checklist items specific to this project
+- Known false positives / accepted patterns
+
+If this file does not exist, proceed without it. You will suggest creating one in the final report.
+
+---
+
+## Phase 2: Detect Project Stack
+
+**Goal**: identify the project's technology stack so the review checklist matches what's actually in the repo.
+
+Read `~/.dotfiles/ai/marketplace/plugins/my/references/review-prs-stack-checklist.md`. It contains:
+- A detection table — files/markers that signal each language/framework/convention
+- The universal review checklist (always include)
+- Stack-specific checklists organized by language/framework
+- The assembly procedure for composing the final checklist
+
+Walk the detection table against the repo root. Assemble the final checklist as **universal items** plus each matched stack-specific section. Print the composed checklist so the user sees what will be checked, and pass it to each review agent in Phase 6.
+
+---
+
+## Phase 3: Learn Review Style
+
+**Goal**: Understand how this project's maintainers give code review feedback.
+
+**Skip condition**: If `SKIP_STYLE_LEARNING=true` (set in Phase 1 because learnings already have a mature style guide updated within 7 days), skip this entire phase and print: "Using existing review style guide from learnings (last updated: {date})."
+
+1. Fetch the 15 most recently merged PRs that have review comments:
+   ```
+   gh pr list --state merged --limit 30 --json number,title,reviews,reviewDecision
+   ```
+   Filter to those that actually have reviews with comments (not just approvals).
+
+2. For the top 15 with comments (or top 5 if learnings already exist), use the `subagent` tool with mode `rush` (2-5 at a time, or 2 if RATE_LIMITED) to fetch and analyze review comments. Launch each batch in one parallel call. Each subagent should fetch and analyze 3-5 PRs via:
+   ```
+   gh api repos/{OWNER}/{REPO}/pulls/{number}/reviews
+   gh api repos/{OWNER}/{REPO}/pulls/{number}/comments
+   ```
+   Each agent should return:
+   - Common tone patterns (direct? gentle? question-based?)
+   - Types of feedback given (bugs, style, architecture, testing, etc.)
+   - Level of detail in comments
+   - Whether reviewers suggest alternatives or just flag issues
+   - Notable phrases or conventions used
+
+3. Synthesize the findings into a brief **Review Style Guide** to inform your reviews. This should be 5-10 bullet points capturing the voice and priorities.
+
+---
+
+## Phase 4: Discover Unreviewed PRs
+
+**Goal**: Find open PRs that need review attention.
+
+### 4a: List and Filter Candidates
+
+1. List all open PRs:
+   ```
+   gh pr list --state open --limit 50 --json number,title,author,createdAt,labels,body,headRefName,changedFiles,additions,deletions,isDraft,headRefOid
+   ```
+   Note: `headRefOid` is the HEAD SHA — needed for re-review detection.
+
+2. **Immediately filter out** from the candidate list:
+   - Draft PRs
+   - PR numbers that appear in the "Previously Reviewed PRs" list from learnings (UNLESS the stored HEAD SHA differs from the current `headRefOid` — those go into a separate **"updated since last review"** list)
+
+3. If 0 candidates remain after filtering (all PRs are drafts, already reviewed, or already have human comments), print a summary and **STOP** cleanly:
+   ```
+   No PRs to review. All {N} open PRs are either drafts, previously reviewed, or already have human comments.
+   {M} PRs were updated since last review — consider re-reviewing: #X, #Y, #Z
+   ```
+
+### 4b: Batch-Check for Human Comments
+
+For the remaining candidates, check for human review activity. Use a **single GraphQL query** to batch-check all PRs at once instead of sequential API calls:
+
+```
+gh api graphql -f query='
+  query {
+    repository(owner: "{OWNER}", name: "{REPO}") {
+      pr1: pullRequest(number: {n1}) { number reviews(first: 1, states: [COMMENTED, CHANGES_REQUESTED, APPROVED]) { totalCount } comments(first: 1) { totalCount } }
+      pr2: pullRequest(number: {n2}) { number reviews(first: 1, states: [COMMENTED, CHANGES_REQUESTED, APPROVED]) { totalCount } comments(first: 1) { totalCount } }
+      ...
+    }
+  }
+'
+```
+
+This checks BOTH formal reviews AND PR comments (inline/general) in a single request. A PR has human review activity if `reviews.totalCount > 0` OR `comments.totalCount > 0`.
+
+**Important**: GraphQL queries have a node limit. If there are more than 30 candidate PRs, split into batches of 30.
+
+**Fallback** if GraphQL fails: use the REST approach with parallel checks (batch with `&` and `wait`):
+```
+for pr in {numbers}; do
+  echo "$pr $(gh api repos/{OWNER}/{REPO}/pulls/$pr/reviews --jq '[.[] | select(.user.type == "Bot" | not)] | length') $(gh api repos/{OWNER}/{REPO}/pulls/$pr/comments --jq 'length')" &
+done
+wait
+```
+
+Filter to PRs where BOTH review count AND comment count are 0.
+
+### 4c: Select and Categorize
+
+1. Select the N most recent unreviewed PRs (where N is the argument, default 10)
+
+2. For each selected PR, collect:
+   - PR number, title, author, branch name
+   - PR body/description
+   - Linked issue numbers (parse from PR body: "Fixes #NNN", "Closes #NNN", "Resolves #NNN")
+   - Changed file count, additions, deletions
+   - List of changed file paths: `gh pr view {number} --json files --jq '.files[].path'`
+
+3. Categorize each PR by size and type:
+   - **Lockfile-only**: All changed files match `*lock*`, `*.lock`, `go.sum`, `*.sum` — review from diff only with the rush model
+   - **Small** (< 100 lines changed): Review from diff only with the rush model
+   - **Medium** (100–500 lines changed): Standard review with worktree and the smart model
+   - **Large** (500–1500 lines changed): Extended review with worktree and the deep model, focused on highest-impact files
+   - **Very Large** (> 1500 lines changed): Summary and key concerns only with the deep model
+
+4. If any PRs were detected as "updated since last review", include them at the end of the list (marked as re-reviews) if there is room within the N limit.
+
+5. Print a summary table of the PRs that will be reviewed (including size category and model) and proceed.
+
+6. **Pre-load file history for Medium and Large PRs.** This is the per-PR context for changed files — skip for Lockfile-only and Small (the overhead isn't worth it for trivial changes). For each Medium/Large PR, gather two signals per changed file, capped to avoid token bloat:
+
+   **Git blame summary** (who last touched each file and when — flags files with high churn or single-author ownership). Run for the top 5 most-changed files per PR (by lines changed from `gh pr view --json files`):
+   ```
+   git log --follow --oneline -10 -- <file>
+   ```
+
+   **Prior review comments on these files** (what reviewers flagged before on the same code):
+   ```
+   gh api graphql -f query='
+     query {
+       repository(owner: "{OWNER}", name: "{REPO}") {
+         pullRequests(states: MERGED, last: 20, orderBy: {field: UPDATED_AT, direction: DESC}) {
+           nodes {
+             number
+             title
+             reviews(first: 20) {
+               nodes {
+                 comments(first: 20) {
+                   nodes {
+                     path
+                     body
+                     author { login }
+                   }
+                 }
+               }
+             }
+           }
+         }
+       }
+     }
+   '
+   ```
+   Filter results to comments whose `path` matches any file in the current PR's changed file list. Keep at most 5 comments per file (most recent). Discard bot comments.
+
+   Store as `FILE_HISTORY[{pr_number}]` — a map of file path → `{ recent_commits: [...], prior_review_comments: [...] }`. Phase 6 passes this to each review agent.
+
+---
+
+## Phase 5: Set Up Worktrees
+
+**Goal**: Create isolated checkouts so multiple agents can review different PRs simultaneously.
+
+### 5a: Stale Cleanup
+
+Check for leftover directories from previous failed runs for THIS repo only:
+```
+ls -d /tmp/pr-reviews-{OWNER}-{REPO}-* 2>/dev/null
+```
+If any exist, remove them with `git worktree remove` (for any registered worktrees) then `rm -rf`, and note the cleanup.
+
+### 5b: Create Worktrees
+
+1. Create a temporary directory:
+   ```
+   mkdir -p /tmp/pr-reviews-{OWNER}-{REPO}-$(date +%s)
+   ```
+   Store the full timestamp directory path for cleanup later.
+
+2. For each **Medium** or **Large** PR, create a worktree. Wrap each in error handling:
+   ```
+   gh pr view {number} --json headRefName --jq '.headRefName'
+   git worktree add /tmp/pr-reviews-{OWNER}-{REPO}-{ts}/pr-{number} --detach
+   cd /tmp/pr-reviews-{OWNER}-{REPO}-{ts}/pr-{number} && gh pr checkout {number}
+   ```
+   **If checkout fails** for any PR (merge conflict, missing branch, etc.):
+   - Clean up the partial worktree: `git worktree remove /tmp/pr-reviews-{OWNER}-{REPO}-{ts}/pr-{number} --force 2>/dev/null`
+   - Add the PR to a **skipped list** with the failure reason
+   - Continue with the remaining PRs — do NOT abort the run
+
+3. **Small**, **Lockfile-only**, and **Very Large** PRs do NOT need worktrees — they will be reviewed from the diff alone.
+
+4. Print which worktrees were created and which PRs were skipped (if any).
+
+---
+
+## Phase 6: Parallel Review
+
+**Goal**: Deep code review of each PR using parallel agents.
+
+Select the **mode per PR based on size category**; `ai/pi/modes.json` centrally controls the corresponding model and thinking level:
+
+| Size Category | Mode | Rationale |
+|---------------|------|-----------|
+| Lockfile-only | `rush` | Trivial changes, just check version sanity |
+| Small | `rush` | Fast and sufficient for small diffs |
+| Medium | `smart` | Good balance of depth and speed |
+| Large | `deep` | Needs careful analysis of impactful files |
+| Very Large | `deep` | Summary-only mode with deeper reasoning |
+
+Before invoking `subagent`, partition the selected PRs into `rush`, `smart`, and `deep` groups according to this table. Preserve the selected PR order within each group. Process every group in batches of up to 5 tasks, or up to 2 tasks when `RATE_LIMITED=true`. Make one parallel `subagent` call per batch with that group's mode, and never mix PRs requiring different modes in the same call.
+
+**Agent timeout guidance**: Give each agent a reasonable scope. If an agent has not returned after 5 minutes, do NOT block the pipeline — mark that PR as "review incomplete — agent timed out" in the report and continue with other results.
+
+### Agent Prompt Template
+
+For each PR, provide the agent with:
+
+1. **PR metadata**: number, title, author, description, linked issue content
+2. **The diff**: obtained via `gh pr diff {number}`
+   - **Diff size limit**: If the diff exceeds 3000 lines, truncate it to the most impactful files. Exclude test files, generated files, lockfiles, and vendor directories. Tell the agent which files were omitted and their line counts.
+3. **The worktree path**: so the agent can read full file context (Medium/Large PRs only)
+4. **The review style guide** from Phase 3 (or learnings)
+5. **The full review checklist**: Universal + Stack-Specific + Project Config items
+6. **Any relevant learnings** about this author or common issues
+7. **Size category and re-review flag**: so the agent knows whether to do a full review, summary, or focused delta review
+8. **File history** from Phase 1c (if available): for each changed file, the recent commit log and any prior review comments on that file from merged PRs. Instruct the agent: "If a prior review comment on a file is still relevant to the current diff (same area, same pattern), flag it as a recurring issue. If the recent commit log shows high churn on a file, note it as a stability concern."
+
+### Specialized Agent Augmentation (Medium/Large PRs only)
+
+For PRs in the **Medium**, **Large**, or **Very Large** size categories, assign the primary review subagent the relevant specialist perspectives below. Do not ask a subagent to recursively dispatch more agents.
+
+| Sub-agent role | When to use |
+|----------------|-------------|
+| Silent failure hunter | PR touches error handling, catch blocks, or fallback logic |
+| Comment analyzer | PR adds or modifies comments/docstrings |
+| Type design analyzer | PR introduces new types, interfaces, or structs |
+| Code reviewer | Always — catches bugs and security issues with confidence filtering |
+
+**Instructions for review subagents:**
+- Apply only specialist perspectives relevant to the PR's changes.
+- Merge those perspectives into one findings list using the same `[Severity|Confidence]` format.
+- Deduplicate overlapping findings and keep the more detailed evidence.
+- Do not apply specialist augmentation for **Lockfile-only** or **Small** PRs.
+
+### Agent Output Format
+
+Each agent must return its findings in this EXACT format:
+
+```
+PR_NUMBER: {number}
+PR_TITLE: {title}
+AUTHOR: {author}
+FILES_CHANGED: {count}
+SIZE_CATEGORY: {Lockfile-only|Small|Medium|Large|Very Large}
+RE_REVIEW: {yes|no}
+VERDICT: APPROVE | REQUEST_CHANGES | NEEDS_DISCUSSION
+
+FINDINGS:
+- [Critical|HIGH] {file}:{line} — {description of issue}
+- [Critical|MEDIUM] {file}:{line} — {description of issue}
+- [Warning|HIGH] {file}:{line} — {description of issue}
+- [Warning|MEDIUM] {file}:{line} — {description of issue}
+- [Warning|LOW] {file}:{line} — {description of issue}
+- [Suggestion|MEDIUM] {description}
+- [Suggestion|LOW] {description}
+- [Positive] {description of something done well}
+
+SUMMARY:
+{2-3 sentence overall assessment}
+
+LEARNINGS:
+{Any new observations about this author's patterns, recurring issues, or project conventions discovered}
+```
+
+**Finding format**: `[Severity|Confidence]` where:
+- **Severity**: Critical, Warning, Suggestion, Positive
+- **Confidence**: HIGH (certain issue), MEDIUM (likely issue, worth checking), LOW (possible concern, reviewer discretion)
+
+---
+
+## Phase 7: Compile Report, Update Learnings & Clean Up
+
+**Goal**: Produce the final review report and persist knowledge for future runs.
+
+### 7a: Compile Report
+
+Create `~/.pi/pr-reviews/{OWNER}/{REPO}/review-{YYYY-MM-DD}.md` (if a file with today's date exists, append a counter: `review-{date}-2.md`).
+
+Use this structure:
+
+```markdown
+# PR Review Report — {date}
+
+**Repository**: {OWNER}/{REPO}
+**Reviewed by**: AI PR Review Agent
+**PRs Reviewed**: {count} ({skipped} skipped, {incomplete} incomplete)
+**Review Style**: Based on analysis of {N} recent merged PR reviews (or "from accumulated learnings" if Phase 3 was skipped)
+
+## Review Style Reference
+{5-10 bullet points summarizing the learned review voice}
+
+## Detected Stack
+{List of detected technologies and frameworks that informed the checklist}
+
+---
+
+## PR #{number}: {title}
+**Author**: @{author} | **Branch**: {branch} | **Files Changed**: {count} | **+{additions} / -{deletions}**
+**Size Category**: {Lockfile-only|Small|Medium|Large|Very Large}
+**Re-review**: {Yes — updated since last review on {date} | No}
+**Description**: {first 2-3 sentences of PR body}
+**Linked Issue**: #{issue_number} (if any)
+**Link**: {REPO_URL}/pull/{number}
+
+### Verdict: {APPROVE / REQUEST_CHANGES / NEEDS_DISCUSSION}
+
+### Findings
+- **[Critical|HIGH]** `{file}:{line}` — {description}
+- **[Warning|MEDIUM]** `{file}:{line}` — {description}
+- **[Suggestion|LOW]** {description}
+- **[Positive]** {description of something done well}
+
+### Summary
+{2-3 sentence assessment}
+
+---
+
+(repeat for each PR)
+
+## Skipped PRs
+(if any PRs were skipped due to worktree failures or agent timeouts)
+- PR #{number}: {reason}
+
+## Statistics
+- **Total PRs Reviewed**: {count}
+- **Verdicts**: {N} APPROVE, {N} REQUEST_CHANGES, {N} NEEDS_DISCUSSION
+- **Findings by Severity**: {N} Critical, {N} Warning, {N} Suggestion, {N} Positive
+- **High-Confidence Issues**: {N}
+- **Top Issue Categories**: {ranked list of most common issue types}
+- **Size Distribution**: {N} Lockfile-only, {N} Small, {N} Medium, {N} Large, {N} Very Large
+- **Models Used**: {N} haiku, {N} sonnet
+
+## Trend Comparison
+(if previous session data exists in learnings)
+- {metric} changed from {old} to {new} (e.g., "Commit message violations: 50% → 30%")
+
+## Aggregate Observations
+{Cross-PR patterns noticed — e.g., "3 of 10 PRs missing test coverage for new features"}
+```
+
+If no project config file exists, append:
+
+```markdown
+## Suggestion: Create a Project Config
+
+No project-specific review config was found. You can create one at:
+`~/.pi/pr-reviews/{OWNER}/{REPO}/config.md`
+
+This lets you define:
+- Commit message format requirements
+- License header expectations
+- Additional project-specific checklist items
+- Known false positives / accepted patterns
+
+See the learnings file for auto-discovered conventions so far.
+```
+
+### 7b: Update Learnings
+
+Read the existing `~/.pi/pr-reviews/{OWNER}/{REPO}/learnings.md` (if any), then update it. Do NOT just append — consolidate and deduplicate. The file structure should be:
+
+```markdown
+# PR Review Learnings — {OWNER}/{REPO}
+
+*Last updated: {date}*
+
+## Review Style Guide
+{Synthesized guidance on tone, level of detail, and priorities — updated with any new observations}
+
+## Detected Stack
+{Technologies and frameworks detected in this project, for reference}
+
+## Common Issues
+{Patterns seen across multiple review sessions. Each entry should note how often it occurs.}
+- {issue description} (seen in N/M PRs reviewed)
+
+## False Positives / Project Conventions
+{Things that look wrong but are accepted patterns in this project.}
+- {pattern}: {why it's actually fine}
+
+## Author Notes
+{Per-author observations — only note patterns seen across 2+ PRs from the same author.}
+- @{username}: {tendency}
+
+## Previously Reviewed PRs
+{Keep only the most recent 100 entries. If the list exceeds 100, remove the oldest entries.}
+{Each entry includes the HEAD SHA for re-review detection.}
+- #{number} — {date} — {headRefOid} — {title}
+
+## Session Log
+### {date}
+- Reviewed {N} PRs: #{n1}, #{n2}, ...
+- Models used: {N} haiku, {N} sonnet
+- Skipped: {N} (reasons)
+- New observations: {brief notes on anything new learned this session}
+- Trend vs last session: {any notable changes in issue rates}
+```
+
+### 7c: Clean Up Worktrees
+
+Remove all worktrees created during this run. For each worktree:
+```
+git worktree remove /tmp/pr-reviews-{OWNER}-{REPO}-{ts}/pr-{number} --force
+```
+Then remove the temporary directory:
+```
+rm -rf /tmp/pr-reviews-{OWNER}-{REPO}-{ts}
+```
+
+If any removal fails, retry once. If it still fails, warn the user with the path that needs manual cleanup.
+
+Confirm cleanup succeeded.
+
+---
+
+## Important Notes
+
+- Do NOT post comments to GitHub. All output is local only.
+- Do NOT run builds, tests, or linters — assume CI handles that separately.
+- Use `gh` for all GitHub interactions, never web fetch.
+- **Shell escaping**: Never use `!=` in jq filters inside bash command substitutions. Always use `select(.field == "value" | not)` instead of `select(.field != "value")` to avoid zsh/bash history expansion issues with `!` inside `$()`.
+- When reviewing, focus on issues a senior engineer would flag. Skip pedantic nitpicks.
+- Always include positive findings — balanced reviews are more useful.
+- If a PR is Very Large (>1500 lines), provide summary and key concerns only.
+- If a linked issue exists, verify the PR actually addresses it — misalignment is a common problem.
+- If CONTRIBUTING.md, CLAUDE.md, or AGENTS.md exist in the repo, treat their guidelines as authoritative for checklist items they cover.

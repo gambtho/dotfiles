@@ -357,68 +357,6 @@ setup_profile() {
   esac
 }
 
-setup_projects_overlay() {
-  # Per-project Claude overlays live in a separate private repository, cloned to
-  # the canonical checkout so bin/claude-link-project and the /opt/dotfiles
-  # stable link root find them at the path they already expect. This is never
-  # fatal: a machine without overlays is a working machine, it just has no
-  # project links.
-  local overlay_dir="$HOME/.dotfiles/projects"
-  local remote_file="$HOME/.dotfiles-projects-remote"
-  local remote
-
-  if [ -d "$overlay_dir/.git" ]; then
-    log_info "Project overlays already attached at $overlay_dir"
-    return 0
-  fi
-
-  if [ -d "$overlay_dir" ] && [ -n "$(ls -A "$overlay_dir" 2>/dev/null)" ]; then
-    log_warning "$overlay_dir exists, is not a git repo, and is not empty -- leaving it alone"
-    log_warning "Move it aside and re-run bootstrap to attach the private overlay repo"
-    return 0
-  fi
-
-  # The remote lives in an untracked file rather than in this repo: this repo is
-  # public, and the overlay repo's name is itself worth withholding.
-  if [ ! -f "$remote_file" ]; then
-    log_info "No project overlay repo configured; skipping"
-    log_info "To attach one: printf '%s\\n' '<clone-url>' > $remote_file"
-    return 0
-  fi
-
-  remote="$(tr -d '[:space:]' <"$remote_file")"
-  if [ -z "$remote" ]; then
-    log_warning "$remote_file is empty; skipping project overlay clone"
-    return 0
-  fi
-
-  # GIT_TERMINAL_PROMPT=0 so an unauthenticated https remote fails immediately
-  # instead of blocking bootstrap on "Username for 'https://github.com':". That
-  # prompt is answered with ^C, which kills the whole run -- an optional step
-  # taking the machine down with it.
-  if GIT_TERMINAL_PROMPT=0 git clone "$remote" "$overlay_dir"; then
-    log_success "Project overlays attached at $overlay_dir"
-  else
-    log_warning "Could not clone the project overlay repo; continuing without overlays"
-    # Name the identity the REMOTE needs, not whichever one the current
-    # directory happens to route to: the overlay repo is frequently owned by a
-    # different account than the checkout bootstrap is running from.
-    (
-      # Source the library from the running checkout, but leave $DOTFILES alone
-      # so the hint names the paths the gh shim and the pre-push guard will
-      # actually consult later. Pinning it to $DOTFILES_ROOT would print a
-      # bin/relink under a disposable linked worktree when bootstrap was run
-      # from one.
-      . "$DOTFILES_ROOT/core/git/identity-lib.sh" 2>/dev/null || exit 0
-      owner="$(identity_url_owner "$remote" 2>/dev/null)" || exit 0
-      slug="$(identity_owner_slug "$owner" 2>/dev/null)" || exit 0
-      identity_slug_provisioned "$slug" && exit 0
-      identity_slug_provision_hint "$slug" '  [ INFO ] '
-    ) || true
-  fi
-  return 0
-}
-
 install_dotfiles() {
   log_info "Installing dotfiles symlinks"
 
@@ -521,15 +459,7 @@ main() {
   setup_identity_map
   render_identity_routes
   setup_profile
-  # $HOME/.dotfiles, not $DOTFILES_ROOT: the latter is wherever this script was
-  # run from, which may be a disposable linked worktree. The stable root must
-  # name the canonical checkout.
-  ensure_stable_link_root "$HOME/.dotfiles"
   install_dotfiles
-  # AFTER install_dotfiles, not before: a private https overlay remote
-  # authenticates through the gh credential helper, which needs the identity
-  # include that install_dotfiles links into $HOME.
-  setup_projects_overlay
 
   log_success "Bootstrap complete. Run 'bin/install' to complete setup."
 }

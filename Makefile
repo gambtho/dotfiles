@@ -19,15 +19,15 @@ relink: ## Remove dead symlinks and re-create from current layout
 # Failures are aggregated rather than aborting the loop: one broken installer
 # must not block the rest, but it must still fail the target — a plain loop
 # reports only the last installer's status and hides every earlier failure.
-ai: ## Install/update all AI tool configs and the Vekil proxy
-	@failed=""; for installer in ai/*/install.sh; do \
+ai: ## Install/update Pi and its managed configuration
+	@failed=""; for installer in ai/pi/install.sh; do \
 		echo "Running $$installer..."; \
 		bash "$$installer" || failed="$$failed $$installer"; \
 	done; \
 	if [ -n "$$failed" ]; then echo "make ai: failed:$$failed" >&2; exit 1; fi
 
-ai-check: ## Dry-run: show what AI install would do
-	@failed=""; for installer in ai/*/install.sh; do \
+ai-check: ## Dry-run: show what the Pi install would do
+	@failed=""; for installer in ai/pi/install.sh; do \
 		echo "Checking $$installer..."; \
 		bash "$$installer" --check || failed="$$failed $$installer"; \
 	done; \
