@@ -48,10 +48,10 @@ Existing Pi packages own generic runtime mechanisms. The local `my` package rema
 
 | Mode | Model | Thinking | Use |
 |---|---|---|---|
-| `rush` | GitHub Copilot Claude Haiku 4.5 | low | Bounded searches, inventories, and mechanical checks |
-| `smart` | GitHub Copilot Claude Sonnet 4.6 | medium | Normal code review and implementation subtasks |
-| `deep` | GitHub Copilot Claude Opus 4.7 | high | Architecture, security, diagnosis, and broad analysis |
-| `review` | GitHub Copilot GPT-5.4 | medium | Independent second opinions from another model family |
+| `rush` | GitHub Copilot GPT-5.4 Mini | low | Bounded searches, inventories, and mechanical checks |
+| `smart` | GitHub Copilot GPT-5.6 Sol | medium | Normal code review and implementation subtasks |
+| `deep` | GitHub Copilot GPT-5.6 Terra | high | Architecture, security, diagnosis, and broad analysis |
+| `review` | GitHub Copilot Claude Opus 5 | high | Independent second opinions from another model family |
 
 A subagent inherits the current session's model and thinking when neither `mode` nor `model` is supplied. An explicit `model` overrides the model selected by a mode. One `subagent` call applies the same mode/model to every task in that batch, so tasks requiring different models must use separate calls.
 

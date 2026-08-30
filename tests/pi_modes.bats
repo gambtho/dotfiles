@@ -5,6 +5,16 @@ load test_helper
 setup() {
   setup_dotfiles_test
   MODES="$REPO_ROOT/ai/pi/modes.json"
+  SETTINGS="$REPO_ROOT/ai/pi/settings.json"
+}
+
+@test "Pi defaults to the smart GPT-5.6 model" {
+  run jq -e '
+    .defaultProvider == "github-copilot"
+    and .defaultModel == "gpt-5.6-sol"
+    and .defaultThinkingLevel == "medium"
+  ' "$SETTINGS"
+  [ "$status" -eq 0 ]
 }
 
 @test "Pi subagent modes use direct GitHub Copilot models" {
@@ -12,10 +22,10 @@ setup() {
     .version == 1
     and .currentMode == "smart"
     and ([.modes[].provider] | all(. == "github-copilot"))
-    and .modes.rush.modelId == "claude-haiku-4.5"
-    and .modes.smart.modelId == "claude-sonnet-4.6"
-    and .modes.deep.modelId == "claude-opus-4.7"
-    and .modes.review.modelId == "gpt-5.4"
+    and .modes.rush.modelId == "gpt-5.4-mini"
+    and .modes.smart.modelId == "gpt-5.6-sol"
+    and .modes.deep.modelId == "gpt-5.6-terra"
+    and .modes.review.modelId == "claude-opus-5"
   ' "$MODES"
   [ "$status" -eq 0 ]
 }
@@ -25,7 +35,7 @@ setup() {
     .modes.rush.thinkingLevel == "low"
     and .modes.smart.thinkingLevel == "medium"
     and .modes.deep.thinkingLevel == "high"
-    and .modes.review.thinkingLevel == "medium"
+    and .modes.review.thinkingLevel == "high"
   ' "$MODES"
   [ "$status" -eq 0 ]
 }
@@ -40,7 +50,7 @@ setup() {
     "$REPO_ROOT/ai/marketplace/plugins/my/skills/improve/references/platforms.md"
   [ "$status" -eq 0 ]
 
-  run rg -n 'github-copilot/claude-(haiku|sonnet)' \
+  run rg -n 'github-copilot/(claude-(haiku|sonnet)|gpt-5\\.6)' \
     "$REPO_ROOT/ai/marketplace/plugins/my/prompts" \
     "$REPO_ROOT/ai/marketplace/plugins/my/skills"
   [ "$status" -eq 1 ]

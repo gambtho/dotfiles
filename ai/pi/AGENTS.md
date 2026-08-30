@@ -31,6 +31,17 @@ take precedence.
 - When investigating an API, call the endpoint before tracing implementation code.
 - For reviews or audits spanning more than five files, scope with search first, then delegate deep reading to one structured subagent pass.
 
+## Subagent model routing
+
+When subagents materially help and the user has not requested a specific model, choose the named mode by task shape:
+
+- `rush`: bounded searches, inventories, and mechanical checks.
+- `smart`: normal code review, focused investigation, and implementation subtasks.
+- `deep`: architecture, security, difficult diagnosis, or broad cross-cutting analysis.
+- `review`: an independent second opinion from a different model family.
+
+Omit `mode` and `model` when the subagent should intentionally inherit the current session. Use an explicit `model` only when the user requests one or a workflow requires a different model family. A single `subagent` call applies one mode/model to every task in its batch; use separate calls when tasks need different models.
+
 ## Worktree workflow
 
 - Inspect and clarify in the current checkout, then create or reuse a linked worktree before the first repository write.
