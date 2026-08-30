@@ -7,7 +7,6 @@
     {
       "source": "git:github.com/tmustier/pi-extensions",
       "extensions": [
-        "files-widget/index.ts",
         "raw-paste/index.ts",
         "session-recap/index.ts",
         "tab-status/tab-status.ts",

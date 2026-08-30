@@ -90,7 +90,19 @@ SCRIPT
 }
 
 @test "Pi keybindings reserve ctrl+x for plan mode" {
-  run jq -e '.["app.message.copy"] == "ctrl+shift+x"' "$REPO_ROOT/ai/pi/keybindings.json"
+  run jq -e '
+    .["app.message.copy"] == "ctrl+shift+x"
+    and .["app.models.clearAll"] == "alt+x"
+    and ([to_entries[] | select(.value == "ctrl+x")] | length == 0)
+  ' "$REPO_ROOT/ai/pi/keybindings.json"
+  [ "$status" -eq 0 ]
+}
+
+@test "Pi package selection omits files-widget system dependencies" {
+  run jq -e '
+    [.packages[] | objects | .extensions[]?]
+    | index("files-widget/index.ts") == null
+  ' "$REPO_ROOT/ai/pi/settings.json"
   [ "$status" -eq 0 ]
 }
 
