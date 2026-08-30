@@ -33,13 +33,7 @@
     },
     "npm:pi-amplike",
     {
-      "source": "git:github.com/obra/superpowers@v6.3.0",
-      "extensions": [],
-      "skills": [
-        "skills/using-git-worktrees/SKILL.md"
-      ],
-      "prompts": [],
-      "themes": []
+      "source": "git:github.com/obra/superpowers@v6.3.0"
     },
     "~/.dotfiles/ai/marketplace/plugins/my"
   ]
