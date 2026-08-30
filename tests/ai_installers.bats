@@ -77,6 +77,65 @@ SCRIPT
   [ "$(cat "$HOME/pi-invocation")" = "update --extensions" ]
 }
 
+@test "Pi installer removes positively identified Vekil and generated client remnants" {
+  export PI_VERSION
+  stub_pi_install
+  mkdir -p "$HOME/.config/systemd/user/vekil.service.d" \
+    "$HOME/.local/bin" "$HOME/.local/state/vekil" \
+    "$HOME/.config/vekil" "$HOME/.codex" "$HOME/.claude"
+  cat >"$HOME/.config/systemd/user/vekil.service" <<EOF
+[Service]
+ExecStart=$REPO_ROOT/bin/vekil-proxy start
+EOF
+  printf '[Service]\nEnvironment=VEKIL_BIN=/tmp/vekil\n' \
+    >"$HOME/.config/systemd/user/vekil.service.d/override.conf"
+  printf '#!/bin/sh\n' >"$HOME/.local/bin/vekil"
+  chmod +x "$HOME/.local/bin/vekil"
+  printf 'v0.14.0\n' >"$HOME/.local/state/vekil/installed-version"
+  printf 'token\n' >"$HOME/.config/vekil/access-token"
+  printf '{"auth_mode":"apikey","OPENAI_API_KEY":"dummy"}\n' >"$HOME/.codex/auth.json"
+  ln -s "$REPO_ROOT/ai/codex/AGENTS.md" "$HOME/.codex/AGENTS.md"
+  ln -s "$REPO_ROOT/ai/claude/settings.json" "$HOME/.claude/settings.json"
+  stub_command systemctl 'printf "%s\n" "$*" >>"$HOME/systemctl-invocations"'
+
+  run env HOME="$HOME" PATH="$PATH" PI_VERSION="$PI_VERSION" \
+    PI_ALLOW_REDIRECTED_SYSTEMD=1 bash "$REPO_ROOT/ai/pi/install.sh"
+
+  [ "$status" -eq 0 ]
+  [ ! -e "$HOME/.config/systemd/user/vekil.service" ]
+  [ ! -e "$HOME/.config/systemd/user/vekil.service.d" ]
+  [ ! -e "$HOME/.local/bin/vekil" ]
+  [ ! -e "$HOME/.local/state/vekil" ]
+  [ ! -e "$HOME/.codex/auth.json" ]
+  [ ! -e "$HOME/.codex/AGENTS.md" ]
+  [ ! -e "$HOME/.claude/settings.json" ]
+  [ "$(cat "$HOME/.config/vekil/access-token")" = token ]
+  grep -Fxq -- '--user disable vekil.service' "$HOME/systemctl-invocations"
+  grep -Fxq -- '--user daemon-reload' "$HOME/systemctl-invocations"
+}
+
+@test "legacy cleanup stops only the Vekil process recorded with matching identity" {
+  mkdir -p "$HOME/.local/bin" "$HOME/.local/state/vekil"
+  cp /bin/sleep "$HOME/.local/bin/vekil"
+  "$HOME/.local/bin/vekil" 60 &
+  local vekil_pid=$!
+  local start_id
+  start_id=$(awk '{print $22}' "/proc/$vekil_pid/stat")
+  printf '%s|%s\n' "$vekil_pid" "$start_id" >"$HOME/.local/state/vekil/proxy.pid"
+  printf 'v0.14.0\n' >"$HOME/.local/state/vekil/installed-version"
+
+  run env HOME="$HOME" PATH="$PATH" REPO_ROOT="$REPO_ROOT" bash -c '
+    source "$REPO_ROOT/bin/common.sh"
+    source "$REPO_ROOT/ai/pi/cleanup-legacy.sh"
+    cleanup_legacy_ai
+  '
+
+  [ "$status" -eq 0 ]
+  ! kill -0 "$vekil_pid" 2>/dev/null
+  [ ! -e "$HOME/.local/bin/vekil" ]
+  [ ! -e "$HOME/.local/state/vekil" ]
+}
+
 @test "Pi installer preserves machine-local authentication" {
   printf '{"github-copilot":{"type":"oauth"}}\n' >"$HOME/.pi/agent/auth.json"
   export PI_VERSION

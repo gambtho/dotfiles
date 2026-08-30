@@ -50,6 +50,33 @@ run_loader() {
   [[ "$output" != *"goms.io"* ]]
 }
 
+@test "zshrc removes inherited Vekil-managed environment without touching user overrides" {
+  stub_command mise 'exit 0'
+
+  run env HOME="$HOME" DOTFILES="$REPO_ROOT" PATH="$PATH" \
+    OPENAI_BASE_URL=http://proxy/v1 \
+    VEKIL_MANAGED_OPENAI_BASE_URL=http://proxy/v1 \
+    OPENAI_API_KEY=dummy \
+    VEKIL_MANAGED_OPENAI_API_KEY=dummy \
+    ANTHROPIC_BASE_URL=https://user.example \
+    VEKIL_MANAGED_ANTHROPIC_BASE_URL=http://proxy \
+    ANTHROPIC_API_KEY=dummy \
+    VEKIL_MANAGED_ANTHROPIC_API_KEY=dummy \
+    ANTHROPIC_MODEL=claude-opus-5 \
+    VEKIL_MANAGED_ANTHROPIC_MODEL=claude-opus-5 \
+    CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1 \
+    VEKIL_MANAGED_CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1 \
+    zsh -dfc '
+      source "$DOTFILES/core/shell/zshrc.symlink" || exit 1
+      print -r -- "${OPENAI_BASE_URL-unset}|${OPENAI_API_KEY-unset}|${ANTHROPIC_BASE_URL-unset}|${ANTHROPIC_API_KEY-unset}|${ANTHROPIC_MODEL-unset}|${CLAUDE_CODE_DISABLE_ADVISOR_TOOL-unset}"
+      env | grep -E "^VEKIL_MANAGED_" || true
+    '
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"unset|unset|https://user.example|unset|unset|unset"* ]]
+  [[ "$output" != *"VEKIL_MANAGED_"* ]]
+}
+
 @test "core path never places the current directory on PATH" {
   run zsh -fc 'PATH=./bin:/usr/bin:/bin; ZSH="$1"; HOME="$2"; source "$1/core/path.zsh"; print -r -- "$PATH"' _ "$REPO_ROOT" "$HOME"
   [ "$status" -eq 0 ]

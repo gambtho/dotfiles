@@ -7,6 +7,8 @@ source "$(dirname "$0")/../../bin/common.sh"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd -P)"
 # shellcheck source=config/versions.env
 source "$ROOT/config/versions.env"
+# shellcheck source=ai/pi/cleanup-legacy.sh
+source "$ROOT/ai/pi/cleanup-legacy.sh"
 
 check_only=false
 
@@ -25,17 +27,21 @@ install_pi() {
 main() {
   if [[ "${1:-}" == "--check" ]]; then
     check_only=true
+    log_info "[dry-run] Would remove positively identified Vekil, Claude, and Codex integration remnants"
     log_info "[dry-run] Would install Pi $PI_VERSION into $HOME/.local"
-  elif [[ ! -x "$HOME/.local/bin/pi" ]] ||
-    [[ "$($HOME/.local/bin/pi --version 2>/dev/null || true)" != "$PI_VERSION" ]]; then
-    command_exists npm || {
-      log_warning "npm is required to install Pi."
-      return 1
-    }
-    install_pi
-    log_success "Installed Pi $PI_VERSION."
   else
-    log_info "Pi $PI_VERSION is already installed at $HOME/.local/bin/pi."
+    cleanup_legacy_ai
+    if [[ ! -x "$HOME/.local/bin/pi" ]] ||
+      [[ "$("$HOME/.local/bin/pi" --version 2>/dev/null || true)" != "$PI_VERSION" ]]; then
+      command_exists npm || {
+        log_warning "npm is required to install Pi."
+        return 1
+      }
+      install_pi
+      log_success "Installed Pi $PI_VERSION."
+    else
+      log_info "Pi $PI_VERSION is already installed at $HOME/.local/bin/pi."
+    fi
   fi
 
   if [[ "$check_only" != true ]]; then

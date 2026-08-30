@@ -1,3 +1,32 @@
+# Retired Vekil shells and long-lived terminal servers can pass their managed
+# proxy environment to new shells after the integration itself is removed.
+# Clear only values whose ownership marker still matches; preserve user-owned
+# endpoint or credential overrides.
+function cleanup_retired_vekil_env() {
+  local marker target marker_value target_value
+  while (( $# >= 2 )); do
+    marker=$1
+    target=$2
+    shift 2
+    (( ${+parameters[$marker]} )) || continue
+    marker_value=${(P)marker}
+    target_value=${(P)target}
+    if (( ${+parameters[$target]} )) && [[ $target_value == $marker_value ]]; then
+      unset "$target"
+    fi
+    unset "$marker"
+  done
+}
+cleanup_retired_vekil_env \
+  VEKIL_MANAGED_OPENAI_BASE_URL OPENAI_BASE_URL \
+  VEKIL_MANAGED_OPENAI_API_KEY OPENAI_API_KEY \
+  VEKIL_MANAGED_ANTHROPIC_BASE_URL ANTHROPIC_BASE_URL \
+  VEKIL_MANAGED_ANTHROPIC_API_KEY ANTHROPIC_API_KEY \
+  VEKIL_MANAGED_ANTHROPIC_MODEL ANTHROPIC_MODEL \
+  VEKIL_MANAGED_CLAUDE_CODE_DISABLE_ADVISOR_TOOL CLAUDE_CODE_DISABLE_ADVISOR_TOOL
+unfunction cleanup_retired_vekil_env
+unset VEKIL_MANAGED_CODEX_FUNCTION
+
 # Enable Powerlevel10k instant prompt. Should stay close to the top of ~/.zshrc.
 # Initialization code that may require console input (password prompts, [y/n]
 # confirmations, etc.) must go above this block; everything else may go below.
