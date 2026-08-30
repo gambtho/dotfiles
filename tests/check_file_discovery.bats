@@ -81,7 +81,7 @@ list_files() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"bin/install"* ]]
   [[ "$output" == *"bin/common.sh"* ]]
-  [[ "$output" == *"ai/claude/install.sh"* ]]
+  [[ "$output" == *"ai/pi/install.sh"* ]]
   [[ "$output" == *"${UNTRACKED_FILE#"$REPO_ROOT/"}"* ]]
   [[ "$output" != *"${IGNORED_FILE#"$REPO_ROOT/"}"* ]]
 }
@@ -92,7 +92,7 @@ list_files() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"tests/test_helper.bash"* ]]
   [[ "$output" == *"bin/common.sh"* ]]
-  [[ "$output" == *"ai/claude/install.sh"* ]]
+  [[ "$output" == *"ai/pi/install.sh"* ]]
 }
 
 @test "shfmt discovery covers Bats suites" {
@@ -104,23 +104,13 @@ list_files() {
 
   [ "$status" -eq 0 ]
   [[ "$output" == *"tests/check_file_discovery.bats"* ]]
-  [[ "$output" == *"tests/seed_drift.bats"* ]]
+  [[ "$output" == *"tests/pi_worktree_guard.bats"* ]]
 
   local class
   for class in bash shellcheck zsh; do
     list_files "$class"
     [ "$status" -eq 0 ]
     [[ "$output" != *".bats"* ]]
-  done
-}
-
-@test "project seed template is covered by every bash source gate" {
-  local expected="ai/marketplace/plugins/my/skills/project-claude-setup/templates/local-seed.sh"
-  local class
-  for class in bash shellcheck shfmt; do
-    list_files "$class"
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"$expected"* ]]
   done
 }
 
@@ -138,7 +128,7 @@ list_files() {
   [ "$status" -eq 0 ]
   [ -z "$output" ]
 
-  [[ "$shfmt_set" == *"bin/vekil-proxy"* ]]
+  [[ "$shfmt_set" == *"ai/pi/install.sh"* ]]
 }
 
 @test "Makefile check pipelines propagate discovery failures portably" {

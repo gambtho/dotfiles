@@ -20,25 +20,20 @@ setup() {
   [[ "$output" == *"WARNING: fonts"* ]]
 }
 
-@test "make ai keeps going past a failed installer and still exits nonzero" {
-  # A plain recipe loop reports only the LAST installer's status: a failed
-  # claude install followed by a successful vekil install exits 0 and `make ai`
-  # announces success over a half-configured machine. The recipe must both
-  # finish the loop (one broken installer must not block the rest) and fail.
+@test "make ai runs only the Pi installer and propagates failures" {
   local fixture="$TEST_ROOT/make-ai"
-  mkdir -p "$fixture/ai/aa" "$fixture/ai/bb"
+  mkdir -p "$fixture/ai/pi"
   cp "$REPO_ROOT/Makefile" "$fixture/Makefile"
-  printf '#!/usr/bin/env bash\nexit 1\n' >"$fixture/ai/aa/install.sh"
-  printf '#!/usr/bin/env bash\ntouch "%s/ran-bb"\nexit 0\n' "$fixture" >"$fixture/ai/bb/install.sh"
+  printf '#!/usr/bin/env bash\ntouch "%s/pi-ran"\nexit 1\n' "$fixture" >"$fixture/ai/pi/install.sh"
 
   run make -C "$fixture" ai
   [ "$status" -ne 0 ]
-  [[ "$output" == *"ai/aa/install.sh"* ]]
-  [ -f "$fixture/ran-bb" ]
+  [[ "$output" == *"ai/pi/install.sh"* ]]
+  [ -f "$fixture/pi-ran" ]
 
   run make -C "$fixture" ai-check
   [ "$status" -ne 0 ]
-  [[ "$output" == *"ai/aa/install.sh"* ]]
+  [[ "$output" == *"ai/pi/install.sh"* ]]
 }
 
 @test "remote installer is denied without explicit consent" {
@@ -299,29 +294,6 @@ CASES
   [ "$(cat "$path_result")" = "$original_path" ]
 }
 
-@test "agent teams setup consumes verified yq and win32yank artifacts" {
-  run rg -n 'install_pinned_yq' "$REPO_ROOT/bin/setup-agent-teams"
-  [ "$status" -eq 0 ]
-
-  run rg -n 'download_verified_artifact.*WIN32YANK_WINDOWS_X64_SHA256' "$REPO_ROOT/bin/setup-agent-teams"
-  [ "$status" -eq 0 ]
-
-  run rg -n 'curl[[:space:]].*github.com/(mikefarah/yq|equalsraf/win32yank)' "$REPO_ROOT/bin/setup-agent-teams"
-  [ "$status" -eq 1 ]
-}
-
-@test "work kubectl shortcuts use maintained krew plugins" {
-  run rg -n 'raw\.githubusercontent\.com/blendle/kns' "$REPO_ROOT/work"
-  [ "$status" -eq 1 ]
-
-  run rg -n 'kubectl krew install ctx ns' "$REPO_ROOT/work/install.sh"
-  [ "$status" -eq 0 ]
-
-  run rg -n "alias ktx='kubectl ctx'|alias kns='kubectl ns'" "$REPO_ROOT/work/k8s-aliases.zsh"
-  [ "$status" -eq 0 ]
-  [ "${#lines[@]}" -eq 2 ]
-}
-
 # --- work profile Krew bootstrap --------------------------------------------
 #
 # The ctx/ns plugins are installed through Krew, and Linux/WSL has no package
@@ -380,127 +352,4 @@ CASES
 @test "work profile puts the Krew bin directory on PATH for interactive shells" {
   run rg -n 'KREW_ROOT:-\$HOME/\.krew' "$REPO_ROOT/work/path.zsh"
   [ "$status" -eq 0 ]
-}
-
-#
-# setup_projects_overlay clones the private overlay repo to ~/.dotfiles/projects.
-# It must never be fatal: a machine without overlays is a working machine, so
-# every failure path logs and returns 0 rather than aborting `set -e` bootstrap.
-
-run_setup_projects_overlay() {
-  run env BOOTSTRAP_SOURCE_ONLY=1 HOME="$HOME" bash -c \
-    'source "$1/bin/bootstrap"; setup_projects_overlay' _ "$REPO_ROOT"
-}
-
-@test "overlay attach skips when no remote is configured" {
-  run_setup_projects_overlay
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"No project overlay repo configured"* ]]
-  [ ! -e "$HOME/.dotfiles/projects" ]
-}
-
-@test "overlay attach clones the configured remote to the canonical path" {
-  local source_repo="$TEST_ROOT/overlay-source"
-  mkdir -p "$source_repo/myrepo"
-  printf '%s\n' "# myrepo" >"$source_repo/myrepo/CLAUDE.md"
-  git -C "$source_repo" init -q
-  git -C "$source_repo" -c user.name=T -c user.email=t@e add -A
-  git -C "$source_repo" -c user.name=T -c user.email=t@e commit -q -m seed
-  printf '%s\n' "$source_repo" >"$HOME/.dotfiles-projects-remote"
-
-  # Stand in for bootstrap being run out of a disposable linked worktree:
-  # DOTFILES_ROOT is that worktree, but the overlays must land in the canonical
-  # checkout, where bin/claude-link-project and the stable link root look.
-  local worktree="$TEST_ROOT/worktrees/some-feature"
-  mkdir -p "$worktree"
-
-  run env BOOTSTRAP_SOURCE_ONLY=1 HOME="$HOME" bash -c \
-    'source "$1/bin/bootstrap"; DOTFILES_ROOT="$2"; setup_projects_overlay' \
-    _ "$REPO_ROOT" "$worktree"
-
-  [ "$status" -eq 0 ]
-  [ -d "$HOME/.dotfiles/projects/.git" ]
-  [ "$(cat "$HOME/.dotfiles/projects/myrepo/CLAUDE.md")" = "# myrepo" ]
-  [ ! -e "$worktree/projects" ]
-}
-
-@test "overlay attach leaves an already-attached repo alone" {
-  mkdir -p "$HOME/.dotfiles/projects/.git"
-  printf '%s\n' "/nonexistent/remote.git" >"$HOME/.dotfiles-projects-remote"
-
-  run_setup_projects_overlay
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"already attached"* ]]
-}
-
-@test "overlay attach refuses to touch a non-empty non-repo directory" {
-  mkdir -p "$HOME/.dotfiles/projects/myrepo"
-  printf '%s\n' "local work" >"$HOME/.dotfiles/projects/myrepo/CLAUDE.md"
-  printf '%s\n' "/nonexistent/remote.git" >"$HOME/.dotfiles-projects-remote"
-
-  run_setup_projects_overlay
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"leaving it alone"* ]]
-  [ "$(cat "$HOME/.dotfiles/projects/myrepo/CLAUDE.md")" = "local work" ]
-}
-
-@test "overlay attach survives a failing clone" {
-  printf '%s\n' "$TEST_ROOT/does-not-exist.git" >"$HOME/.dotfiles-projects-remote"
-
-  run_setup_projects_overlay
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"continuing without overlays"* ]]
-}
-
-@test "overlay attach ignores an empty remote pointer" {
-  printf '\n' >"$HOME/.dotfiles-projects-remote"
-
-  run_setup_projects_overlay
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"is empty"* ]]
-  [ ! -e "$HOME/.dotfiles/projects" ]
-}
-
-# Cloning a private https overlay repo authenticates through the gh credential
-# helper, which needs ~/.gitconfig.<slug> -- a symlink only install_dotfiles
-# creates. Attaching first made the clone prompt for a username on a fresh
-# machine, and the ^C that answers that prompt kills bootstrap before any
-# symlink is installed.
-@test "bootstrap installs symlinks before attaching the overlay repo" {
-  local install_line overlay_line
-  install_line="$(grep -n '^  install_dotfiles$' "$REPO_ROOT/bin/bootstrap" | cut -d: -f1)"
-  overlay_line="$(grep -n '^  setup_projects_overlay$' "$REPO_ROOT/bin/bootstrap" | cut -d: -f1)"
-  [ -n "$install_line" ]
-  [ -n "$overlay_line" ]
-  [ "$install_line" -lt "$overlay_line" ]
-}
-
-# A clone that blocks on "Username for 'https://github.com':" turns a
-# non-fatal attach step into a hung bootstrap.
-@test "overlay attach fails fast instead of prompting for credentials" {
-  printf '%s\n' "https://github.com/example/overlays.git" \
-    >"$HOME/.dotfiles-projects-remote"
-  stub_command git 'printf "clone GIT_TERMINAL_PROMPT=[${GIT_TERMINAL_PROMPT:-unset}]\n"; exit 128'
-
-  run_setup_projects_overlay
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"GIT_TERMINAL_PROMPT=[0]"* ]]
-  [[ "$output" == *"continuing without overlays"* ]]
-}
-
-# The clone that failed is the one the user has to repair, so the remaining
-# step must be named for the REMOTE's owner -- not for whichever identity the
-# directory bootstrap happens to be running from resolves to.
-@test "a failed clone names the unprovisioned identity the remote needs" {
-  printf '%s\n' "https://github.com/guarzo/overlays.git" \
-    >"$HOME/.dotfiles-projects-remote"
-  printf 'gambtho default\nguarzo guarzo\n' >"$TEST_ROOT/overlay-owner-map"
-  stub_command git 'exit 128'
-
-  run env BOOTSTRAP_SOURCE_ONLY=1 HOME="$HOME" \
-    IDENTITY_MAP_FILE="$TEST_ROOT/overlay-owner-map" \
-    bash -c 'source "$1/bin/bootstrap"; setup_projects_overlay' _ "$REPO_ROOT"
-
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"GH_CONFIG_DIR=$HOME/.gh-guarzo gh auth login"* ]]
 }

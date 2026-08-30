@@ -1,0 +1,47 @@
+{
+  "defaultProvider": "github-copilot",
+  "defaultModel": "claude-opus-4.7",
+  "defaultThinkingLevel": "medium",
+  "theme": "dark",
+  "packages": [
+    {
+      "source": "git:github.com/tmustier/pi-extensions",
+      "extensions": [
+        "files-widget/index.ts",
+        "raw-paste/index.ts",
+        "session-recap/index.ts",
+        "tab-status/tab-status.ts",
+        "usage-extension/index.ts",
+        "pi-ralph-wiggum/index.ts"
+      ],
+      "skills": [
+        "pi-ralph-wiggum/SKILL.md"
+      ],
+      "prompts": [],
+      "themes": []
+    },
+    "npm:pi-powerline-footer",
+    {
+      "source": "npm:shitty-extensions",
+      "extensions": [
+        "extensions/clipboard.ts",
+        "extensions/memory-mode.ts",
+        "extensions/plan-mode.ts"
+      ],
+      "skills": [],
+      "prompts": [],
+      "themes": []
+    },
+    "npm:pi-amplike",
+    {
+      "source": "git:github.com/obra/superpowers@v6.3.0",
+      "extensions": [],
+      "skills": [
+        "skills/using-git-worktrees/SKILL.md"
+      ],
+      "prompts": [],
+      "themes": []
+    },
+    "~/.dotfiles/ai/marketplace/plugins/my"
+  ]
+}

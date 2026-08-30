@@ -19,24 +19,15 @@ core/git/gitconfig.local.symlink
 core/git/gitconfig.*.symlink
 .dotfiles-profile
 .opencode/
-ai/codex/projects.local.toml
 
 # Python runtime artifacts
 __pycache__/
 *.py[cod]
 
-# The global ~/.gitignore ignores all CLAUDE.md files (project-local instructions).
-# Our repo-managed global CLAUDE.md is an intentional tracked exception.
-!ai/claude/CLAUDE.md
-
-# Per-project Claude overlays used to be tracked here. They described the
-# architecture and security boundaries of non-public codebases, so they now live
-# in a separate private repository that bootstrap clones to ~/.dotfiles/projects.
-# This repo is public: nothing under projects/ may be tracked again. The
-# assertion in tests/repository_hygiene.bats enforces that; see
-# docs/guides/project-overlays.md for the workflow.
-# (The dev platform's machine-local projects/*/workspace.local.yaml is covered
-# by this rule too.)
+# Machine-local Pi plans and retired Claude-era state are not tracked.
+.pi/plans/
+.pi/overnight-run-state.md
+.claude/
 projects/
 
 # Machine-local owner map (see identity-owners.local.example).

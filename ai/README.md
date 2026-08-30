@@ -1,0 +1,132 @@
+# Pi configuration
+
+This directory contains the repository-managed configuration for Pi, the sole coding-agent harness installed by these dotfiles.
+
+## Decisions
+
+### Provider and models
+
+Pi connects directly to the GitHub Copilot subscription. No model proxy is required.
+
+- Authenticate interactively with `/login` and choose **GitHub Copilot**.
+- Select any Copilot model enabled for the subscription with `/model`.
+- Press Ctrl+S in the model picker to save the highlighted model as the startup default.
+- Keep OAuth credentials in `~/.pi/agent/auth.json`; never commit them.
+
+### Prefer packaged mechanisms and custom workflows
+
+Existing Pi packages own generic runtime mechanisms. The local `my` package remains responsible for workflows that encode personal policy or behavior.
+
+| Capability | Decision | Implementation |
+|---|---|---|
+| Authentication, model selection, sessions, branching, compaction, and trust | Use native Pi | `@earendil-works/pi-coding-agent` |
+| Subagents and cross-session handoff | Use existing | `pi-amplike` |
+| Auto-allow, ask, or deny Bash commands | Use existing | `pi-amplike` permissions in enabled mode |
+| Plan-mode enforcement and persistent plan state | Use existing | `shitty-extensions/extensions/plan-mode.ts` |
+| Planning quality and blind-spot analysis | Keep custom | `implementation-plan`, `blindspot-pass` |
+| Long-running iteration runtime | Use existing | `pi-ralph-wiggum/index.ts` |
+| Opinionated overnight improvement workflow | Keep custom | `overnight-improve` |
+| Worktree creation guidance | Use existing | `obra/superpowers@using-git-worktrees` |
+| Primary-checkout write enforcement | Keep custom | `ai/pi/extensions/worktree-guard.ts` |
+| Spec and plan second opinions | Keep custom | `/second-opinion` using a different Copilot model |
+| General alternate-model Oracle | Remove | Duplicates the broad concept, lacks repository tools, and does not target Copilot models |
+| Conservative code cleanup and language rules | Keep custom | `/polish` and `polish-core` |
+| PR feedback planning, batch review, and isolated PR polishing | Keep custom | `/fix-pr`, `/review-prs`, `/polish-pr` |
+| Session recap | Use existing | `session-recap` |
+| Historical usage dashboard | Use existing | `usage-extension` |
+| Live model, context, token, and cost display | Use existing | `pi-powerline-footer` |
+| Separate historical cost tracker | Remove | Redundant with the usage dashboard and footer |
+| Clipboard output and editable raw paste | Use existing | `clipboard.ts` and `raw-paste` |
+| Web search and page extraction | Use existing | `pi-amplike` skills |
+| Interactive browser automation | Add only when needed | No default dependency |
+| Claude project overlays and devcontainer seeding | Remove without replacement | These workflows are not in active use |
+
+### Permission mode
+
+Pi's built-in tools run without Claude-style permission prompts. The `pi-amplike` permissions extension supplies the closest equivalent to Auto Mode for Bash: known low-risk commands are allowed, risky or unmatched commands ask, and explicit deny rules block. `/permissions` toggles between `enabled` and unrestricted `yolo`; keep `enabled` as the default. The choice persists in machine-local `~/.pi/agent/amplike.json`.
+
+These rules cover Bash only. Direct file writes remain governed by the worktree guard described below.
+
+### Second opinion versus Oracle
+
+`/second-opinion` is not a generic chat query. It launches one isolated Pi subagent with a model from a different Copilot family, gives it repository access, and requires an evidence-backed review of a spec or implementation plan. The current agent then assesses the findings using conversation context.
+
+Oracle sends conversation context and optional files to a fixed alternate-model list, without repository tools. It does not replace the document-review workflow and is unnecessary in the Copilot-only setup.
+
+### Worktree policy
+
+Use the established `using-git-worktrees` skill to create or reuse linked worktrees. The custom worktree guard enforces the local policy by blocking Pi's direct `write` and `edit` tools when their target belongs to a primary checkout. Linked worktrees and repositories listed in `~/.pi/worktree-guard-allow` are permitted.
+
+The extension cannot reliably classify every possible shell command. Global guidance therefore explicitly forbids bypassing the guard through shell redirection, generators, or other mutating commands. Set `PI_WORKTREE_GUARD=off` only for a deliberate one-off exception.
+
+### Removed Claude-era scope
+
+The migration does not preserve or replace:
+
+- `project-claude-setup`;
+- private per-project Claude overlays;
+- Claude devcontainer seeding and compose overrides;
+- seed-drift tooling;
+- Claude agent-team setup;
+- Vekil proxy lifecycle;
+- Claude Code or Codex CLI installation and configuration.
+
+Existing machine-local Claude and Codex authentication, histories, and sessions are not deleted automatically.
+
+## Managed layout
+
+```text
+ai/
+  README.md
+  pi/
+    AGENTS.md
+    settings.json
+    keybindings.json
+    extensions/
+      worktree-guard.ts
+    install.sh
+  marketplace/plugins/my/
+    package.json
+    prompts/
+    skills/
+```
+
+`ai/pi/install.sh` installs the pinned Pi release, links authored configuration into `~/.pi/agent/`, and reconciles declared packages. Run it through:
+
+```bash
+make ai
+```
+
+Preview without changing the machine:
+
+```bash
+make ai-check
+```
+
+## Machine-local boundary
+
+Do not add these to the repository:
+
+- `~/.pi/agent/auth.json`;
+- `~/.pi/agent/sessions/`;
+- `~/.pi/agent/trust.json`;
+- `~/.pi/agent/models-store.json`;
+- installed package trees under `~/.pi/agent/git/` and `~/.pi/agent/npm/`;
+- API keys, OAuth tokens, generated catalogs, or extension runtime state.
+
+Only authored settings, guidance, keybindings, local extensions, prompts, and skills belong here.
+
+## Validation
+
+After changing Pi configuration or the personal package, run:
+
+```bash
+bash bin/validate-ai --verbose
+bats tests/pi_worktree_guard.bats
+```
+
+Run the full repository suite before completing a migration change:
+
+```bash
+make check
+```

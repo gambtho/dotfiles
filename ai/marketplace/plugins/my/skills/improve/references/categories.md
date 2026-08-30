@@ -1,4 +1,4 @@
-# Review categories — `my:improve`
+# Review categories — `improve`
 
 The 10 categories the qualitative analysis (Phase 2) hunts across. Each agent owns a subset; the orchestrator inlines the relevant subset into that agent's prompt rather than sending the whole list.
 
@@ -46,7 +46,7 @@ On the frontend, look for components with overlapping functionality — two badg
 ## Category 5: Test Quality
 - Focus on packages with low or zero coverage from Phase 1
 - Look for tests that don't assert anything meaningful (happy-path only)
-- Check for missing edge case coverage on the critical business logic CLAUDE.md identifies (e.g. money math, auth, parsing, scheduled jobs)
+- Check for missing edge case coverage on the critical business logic the project instructions identify (e.g. money math, auth, parsing, scheduled jobs)
 
 ## Category 6: Architecture & code smells
 
@@ -56,7 +56,7 @@ Mechanical hexagonal violations are typically caught by a project-specific check
 - Business logic leaking into adapter packages — HTTP handlers doing calculations, SQLite queries embedding business rules, scheduler code making policy decisions
 - Domain packages that have grown too broad and should be split (a `Service` struct with 20+ methods is a canonical warning sign)
 - Interfaces defined in adapter packages but consumed by domain packages (wrong direction)
-- Cross-imports between sibling sub-packages where the project's CLAUDE.md or architecture doc forbids them — and especially the subtle cases where one sub-package re-exports another's types
+- Cross-imports between sibling sub-packages where the project's instructions or architecture docs forbid them — and especially the subtle cases where one sub-package re-exports another's types
 
 **Code smells to hunt for** (each of these is a reviewer judgment call, not a lint):
 - **God services** — one struct with >10 methods spanning multiple responsibilities. Split by concern.

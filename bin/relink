@@ -17,11 +17,6 @@ DOTFILES_ROOT=$(pwd -P)
 
 log_info "Relinking dotfiles from $DOTFILES_ROOT"
 
-# $HOME/.dotfiles, not $DOTFILES_ROOT: relink is frequently run from a linked
-# worktree, and pointing the stable root at one would make every project
-# overlay link resolve through a directory that gets deleted.
-ensure_stable_link_root "$HOME/.dotfiles"
-
 # Destinations skipped because a real file/dir occupies them. Collected rather
 # than aborted on, so one conflict does not block every remaining link, and
 # reported as a hard failure at exit — a warning alone is how ~/.git-hooks sat

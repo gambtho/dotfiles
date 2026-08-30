@@ -26,9 +26,8 @@ setup() {
   [[ "$output" == *"artifact krew v0.5.0"* ]]
   [[ "$output" == *"artifact yq v4.45.1"* ]]
   [[ "$output" == *"artifact win32yank v0.1.1"* ]]
-  [[ "$output" == *"artifact vekil v0.14.0"* ]]
   [[ "$output" == *"artifact herdr v0.8.0"* ]]
-  [[ "$output" == *"npm codex $CODEX_VERSION"* ]]
+  [[ "$output" == *"npm pi $PI_VERSION"* ]]
   [[ "$output" == *"artifact nerd-fonts v3.4.0"* ]]
   [[ "$output" == *"artifact nerd-font-cascadia-mono v3.4.0 $NERD_FONT_CASCADIA_MONO_SHA256"* ]]
   [[ "$output" == *"artifact nerd-font-hack v3.4.0 $NERD_FONT_HACK_SHA256"* ]]
@@ -45,7 +44,7 @@ setup() {
 }
 
 @test "non-mise pins have one canonical manifest" {
-  run rg -l '^(PREZTO_REF|ZSH_DEFER_REF|KUBERNETES_CHANNEL|VEKIL_VERSION|VEKIL_RELEASE_BASE|VEKIL_(DARWIN|LINUX)_(AMD64|ARM64)_SHA256|HERDR_VERSION|HERDR_RELEASE_BASE|HERDR_LINUX_(X86_64|AARCH64)_SHA256)=' "$REPO_ROOT" \
+  run rg -l '^(PREZTO_REF|ZSH_DEFER_REF|KUBERNETES_CHANNEL|PI_VERSION|HERDR_VERSION|HERDR_RELEASE_BASE|HERDR_LINUX_(X86_64|AARCH64)_SHA256)=' "$REPO_ROOT" \
     --glob '!docs/**' --glob '!tests/**'
   [ "$status" -eq 0 ]
   [ "$output" = "$REPO_ROOT/config/versions.env" ]
@@ -104,10 +103,9 @@ case "$url" in
   *kubernetes-sigs/krew*) printf '{"tag_name":"v0.5.0"}\n' ;;
   *mikefarah/yq*) printf '{"tag_name":"v4.45.1"}\n' ;;
   *equalsraf/win32yank*) printf '{"tag_name":"v0.1.1"}\n' ;;
-  *sozercan/vekil*) printf '{"tag_name":"v0.14.0"}\n' ;;
   *ryanoasis/nerd-fonts*) printf '{"tag_name":"v3.4.0"}\n' ;;
   *herdrdev/herdr*) printf '{"tag_name":"v0.8.0"}\n' ;;
-  *registry.npmjs.org*) printf '{"version":"0.146.0"}\n' ;;
+  *registry.npmjs.org*) printf '{"version":"0.84.4"}\n' ;;
 esac
 SCRIPT
   chmod +x "$STUB_BIN/curl"
@@ -119,10 +117,9 @@ SCRIPT
   [[ "$output" == *"current artifact krew v0.5.0"* ]]
   [[ "$output" == *"current artifact yq v4.45.1"* ]]
   [[ "$output" == *"current artifact win32yank v0.1.1"* ]]
-  [[ "$output" == *"current artifact vekil v0.14.0"* ]]
   [[ "$output" == *"current artifact herdr v0.8.0"* ]]
   [[ "$output" == *"current artifact nerd-fonts v3.4.0"* ]]
-  [[ "$output" == *"current npm codex $CODEX_VERSION"* ]]
+  [[ "$output" == *"current npm pi $PI_VERSION"* ]]
 }
 
 @test "versions check reports artifact release lookup failures clearly" {

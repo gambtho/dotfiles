@@ -15,9 +15,9 @@ Parse arguments:
 - If `--fix` is present (in any position), set FIX_MODE=true and remove it from the commit reference.
 - If `--path <prefix>` is present, set PATH_FILTER to the given prefix and remove both tokens from the arguments. This limits analysis to files under that directory.
 - Remaining argument is the commit reference (default: merge-base with the default branch).
-- Natural-language mentions of `my:polish` refer to this skill via its `/polish` command wrapper.
-- Examples: `$my:polish-core`, `$my:polish-core HEAD~5`, `$my:polish-core abc123 --fix`, `$my:polish-core --fix --path src/api HEAD~3`
-- Natural-language equivalents are accepted, such as “use my:polish to review changes since HEAD~5 and apply safe fixes.”
+- Use the `/polish` prompt wrapper for normal invocation, or `/skill:polish-core` to load the skill directly.
+- Examples: `/polish`, `/polish HEAD~5`, `/polish abc123 --fix`, `/polish --fix --path src/api HEAD~3`.
+- Natural-language equivalents are accepted, such as “use polish to review changes since HEAD~5 and apply safe fixes.”
 
 ---
 
@@ -53,7 +53,7 @@ Scan for language markers in the project root to determine the tech stack:
 | `Makefile`, `CMakeLists.txt` | C/C++ (no language rules — general principles only) |
 
 Convention sources (in priority order):
-1. `CLAUDE.md` or `AGENTS.md` at project root (highest priority)
+1. `AGENTS.md` or a `CLAUDE.md` fallback at project root (highest priority)
 2. Linter/formatter configs (`.eslintrc*`, `golangci.yml`, `.rubocop.yml`, `ruff.toml`, etc.)
 3. `CONTRIBUTING.md`, `STYLE.md`, or similar docs
 4. Patterns sampled from surrounding (unchanged) files
@@ -73,7 +73,7 @@ Only load rules for languages actually present in the changed files.
 Print detected stack summary:
 ```
 Stack: Go, TypeScript
-Conventions: CLAUDE.md, .eslintrc.json, golangci.yml, codebase patterns
+Conventions: AGENTS.md/CLAUDE.md, .eslintrc.json, golangci.yml, codebase patterns
 Language rules loaded: go.md, typescript.md
 ```
 
@@ -91,7 +91,7 @@ Language rules loaded: go.md, typescript.md
 8. Apply large diff tiers:
    - **Under 30 source files**: full analysis of all files.
    - **30-80 source files**: full diff for all, but only read full file contents for the top 20 files by lines changed. Note in the report which files had abbreviated analysis.
-   - **Over 80 source files**: warn the user ("This diff spans N files. Analyzing the top 40 by change size. Run `$my:polish-core` with `--path` for targeted analysis of specific directories."). Analyze the top 40 files only.
+   - **Over 80 source files**: warn the user ("This diff spans N files. Analyzing the top 40 by change size. Run `/polish --path <directory>` for targeted analysis of specific directories."). Analyze the top 40 files only.
 
 ---
 
@@ -120,7 +120,7 @@ Walk through each of 3a-3h from the reference and produce findings, classifying 
 
 ### 3i: Dispatch Subagents
 
-Dispatch read-only review subagents **in parallel** using whatever subagent mechanism the platform provides (e.g. the Agent tool in Claude Code). For each role below, prefer a dedicated agent if one with that specialty is available in the session; otherwise dispatch a generic read-only subagent (e.g. `general-purpose` or `Explore`) with the role assigned in its prompt. If subagents are unavailable or their use is not authorized, perform these checks locally and note that in the report:
+Dispatch read-only review subagents **in parallel** with one `subagent` tool call and a self-contained task for each relevant role. Use mode `smart` and a strong GitHub Copilot model. If subagents are unavailable, perform these checks locally and note that in the report:
 
 1. **code-reviewer** — confidence-filtered general review. Prefer a dedicated review agent when available (e.g. `coderabbit:code-reviewer`). Scope to quality/fragility and suggestions — Phase 3a already covers bugs and security.
 2. **silent-failure-hunter** — generic subagent with this role: finds swallowed errors and silent fallbacks.

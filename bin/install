@@ -145,9 +145,6 @@ setup_fonts() {
 # cosmetic failure -- no Windows Terminal installed, an ambiguous Windows user,
 # a JSONC settings.json it refuses to rewrite -- must not fail the install.
 #
-# Sibling note: platforms/windows/setup-wt-claude-profiles.sh is deliberately
-# NOT wired in here. It prompts per project and adds terminal profiles, so it
-# is a decision to make once, not an unattended step on every install.
 setup_wt_theme() {
   local script="$DOTFILES_ROOT/platforms/windows/wt-color-scheme.sh"
   [ -f "$script" ] || return 0
@@ -179,14 +176,9 @@ setup_flatpak() {
 # ── Phase 9: AI tools ────────────────────────────────────────────────────────
 
 setup_ai() {
-  log_info "Setting up AI tools..."
-  for installer in "$DOTFILES_ROOT/ai"/*/install.sh; do
-    [ -f "$installer" ] || continue
-    local tool_name
-    tool_name=$(basename "$(dirname "$installer")")
-    run_phase optional "ai-$tool_name" bash "$installer"
-  done
-  log_success "AI tools setup complete."
+  log_info "Setting up Pi..."
+  run_phase optional ai-pi bash "$DOTFILES_ROOT/ai/pi/install.sh"
+  log_success "Pi setup complete."
 }
 
 # ── Main ──────────────────────────────────────────────────────────────────────

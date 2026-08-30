@@ -3,7 +3,7 @@
 Write the implementation plan to:
 
 ```
-~/.claude/pr-fix-plans/{OWNER}/{REPO}/pr-{PR_NUMBER}-plan.md
+~/.pi/pr-fix-plans/{OWNER}/{REPO}/pr-{PR_NUMBER}-plan.md
 ```
 
 If a plan for this PR already exists, archive the old one by renaming to `pr-{PR_NUMBER}-plan-{YYYY-MM-DD-HHMMSS}.md` before writing the new file.

@@ -4,7 +4,7 @@ set -euo pipefail
 
 # Copy a line-wrapped URL out of a tmux pane into the Windows clipboard.
 #
-# Full-screen TUIs (Claude Code's login prompt, for one) draw a long URL as
+# Full-screen terminal login prompts can draw a long URL as
 # several padded screen lines rather than one soft-wrapped line. tmux copies
 # what is on screen, so a drag-selection yields those lines joined by newlines
 # -- a broken URL. Worse, such TUIs usually enable mouse reporting, which sets

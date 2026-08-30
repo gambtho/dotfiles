@@ -191,13 +191,11 @@ CASES
   mkdir -p "$fixture/dir with spaces"
   mkdir -p "$fixture/archived/core"
   mkdir -p "$fixture/.git/core"
-  mkdir -p "$fixture/.claude/worktrees/core"
 
   printf 'zshrc\n' >"$fixture/core/shell/zshrc.symlink"
   printf 'spaced\n' >"$fixture/dir with spaces/tool.symlink"
   printf 'archived\n' >"$fixture/archived/core/should-not-appear.symlink"
   printf 'git\n' >"$fixture/.git/core/should-not-appear.symlink"
-  printf 'worktree\n' >"$fixture/.claude/worktrees/core/should-not-appear.symlink"
 
   local pairs=()
   while IFS= read -r -d '' source && IFS= read -r -d '' destination; do
@@ -213,7 +211,6 @@ CASES
   [[ "$joined" == *"$fixture/config/tool with spaces"$'\t'"$HOME/.config/tool with spaces"* ]]
   [[ "$joined" != *"archived"* ]]
   [[ "$joined" != *"/.git/"* ]]
-  [[ "$joined" != *"worktrees"* ]]
 }
 
 @test "bootstrap and relink share one link loop while keeping their differing conflict policies" {

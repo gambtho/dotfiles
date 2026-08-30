@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # PATH shim routing `gh` to the identity owning the current repository's
 # remote. A shell function would reach only interactive zsh; scripts, editors,
-# Codex, and Claude Code's bash tool would all silently use the default
+# Pi and other non-interactive callers would all silently use the default
 # account -- the exact disagreement this design exists to prevent.
 #
 # BASH 3.2 ONLY: macOS ships bash 3.2, and tests/portability.bats rejects

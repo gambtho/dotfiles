@@ -1,39 +1,44 @@
 # Preflight checklist
 
-Run these before kicking off the loop. If any check fails, fix it or abort — do not start the loop on a broken baseline.
+Run these before kicking off the loop. If any check fails, fix it or abort.
 
-## 0. Verify session is in bypass-permissions mode
+## 0. Verify unattended permissions
 
-The skill body checks this; the runtime check is also visible in the startup banner or `/status`. If the session is in plan mode (the default), the loop will stall on the first Bash call. Exit and relaunch with:
+Use `/permissions` and confirm the status shows `YOLO mode`. This temporary setting prevents an unattended iteration from pausing on a Bash confirmation. Keep the worktree guard enabled, and restore permissions to enabled mode when the loop ends.
 
-```bash
-claude --permission-mode bypassPermissions
-# equivalent: claude --dangerously-skip-permissions
-```
+Exit plan mode before starting; plan mode intentionally blocks writes.
 
-## 1. Verify main is clean and up to date
+## 1. Verify the base branch
+
+From the primary checkout:
 
 ```bash
 git status                                    # must be clean
 git fetch origin && git log HEAD..origin/main # must be empty
 ```
 
-## 2. Create the overnight branch
+## 2. Create a linked worktree and overnight branch
+
+Load and follow the `using-git-worktrees` skill. Read the configured prefix and create a new linked worktree rather than switching the primary checkout:
 
 ```bash
-BRANCH_PREFIX=$(awk '/^branch_prefix:/ {print $2}' .claude/overnight-config.yaml)
-git checkout -b "${BRANCH_PREFIX}-$(date +%Y-%m-%d)"
+BRANCH_PREFIX=$(awk '/^branch_prefix:/ {print $2}' .pi/overnight-config.yaml)
+BRANCH="${BRANCH_PREFIX}-$(date +%Y-%m-%d)"
+# Choose the worktree path according to the using-git-worktrees skill.
+git worktree add -b "$BRANCH" <worktree-path> main
 ```
+
+Continue all remaining steps from `<worktree-path>`. Copy or create `.pi/overnight-config.yaml` there if it is intentionally untracked.
 
 ## 3. Seed the state file
 
 ```bash
-mkdir -p .claude
-MAX_ITER=$(awk '/^max_iterations:/ {print $2}' .claude/overnight-config.yaml)
-MAX_WRAP=$(awk '/^max_wrap_iterations:/ {print $2}' .claude/overnight-config.yaml)
+mkdir -p .pi
+MAX_ITER=$(awk '/^max_iterations:/ {print $2}' .pi/overnight-config.yaml)
+MAX_WRAP=$(awk '/^max_wrap_iterations:/ {print $2}' .pi/overnight-config.yaml)
 BRANCH=$(git branch --show-current)
 
-cat > .claude/overnight-run-state.md <<EOF
+cat > .pi/overnight-run-state.md <<EOF
 ---
 started: $(date -u +%Y-%m-%dT%H:%M:%SZ)
 branch: ${BRANCH}
@@ -50,22 +55,17 @@ max_wrap_iterations: ${MAX_WRAP}
 EOF
 ```
 
-## 4. Verify all gates pass on baseline
+## 4. Verify all gates
 
-Read each gate from `.claude/overnight-config.yaml` and run it. ALL must exit 0 before the loop starts. If any fails, fix the underlying problem on `main` (or abort) — never start the loop on a broken baseline.
+Read each gate from `.pi/overnight-config.yaml` and run it. Every gate must pass on the baseline before starting the loop.
 
-## 5. Recommended: do a 2-iteration dry run first
+## 5. Recommended dry run
 
-Before committing a whole night to the loop, do a small dry run:
+Run two iterations with `ralph_start` before committing a whole night. Verify:
 
-```bash
-# In the skill, this means invoking ralph-loop with --max-iterations 2 instead of the configured value.
-```
+1. The first iteration produced a commit that passes the gates.
+2. The state file recorded the commit and iteration counter.
+3. The second iteration saw the first iteration's change and did not repeat it.
+4. Each iteration ended with a clean worktree.
 
-After the dry run, verify all 4:
-1. Iteration 1 produced a commit that passes gates.
-2. The state file got updated correctly (one `succeeded: <sha>` entry, `iteration: 2` after the second fire).
-3. Iteration 2 saw iteration 1's fix in the tree (didn't re-flag the same finding).
-4. `git status` ended clean after each iteration.
-
-**Caveat:** PHASE 2 fires when `iteration == max_iterations` *as written in the state file* (the configured value, e.g. 15), not the `--max-iterations` CLI flag. So a 2-iter dry run normally won't push or open a PR — UNLESS both iterations exhaust eligible findings, which triggers PHASE 2 via the no-findings path. To dry-run with zero PR risk, delete the seeded state file before each dry run.
+PHASE 2 uses `max_iterations` in the state file, not only the Ralph runtime limit. A two-iteration dry run normally will not open a PR, but exhausting eligible findings can still trigger wrap-up. For a zero-push dry run, use a test remote or temporarily configure a wrap-up constraint that forbids pushing.

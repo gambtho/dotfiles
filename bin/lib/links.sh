@@ -44,7 +44,6 @@ managed_link_pairs() {
   done < <(find -H "$dotfiles_root" \
     -not -path '*/archived/*' \
     -not -path '*/.git/*' \
-    -not -path "$dotfiles_root/.claude/worktrees/*" \
     -name '*.symlink' -print0)
 
   if [[ -d "$dotfiles_root/config" ]]; then

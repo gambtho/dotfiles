@@ -41,12 +41,10 @@ After bootstrap, run `bin/install` (or `bin/dot-update`) to install packages and
   tools/          # Tool configs: docker, kubernetes
   platforms/      # OS-specific: linux/, macos/, windows/
   work/           # Work context: only sourced when work profile is active
-  ai/             # AI tools: claude/, codex/, marketplace/, vekil/
+  ai/             # Pi configuration and personal prompt/skill package
   profiles/       # Machine profiles: personal.zsh, work.zsh
   config/         # XDG config files, symlinked to ~/.config/<name>
   docs/guides/    # Long-form guides for the tooling in bin/
-  projects/       # NOT tracked here — a separate private repo, cloned by
-                  # bin/bootstrap. See docs/guides/project-overlays.md
 ```
 
 ## Profile System
@@ -297,11 +295,6 @@ echo 'export WT_WINDOWS_USER=yourname' >> ~/.localrc
 
 Without it, the install phase warns and is skipped rather than prompting.
 
-`platforms/windows/setup-wt-claude-profiles.sh` — which adds Windows Terminal
-profiles for the Claude + tmux workflow — is a separate manual step. It prompts
-per project, so it is a decision to make once rather than an unattended part of
-every install.
-
 ## Runtime Manager
 
 All language runtimes are managed by [mise](https://mise.jdx.dev/). Versions are defined
@@ -356,96 +349,36 @@ skipped unless `--include-locked`, which unlocks each before removing it.
 - Machine-local files use a `.local` suffix and remain ignored.
 - Generated backups and binaries larger than 5 MiB are not tracked.
 - Historical artifacts belong in release storage or a dedicated archive repository.
-- `projects/` is never tracked here. Per-project Claude overlays describe
-  non-public codebases and live in a separate private repository that
-  `bin/bootstrap` clones to `~/.dotfiles/projects`; a test asserts the boundary.
-  See [docs/guides/project-overlays.md](docs/guides/project-overlays.md).
 
-## AI Coding Assistants
+## AI Coding Agent
 
-Two AI tools are configured under `ai/` — Claude Code (primary) and Codex CLI —
-plus a shared Vekil proxy:
+Pi is the only repository-managed coding-agent harness:
 
 ```text
 ai/
-  marketplace/  # Claude Code plugin marketplace — the 'my' plugin (commands + skills)
-  claude/       # Claude Code — settings.json + global CLAUDE.md
-  codex/        # Codex CLI — generated config.toml + global AGENTS.md
-  vekil/        # Shared GitHub Copilot model proxy for Claude Code + Codex
+  pi/                     # settings, global guidance, keybindings, extensions, installer
+  marketplace/plugins/my/ # local Pi package containing prompts and skills
 ```
 
 ### Setup
 
 ```bash
-make ai          # install/update all AI tool configs
-make ai-check    # dry-run: show what would be linked
+make ai          # install pinned Pi, link config, and reconcile packages
+make ai-check    # dry-run without changing the machine
 ```
 
-Or run individually: `ai/claude/install.sh`, `ai/codex/install.sh`,
-`ai/marketplace/install.sh`, `ai/vekil/install.sh`. The Vekil installer
-authenticates and starts the proxy through `bin/vekil-proxy`, binding to the
-Docker bridge when available and falling back to loopback on macOS or when the
-bridge cannot be detected.
+The full installer also runs Pi setup during Phase 9. Authentication remains machine-local: start `pi`, run `/login`, and choose **GitHub Copilot**. Use `/model` to select any Copilot model enabled for the subscription and Ctrl+S to save the highlighted model as the default.
 
-Fresh zsh sessions automatically configure both clients when Vekil is ready:
+The installer links the authored extension directory, and `ai/pi/settings.json` loads the local `my` package. The guard blocks Pi's direct file-write tools in primary checkouts; use a linked worktree, or place an intentional exception in `~/.pi/worktree-guard-allow`.
 
-```bash
-claude          # through Vekil
-codex           # through Vekil
-claude-direct   # bypass Vekil for this invocation
-codex-direct    # bypass Vekil for this invocation
-```
+The personal package provides `/fix-pr`, `/polish`, `/polish-pr`, `/review-prs`, and `/second-opinion`, plus the `improve`, `overnight-improve`, `polish-core`, `blindspot-pass`, `implementation-plan`, and `change-explainer` skills. See `AGENTS.md` and `ai/marketplace/plugins/my/README.md` for details.
 
-AI tools are also installed during `bin/install` (Phase 9).
-
-Codex project trust paths are machine-local. Copy entries from
-`ai/config-paths.example.toml` to the ignored
-`ai/codex/projects.local.toml`; `ai/codex/install.sh` merges them into the
-generated user config.
-
-### The `my` plugin (Claude Code)
-
-The personal plugin is the single source of truth for commands and skills. See
-`AGENTS.md` for the full inventory. In brief:
-
-- **Commands:** `/fix-pr`, `/polish`, `/polish-pr`, `/review-prs`.
-- **Skills:** `improve`, `overnight-improve`, `polish-core`, `project-claude-setup`,
-  and the deliberately-invoked `blindspot-pass`, `implementation-plan`,
-  `change-explainer`.
-
-### Devcontainer seed drift
-
-`bin/seed-drift` reports, per project and per documented block, whether a
-project's `.devcontainer/local-seed.sh` has fallen behind the
-`project-claude-setup` template, run ahead of it, or diverged from it.
-
-```bash
-bin/seed-drift                       # every project under ~/workspace
-bin/seed-drift ~/workspace/myproject # named candidates only
-```
-
-It is strictly read-only with respect to the seeds it inspects. Exit codes:
-`0` clean, `1` drift found, `2` usage / template / doc / extraction error, or no
-projects discovered.
-
-`AHEAD` is a **promotion candidate**, not an error — the seed has something the
-template does not, and the seed is the hand-owned file, so the fix direction is
-to port it up rather than overwrite it.
-
-The blocks it compares come from the Step 1 table in
-`ai/marketplace/plugins/my/skills/project-claude-setup/catch-up-local-seed.md`;
-that table is the tool's input, so adding a row there extends the detector.
-
-### Global working agreement
-
-`ai/claude/CLAUDE.md` and `ai/codex/AGENTS.md` hold always-loaded default guidance
-(inspect before implementing, blind-spot analysis, evidence-based planning,
-thorough verification). Both defer to repository-specific instructions.
+Pi's always-loaded global working agreement is `ai/pi/AGENTS.md`; project instructions override it through repository `AGENTS.md` files.
 
 ### Validation
 
 ```bash
-bash bin/validate-ai --verbose   # checks plugin command/skill frontmatter
+bash bin/validate-ai --verbose   # checks Pi prompt/skill frontmatter and manifest coverage
 ```
 
 ## Origins

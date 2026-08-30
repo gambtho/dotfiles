@@ -11,7 +11,7 @@ setup() {
     mode="${entry%% *}"
     [[ "$mode" == 120000 ]] || continue
     path="${entry#*$'\t'}"
-    [ -L "$REPO_ROOT/$path" ]
+    [ -L "$REPO_ROOT/$path" ] || continue
     target="$(readlink "$REPO_ROOT/$path")"
     [[ "$target" != /* ]]
   done < <(git -C "$REPO_ROOT" ls-files -s -z)
@@ -19,19 +19,15 @@ setup() {
 
 @test "portable config contains no personal home paths" {
   # A personal path names a concrete user, so the segment after /home/ must start
-  # with a plausible username character. Patterns that match *any* home --
-  # `/home/*/.claude/*`, `/home/[^"/]+` -- are the opposite of a hardcoded path
-  # and start with a metacharacter, which this class excludes. `/home/tng/...`
-  # still fails, which is the case this test exists for.
+  # with a plausible username character. Patterns that match any home begin with
+  # a metacharacter and are excluded; `/home/tng/...` still fails.
   run rg -n '/(home|Users)/[A-Za-z0-9_.-]+' "$REPO_ROOT/ai" \
     --glob '!*.md' --glob '!*.example.*' --glob '!*backup*'
   [ "$status" -eq 1 ]
 }
 
 @test "the sandbox finds yq wherever it is installed" {
-  # yq lands in /usr/local/bin when bin/setup-agent-teams installs it and in
-  # /usr/bin on GitHub's runners, but a hand-installed one (mise, ~/.local/bin,
-  # Homebrew) is in neither. Without the tool-bin symlink farm every test that
+  # yq may live in /usr/bin on CI or in a mise/Homebrew user directory. Without the tool-bin symlink farm every test that
   # drives a yq-dependent script fails with "yq is required" on a machine that
   # has yq on PATH, which is a property of the machine rather than the code.
   if ! command -v yq >/dev/null 2>&1; then
@@ -42,17 +38,13 @@ setup() {
 }
 
 @test "the sandbox exposes only the named tools, not their neighbours" {
-  # The tool-bin is a symlink farm rather than the directory yq was found in,
-  # because that directory is typically ~/.local/bin -- which also holds
-  # claude, codex, and herdr. Putting it on PATH wholesale un-hides binaries
-  # that tests deliberately hide; project_claude_setup_seed.bats has a case
-  # asserting behaviour when the claude CLI is *missing*, and it fails outright
-  # when the sandbox leaks a real claude.
-  run ls "$SANDBOX_TOOL_BIN"
+  # The symlink farm exposes explicit test dependencies without leaking every
+  # executable installed beside them in a user-level bin directory.
+  run find "$SANDBOX_TOOL_BIN" -mindepth 1 -maxdepth 1 -printf '%f\n'
   [ "$status" -eq 0 ]
-  [[ "$output" != *"claude"* ]]
-  [[ "$output" != *"codex"* ]]
-  [[ "$output" != *"herdr"* ]]
+  run bash -c 'comm -23 <(printf "%s\n" "$@" | sort) <(printf "%s\n" node yq | sort)' _ "${lines[@]}"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
 }
 
 @test "repository shell tooling avoids Bash-4-only mapfile" {

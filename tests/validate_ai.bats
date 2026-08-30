@@ -15,12 +15,20 @@ make_validator_repo() {
   git -C "$VALIDATOR_REPO" add ai bin/validate-ai
 }
 
-write_pi_skills() {
-  local json="$1"
+write_pi_inventory() {
+  local kind="$1" json="$2"
   local package="$VALIDATOR_REPO/ai/marketplace/plugins/my/package.json"
   local temporary="$package.tmp"
-  jq --argjson skills "$json" '.pi.skills = $skills' "$package" >"$temporary"
+  jq --arg kind "$kind" --argjson values "$json" '.pi[$kind] = $values' "$package" >"$temporary"
   mv "$temporary" "$package"
+}
+
+write_pi_skills() {
+  write_pi_inventory skills "$1"
+}
+
+write_pi_prompts() {
+  write_pi_inventory prompts "$1"
 }
 
 @test "warnings do not abort validate-ai" {
@@ -34,23 +42,14 @@ write_pi_skills() {
   run bash "$REPO_ROOT/bin/validate-ai" --verbose
 
   [ "$status" -eq 0 ]
-  [[ "$output" == *"package.json: exhaustive Pi skill inventory"* ]]
+  [[ "$output" == *"package.json: exhaustive Pi skills inventory"* ]]
 }
 
-@test "project setup executable assets remain inside and linked from the canonical skill" {
-  local skill="$REPO_ROOT/ai/marketplace/plugins/my/skills/project-claude-setup"
+@test "real Pi manifest is an exhaustive inventory of prompts" {
+  run bash "$REPO_ROOT/bin/validate-ai" --verbose
 
-  [ -f "$skill/templates/local-seed.sh" ]
-  [ -f "$skill/templates/compose-override.yml" ]
-  # One grep per file, not one grep over both: a multi-file grep succeeds when
-  # EITHER matches, so a reference dropped from SKILL.md would pass silently as
-  # long as the other document still mentioned it.
-  local doc
-  for doc in "$skill/SKILL.md" "$skill/devcontainer-host-mounts.md"; do
-    grep -Fq 'templates/local-seed.sh' "$doc"
-    grep -Fq 'templates/compose-override.yml' "$doc"
-    grep -Fq 'bin/claude-merge-compose-override' "$doc"
-  done
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"package.json: exhaustive Pi prompts inventory"* ]]
 }
 
 @test "validator rejects a nonexistent declared Pi skill" {
@@ -61,6 +60,16 @@ write_pi_skills() {
 
   [ "$status" -ne 0 ]
   [[ "$output" == *"declared Pi skill does not exist"* ]]
+}
+
+@test "validator rejects a nonexistent declared Pi prompt" {
+  make_validator_repo
+  write_pi_prompts '["./prompts/not-real.md"]'
+
+  run bash "$VALIDATOR_REPO/bin/validate-ai"
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"declared Pi prompt does not exist"* ]]
 }
 
 @test "validator rejects an actual skill omitted from Pi metadata" {
