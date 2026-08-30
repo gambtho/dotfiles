@@ -89,6 +89,11 @@ SCRIPT
   [ ! -L "$HOME/.pi/agent/auth.json" ]
 }
 
+@test "Pi keybindings reserve ctrl+x for plan mode" {
+  run jq -e '.["app.message.copy"] == "ctrl+shift+x"' "$REPO_ROOT/ai/pi/keybindings.json"
+  [ "$status" -eq 0 ]
+}
+
 @test "Pi installer backs up conflicting authored configuration" {
   printf 'local settings\n' >"$HOME/.pi/agent/settings.json"
   export PI_VERSION

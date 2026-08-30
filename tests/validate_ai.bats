@@ -52,6 +52,12 @@ write_pi_prompts() {
   [[ "$output" == *"package.json: exhaustive Pi prompts inventory"* ]]
 }
 
+@test "Jekyll gallery skill frontmatter has a scalar description" {
+  local skill="$REPO_ROOT/ai/marketplace/plugins/my/skills/jekyll-media-gallery/SKILL.md"
+  run grep -n '^description:.*: ' "$skill"
+  [ "$status" -eq 1 ]
+}
+
 @test "validator rejects a nonexistent declared Pi skill" {
   make_validator_repo
   write_pi_skills '["./skills/not-real/SKILL.md"]'
