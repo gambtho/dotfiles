@@ -25,9 +25,10 @@ Existing Pi packages own generic runtime mechanisms. The local `my` package rema
 | Auto-allow, ask, or deny Bash commands | Use existing | `pi-amplike` permissions in enabled mode |
 | Plan-mode enforcement and persistent plan state | Use existing | `shitty-extensions/extensions/plan-mode.ts` |
 | Planning quality and blind-spot analysis | Keep custom | `implementation-plan`, `blindspot-pass` |
+| Structured development methodology and skill bootstrap | Use existing | `obra/superpowers` Pi package |
 | Long-running iteration runtime | Use existing | `pi-ralph-wiggum/index.ts` |
 | Opinionated overnight improvement workflow | Keep custom | `overnight-improve` |
-| Worktree creation guidance | Use existing | `obra/superpowers@using-git-worktrees` |
+| Worktree creation guidance | Use existing | `obra/superpowers@using-git-worktrees` (loaded by the full package) |
 | Primary-checkout write enforcement | Keep custom | `ai/pi/extensions/worktree-guard.ts` |
 | Spec and plan second opinions | Keep custom | `/second-opinion` using a different Copilot model |
 | General alternate-model Oracle | Remove | Duplicates the broad concept, lacks repository tools, and does not target Copilot models |
@@ -79,6 +80,12 @@ It deliberately does not blanket-allow `git`, `gh`, package managers, language r
 `/second-opinion` is not a generic chat query. It launches one isolated Pi subagent with a model from a different Copilot family, gives it repository access, and requires an evidence-backed review of a spec or implementation plan. The current agent then assesses the findings using conversation context.
 
 Oracle sends conversation context and optional files to a fixed alternate-model list, without repository tools. It does not replace the document-review workflow and is unnecessary in the Copilot-only setup.
+
+### Superpowers workflow
+
+Load the complete pinned `obra/superpowers` Pi package without resource filters. Its Pi extension injects the `using-superpowers` bootstrap at session startup and after compaction, while its manifest exposes the full workflow skill set. Filtering the package down to `using-git-worktrees` disables that bootstrap and therefore does not provide the Superpowers flow.
+
+The custom skills remain available alongside Superpowers. Repository and user instructions take precedence when their workflow requirements differ.
 
 ### Worktree policy
 

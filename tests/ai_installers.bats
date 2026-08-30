@@ -165,6 +165,18 @@ EOF
   [ "$status" -eq 0 ]
 }
 
+@test "Pi loads the complete Superpowers package" {
+  run jq -e '
+    [.packages[] | objects | select(.source | startswith("git:github.com/obra/superpowers@"))]
+    | length == 1
+      and (.[0] | has("extensions") | not)
+      and (.[0] | has("skills") | not)
+      and (.[0] | has("prompts") | not)
+      and (.[0] | has("themes") | not)
+  ' "$REPO_ROOT/ai/pi/settings.json"
+  [ "$status" -eq 0 ]
+}
+
 @test "Pi installer backs up conflicting authored configuration" {
   printf 'local settings\n' >"$HOME/.pi/agent/settings.json"
   export PI_VERSION
