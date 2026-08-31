@@ -36,5 +36,6 @@
       "source": "git:github.com/obra/superpowers@v6.3.0"
     },
     "~/.dotfiles/ai/marketplace/plugins/my"
-  ]
+  ],
+  "lastChangelogVersion": "0.84.4"
 }
