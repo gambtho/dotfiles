@@ -3,6 +3,11 @@
   "defaultModel": "gpt-5.6-sol",
   "defaultThinkingLevel": "medium",
   "theme": "dark",
+  "compaction": {
+    "enabled": true,
+    "reserveTokens": 650000,
+    "keepRecentTokens": 60000
+  },
   "packages": [
     {
       "source": "git:github.com/tmustier/pi-extensions",
