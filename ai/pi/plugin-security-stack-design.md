@@ -2,9 +2,7 @@
 
 ## Status
 
-Revised after independent `/second-opinion` review and follow-up package analysis on 2026-09-01. The user accepted the review findings and selected a parent-only sandbox after verification showed that `pi-sandbox` is unsafe to bind into concurrent in-process child sessions.
-
-This document is ready for user review before implementation planning.
+Approved after independent `/second-opinion` review and follow-up package analysis on 2026-09-01. The user accepted the review findings and selected a parent-only sandbox after verification showed that `pi-sandbox` is unsafe to bind into concurrent in-process child sessions.
 
 ## Context
 
