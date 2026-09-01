@@ -165,6 +165,46 @@ EOF
   [ "$status" -eq 0 ]
 }
 
+@test "Pi selects the pinned workflow and security packages" {
+  run jq -e '
+    [.packages[] | if type == "string" then . else .source end] as $sources
+    | ($sources | index("git:github.com/tmustier/pi-queue-steer@v0.2.0")) != null
+    and ($sources | index("npm:pi-web-access@0.27.0")) != null
+    and ($sources | index("npm:@narumitw/pi-lsp@0.49.6")) != null
+    and ($sources | index("npm:@gotgenes/pi-subagents@21.2.0")) != null
+    and ($sources | index("npm:@gotgenes/pi-permission-system@29.2.0")) != null
+    and ($sources | index("git:github.com/carderne/pi-sandbox@53bd1d64d896d4a6bfab3769023201891e76ba72")) != null
+  ' "$REPO_ROOT/ai/pi/settings.json"
+  [ "$status" -eq 0 ]
+}
+
+@test "Pi filters Amp permissions subagents and legacy web resources" {
+  run jq -e '
+    [.packages[] | objects | select(.source == "npm:pi-amplike")][0] as $amp
+    | $amp.extensions == [
+        "extensions/btw.ts",
+        "extensions/handoff.ts",
+        "extensions/modes.ts",
+        "extensions/session-query.ts"
+      ]
+    and $amp.skills == ["skills/session-query/SKILL.md"]
+    and $amp.prompts == []
+    and $amp.themes == []
+  ' "$REPO_ROOT/ai/pi/settings.json"
+  [ "$status" -eq 0 ]
+}
+
+@test "Pi loads permission-system before sandbox and enables code actions" {
+  run jq -e '
+    [.packages[] | if type == "string" then . else .source end] as $sources
+    | ($sources | index("npm:@gotgenes/pi-permission-system@29.2.0"))
+      < ($sources | index("git:github.com/carderne/pi-sandbox@53bd1d64d896d4a6bfab3769023201891e76ba72"))
+    and ([.packages[] | objects | select(.source == "git:github.com/tmustier/pi-extensions")][0].extensions
+      | index("code-actions/index.ts")) != null
+  ' "$REPO_ROOT/ai/pi/settings.json"
+  [ "$status" -eq 0 ]
+}
+
 @test "Pi loads the complete Superpowers package" {
   run jq -e '
     [.packages[] | objects | select(.source | startswith("git:github.com/obra/superpowers@"))]
