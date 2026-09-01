@@ -64,7 +64,7 @@ New package sources are pinned because extension code executes with the user's f
 
 Repository guidance continues to require inspection in the primary checkout followed by implementation in a linked worktree. `ai/pi/extensions/worktree-guard.ts` remains the authoritative direct-tool enforcement layer.
 
-The guard continues to block built-in `edit` and `write` calls targeting a primary checkout. It is extended to block `lsp_fix` when `write=true` and the requested path belongs to a primary checkout. Preview-only `lsp_fix` calls remain allowed.
+The guard continues to block built-in `edit` and `write` calls targeting a primary checkout. It is extended to block `lsp_fix` when `write=true` and the effective target—`path` resolved through the optional `root` using pi-lsp's resolution semantics—belongs to a primary checkout. Preview-only `lsp_fix` calls remain allowed. The extension also registers that same effective-path extractor with the permission system, so `path` and `external_directory` policy sees the real LSP target rather than an incorrectly cwd-relative `input.path`. Because this is a loose global extension, it loads the permission service by absolute file URL under the active agent directory's installed package tree; a bare package import cannot resolve from the dotfiles checkout.
 
 The replacement subagent runtime binds the parent's extension set into each child, so the worktree guard runs against the child's `ctx.cwd` as well. The guard's recursion and symlink tests remain applicable to child calls because enforcement happens at each child tool boundary.
 
@@ -121,7 +121,7 @@ subagent({
 })
 ```
 
-Parallel work uses multiple sibling `subagent` calls with `run_in_background: true`, followed by `get_subagent_result` calls for the returned agent IDs. `steer_subagent` provides mid-run steering. There is no `tasks` parameter, `mode` parameter, per-agent wall-clock timeout, or individual stop tool.
+Parallel work uses multiple sibling `subagent` calls with `run_in_background: true`, followed by nonblocking `get_subagent_result({ wait: false })` polling for the returned agent IDs. `steer_subagent` provides mid-run steering. There is no `tasks` parameter, `mode` parameter, per-agent wall-clock timeout, or individual stop tool; workflows with a collection budget must not use `wait: true`, which waits until settlement or interruption.
 
 The migration updates every personal prompt, skill, test, and guidance file that describes the old batch/mode contract. Existing timeout wording becomes best-effort nonblocking collection: the parent may continue after a documented polling budget and ignore a late result, but the design does not claim the tool killed the agent.
 
@@ -146,7 +146,7 @@ They are installed under the active Pi agent directory's `agents/` folder. Each 
 | `deep` | `github-copilot/gpt-5.6-terra` | high | read-only built-ins for architecture, security, diagnosis, and broad analysis |
 | `review` | `github-copilot/claude-opus-5` | high | read-only built-ins for independent second opinions |
 
-Read-only agents list `read`, `bash`, `grep`, `find`, and `ls`; they omit `edit` and `write`. Their specialist instructions and permission frontmatter set `path_write`, `write`, and `edit` to `deny`, allow a curated read-only Bash set, and leave unmatched Bash at `ask` for parent forwarding. `smart` lists all seven built-ins and inherits the balanced global permission policy.
+Read-only agents list `read`, `bash`, `grep`, `find`, and `ls`; they omit `edit` and `write`. Their specialist instructions and permission frontmatter set `path_write`, `write`, and `edit` to `deny`. Curated local inspection commands remain allowed through the global policy, while commands capable of subprocess execution, repository mutation, build side effects, or credential access are raised to `ask` in the agent scope. Any broad agent-scope `ask` that overlaps a global hard deny is followed by a repeated agent-scope deny, preventing last-match-wins composition and YOLO rewriting from weakening the parent policy. Unmatched Bash also remains `ask` for parent forwarding. `smart` lists all seven built-ins and inherits the balanced global permission policy.
 
 The tool allowlist is complete, not additive. Extension tools are absent from children unless deliberately named. The subagent package always removes its own three control tools in children, preventing recursive spawning.
 
@@ -192,6 +192,7 @@ Filesystem policy for the parent:
 - allow writes in the active project, `/tmp`, and selected build/language caches;
 - deny writes for SSH keys, cloud credentials, Pi authentication, private key material, and `.env` variants;
 - do not broadly allow all of `~/.config` or the home directory;
+- replace the package's blanket `/home`/`/Users` read-deny defaults with narrow project/cache allows and explicit credential/browser denies, because projects and approved caches normally live below the home directory;
 - recognize that sandbox `denyRead` is a default prompt posture rather than an unoverrideable hard deny, while `denyWrite` takes precedence.
 
 Network policy for the parent:
@@ -211,7 +212,7 @@ The following are intentionally documented residuals:
 
 - Gotgenes subagent children do not receive OS-level Bubblewrap containment under this design. They do receive the permission system, per-agent tool allowlists, and worktree guard.
 - `code-actions` `/code run` executes only after explicit user confirmation, but calls `pi.exec()` from an extension command. It does not pass through model tool-call permissions or Bubblewrap. The recommended use is `/code ... insert`, followed by a normal reviewed execution path.
-- Extension factories, event handlers, and package code run with Pi's full user permissions.
+- Extension factories, event handlers, and package code run with Pi's full user permissions. In particular, language servers started internally by pi-lsp and network requests made internally by pi-web-access are outside the parent Bash sandbox.
 - A permitted build/test/format command can mutate files inside the active working directory. Repository guidance and linked-worktree use remain necessary.
 - A subprocess may access credentials from an explicitly allowed configuration directory even when the command line itself does not name that credential file. Only roots required by approved tools are allowed.
 - Permission review logs redact values only when their input key is recognized as sensitive. Secrets embedded in Bash command strings are logged unredacted.
@@ -220,10 +221,11 @@ The following are intentionally documented residuals:
 
 ### Problem
 
-The installer currently symlinks the entire tracked `ai/pi/extensions` directory to `~/.pi/agent/extensions` and also links `modes.json` directly.
+The installer currently symlinks tracked `settings.json` and `modes.json` plus the entire `ai/pi/extensions` directory into `~/.pi/agent`.
 
 That ownership model conflicts with the new stack:
 
+- Pi writes startup-model, theme, changelog, and other runtime settings to `settings.json`;
 - permission-system configuration and owner-only logs live below `~/.pi/agent/extensions/pi-permission-system/`, and `/permission-system` mutates runtime knobs there;
 - `pi-sandbox` global grants mutate `sandbox.json`;
 - `pi-web-access` may persist configuration and API-key references;
@@ -236,9 +238,10 @@ Runtime mutations and sensitive logs must not resolve into the Git checkout.
 
 The installer replaces the whole-directory extension symlink with a real machine-local extension directory and individual links for authored extension entrypoints.
 
-Tracked baselines live outside auto-discovered runtime directories:
+Tracked mutable baselines live outside auto-discovered runtime directories:
 
 ```text
+ai/pi/settings.json
 ai/pi/config/
   modes.json
   permission-system.json
@@ -247,27 +250,33 @@ ai/pi/config/
   web-search.json
 ```
 
+`settings.json` is a first-install/reset baseline with a repository-controlled `packages` field. On an existing regular runtime file, routine installation updates only `packages` from the baseline and preserves all other user/runtime fields. An explicit reset restores the complete baseline.
+
 Tracked global agent definitions live under `ai/pi/agents/` and are individually linked or published to the active agent directory.
 
-Runtime destinations are resolved from `PI_CODING_AGENT_DIR` rather than hard-coded. Web configuration follows `pi-web-access`'s `PI_CODING_AGENT_DIR` and XDG/legacy resolution order so the installer writes the same path the extension reads.
+Permission and sandbox baselines use a JSON string token for the Pi authentication path. The installer renders that token with the absolute active agent directory through jq before comparison/publication, so a custom `PI_CODING_AGENT_DIR` cannot move `auth.json` outside the deny policy.
+
+Runtime destinations are resolved from `PI_CODING_AGENT_DIR` rather than hard-coded. Web configuration follows `pi-web-access`'s `PI_CODING_AGENT_DIR` and XDG/legacy resolution order so the installer writes the same path the extension reads. When the canonical dotfiles checkout exists, an apply targeting the production agent directory fails if the installer source is a different linked worktree; pre-integration smoke must use an isolated HOME/agent directory.
 
 ### Mutable-file reconciliation
 
-A new regular-file reconciliation helper has explicit behavior:
+Regular-file reconciliation has explicit behavior:
 
 1. **Missing destination:** atomically install the tracked baseline with an appropriate mode.
 2. **Identical destination:** do nothing and create no backup.
 3. **Differing regular destination:** preserve it, report drift, and print the explicit reset command. Do not discard API keys, grants, YOLO state, mode selection, or runtime tuning during routine `make ai`.
-4. **Managed symlink from the old layout:** migrate its current contents into a regular file, then remove only the managed link. This preserves current mode state while severing runtime writes from Git.
-5. **Explicit reset:** `PI_AI_RESET_MUTABLE_CONFIG=1 make ai` backs up a differing regular file once, then atomically restores the tracked baseline.
-6. **Check mode:** report every action or drift without creating directories, files, or backups.
-7. **Invalid destination type:** fail rather than descending into or replacing an unexpected directory.
+4. **Runtime settings:** reconcile the repository-controlled `packages` field into the machine-local file while preserving every other existing setting.
+5. **Managed symlink from the old layout:** recognize both the canonical dotfiles checkout and an isolated source checkout. Migrate readable current contents into a regular file; if a removed legacy target is already dangling, install the corresponding new baseline. Never treat a foreign symlink as managed.
+6. **Explicit reset:** `PI_AI_RESET_MUTABLE_CONFIG=1 make ai` backs up a differing regular file once, then atomically restores the tracked baseline.
+7. **Check mode:** report every action or drift without creating directories, files, or backups.
+8. **Invalid destination type:** fail rather than descending into or replacing an unexpected directory.
 
 This policy gives tracked baselines a safe restore path without making routine installation destructive. Backups are created only for explicit resets or one-time ownership migration, so ordinary drift does not create an unbounded timestamped backup series.
 
 File-specific notes:
 
-- permission config and any credential-bearing web config are owner-readable/writable only;
+- any credential-bearing web config is owner-readable/writable only;
+- runtime settings, modes, and non-secret permission policy use regular-file modes compatible with upstream atomic rewrites rather than claiming a persistent `0600` mode those writers do not preserve;
 - permission logs remain machine-local under a `0700` runtime directory and are never published from the repository;
 - `subagents.json` global defaults are machine-local; `/subagents:settings` continues to write project-local `.pi/subagents.json` according to upstream behavior;
 - project-local runtime files remain project-owned and are not swept into dotfiles management.
@@ -278,7 +287,7 @@ The installer owns a manifest of individual extension links. It creates or repai
 
 It prunes only stale symlinks that resolve into this repository's `ai/pi/extensions` tree and no longer correspond to a declared managed extension. It never removes arbitrary extension files, directories, package configuration, or logs.
 
-Rollback does not recreate the old whole-directory symlink. It removes or disables package entries while retaining the real extension directory, individual authored links, and machine-local runtime state. This avoids moving third-party configuration/logs into a backup directory merely to restore the previous package set.
+Rollback does not recreate the old whole-directory symlink. It removes or disables package entries while retaining the real extension directory, individual authored links, and machine-local runtime state. The documented emergency path reverts the rollout commits but does not run the reverted whole-directory-link installer; it restores Amp's policy file and package inventory together with `permissions.mode: enabled`, then reconciles packages directly. Tests assert that partial Amp restoration is never documented as safe.
 
 ## Web access policy
 
@@ -289,7 +298,7 @@ The `pi-web-access` baseline is intentionally narrower than the package defaults
 - raw result workflow (`workflow: "none"`), avoiding automatic summary-model calls and browser curator launch;
 - direct local HTTP extraction only by default;
 - remote hosted fetch providers disabled;
-- browser-cookie access disabled;
+- browser-cookie access disabled and no `authFetch` profile declared;
 - automatic repository cloning, YouTube processing, local video processing, and image features disabled;
 - PDF extraction enabled with local `unpdf`;
 - curator shortcut moved away from `Ctrl+Shift+S`, which belongs to retained Amp modes.
@@ -313,7 +322,7 @@ This removes duplicate broken guidance without treating the entire user skill di
 
 The current machine already provides Ruff, rust-analyzer, gopls, and RuboCop. Missing language servers are reported rather than installed automatically.
 
-`lsp_diagnostics` is available by default in the parent. `lsp_fix` remains available but always goes through the permission system; `write=false` is the expected default. A primary-checkout `write=true` request is blocked by the worktree guard even if approved at the permission layer.
+`lsp_diagnostics` is available by default in the parent. `lsp_fix` remains available but always goes through the permission system; `write=false` is the expected default. A primary-checkout `write=true` request is blocked by the worktree guard even if approved at the permission layer, including when an explicit `root` makes a relative `path` target the primary checkout.
 
 The named child agent allowlists do not include LSP tools initially, so LSP initialization remains parent-only. LSP results are intermediate feedback; repository-native format, lint, type-check, build, and test commands remain authoritative.
 
@@ -345,14 +354,14 @@ The current machine's persistent Amp YOLO flag is therefore removed rather than 
 
 `ai/pi/install.sh` will:
 
-1. keep linking immutable authored settings, guidance, and keybindings;
-2. migrate the mutable `modes.json` link to regular-file reconciliation;
+1. keep linking immutable authored guidance and keybindings;
+2. migrate `settings.json` and `modes.json` to regular-file reconciliation, updating only the repository-controlled package inventory in an existing settings file;
 3. migrate `~/.pi/agent/extensions` from the old managed directory symlink to a real directory;
 4. link each tracked authored extension entrypoint individually and prune only stale repository-owned links;
-5. install or preserve the five mutable runtime baselines according to the explicit drift/reset policy;
+5. install or preserve the six mutable runtime destinations according to their per-file reconciliation policy;
 6. install the four global named agent definitions;
-7. retire only positively identified Amp permission state;
-8. quarantine only the positively identified broken Brave skill;
+7. retire only positively identified Amp permission state through a focused Pi migration module;
+8. quarantine only the positively identified broken Brave skill through that module;
 9. reconcile the pinned package set through `pi update --extensions` as before.
 
 `make ai-check` reports all of these actions without writing.
@@ -426,6 +435,7 @@ Implementation follows test-driven development. Repository tests verify this rep
 Add failing Bats assertions that verify:
 
 - all new package versions/refs match the canonical pin inventory;
+- every `subagents.json` child exclusion exactly equals a source string in `settings.json`;
 - `code-actions/index.ts` is enabled while `files-widget` remains disabled;
 - `pi-amplike` retains only the explicitly approved resources;
 - Amp permissions, Amp subagents, and old Amp web skills are absent;
@@ -439,8 +449,10 @@ Add failing assertions that verify:
 
 - all four named agent files exist and declare the expected model, thinking level, prompt mode, and complete tool allowlist;
 - agent model/thinking values remain in parity with tracked `modes.json`;
-- read-only agents omit edit/write and include an intentional restrictive policy;
+- read-only agents omit edit/write, include an intentional restrictive policy, and preserve every overlapping global hard deny after broader agent-scope ask rules;
 - personal workflows contain no old `tasks:` or `mode`-based subagent instructions;
+- root and Pi-specific `AGENTS.md` plus user documentation reflect the replacement paths, regular-file ownership, and subagent schema;
+- documentation explicitly retains the `/code run` extension-internal execution bypass warning;
 - fan-out instructions require one background call per task and explicit result collection;
 - no workflow claims a wall-clock timeout kills an individual gotgenes agent.
 
@@ -453,13 +465,15 @@ Add failing installer tests that verify:
 - check mode reports every new managed destination without modifying files;
 - a former managed extension-directory symlink becomes a real directory;
 - authored extension files are linked individually;
-- mutable permission, sandbox, subagent, mode, and web configurations are regular files rather than symlinks;
+- runtime settings plus mutable permission, sandbox, subagent, mode, and web configurations are regular files rather than symlinks;
+- routine settings reconciliation updates the tracked package inventory while preserving all other machine-local settings;
 - missing and identical files follow the defined reconciliation behavior;
 - differing regular files are preserved and reported during normal installation;
 - explicit reset backs up once and atomically publishes the baseline;
 - existing unrelated extension files/directories are preserved;
 - stale symlinks are pruned only when they resolve into the repository's managed extension tree;
 - custom `PI_CODING_AGENT_DIR` and XDG web-config paths are honored;
+- legacy identity checks recognize the canonical dotfiles checkout without repointing production links into an implementation worktree;
 - authentication and other machine-local Pi state remain untouched.
 
 ### Amp and Brave cleanup
@@ -475,24 +489,25 @@ Add failing tests that verify:
 
 ### Permission and sandbox configuration
 
-Repository tests verify JSON validity, required secure knobs, declared tool actions, explicit child exclusions, and absence of credentials. They do not copy the permission package's matcher into Bats.
+Repository tests verify JSON validity, required secure knobs, declared tool actions, explicit child exclusions, absence of credentials, and absence of `provider`/`searchProvider` keys that would bypass the ordered web route. They do not copy the permission package's matcher into Bats.
 
-Focused verification validates the permission config against the exact pinned package's published JSON Schema. Host smoke tests exercise the actual extension for representative allow, ask, deny, child-forwarding, and YOLO-preserves-deny cases.
+Post-install focused verification validates the permission config against the exact installed package's published JSON Schema, then loads its TypeScript through Pi's bundled jiti and exercises the actual deterministic `PermissionManager` for representative global, YOLO-preserves-deny, and per-agent decisions. Host smoke tests exercise the higher tool/path gate pipeline, child forwarding, and lifecycle behavior that direct manager calls do not cover.
 
-Sandbox configuration tests verify that the parent policy names required Pi infrastructure, cache, and registry allowances; omits dangerous broad socket/browser/credential access; and that `subagents.json` excludes the exact pinned sandbox source while retaining permission-system inheritance.
+Sandbox configuration tests verify that the parent policy names required Pi infrastructure, cache, and registry allowances; intentionally replaces the blanket home deny with narrow allows and explicit credential denies; omits dangerous broad socket/browser/credential access; and that `subagents.json` excludes the exact pinned sandbox source while retaining permission-system inheritance.
 
 ### Worktree guard
 
 Extend the existing pure path-classification tests and add a handler-level harness that registers the extension against a fake `pi.on("tool_call")` API. Verify:
 
-- `lsp_fix write=true` blocks in a primary checkout;
+- `lsp_fix write=true` blocks in a primary checkout, including an explicit-primary-`root` call made from a linked worktree;
 - `lsp_fix write=true` is allowed in a linked worktree;
 - `lsp_fix write=false` remains allowed;
+- the permission-system access extractor resolves `lsp_fix` through `root` for read/path/external-directory gating;
 - existing `edit`/`write`, symlink, allow-file, and new-file behavior remains unchanged.
 
 ### Host smoke verification
 
-After repository tests pass and `make ai` applies the configuration, use the real pinned packages to verify:
+After repository tests pass, apply `make ai` only inside an isolated temporary HOME/`PI_CODING_AGENT_DIR` while the implementation remains in a linked worktree, then use those real pinned packages to verify:
 
 1. Pi starts and reports no extension-load errors.
 2. The loaded command/tool inventory contains queue steering, web tools, gotgenes subagent tools, permission-system, sandbox, and LSP, while Amp permissions/subagents are absent.
@@ -520,7 +535,7 @@ bash bin/validate-ai --verbose
 make check
 ```
 
-Then run `make ai` on the current host and perform the smoke matrix above. Completion requires both repository verification and host runtime evidence.
+Before integration, the smoke HOME receives a temporary owner-only copy of the existing Pi authentication file and is deleted afterward. Production immutable links are never pointed into the temporary worktree. After the branch is integrated, run production `make ai` from the canonical dotfiles checkout and verify the identity-aware migration report. Completion distinguishes pre-integration runtime evidence from final canonical-checkout rollout evidence.
 
 ## Rollout and rollback
 
@@ -535,7 +550,7 @@ Before activation:
 - install the parent sandbox baseline;
 - verify child package exclusions before spawning a child.
 
-Rollback disables or removes the newly added package entries and restores the prior retained-package filters if necessary. It does not restore the old whole-directory extension symlink, re-enable Amp permissions concurrently, or delete machine-local logs/configuration. If Amp subagents are temporarily restored, their Amp settings and non-YOLO state must be restored together; a partial restoration is forbidden.
+Rollback reverts the rollout commits but does not run the reverted old installer. It merges the reverted package inventory into the regular runtime settings file and reconciles packages directly, without restoring the old whole-directory extension symlink or deleting machine-local logs/configuration. If Amp subagents are restored, the reverted Amp policy and an explicit `permissions.mode: enabled` state are restored in the same operation before Pi is launched; a partial restoration is forbidden. The documented rollback procedure and tests cover this coupling.
 
 Machine-local package caches, backups, logs, and quarantined skill data may remain but are not loaded once their resources are disabled. The Brave skill can be restored by moving its intact quarantined directory back to its original location.
 
