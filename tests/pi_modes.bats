@@ -4,8 +4,13 @@ load test_helper
 
 setup() {
   setup_dotfiles_test
-  MODES="$REPO_ROOT/ai/pi/modes.json"
+  MODES="$REPO_ROOT/ai/pi/config/modes.json"
   SETTINGS="$REPO_ROOT/ai/pi/settings.json"
+  AGENTS="$REPO_ROOT/ai/pi/agents"
+}
+
+agent_frontmatter() {
+  awk 'NR == 1 { next } /^---$/ { exit } { print }' "$AGENTS/$1.md" | yq -o=json '.'
 }
 
 @test "Pi defaults to the smart GPT-5.6 model" {
@@ -37,6 +42,69 @@ setup() {
     and .modes.deep.thinkingLevel == "high"
     and .modes.review.thinkingLevel == "high"
   ' "$MODES"
+  [ "$status" -eq 0 ]
+}
+
+@test "Pi named agents match the tracked mode routing" {
+  local agent expected_model expected_thinking actual
+  for agent in rush smart deep review; do
+    expected_model=$(jq -r --arg agent "$agent" \
+      '"\(.modes[$agent].provider)/\(.modes[$agent].modelId)"' "$MODES")
+    expected_thinking=$(jq -r --arg agent "$agent" \
+      '.modes[$agent].thinkingLevel' "$MODES")
+    actual=$(agent_frontmatter "$agent")
+
+    run jq -e \
+      --arg model "$expected_model" \
+      --arg thinking "$expected_thinking" \
+      '.model == $model and .thinking == $thinking and .prompt_mode == "append"' \
+      <<<"$actual"
+    [ "$status" -eq 0 ]
+  done
+}
+
+@test "Pi named agents declare complete tool allowlists" {
+  local agent actual
+  for agent in rush deep review; do
+    actual=$(agent_frontmatter "$agent")
+    run jq -e '.tools == "read, bash, grep, find, ls"' <<<"$actual"
+    [ "$status" -eq 0 ]
+  done
+
+  actual=$(agent_frontmatter smart)
+  run jq -e '.tools == "read, write, edit, bash, grep, find, ls"' <<<"$actual"
+  [ "$status" -eq 0 ]
+}
+
+@test "Pi read-only agents preserve hard GitHub denies without a broad override" {
+  local agent actual
+  for agent in rush deep review; do
+    actual=$(agent_frontmatter "$agent")
+    run jq -e '
+      .permission.path_write == "deny"
+      and .permission.write == "deny"
+      and .permission.edit == "deny"
+      and (.permission.bash | has("gh *") | not)
+      and (.permission.bash as $bash
+        | all([
+            "gh auth status*",
+            "gh repo view*",
+            "gh pr list*",
+            "gh pr view*",
+            "gh pr checks*",
+            "gh issue list*",
+            "gh issue view*",
+            "gh run list*",
+            "gh run view*"
+          ][]; . as $pattern | $bash[$pattern] == "ask"))
+      and .permission.bash["gh repo delete*"] == "deny"
+      and .permission.bash["gh api * --method DELETE*"] == "deny"
+    ' <<<"$actual"
+    [ "$status" -eq 0 ]
+  done
+
+  actual=$(agent_frontmatter smart)
+  run jq -e 'has("permission") | not' <<<"$actual"
   [ "$status" -eq 0 ]
 }
 

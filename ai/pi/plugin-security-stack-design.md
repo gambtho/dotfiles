@@ -146,7 +146,7 @@ They are installed under the active Pi agent directory's `agents/` folder. Each 
 | `deep` | `github-copilot/gpt-5.6-terra` | high | read-only built-ins for architecture, security, diagnosis, and broad analysis |
 | `review` | `github-copilot/claude-opus-5` | high | read-only built-ins for independent second opinions |
 
-Read-only agents list `read`, `bash`, `grep`, `find`, and `ls`; they omit `edit` and `write`. Their specialist instructions and permission frontmatter set `path_write`, `write`, and `edit` to `deny`. Curated local inspection commands remain allowed through the global policy, while commands capable of subprocess execution, repository mutation, build side effects, or credential access are raised to `ask` in the agent scope. Any broad agent-scope `ask` that overlaps a global hard deny is followed by a repeated agent-scope deny, preventing last-match-wins composition and YOLO rewriting from weakening the parent policy. Unmatched Bash also remains `ask` for parent forwarding. `smart` lists all seven built-ins and inherits the balanced global permission policy.
+Read-only agents list `read`, `bash`, `grep`, `find`, and `ls`; they omit `edit` and `write`. Their specialist instructions and permission frontmatter set `path_write`, `write`, and `edit` to `deny`. Curated local inspection commands remain allowed through the global policy, while commands capable of subprocess execution, repository mutation, build side effects, or credential access are raised to `ask` in the agent scope. Agent scopes do not add broad `ask` patterns that overlap global hard denies. They raise only the globally allowed read-only GitHub commands to `ask`; unknown commands already inherit the global fallback, while destructive GitHub commands retain the global hard denies under last-match-wins composition and YOLO. Unmatched Bash also remains `ask` for parent forwarding. `smart` lists all seven built-ins and inherits the balanced global permission policy.
 
 The tool allowlist is complete, not additive. Extension tools are absent from children unless deliberately named. The subagent package always removes its own three control tools in children, preventing recursive spawning.
 
@@ -449,7 +449,7 @@ Add failing assertions that verify:
 
 - all four named agent files exist and declare the expected model, thinking level, prompt mode, and complete tool allowlist;
 - agent model/thinking values remain in parity with tracked `modes.json`;
-- read-only agents omit edit/write, include an intentional restrictive policy, and preserve every overlapping global hard deny after broader agent-scope ask rules;
+- read-only agents omit edit/write, include an intentional restrictive policy, avoid broad agent rules that overlap global hard denies, and preserve destructive GitHub denies under YOLO;
 - personal workflows contain no old `tasks:` or `mode`-based subagent instructions;
 - root and Pi-specific `AGENTS.md` plus user documentation reflect the replacement paths, regular-file ownership, and subagent schema;
 - documentation explicitly retains the `/code run` extension-internal execution bypass warning;

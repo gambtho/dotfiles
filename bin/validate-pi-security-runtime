@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
+AGENT_DIR="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}"
+package_root=""
+pi_package_root=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --package-root)
+      [[ $# -ge 2 ]] || {
+        printf 'error: --package-root requires a path\n' >&2
+        exit 2
+      }
+      package_root=$2
+      shift 2
+      ;;
+    --pi-package-root)
+      [[ $# -ge 2 ]] || {
+        printf 'error: --pi-package-root requires a path\n' >&2
+        exit 2
+      }
+      pi_package_root=$2
+      shift 2
+      ;;
+    *)
+      printf 'usage: %s [--package-root PATH] [--pi-package-root PATH]\n' "$0" >&2
+      exit 2
+      ;;
+  esac
+done
+
+package_root="${package_root:-$AGENT_DIR/npm/node_modules/@gotgenes/pi-permission-system}"
+package_file="$package_root/package.json"
+schema_file="$package_root/schemas/permissions.schema.json"
+manager_file="$package_root/src/permission-manager.ts"
+config_file="$ROOT/ai/pi/config/permission-system.json"
+
+if [[ ! -f "$package_file" || ! -f "$schema_file" || ! -f "$manager_file" ]]; then
+  printf 'error: permission package not installed at %s\n' "$package_root" >&2
+  exit 1
+fi
+
+if [[ -z "$pi_package_root" ]]; then
+  pi_bin=$(command -v pi 2>/dev/null || true)
+  [[ -n "$pi_bin" ]] || {
+    printf 'error: Pi executable not found on PATH\n' >&2
+    exit 1
+  }
+  pi_real=$(readlink -f "$pi_bin")
+  pi_package_root=$(cd "$(dirname "$pi_real")/../.." && pwd -P)
+fi
+
+jiti_cli="$pi_package_root/node_modules/jiti/lib/jiti-cli.mjs"
+if [[ ! -f "$jiti_cli" ]]; then
+  printf 'error: Pi bundled jiti not installed at %s\n' "$jiti_cli" >&2
+  exit 1
+fi
+pi_core_entry="$pi_package_root/dist/index.js"
+if [[ ! -f "$pi_core_entry" ]]; then
+  printf 'error: Pi extension API entry not installed at %s\n' "$pi_core_entry" >&2
+  exit 1
+fi
+
+python3 - "$schema_file" "$config_file" <<'PY'
+import json
+import sys
+
+try:
+    from jsonschema import Draft202012Validator
+except ImportError:
+    print("error: Python jsonschema is required for Pi permission validation", file=sys.stderr)
+    raise SystemExit(1)
+
+schema_path, config_path = sys.argv[1:]
+with open(schema_path, encoding="utf-8") as stream:
+    schema = json.load(stream)
+with open(config_path, encoding="utf-8") as stream:
+    config = json.load(stream)
+
+Draft202012Validator.check_schema(schema)
+errors = sorted(Draft202012Validator(schema).iter_errors(config), key=lambda item: list(item.path))
+if errors:
+    for error in errors:
+        location = ".".join(str(part) for part in error.path) or "<root>"
+        print(f"error: permission schema {location}: {error.message}", file=sys.stderr)
+    raise SystemExit(1)
+PY
+
+# Managed extensions omit Pi peer dependencies and normally receive them from
+# Pi's extension loader. Reproduce that host alias while retaining jiti's
+# TypeScript and extensionless-import resolution.
+JITI_ALIAS=$(node -e \
+  'console.log(JSON.stringify({"@earendil-works/pi-coding-agent": process.argv[1]}))' \
+  "$pi_core_entry")
+export JITI_ALIAS
+exec node "$jiti_cli" "$ROOT/bin/validate-pi-security-runtime.ts" \
+  --package-root "$package_root" \
+  --repo-root "$ROOT"
