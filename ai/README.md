@@ -187,42 +187,58 @@ Rollback is coupled and non-YOLO. Choose the last commit before this rollout as 
 A concrete staging sequence, after reverting the implementation commits, is:
 
 ```bash
+set -euo pipefail
+
 PRE_ROLLOUT=<last-commit-before-this-rollout>
 AGENT_DIR="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}"
 AMP_SETTINGS="${XDG_CONFIG_HOME:-$HOME/.config}/amp/settings.json"
 mkdir -p "$(dirname "$AMP_SETTINGS")"
-[[ ! -L "$AMP_SETTINGS" ]] || { echo "refusing Amp settings symlink" >&2; exit 1; }
+[[ ! -L "$AMP_SETTINGS" && ( ! -e "$AMP_SETTINGS" || -f "$AMP_SETTINGS" ) ]] || {
+  echo "refusing non-file Amp settings destination" >&2
+  exit 1
+}
 [[ -f "$AGENT_DIR/settings.json" && ! -L "$AGENT_DIR/settings.json" ]] || exit 1
 [[ ! -e "$AGENT_DIR/amplike.json" || ( -f "$AGENT_DIR/amplike.json" && ! -L "$AGENT_DIR/amplike.json" ) ]] || exit 1
 
 amp_stage=$(mktemp "$(dirname "$AMP_SETTINGS")/.amp-settings.XXXXXX")
-git show "$PRE_ROLLOUT:ai/pi/permissions.json" >"$amp_stage"
-chmod 0644 "$amp_stage"
-mv -f "$amp_stage" "$AMP_SETTINGS"
-
 settings_baseline=$(mktemp "$AGENT_DIR/.settings-baseline.XXXXXX")
 settings_stage=$(mktemp "$AGENT_DIR/.settings.XXXXXX")
+amplike_stage=$(mktemp "$AGENT_DIR/.amplike.XXXXXX")
+cleanup_rollback_stages() {
+  rm -f -- "$amp_stage" "$settings_baseline" "$settings_stage" "$amplike_stage"
+}
+trap cleanup_rollback_stages EXIT
+
+git show "$PRE_ROLLOUT:ai/pi/permissions.json" >"$amp_stage"
+jq -e 'type == "object"' "$amp_stage" >/dev/null
+
 git show "$PRE_ROLLOUT:ai/pi/settings.json" >"$settings_baseline"
+jq -e 'type == "object"' "$settings_baseline" >/dev/null
 jq -s '.[0] as $runtime | .[1] as $old | $runtime + {packages: $old.packages}' \
   "$AGENT_DIR/settings.json" "$settings_baseline" >"$settings_stage"
-chmod 0644 "$settings_stage"
-mv -f "$settings_stage" "$AGENT_DIR/settings.json"
-rm "$settings_baseline"
+jq -e 'type == "object"' "$settings_stage" >/dev/null
 
-amplike_stage=$(mktemp "$AGENT_DIR/.amplike.XXXXXX")
 if [[ -f "$AGENT_DIR/amplike.json" ]]; then
   jq '.permissions = ((.permissions // {}) + {mode: "enabled"})' \
     "$AGENT_DIR/amplike.json" >"$amplike_stage"
 else
   printf '{}\n' | jq '.permissions.mode = "enabled"' >"$amplike_stage"
 fi
+jq -e 'type == "object"' "$amplike_stage" >/dev/null
+jq -e '.permissions.mode == "enabled"' "$amplike_stage" >/dev/null
+
+chmod 0644 "$amp_stage" "$settings_stage"
 chmod 0600 "$amplike_stage"
+mv -f "$amp_stage" "$AMP_SETTINGS"
+mv -f "$settings_stage" "$AGENT_DIR/settings.json"
 mv -f "$amplike_stage" "$AGENT_DIR/amplike.json"
+rm -f "$settings_baseline"
+trap - EXIT
 
 PI_CODING_AGENT_DIR="$AGENT_DIR" pi update --extensions
 ```
 
-Inspect each staged JSON file before its `install` command. Amp subagents, the reverted Amp package inventory, the Amp policy file, and enabled permission state **must be restored together** before launching Pi. Restoring Amp subagents with a missing policy file or YOLO state is forbidden.
+Every restored JSON file is staged and validated before the first destination changes, and each destination is replaced through a same-directory atomic rename. No portable filesystem operation can commit all three destinations as one transaction, so keep Pi stopped and rerun the complete sequence if any publication fails. Amp subagents, the reverted Amp package inventory, the Amp policy file, and enabled permission state **must be restored together** before launching Pi. Restoring Amp subagents with a missing policy file or YOLO state is forbidden.
 
 ## Removed scope
 

@@ -787,7 +787,7 @@ EOF
 @test "Pi installer callers no longer reference retired tracked modes or permissions" {
   [ ! -e "$REPO_ROOT/ai/pi/modes.json" ]
   [ ! -e "$REPO_ROOT/ai/pi/permissions.json" ]
-  run rg -n '\$ROOT/ai/pi/(permissions|modes)\\.json' \
+  run rg -n '\$ROOT/ai/pi/(permissions|modes)\.json' \
     "$REPO_ROOT/ai/pi/install.sh" "$REPO_ROOT/tests/feature_workflow_policy.bats"
   [ "$status" -eq 1 ]
 }

@@ -109,10 +109,14 @@ agent_frontmatter() {
   [ "$status" -eq 0 ]
 }
 
-@test "PR review fan-out is partitioned by named agent type" {
+@test "PR review fan-out uses only read-only named agent types" {
   local prompt="$REPO_ROOT/ai/marketplace/plugins/my/prompts/review-prs.md"
-  run grep -F 'partition the selected PRs into `rush`, `smart`, and `deep` groups' "$prompt"
+  run grep -F 'partition the selected PRs into `rush` and `deep` groups' "$prompt"
   [ "$status" -eq 0 ]
+  run grep -F '| Medium | `deep` |' "$prompt"
+  [ "$status" -eq 0 ]
+  run rg -n 'subagent_type: smart|`smart` group|`rush`, `smart`' "$prompt"
+  [ "$status" -eq 1 ]
   run grep -F 'never mix PRs requiring different `subagent_type` values' "$prompt"
   [ "$status" -eq 0 ]
   run grep -F 'up to 2 sibling calls when `RATE_LIMITED=true`' "$prompt"
@@ -165,11 +169,16 @@ agent_frontmatter() {
   [ "$status" -eq 0 ]
 }
 
-@test "personal workflows route through named agent types" {
-  run rg -n 'subagent_type: smart' \
+@test "personal workflows route review-only work through read-only agents" {
+  local workflow
+  for workflow in \
     "$REPO_ROOT/ai/marketplace/plugins/my/prompts/fix-pr.md" \
-    "$REPO_ROOT/ai/marketplace/plugins/my/skills/polish-core/SKILL.md"
-  [ "$status" -eq 0 ]
+    "$REPO_ROOT/ai/marketplace/plugins/my/skills/polish-core/SKILL.md"; do
+    run grep -F 'subagent_type: deep' "$workflow"
+    [ "$status" -eq 0 ]
+    run grep -F 'subagent_type: smart' "$workflow"
+    [ "$status" -eq 1 ]
+  done
 
   run rg -n 'subagent_type: deep' \
     "$REPO_ROOT/ai/marketplace/plugins/my/skills/improve/references/platforms.md"

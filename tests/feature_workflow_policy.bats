@@ -141,6 +141,29 @@ setup() {
   [ "$status" -eq 0 ]
 }
 
+@test "Pi rollback stages and validates every JSON file before publication" {
+  local readme="$REPO_ROOT/ai/README.md"
+  local first_publish marker marker_line
+
+  run grep -F 'set -euo pipefail' "$readme"
+  [ "$status" -eq 0 ]
+  run grep -F '[[ ! -L "$AMP_SETTINGS" && ( ! -e "$AMP_SETTINGS" || -f "$AMP_SETTINGS" ) ]]' "$readme"
+  [ "$status" -eq 0 ]
+
+  first_publish=$(grep -nF 'mv -f "$amp_stage" "$AMP_SETTINGS"' "$readme" | cut -d: -f1)
+  [ -n "$first_publish" ]
+  for marker in \
+    'settings_stage=$(mktemp' \
+    'amplike_stage=$(mktemp' \
+    'jq -e '\''type == "object"'\'' "$amp_stage"' \
+    'jq -e '\''type == "object"'\'' "$settings_stage"' \
+    'jq -e '\''type == "object"'\'' "$amplike_stage"'; do
+    marker_line=$(grep -nF "$marker" "$readme" | cut -d: -f1)
+    [ -n "$marker_line" ]
+    [ "$marker_line" -lt "$first_publish" ]
+  done
+}
+
 @test "Pi global guidance defines the automatic worktree workflow" {
   run grep -F "create or reuse a linked worktree before the first repository write" "$PI_GUIDANCE"
   [ "$status" -eq 0 ]

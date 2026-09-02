@@ -25,10 +25,10 @@ setup() {
   done
 }
 
-@test "Pi permission policy starts balanced with review logging" {
+@test "Pi permission policy starts balanced without unredacted review logging" {
   run jq -e '
     .debugLog == false
-    and .permissionReviewLog == true
+    and .permissionReviewLog == false
     and .yoloMode == false
     and .doublePressToConfirm == false
     and .forwardingTimeoutMs == 600000

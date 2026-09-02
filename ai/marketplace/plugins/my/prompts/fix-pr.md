@@ -279,7 +279,7 @@ Identify connections:
 
 **Skip this section entirely if `DEEP_MODE` is not set.** The default behavior is to plan around reviewer + CI feedback only. Agent dispatch adds preemptive findings, which is useful when the user explicitly opted in but is noisy as a default — those agents are tuned for fresh code, and running them on a PR that already has reviewer comments tends to surface things reviewers chose to ignore.
 
-When `DEEP_MODE` is set, dispatch specialized reviewers in parallel with the `subagent` tool to surface issues that reviewers and CI may have missed. Issue one sibling call per relevant role with a focused read-only `prompt`, a 3–5 word `description`, `subagent_type: smart`, and `run_in_background: true`:
+When `DEEP_MODE` is set, dispatch specialized reviewers in parallel with the `subagent` tool to surface issues that reviewers and CI may have missed. Issue one sibling call per relevant role with a focused read-only `prompt`, a 3–5 word `description`, `subagent_type: deep`, and `run_in_background: true`:
 
 | Agent role | Purpose |
 |------------|---------|

@@ -94,7 +94,7 @@ The policy starts with:
 
 - `yoloMode: false`;
 - `doublePressToConfirm: false`, reducing prompt friction while retaining explicit choices;
-- `permissionReviewLog: true`;
+- `permissionReviewLog: false`, because command fields are not comprehensively redacted;
 - `debugLog: false`.
 
 Session approvals are preferred for unfamiliar but legitimate command families. They disappear at session shutdown.
@@ -215,7 +215,7 @@ The following are intentionally documented residuals:
 - Extension factories, event handlers, and package code run with Pi's full user permissions. In particular, language servers started internally by pi-lsp and network requests made internally by pi-web-access are outside the parent Bash sandbox.
 - A permitted build/test/format command can mutate files inside the active working directory. Repository guidance and linked-worktree use remain necessary.
 - A subprocess may access credentials from an explicitly allowed configuration directory even when the command line itself does not name that credential file. Only roots required by approved tools are allowed.
-- Permission review logs redact values only when their input key is recognized as sensitive. Secrets embedded in Bash command strings are logged unredacted.
+- Permission review logging is disabled by default because values are redacted only when their input key is recognized as sensitive. An operator who enables it for diagnosis must avoid inline secrets in Bash commands and disable it again afterward.
 
 ## Mutable configuration boundary
 

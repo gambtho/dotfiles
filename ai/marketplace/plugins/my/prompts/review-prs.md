@@ -101,13 +101,13 @@ Walk the detection table against the repo root. Assemble the final checklist as 
 **Skip condition**: If `SKIP_STYLE_LEARNING=true` (set in Phase 1 because learnings already have a mature style guide updated within 7 days), skip this entire phase and print: "Using existing review style guide from learnings (last updated: {date})."
 
 1. Fetch the 15 most recently merged PRs that have review comments:
-   ```
+   ```bash
    gh pr list --state merged --limit 30 --json number,title,reviews,reviewDecision
    ```
    Filter to those that actually have reviews with comments (not just approvals).
 
 2. For the top 15 with comments (or top 5 if learnings already exist), use sibling `subagent` calls with `subagent_type: rush` to fetch and analyze review comments. Give each call a self-contained `prompt`, a 3–5 word `description`, and `run_in_background: true`; issue up to 5 sibling calls at a time, or up to 2 sibling calls when `RATE_LIMITED=true`. Each subagent should fetch and analyze 3-5 PRs via:
-   ```
+   ```bash
    gh api repos/{OWNER}/{REPO}/pulls/{number}/reviews
    gh api repos/{OWNER}/{REPO}/pulls/{number}/comments
    ```
@@ -283,11 +283,11 @@ Select the **`subagent_type` per PR based on size category**; the named agent ce
 |---------------|-----------------|-----------|
 | Lockfile-only | `rush` | Trivial changes, just check version sanity |
 | Small | `rush` | Fast and sufficient for small diffs |
-| Medium | `smart` | Good balance of depth and speed |
+| Medium | `deep` | Review-only analysis requires a read-only agent |
 | Large | `deep` | Needs careful analysis of impactful files |
 | Very Large | `deep` | Summary-only mode with deeper reasoning |
 
-Before invoking `subagent`, partition the selected PRs into `rush`, `smart`, and `deep` groups according to this table. Preserve the selected PR order within each group. For each PR, issue one sibling call with a self-contained `prompt`, a 3–5 word `description`, the group's `subagent_type`, and `run_in_background: true`. Process up to 5 sibling calls per group at a time, or up to 2 sibling calls when `RATE_LIMITED=true`; never mix PRs requiring different `subagent_type` values in the same dispatch group. Record every returned agent ID and poll each with `get_subagent_result({ agent_id, wait: false })`.
+Before invoking `subagent`, partition the selected PRs into `rush` and `deep` groups according to this table. Preserve the selected PR order within each group. For each PR, issue one sibling call with a self-contained `prompt`, a 3–5 word `description`, the group's `subagent_type`, and `run_in_background: true`. Process up to 5 sibling calls per group at a time, or up to 2 sibling calls when `RATE_LIMITED=true`; never mix PRs requiring different `subagent_type` values in the same dispatch group. Record every returned agent ID and poll each with `get_subagent_result({ agent_id, wait: false })`.
 
 **Collection-budget guidance**: Poll without blocking unrelated work. After the workflow's collection budget, continue without an unfinished result and mark that PR "review incomplete — result arrived late". This does not stop the agent; ignore a later notification for that report.
 

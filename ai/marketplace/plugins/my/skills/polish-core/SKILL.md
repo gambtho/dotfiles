@@ -120,7 +120,7 @@ Walk through each of 3a-3h from the reference and produce findings, classifying 
 
 ### 3i: Dispatch Subagents
 
-Dispatch read-only review subagents **in parallel** with one sibling `subagent` call per relevant role. Give each call a self-contained `prompt`, a 3–5 word `description`, `subagent_type: smart`, and `run_in_background: true`. If subagents are unavailable, perform these checks locally and note that in the report:
+Dispatch read-only review subagents **in parallel** with one sibling `subagent` call per relevant role. Give each call a self-contained `prompt`, a 3–5 word `description`, `subagent_type: deep`, and `run_in_background: true`. If subagents are unavailable, perform these checks locally and note that in the report:
 
 1. **code-reviewer** — confidence-filtered general review. Prefer a dedicated review agent when available (e.g. `coderabbit:code-reviewer`). Scope to quality/fragility and suggestions — Phase 3a already covers bugs and security.
 2. **silent-failure-hunter** — generic subagent with this role: finds swallowed errors and silent fallbacks.

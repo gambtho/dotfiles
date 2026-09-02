@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/gotgenes/pi-packages/main/packages/pi-permission-system/schemas/permissions.schema.json",
   "debugLog": false,
-  "permissionReviewLog": true,
+  "permissionReviewLog": false,
   "yoloMode": false,
   "doublePressToConfirm": false,
   "forwardingTimeoutMs": 600000,
