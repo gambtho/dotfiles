@@ -240,7 +240,13 @@ reset_permission_policy_for_sandbox_retirement() {
     return 1
   }
   jq -e 'has("packages")' "$settings" >/dev/null || return 0
-  jq -e '(.packages | type) == "array"' "$settings" >/dev/null || {
+  jq -e '
+    (.packages | type) == "array"
+    and all(.packages[];
+      (type == "string" and length > 0)
+      or (type == "object" and (.source | type) == "string" and (.source | length) > 0)
+    )
+  ' "$settings" >/dev/null || {
     log_warning "Cannot safely inspect Pi package inventory at $settings"
     return 1
   }

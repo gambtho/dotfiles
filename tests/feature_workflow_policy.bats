@@ -87,6 +87,8 @@ setup() {
   [ "$status" -eq 0 ]
   run rg -n 'disable.*YOLO|YOLO.*off' "$skill" "$preflight"
   [ "$status" -eq 0 ]
+  run grep -F 'before every early exit' "$skill" "$preflight"
+  [ "$status" -eq 0 ]
 }
 
 @test "Pi README documents packages mutable ownership and containment boundaries" {

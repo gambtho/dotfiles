@@ -373,6 +373,26 @@ EOF
   done
 }
 
+@test "Pi installer refuses malformed package entries before disabling sandbox" {
+  export PI_VERSION
+  stub_existing_pi
+  local permission="$HOME/.pi/agent/extensions/pi-permission-system/config.json"
+  mkdir -p "$(dirname "$permission")"
+  printf '{"yoloMode":true,"permission":{"bash":{"*":"allow"}}}\n' >"$permission"
+  jq '.packages += [42, "git:github.com/carderne/pi-sandbox@53bd1d64d896d4a6bfab3769023201891e76ba72"]' \
+    "$REPO_ROOT/ai/pi/settings.json" >"$HOME/.pi/agent/settings.json"
+
+  run env HOME="$HOME" PATH="$PATH" PI_VERSION="$PI_VERSION" \
+    bash "$REPO_ROOT/ai/pi/install.sh"
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Cannot safely inspect Pi package inventory"* ]]
+  run jq -e '
+    [.packages[] | strings | select(contains("pi-sandbox"))] | length == 1
+  ' "$HOME/.pi/agent/settings.json"
+  [ "$status" -eq 0 ]
+}
+
 @test "Pi installer explicitly installs missing pinned npm packages before updating" {
   export PI_VERSION
   stub_existing_pi

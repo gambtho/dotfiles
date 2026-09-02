@@ -9,7 +9,7 @@ Run these before kicking off the loop. If any check fails, fix it or abort.
 3. Keep the worktree guard enabled. Child agents inherit permission-system and worktree-guard; limit their tools and prompts accordingly.
 4. Exit plan mode before starting; plan mode intentionally blocks writes.
 
-When the loop ends, return to `/permission-system`, disable YOLO, and verify the status reports YOLO off.
+Before every early exit after YOLO is enabled—including any preflight failure or abort below—return to `/permission-system`, disable YOLO, and verify the status reports YOLO off. Do the same when the loop ends normally.
 
 ## 1. Verify the base branch
 
