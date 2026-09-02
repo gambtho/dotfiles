@@ -19,7 +19,7 @@ WEB_CONFIG_PATH=""
 AMP_SETTINGS_PATH=""
 CANONICAL_DOTFILES_ROOT=""
 MANAGED_SOURCE_ROOTS=()
-managed_extensions=(herdr-agent-state.ts worktree-guard.ts)
+managed_extensions=(herdr-agent-state.ts herdr-prompt-state.ts worktree-guard.ts)
 
 usage() {
   printf 'usage: %s [--check]\n' "$0"

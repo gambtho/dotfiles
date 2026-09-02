@@ -13,7 +13,8 @@ setup() {
 @test "Pi configuration publishes individual guarded extension links" {
   [ -f "$REPO_ROOT/ai/pi/extensions/worktree-guard.ts" ]
   [ -f "$REPO_ROOT/ai/pi/extensions/herdr-agent-state.ts" ]
-  run rg -n 'managed_extensions=.*herdr-agent-state\.ts.*worktree-guard\.ts|managed_extensions=\(' \
+  [ -f "$REPO_ROOT/ai/pi/extensions/herdr-prompt-state.ts" ]
+  run rg -n 'managed_extensions=.*herdr-agent-state\.ts.*herdr-prompt-state\.ts.*worktree-guard\.ts|managed_extensions=\(' \
     "$REPO_ROOT/ai/pi/install.sh"
   [ "$status" -eq 0 ]
   run grep -F 'reconcile_authored_extensions "$PI_AGENT_DIR/extensions"' \
