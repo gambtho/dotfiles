@@ -64,3 +64,12 @@ test("uses a generic fallback for an unknown prompt kind", () => {
     },
   ]);
 });
+
+test("uses a string fallback for an inherited prompt-kind key", () => {
+  const { emitted, handlers } = createHarness();
+
+  handlers.get("ui_prompt_start")({ kind: "constructor" });
+
+  assert.equal(typeof emitted[0].data.label, "string");
+  assert.equal(emitted[0].data.label, "Prompt");
+});
