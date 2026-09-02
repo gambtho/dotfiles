@@ -10,10 +10,18 @@ setup() {
   EXPLAINER_SKILL="$REPO_ROOT/ai/marketplace/plugins/my/skills/change-explainer/SKILL.md"
 }
 
-@test "Pi configuration ships the linked-worktree edit guard" {
+@test "Pi configuration publishes individual guarded extension links" {
   [ -f "$REPO_ROOT/ai/pi/extensions/worktree-guard.ts" ]
-  run grep -F '"$ROOT/ai/pi/extensions" "$HOME/.pi/agent/extensions"' "$REPO_ROOT/ai/pi/install.sh"
+  [ -f "$REPO_ROOT/ai/pi/extensions/herdr-agent-state.ts" ]
+  run rg -n 'managed_extensions=.*herdr-agent-state\.ts.*worktree-guard\.ts|managed_extensions=\(' \
+    "$REPO_ROOT/ai/pi/install.sh"
   [ "$status" -eq 0 ]
+  run grep -F 'reconcile_authored_extensions "$PI_AGENT_DIR/extensions"' \
+    "$REPO_ROOT/ai/pi/install.sh"
+  [ "$status" -eq 0 ]
+  run grep -F '"$ROOT/ai/pi/extensions" "$HOME/.pi/agent/extensions"' \
+    "$REPO_ROOT/ai/pi/install.sh"
+  [ "$status" -eq 1 ]
 }
 
 @test "personal skills advertise their automatic workflow phases" {
