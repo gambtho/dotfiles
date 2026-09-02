@@ -50,13 +50,13 @@ Each `subagent` invocation supplies one self-contained `prompt`, a 3–5 word `d
 
 `ai/pi/config/permission-system.json` is a balanced baseline:
 
-- routine reads, linked-worktree edits, common builds/tests/lint, and configured web tools are allowed;
-- unknown tools, mutation-capable commands, external paths, and `lsp_fix` ask;
-- credentials, browser profiles, destructive commands, force operations, subprocess-capable search flags, and primary-checkout writes are denied;
-- parent Bash commands containing `$` expansion ask even when their reader command is normally allowed; named children hard-deny that indirection;
+- routine tools and unmatched parent Bash commands are allowed inside the parent sandbox;
+- unknown tools, Git and GitHub mutations, remote shell/network commands, recursive deletion, external paths, and `lsp_fix` ask;
+- credentials, browser profiles, root deletion, force operations, subprocess-capable search flags, privilege escalation, and primary-checkout writes are denied;
+- common reader/output commands containing unresolved `$` expansion and direct environment-dump commands ask, while named children hard-deny all unresolved shell-variable indirection;
 - `/permission-system` can enable temporary YOLO, which converts asks to allows but preserves explicit denies.
 
-The sandbox baseline in `ai/pi/config/sandbox.json` permits reviewed development registries and caches while denying credential and browser roots. It does not expose SSH/cloud credentials, browser cookies, Docker sockets, unrestricted Unix sockets, or blanket home-directory access.
+The sandbox baseline in `ai/pi/config/sandbox.json` permits reviewed development registries, caches, and installed Pi npm packages while denying credential and browser roots. It does not expose SSH/cloud credentials, browser cookies, Docker sockets, unrestricted Unix sockets, or blanket home-directory access.
 
 ### Important containment boundaries
 
@@ -68,7 +68,7 @@ Sandbox wrapping applies to the parent command paths integrated by `pi-sandbox`,
 - LSP server subprocesses are extension-internal and are not Bubblewrap-contained. Permission-system still gates the model-facing LSP call, and worktree-guard blocks a mutating fix targeting a primary checkout.
 - `pi-web-access network calls` are extension-internal and are not Bubblewrap-contained. The tracked config disables cookie use, remote hosted fetch providers, clone/media/image features, environment proxy trust, and SSRF range exceptions.
 
-Do not describe these layers as a complete security boundary for untrusted code. Keep extension selection and package pins under review.
+Bubblewrap preserves the parent process environment. The permission policy prompts for common direct environment-dump and variable-output forms, but an otherwise allowed program can still inspect inherited variables internally. Do not put secrets in the agent environment or describe these layers as a complete security boundary for untrusted code. Keep extension selection and package pins under review.
 
 ## Worktree policy
 

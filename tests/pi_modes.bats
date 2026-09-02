@@ -76,7 +76,7 @@ agent_frontmatter() {
   [ "$status" -eq 0 ]
 }
 
-@test "Pi read-only agents preserve hard GitHub denies without a broad override" {
+@test "Pi read-only agents preserve hard denies and an ask fallback" {
   local agent actual
   for agent in rush deep review; do
     actual=$(agent_frontmatter "$agent")
@@ -84,6 +84,7 @@ agent_frontmatter() {
       .permission.path_write == "deny"
       and .permission.write == "deny"
       and .permission.edit == "deny"
+      and .permission.bash["*"] == "ask"
       and (.permission.bash | has("gh *") | not)
       and (.permission.bash as $bash
         | all([

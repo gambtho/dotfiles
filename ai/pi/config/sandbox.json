@@ -61,6 +61,7 @@
     ],
     "allowRead": [
       ".",
+      "__PI_AGENT_DIR__/npm",
       "~/.local/bin",
       "~/.local/share/mise",
       "~/.cache/uv",
