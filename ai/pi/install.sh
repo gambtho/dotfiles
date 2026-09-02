@@ -71,20 +71,6 @@ is_production_agent_dir() {
   [[ "$requested_real" == "$production_real" ]]
 }
 
-require_sandbox_dependencies() {
-  local dependencies=(rg) command missing=()
-  if [[ "$(uname -s)" == Linux ]]; then
-    dependencies+=(bwrap socat)
-  fi
-  for command in "${dependencies[@]}"; do
-    command_exists "$command" || missing+=("$command")
-  done
-  if ((${#missing[@]} > 0)); then
-    log_warning "Pi sandbox requires these missing commands: ${missing[*]}"
-    return 1
-  fi
-}
-
 assert_safe_pi_source() {
   [[ "$MODE" == apply ]] || return 0
   is_production_agent_dir || return 0
@@ -243,6 +229,64 @@ reconcile_mutable_file() {
   mkdir -p "$parent"
   publish_rendered_baseline "$source" "$destination" "$file_mode"
   log_success "Installed $label baseline at $destination"
+}
+
+reset_permission_policy_for_sandbox_retirement() {
+  local source=$1 destination=$2 settings=$3 sandbox_source backup rendered
+  sandbox_source='git:github.com/carderne/pi-sandbox@53bd1d64d896d4a6bfab3769023201891e76ba72'
+  [[ -f "$settings" ]] || return 0
+  jq -e 'type == "object"' "$settings" >/dev/null || {
+    log_warning "Cannot safely inspect Pi package inventory at $settings"
+    return 1
+  }
+  jq -e 'has("packages")' "$settings" >/dev/null || return 0
+  jq -e '(.packages | type) == "array"' "$settings" >/dev/null || {
+    log_warning "Cannot safely inspect Pi package inventory at $settings"
+    return 1
+  }
+  jq -e --arg source "$sandbox_source" '
+    [.packages[] | if type == "string" then . else .source end] | index($source) != null
+  ' "$settings" >/dev/null || return 0
+
+  rendered=$(rendered_baseline_contents "$source")
+  if [[ -f "$destination" ]] && cmp -s <(printf '%s\n' "$rendered") "$destination"; then
+    return 0
+  fi
+  if [[ "$MODE" == check ]]; then
+    log_info "[dry-run] Would reset Pi permission policy before retiring pi-sandbox at $destination"
+    return 0
+  fi
+
+  if [[ -f "$destination" ]]; then
+    backup=$(backup_regular_contents "$destination" "$destination")
+  fi
+  publish_rendered_baseline "$source" "$destination" 0644
+  log_success "Reset Pi permission policy before retiring pi-sandbox${backup:+; backup: $backup}"
+}
+
+remove_retired_sandbox_exclusion() {
+  local destination=$1 backup candidate source
+  source='git:github.com/carderne/pi-sandbox@53bd1d64d896d4a6bfab3769023201891e76ba72'
+  [[ -f "$destination" ]] || return 0
+  jq -e --arg source "$source" '
+    (.excludedExtensionPackages // []) | index($source) != null
+  ' "$destination" >/dev/null || return 0
+
+  if [[ "$MODE" == check ]]; then
+    log_info "[dry-run] Would remove the retired pi-sandbox child exclusion from $destination"
+    return 0
+  fi
+
+  backup=$(backup_regular_contents "$destination" "$destination")
+  candidate=$(mktemp "${destination}.candidate.XXXXXX")
+  jq --arg source "$source" '
+    .excludedExtensionPackages = [
+      .excludedExtensionPackages[] | select(. != $source)
+    ]
+  ' "$destination" >"$candidate"
+  atomic_publish_file "$candidate" "$destination" 0600
+  rm -f "$candidate"
+  log_success "Removed retired pi-sandbox child exclusion; backup: $backup"
 }
 
 settings_candidate_contents() {
@@ -499,7 +543,6 @@ main() {
   esac
 
   resolve_pi_paths
-  require_sandbox_dependencies
   assert_safe_pi_source
   migrate_pi_security_stack "$MODE" "$PI_AGENT_DIR" "$AMP_SETTINGS_PATH" \
     "${MANAGED_SOURCE_ROOTS[@]}"
@@ -526,19 +569,25 @@ main() {
   if [[ "$MODE" == apply ]]; then
     mkdir -p "$PI_AGENT_DIR"
   fi
-  reconcile_pi_settings "$ROOT/ai/pi/settings.json" "$PI_AGENT_DIR/settings.json"
-  reconcile_authored_links
-  reconcile_mutable_file "$ROOT/ai/pi/config/modes.json" "$PI_AGENT_DIR/modes.json" \
-    "Pi modes" 0644 'ai/pi/modes.json'
 
+  # Establish the permission boundary before removing pi-sandbox from the
+  # runtime package inventory. Any unsafe or malformed policy aborts first.
   reconcile_private_runtime_directory "$PI_AGENT_DIR/extensions/pi-permission-system"
   reconcile_mutable_file "$ROOT/ai/pi/config/permission-system.json" \
     "$PI_AGENT_DIR/extensions/pi-permission-system/config.json" \
     "Pi permission policy" 0644
-  reconcile_mutable_file "$ROOT/ai/pi/config/sandbox.json" "$PI_AGENT_DIR/sandbox.json" \
-    "Pi sandbox policy" 0600
+  reset_permission_policy_for_sandbox_retirement \
+    "$ROOT/ai/pi/config/permission-system.json" \
+    "$PI_AGENT_DIR/extensions/pi-permission-system/config.json" \
+    "$PI_AGENT_DIR/settings.json"
+
+  reconcile_pi_settings "$ROOT/ai/pi/settings.json" "$PI_AGENT_DIR/settings.json"
+  reconcile_authored_links
+  reconcile_mutable_file "$ROOT/ai/pi/config/modes.json" "$PI_AGENT_DIR/modes.json" \
+    "Pi modes" 0644 'ai/pi/modes.json'
   reconcile_mutable_file "$ROOT/ai/pi/config/subagents.json" "$PI_AGENT_DIR/subagents.json" \
     "Pi subagent settings" 0600
+  remove_retired_sandbox_exclusion "$PI_AGENT_DIR/subagents.json"
   reconcile_mutable_file "$ROOT/ai/pi/config/web-search.json" "$WEB_CONFIG_PATH" \
     "Pi web access settings" 0600
 

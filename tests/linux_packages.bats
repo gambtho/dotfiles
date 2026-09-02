@@ -28,15 +28,14 @@ compose_packages() {
   done
 }
 
-@test "every Linux profile includes Pi sandbox runtime dependencies" {
-  local os profile package
+@test "every Linux profile includes ripgrep without retired Pi sandbox dependencies" {
+  local os profile
   for os in Ubuntu WSL; do
     for profile in personal work server; do
       compose_packages "$os" "$profile"
       [ "$status" -eq 0 ]
-      for package in bubblewrap ripgrep socat; do
-        printf '%s\n' "$output" | grep -Fxq "$package"
-      done
+      printf '%s\n' "$output" | grep -Fxq ripgrep
+      ! printf '%s\n' "$output" | grep -Eq '^(bubblewrap|socat)$'
     done
   done
 }

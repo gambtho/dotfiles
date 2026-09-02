@@ -14,9 +14,9 @@ This workflow uses the packaged `pi-ralph-wiggum` extension through `ralph_start
 ## Prerequisites
 
 - Work from a clean linked worktree on a dedicated overnight branch; the worktree guard must remain enabled.
-- Open `/permission-system`, enable YOLO temporarily, and verify its status before starting. YOLO converts asks to allows but preserves explicit denies; it never bypasses the parent sandbox. Confirm this deliberate relaxation with the user and disable YOLO during wrap-up.
-- Open `/sandbox`, verify it is enabled, and pre-approve every reviewed parent path and domain the configured gates require. Child agents remain permission-enforced and worktree-guarded but are not Bubblewrap-contained.
-- Run one representative build/test gate before going unattended. Treat any sandbox prompt timeout or permission deny as blocked and never claim success for that iteration.
+- Open `/permission-system`, enable YOLO temporarily, and verify its status before starting. YOLO converts asks to allows but preserves explicit denies. Confirm this deliberate relaxation with the user and disable YOLO during wrap-up.
+- Parent and child commands are not OS-contained. Use unattended mode only with reviewed code and commands; keep the permission system and worktree guard enabled.
+- Run one representative build/test gate before going unattended. Treat any prompt timeout or permission deny as blocked and never claim success for that iteration.
 - Require `.pi/overnight-config.yaml`. If it is absent, read `references/config-schema.md` and stop so the user can configure the gates and constraints.
 - Write state and run logs under `.pi/` only.
 
@@ -25,8 +25,8 @@ This workflow uses the packaged `pi-ralph-wiggum` extension through `ralph_start
 Run all checks in `references/preflight-checklist.md`. If any check fails, log the failure and stop. Do not start the loop on a broken baseline.
 
 The preflight covers:
-- Verifies permission-system YOLO is temporarily enabled and the sandbox is enabled with reviewed allowances
-- Runs a representative gate and treats any sandbox prompt timeout or permission deny as blocked
+- Verifies permission-system YOLO is temporarily enabled and explicit denies remain active
+- Runs a representative gate and treats any prompt timeout or permission deny as blocked
 - Verifies the base branch is clean and up to date
 - Creates a linked worktree and overnight branch
 - Seeds `.pi/overnight-run-state.md`

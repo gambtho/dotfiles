@@ -2,14 +2,14 @@
 
 Run these before kicking off the loop. If any check fails, fix it or abort.
 
-## 0. Verify unattended permission and sandbox state
+## 0. Verify unattended permission state
 
 1. Open `/permission-system`, enable YOLO temporarily, and verify the status reports YOLO on. YOLO converts asks to allows but preserves explicit denies.
-2. Open `/sandbox` and verify it is enabled. Review every configured gate, then pre-approve only the parent paths and domains those commands require. Do not grant SSH/cloud credential roots, browser profiles, Docker sockets, or broad Unix-socket access.
-3. Keep the worktree guard enabled. Child agents inherit permission-system and worktree-guard but are not Bubblewrap-contained; limit their tools and prompts accordingly.
+2. Review every configured gate before approving unattended execution. Parent and child commands are not OS-contained, so use only trusted code and reviewed commands.
+3. Keep the worktree guard enabled. Child agents inherit permission-system and worktree-guard; limit their tools and prompts accordingly.
 4. Exit plan mode before starting; plan mode intentionally blocks writes.
 
-YOLO never bypasses sandbox containment. When the loop ends, return to `/permission-system`, disable YOLO, and verify the status reports YOLO off.
+When the loop ends, return to `/permission-system`, disable YOLO, and verify the status reports YOLO off.
 
 ## 1. Verify the base branch
 
@@ -60,9 +60,9 @@ EOF
 
 ## 4. Verify all gates
 
-Read each gate from `.pi/overnight-config.yaml` and run it. Every gate must pass on the baseline before starting the loop. Run at least one representative build/test command through the configured permission and sandbox layers, not only a read-only probe.
+Read each gate from `.pi/overnight-config.yaml` and run it. Every gate must pass on the baseline before starting the loop. Run at least one representative build/test command through the configured permission layer, not only a read-only probe.
 
-Treat any sandbox prompt timeout or permission deny as **blocked**. Record the blocked command and required path/domain, stop the preflight, and ask for the narrowest reviewed allowance; never claim the gate or unattended run succeeded.
+Treat any prompt timeout or permission deny as **blocked**. Record the blocked command, stop the preflight, and either revise the gate or ask the user whether the explicit policy should change; never claim the gate or unattended run succeeded.
 
 ## 5. Recommended dry run
 

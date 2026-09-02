@@ -72,13 +72,13 @@ setup() {
   [ "$status" -eq 1 ]
 }
 
-@test "overnight workflow requires permission and sandbox preflight and restoration" {
+@test "overnight workflow requires permission preflight and restoration" {
   local skill="$REPO_ROOT/ai/marketplace/plugins/my/skills/overnight-improve/SKILL.md"
   local preflight="$REPO_ROOT/ai/marketplace/plugins/my/skills/overnight-improve/references/preflight-checklist.md"
   run rg -n '/permission-system|YOLO' "$skill" "$preflight"
   [ "$status" -eq 0 ]
-  run grep -F '/sandbox' "$preflight"
-  [ "$status" -eq 0 ]
+  run grep -F '/sandbox' "$skill" "$preflight"
+  [ "$status" -eq 1 ]
   run grep -F 'representative' "$preflight"
   [ "$status" -eq 0 ]
   run grep -F 'linked worktree' "$preflight"
@@ -98,18 +98,19 @@ setup() {
     code-actions \
     @narumitw/pi-lsp \
     @gotgenes/pi-subagents \
-    @gotgenes/pi-permission-system \
-    pi-sandbox; do
+    @gotgenes/pi-permission-system; do
     run grep -F "$package" "$readme"
     [ "$status" -eq 0 ]
   done
-  run grep -F 'six mutable runtime files' "$readme"
+  run grep -F 'five mutable runtime files' "$readme"
   [ "$status" -eq 0 ]
   run grep -F 'merges only `.packages`' "$readme"
   [ "$status" -eq 0 ]
   run grep -F 'PI_AI_RESET_MUTABLE_CONFIG=1' "$readme"
   [ "$status" -eq 0 ]
-  run grep -F 'parent-only' "$readme"
+  run grep -F 'retired `pi-sandbox`' "$readme"
+  [ "$status" -eq 0 ]
+  run grep -F 'commands are not OS-contained' "$readme"
   [ "$status" -eq 0 ]
   run grep -F 'children inherit permission-system and worktree-guard' "$readme"
   [ "$status" -eq 0 ]

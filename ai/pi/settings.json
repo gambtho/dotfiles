@@ -56,7 +56,6 @@
     "npm:@narumitw/pi-lsp@0.49.6",
     "npm:@gotgenes/pi-permission-system@29.2.0",
     "npm:@gotgenes/pi-subagents@21.2.0",
-    "git:github.com/carderne/pi-sandbox@53bd1d64d896d4a6bfab3769023201891e76ba72",
     {
       "source": "git:github.com/obra/superpowers@v6.3.0"
     },
