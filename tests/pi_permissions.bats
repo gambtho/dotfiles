@@ -109,10 +109,29 @@ setup() {
   [ "$status" -eq 0 ]
 }
 
-@test "Pi permission Bash policy blocks escape hatches and catastrophic commands" {
+@test "Pi permission Bash policy defaults to allow while guarding risky operations" {
   run jq -e '
     .permission.bash as $bash
-    | $bash["*"] == "ask"
+    | $bash["*"] == "allow"
+    and $bash["git *"] == "ask"
+    and $bash["*/git *"] == "ask"
+    and $bash["gh *"] == "ask"
+    and $bash["*/gh *"] == "ask"
+    and $bash["curl *"] == "ask"
+    and $bash["*/curl *"] == "ask"
+    and $bash["wget *"] == "ask"
+    and $bash["ssh *"] == "ask"
+    and $bash["scp *"] == "ask"
+    and $bash["rsync *"] == "ask"
+    and $bash["rm *"] == "ask"
+    and $bash["*/rm *"] == "ask"
+    and $bash["nc *"] == "ask"
+    and $bash["*/socat *"] == "ask"
+    and $bash["command *"] == "ask"
+    and $bash.env == "ask"
+    and $bash.printenv == "ask"
+    and $bash.export == "ask"
+    and $bash["declare *-x*"] == "ask"
     and $bash["git status*"] == "allow"
     and $bash["git show *--ext-diff*"] == "ask"
     and $bash["git show *--textconv*"] == "ask"
@@ -120,30 +139,30 @@ setup() {
     and $bash["git diff *--textconv*"] == "ask"
     and $bash["git log *--ext-diff*"] == "ask"
     and $bash["git log *--textconv*"] == "ask"
-    and $bash["rg *--pre*"] == "deny"
-    and $bash["fd *--exec*"] == "deny"
-    and $bash["fd *-x*"] == "deny"
-    and $bash["fd *-X*"] == "deny"
+    and $bash["*rg *--pre*"] == "deny"
+    and $bash["*fd *--exec*"] == "deny"
+    and $bash["*fd *-x*"] == "deny"
+    and $bash["*fd *-X*"] == "deny"
     and $bash["yq -i*"] == "ask"
     and $bash["yq --inplace*"] == "ask"
-    and $bash["*$*"] == "ask"
-    and $bash["git push *--force*"] == "deny"
-    and $bash["git push -f*"] == "deny"
-    and $bash["git push * -f*"] == "deny"
-    and $bash["git reset *--hard*"] == "deny"
-    and $bash["git clean -*f*"] == "deny"
-    and $bash["git clean * -*f*"] == "deny"
-    and $bash["gh repo delete*"] == "deny"
-    and $bash["gh api *DELETE*"] == "deny"
-    and $bash["gh api *delete*"] == "deny"
-    and $bash["sudo *"] == "deny"
-    and $bash["doas *"] == "deny"
-    and $bash["rm *-r*f* /*"] == "deny"
-    and $bash["rm *-f*r* /*"] == "deny"
-    and $bash["rm *-R*f* /*"] == "deny"
-    and $bash["rm *-f*R* /*"] == "deny"
-    and $bash["rm /* *-r*f*"] == "deny"
-    and $bash["rm /* *-f*r*"] == "deny"
+    and ($bash | has("*$*") | not)
+    and $bash["*cat *$*"] == "ask"
+    and $bash["*rg *$*"] == "ask"
+    and $bash["*git *push *--force*"] == "deny"
+    and $bash["*git *push -f*"] == "deny"
+    and $bash["*git *reset *--hard*"] == "deny"
+    and $bash["*git *clean -*f*"] == "deny"
+    and $bash["*gh *repo delete*"] == "deny"
+    and $bash["*gh *api *DELETE*"] == "deny"
+    and $bash["*sudo *"] == "deny"
+    and $bash["*doas *"] == "deny"
+    and $bash["*rm *-*r* /"] == "deny"
+    and $bash["*rm *-*r* /*"] == "deny"
+    and $bash["*rm / *-*r*"] == "deny"
+    and $bash["*rm /* *-*r*"] == "deny"
+    and $bash["*rm *-*r* /* *"] == "deny"
+    and $bash["*rm * /*/*"] == "ask"
+    and $bash["*rm /*/* *"] == "ask"
   ' "$PERMISSION_CONFIG"
   [ "$status" -eq 0 ]
 }
@@ -164,6 +183,7 @@ setup() {
     and (.filesystem.denyRead | index("/home") == null)
     and (.filesystem.denyRead | index("/Users") == null)
     and (.filesystem.allowRead | index("~/.config") == null)
+    and (.filesystem.allowRead | index("__PI_AGENT_DIR__/npm") != null)
     and (.filesystem.allowRead | index("~/.ssh") == null)
     and (.filesystem.allowWrite | index("~/.ssh") == null)
     and (.filesystem.denyRead | index("~/.ssh") != null)

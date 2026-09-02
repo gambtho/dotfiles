@@ -108,7 +108,10 @@ try {
   const pathFlavorUrl = pathToFileURL(
     join(packageRoot, "src", "path", "path-flavor.ts"),
   ).href;
-  const [loaded, bashLoaded, normalizerLoaded, flavorLoaded] = await Promise.all([
+  const gateUrl = pathToFileURL(
+    join(packageRoot, "src", "handlers", "gates", "bash-command.ts"),
+  ).href;
+  const [loaded, bashLoaded, normalizerLoaded, flavorLoaded, gateLoaded] = await Promise.all([
     import(moduleUrl) as Promise<{
       PermissionManager: new (options: {
         agentDir: string;
@@ -121,6 +124,12 @@ try {
           command: string,
           normalizer: unknown,
         ): Promise<{
+          commands(): Array<{
+            text: string;
+            wrapperKind?: string;
+            executedUnit?: string;
+            floorExemption?: string;
+          }>;
           pathRuleCandidates(): Array<{
             token: string;
             path: { matchValues(): string[] };
@@ -133,9 +142,34 @@ try {
       PathNormalizer: new (flavor: unknown, cwd: string) => unknown;
     }>,
     import(pathFlavorUrl) as Promise<{ posixPathFlavor: unknown }>,
+    import(gateUrl) as Promise<{
+      resolveBashCommandCheck(
+        command: string,
+        commands: Array<{
+          text: string;
+          wrapperKind?: string;
+          executedUnit?: string;
+          floorExemption?: string;
+        }>,
+        agentName: string | undefined,
+        resolver: {
+          resolve(intent: Record<string, unknown>): { state: PermissionState };
+          getToolPermission(toolName: string, agentName?: string): PermissionState;
+        },
+      ): { state: PermissionState };
+    }>,
   ]);
   const manager = new loaded.PermissionManager({ agentDir });
   const pathNormalizer = new normalizerLoaded.PathNormalizer(flavorLoaded.posixPathFlavor, repoRoot);
+
+  async function checkBashGate(command: string, expected: PermissionState): Promise<void> {
+    const program = await bashLoaded.BashProgram.parse(command, pathNormalizer);
+    const actual = gateLoaded.resolveBashCommandCheck(command, program.commands(), undefined, {
+      resolve: (intent) => manager.check(intent),
+      getToolPermission: (toolName, agentName) => manager.getToolPermission(toolName, agentName),
+    }).state;
+    expectState(`global bash gate ${JSON.stringify(command)}`, actual, expected);
+  }
 
   async function checkBashPath(
     scopedManager: PermissionManagerLike,
@@ -192,8 +226,32 @@ try {
     "ask",
   );
 
+  checkBash(manager, "printf hello", "allow");
+  checkBash(manager, 'printf "$HOME"', "ask");
+  checkBash(manager, "node --version", "allow");
+  checkBash(manager, "env", "ask");
+  checkBash(manager, "/usr/bin/env", "ask");
+  checkBash(manager, "printenv", "ask");
+  checkBash(manager, "export -p", "ask");
+  checkBash(manager, "declare -x", "ask");
+  checkBash(manager, "typeset -x", "ask");
+  checkBash(manager, "command env", "ask");
   checkBash(manager, "git status", "allow");
+  checkBash(manager, "git commit -am message", "ask");
+  checkBash(manager, "/usr/bin/git commit -am message", "ask");
   checkBash(manager, "git push origin main", "ask");
+  checkBash(manager, "gh pr create --title example", "ask");
+  checkBash(manager, "/usr/bin/gh pr create --title example", "ask");
+  checkBash(manager, "curl https://example.com", "ask");
+  checkBash(manager, "/usr/bin/curl https://example.com", "ask");
+  checkBash(manager, "rm -f /tmp/example", "ask");
+  checkBash(manager, "rm -rf /tmp/example", "ask");
+  checkBash(manager, "/bin/rm -rf .", "ask");
+  checkBash(manager, "nc example.com 443", "ask");
+  checkBash(manager, '/bin/cat "$SECRET_PATH"', "ask");
+  await checkBashGate("cd . && curl https://example.com", "ask");
+  await checkBashGate("env gh pr create --title example", "ask");
+  await checkBashGate("sh -c 'git push origin main'", "ask");
   checkBash(manager, "git show --ext-diff HEAD", "ask");
   checkBash(manager, "git show --textconv HEAD:file", "ask");
   checkBash(manager, "git diff --ext-diff HEAD", "ask");
@@ -208,13 +266,23 @@ try {
   const destructiveCommands = [
     "git push origin main --force",
     "git push -f origin main",
+    "git -C . push origin main --force",
+    "/usr/bin/git -C . push origin main --force",
     "git reset -q --hard HEAD",
+    "git --git-dir=.git reset -q --hard HEAD",
     "git clean -df",
+    "git -C . clean -df",
     "gh api repos/o/r -X DELETE",
     "gh api repos/o/r --method=delete",
     "rm -r -f /",
-    "rm -fR /tmp/example",
-    "rm /tmp/example -rf",
+    "rm -rf /*",
+    "rm --recursive --force /",
+    "rm --force --recursive /*",
+    "rm --recursive /* --force",
+    "rm --force /* --recursive",
+    "rm --force --no-preserve-root / --recursive",
+    "/bin/rm -fR /",
+    "rm / -rf",
   ];
   for (const command of destructiveCommands) checkBash(manager, command, "deny");
 
@@ -249,11 +317,13 @@ try {
   for (const agentName of ["rush", "deep", "review"] as const) {
     expectState(`${agentName} write tool`, manager.getToolPermission("write", agentName), "deny");
     checkBash(manager, "git status", "allow", agentName);
+    checkBash(manager, "unknown-reader --version", "ask", agentName);
     checkBash(manager, "gh pr view 1", "ask", agentName);
     checkBash(manager, "make check", "ask", agentName);
     checkBash(manager, "gh repo delete owner/repo", "deny", agentName);
     checkBash(manager, "gh api repos/o/r --method DELETE", "deny", agentName);
   }
+  checkBash(manager, "unknown-tool --version", "allow", "smart");
   for (const agentName of ["rush", "smart", "deep", "review"] as const) {
     checkBash(manager, 'cat "$SECRET_PATH"', "deny", agentName);
   }

@@ -10,6 +10,7 @@ permission:
   write: deny
   edit: deny
   bash:
+    "*": ask
     "rg *": ask
     "fd *": ask
     "yq *": ask

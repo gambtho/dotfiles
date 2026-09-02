@@ -2,7 +2,7 @@
 
 ## Status
 
-Approved after independent `/second-opinion` review and follow-up package analysis on 2026-09-01. The user accepted the review findings and selected a parent-only sandbox after verification showed that `pi-sandbox` is unsafe to bind into concurrent in-process child sessions.
+Approved after independent `/second-opinion` review and follow-up package analysis on 2026-09-01. The user accepted the review findings and selected a parent-only sandbox after verification showed that `pi-sandbox` is unsafe to bind into concurrent in-process child sessions. Amended on 2026-09-02 to use a relaxed-but-guarded parent Bash policy after the original unmatched-command fallback caused excessive approval prompts.
 
 ## Context
 
@@ -86,7 +86,7 @@ The global baseline uses a balanced posture:
 - unknown extension tools and MCP operations: `ask`;
 - paths outside the current working directory: `ask`, except Pi infrastructure reads handled by the package;
 - sensitive files and credential roots: `deny` across path-aware tools;
-- Bash: allow curated inspection, repository status, build, test, lint, type-check, and formatting commands; ask for unmatched commands, package installation, Git mutation, remote mutation, deployment, opaque wrappers, and commands containing unresolved `$` expansion; deny catastrophic deletion patterns and explicitly forbidden credential paths.
+- Bash: allow unmatched parent commands inside Bubblewrap; ask for Git/GitHub mutation, remote shell/network commands, recursive deletion, opaque wrappers, direct environment dumps, and common reader/output commands containing unresolved `$` expansion; deny root deletion, force operations, privilege escalation, subprocess-capable search flags, and explicitly forbidden credential paths. Risky command-family rules cover both bare and absolute executable spellings.
 
 Within a permission map, broad rules precede specific exceptions because the package uses last-match-wins semantics.
 
@@ -146,7 +146,7 @@ They are installed under the active Pi agent directory's `agents/` folder. Each 
 | `deep` | `github-copilot/gpt-5.6-terra` | high | read-only built-ins for architecture, security, diagnosis, and broad analysis |
 | `review` | `github-copilot/claude-opus-5` | high | read-only built-ins for independent second opinions |
 
-Read-only agents list `read`, `bash`, `grep`, `find`, and `ls`; they omit `edit` and `write`. Their specialist instructions and permission frontmatter set `path_write`, `write`, and `edit` to `deny`. Curated local inspection commands remain allowed through the global policy, while commands capable of subprocess execution, repository mutation, build side effects, or credential access are raised to `ask` in the agent scope. Agent scopes do not add broad `ask` patterns that overlap global hard denies. They raise only the globally allowed read-only GitHub commands to `ask`; unknown commands already inherit the global fallback, while destructive GitHub commands retain the global hard denies under last-match-wins composition and YOLO. Unmatched Bash also remains `ask` for parent forwarding. `smart` lists all seven built-ins and otherwise inherits the balanced global permission policy. All four named agents add a final hard deny for Bash commands containing `$` expansion, preventing a curated reader from hiding a sensitive path operand through a shell variable even under YOLO.
+Read-only agents list `read`, `bash`, `grep`, `find`, and `ls`; they omit `edit` and `write`. Their specialist instructions and permission frontmatter set `path_write`, `write`, and `edit` to `deny`. Curated local inspection commands remain allowed through the global policy, while commands capable of subprocess execution, repository mutation, build side effects, or credential access are raised to `ask` in the agent scope. Agent scopes do not add broad `ask` patterns that overlap global hard denies. They raise globally allowed commands with side effects to `ask`, while destructive GitHub commands retain the global hard denies under last-match-wins composition and YOLO. Read-only children keep unmatched Bash at `ask` for parent forwarding. `smart` lists all seven built-ins and otherwise inherits the relaxed parent policy. All four named agents add a final hard deny for Bash commands containing `$` expansion, preventing a curated reader from hiding a sensitive path operand through a shell variable even under YOLO.
 
 The tool allowlist is complete, not additive. Extension tools are absent from children unless deliberately named. The subagent package always removes its own three control tools in children, preventing recursive spawning.
 
@@ -188,7 +188,7 @@ The resulting security boundary is explicit:
 
 Filesystem policy for the parent:
 
-- allow reads in the active project, Pi infrastructure required by extension operation, selected runtime/toolchain directories, and narrowly selected configuration roots needed by approved CLI tools;
+- allow reads in the active project, installed Pi npm packages and other infrastructure required by extension operation, selected runtime/toolchain directories, and narrowly selected configuration roots needed by approved CLI tools;
 - allow writes in the active project, `/tmp`, and selected build/language caches;
 - deny writes for SSH keys, cloud credentials, Pi authentication, private key material, and `.env` variants;
 - do not broadly allow all of `~/.config` or the home directory;
@@ -213,6 +213,7 @@ The following are intentionally documented residuals:
 - Gotgenes subagent children do not receive OS-level Bubblewrap containment under this design. They do receive the permission system, per-agent tool allowlists, a hard deny for unresolved `$`-bearing Bash commands, and worktree guard. That deny closes a reviewed direct reader-indirection path but does not make child Bash an isolation boundary for untrusted shell code.
 - `code-actions` `/code run` executes only after explicit user confirmation, but calls `pi.exec()` from an extension command. It does not pass through model tool-call permissions or Bubblewrap. The recommended use is `/code ... insert`, followed by a normal reviewed execution path.
 - Extension factories, event handlers, and package code run with Pi's full user permissions. In particular, language servers started internally by pi-lsp and network requests made internally by pi-web-access are outside the parent Bash sandbox.
+- Bubblewrap preserves the parent process environment. Common direct dump and variable-output commands prompt, but an otherwise allowed program can inspect inherited variables internally; secrets should not be placed in the agent environment.
 - A permitted build/test/format command can mutate files inside the active working directory. Repository guidance and linked-worktree use remain necessary.
 - A subprocess may access credentials from an explicitly allowed configuration directory even when the command line itself does not name that credential file. Only roots required by approved tools are allowed.
 - Permission review logging is disabled by default because values are redacted only when their input key is recognized as sensitive. An operator who enables it for diagnosis must avoid inline secrets in Bash commands and disable it again afterward.
@@ -560,7 +561,7 @@ Machine-local package caches, backups, logs, and quarantined skill data may rema
 
 | Risk | Mitigation |
 |---|---|
-| Prompt fatigue persists | Curated balanced allows, single-press decisions, and session-scoped approval patterns |
+| Prompt fatigue persists | Parent Bash defaults to allow inside Bubblewrap; explicit asks remain for risky command families, with single-press and session-scoped approvals |
 | YOLO becomes the permanent default again | Tracked baseline starts false; explicit reset restores it; docs require temporary use and restoration |
 | Duplicate permission prompts | Filter out Amp permissions; load permission-system before sandbox; allow normal parent project/Pi paths in sandbox |
 | Child bypasses policy | Replace Amp subagents; inherit permission-system and worktree guard; smoke-test ask forwarding and denies |
