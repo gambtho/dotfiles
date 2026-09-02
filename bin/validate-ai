@@ -55,6 +55,38 @@ validate_frontmatter() {
   info "$label"
 }
 
+validate_pi_json() {
+  local file=$1 label
+  label=${file#"$DOTFILES_ROOT/ai/pi/"}
+  if ! jq empty "$file" 2>/dev/null; then
+    error "$label: invalid JSON"
+    return 1
+  fi
+  info "$label: valid JSON"
+}
+
+validate_web_security_baseline() {
+  local file="$DOTFILES_ROOT/ai/pi/config/web-search.json" credential_keys key
+  jq empty "$file" >/dev/null 2>&1 || return 0
+
+  credential_keys=$(jq -r '
+    [.. | objects | keys[]
+      | select(test("apikey|api_key|token|secret|password|credential"; "i"))]
+    | unique | .[]
+  ' "$file")
+  if [[ -n "$credential_keys" ]]; then
+    while IFS= read -r key; do
+      [[ -n "$key" ]] && error "config/web-search.json: credential-like property is forbidden: $key"
+    done <<<"$credential_keys"
+  fi
+
+  for key in provider searchProvider; do
+    if jq -e --arg key "$key" 'has($key)' "$file" >/dev/null; then
+      error "config/web-search.json: must not declare $key; use searchRouting.providers"
+    fi
+  done
+}
+
 manifest_inventory() {
   local kind=$1 pattern=$2 expected_prefix=$3 declared=() actual=() path
 
@@ -125,6 +157,26 @@ elif ! jq empty "$PACKAGE_FILE" 2>/dev/null; then
 else
   manifest_inventory prompts "$PLUGIN_DIR/prompts/*.md" "./prompts/"
   manifest_inventory skills "$PLUGIN_DIR/skills/*/SKILL.md" "./skills/"
+fi
+
+echo
+echo "Pi JSON:"
+if ! command -v jq &>/dev/null; then
+  error "Pi JSON: jq is required for validation"
+else
+  pi_json_files=(
+    "$DOTFILES_ROOT/ai/pi/settings.json"
+    "$DOTFILES_ROOT/ai/pi/keybindings.json"
+    "$DOTFILES_ROOT"/ai/pi/config/*.json
+  )
+  for pi_json in "${pi_json_files[@]}"; do
+    [[ -f "$pi_json" ]] || {
+      error "Pi JSON file does not exist: ${pi_json#"$DOTFILES_ROOT/"}"
+      continue
+    }
+    validate_pi_json "$pi_json" || true
+  done
+  validate_web_security_baseline
 fi
 
 echo

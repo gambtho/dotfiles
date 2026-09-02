@@ -28,6 +28,19 @@ compose_packages() {
   done
 }
 
+@test "every Linux profile includes Pi sandbox runtime dependencies" {
+  local os profile package
+  for os in Ubuntu WSL; do
+    for profile in personal work server; do
+      compose_packages "$os" "$profile"
+      [ "$status" -eq 0 ]
+      for package in bubblewrap ripgrep socat; do
+        printf '%s\n' "$output" | grep -Fxq "$package"
+      done
+    done
+  done
+}
+
 @test "work package composition includes vendor tooling once" {
   compose_packages Ubuntu work
 

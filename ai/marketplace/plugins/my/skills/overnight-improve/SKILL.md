@@ -14,7 +14,9 @@ This workflow uses the packaged `pi-ralph-wiggum` extension through `ralph_start
 ## Prerequisites
 
 - Work from a clean linked worktree on a dedicated overnight branch; the worktree guard must remain enabled.
-- Toggle `pi-amplike` permissions to `yolo` with `/permissions` before starting. Enabled mode can pause on Bash confirmation, defeating an unattended run. Confirm this deliberate temporary relaxation with the user and restore enabled mode afterward.
+- Open `/permission-system`, enable YOLO temporarily, and verify its status before starting. YOLO converts asks to allows but preserves explicit denies; it never bypasses the parent sandbox. Confirm this deliberate relaxation with the user and disable YOLO during wrap-up.
+- Open `/sandbox`, verify it is enabled, and pre-approve every reviewed parent path and domain the configured gates require. Child agents remain permission-enforced and worktree-guarded but are not Bubblewrap-contained.
+- Run one representative build/test gate before going unattended. Treat any sandbox prompt timeout or permission deny as blocked and never claim success for that iteration.
 - Require `.pi/overnight-config.yaml`. If it is absent, read `references/config-schema.md` and stop so the user can configure the gates and constraints.
 - Write state and run logs under `.pi/` only.
 
@@ -23,7 +25,8 @@ This workflow uses the packaged `pi-ralph-wiggum` extension through `ralph_start
 Run all checks in `references/preflight-checklist.md`. If any check fails, log the failure and stop. Do not start the loop on a broken baseline.
 
 The preflight covers:
-- Verifies Pi permissions are in `yolo` mode for the unattended run
+- Verifies permission-system YOLO is temporarily enabled and the sandbox is enabled with reviewed allowances
+- Runs a representative gate and treats any sandbox prompt timeout or permission deny as blocked
 - Verifies the base branch is clean and up to date
 - Creates a linked worktree and overnight branch
 - Seeds `.pi/overnight-run-state.md`
@@ -75,7 +78,7 @@ The loop stops when any of:
 - The fired prompt outputs `<promise>COMPLETE</promise>` after PHASE 2 wrap-up completes, or on a wrong-branch safety trip.
 - The driver's own max-iterations is reached without the completion promise being emitted.
 
-When the loop ends, restore `pi-amplike` permissions to enabled mode and tell the user where to find:
+When the loop ends, open `/permission-system`, disable YOLO, verify the status reports YOLO off, and tell the user where to find:
 - `.pi/overnight-run-state.md` — the per-iteration log
 - `git log --oneline main..HEAD` — what got committed
 - `gh pr view` — the PR if one was opened

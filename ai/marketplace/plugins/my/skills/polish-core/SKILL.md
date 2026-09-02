@@ -120,7 +120,7 @@ Walk through each of 3a-3h from the reference and produce findings, classifying 
 
 ### 3i: Dispatch Subagents
 
-Dispatch read-only review subagents **in parallel** with one `subagent` tool call and a self-contained task for each relevant role. Use mode `smart`; the global Pi modes configuration selects its model and thinking level. If subagents are unavailable, perform these checks locally and note that in the report:
+Dispatch read-only review subagents **in parallel** with one sibling `subagent` call per relevant role. Give each call a self-contained `prompt`, a 3–5 word `description`, `subagent_type: deep`, and `run_in_background: true`. If subagents are unavailable, perform these checks locally and note that in the report:
 
 1. **code-reviewer** — confidence-filtered general review. Prefer a dedicated review agent when available (e.g. `coderabbit:code-reviewer`). Scope to quality/fragility and suggestions — Phase 3a already covers bugs and security.
 2. **silent-failure-hunter** — generic subagent with this role: finds swallowed errors and silent fallbacks.
@@ -142,9 +142,9 @@ Each subagent receives:
 
 **Deduplication:** After collecting subagent findings, merge them into the main findings list. Two findings are duplicates if they refer to the same file, overlapping line ranges (within 5 lines), and describe the same underlying issue regardless of categorization. When duplicates are found, keep the Phase 3 finding and drop the subagent duplicate. If a subagent finding adds new context to an existing Phase 3 finding, append the context rather than creating a duplicate. When in doubt, keep both findings.
 
-**Timeout:** If a subagent has not completed after 90 seconds, proceed without its findings and note in the report: "Subagent {name} timed out — findings not included." If a subagent returns an error, log it and proceed.
+Record every returned agent ID and poll each with `get_subagent_result({ agent_id, wait: false })`. Poll without blocking unrelated work. After the workflow's collection budget, proceed without an unfinished result and note: "Subagent {name} result arrived late — findings not included." This does not stop the agent; ignore its later notification. If a subagent returns an error, log it and proceed.
 
-Wait for all dispatched subagents to complete (or time out) before proceeding to Phase 4.
+Collect all results available within the budget before proceeding to Phase 4.
 
 ---
 

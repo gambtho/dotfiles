@@ -1,0 +1,79 @@
+{
+  "searchRouting": {
+    "providers": [
+      "exa",
+      "duckduckgo"
+    ],
+    "useCurrentModel": false,
+    "fallbackOn": [
+      "transient",
+      "quota",
+      "network",
+      "invalid-response"
+    ]
+  },
+  "fetchRouting": {
+    "providers": [
+      "http"
+    ],
+    "allowRemoteHostedProviders": false
+  },
+  "workflow": "none",
+  "allowBrowserCookies": false,
+  "autoOpenBrowser": false,
+  "tools": {
+    "webSearch": {
+      "enabled": true
+    },
+    "sourceCheck": {
+      "enabled": true
+    },
+    "fetchContent": {
+      "enabled": true
+    },
+    "getSearchContent": {
+      "enabled": true
+    }
+  },
+  "commands": {
+    "websearch": {
+      "enabled": true
+    },
+    "curator": {
+      "enabled": false
+    },
+    "search": {
+      "enabled": true
+    },
+    "google-account": {
+      "enabled": false
+    }
+  },
+  "image": {
+    "enabled": false
+  },
+  "githubClone": {
+    "enabled": false
+  },
+  "githubPrIssue": {
+    "enabled": false
+  },
+  "youtube": {
+    "enabled": false
+  },
+  "video": {
+    "enabled": false
+  },
+  "pdf": {
+    "enabled": true,
+    "provider": "unpdf"
+  },
+  "shortcuts": {
+    "curate": "alt+shift+s",
+    "activity": "ctrl+shift+w"
+  },
+  "ssrf": {
+    "allowRanges": [],
+    "trustEnvProxy": false
+  }
+}

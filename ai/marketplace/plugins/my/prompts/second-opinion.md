@@ -22,14 +22,14 @@ Review one document by default. Pair a spec and plan only when two paths or `--w
 
 Use the model supplied by `--model` when present. Otherwise choose a model from a different family than the current model:
 
-- Current model is GPT/Gemini/Grok: use mode `review` (centrally mapped to Claude Opus 5 in `ai/pi/modes.json`).
-- Current model is Claude: use mode `deep` (centrally mapped to the GPT-5.6 family).
+- Current model is GPT/Gemini/Grok: use `subagent_type: review` (centrally mapped to Claude Opus 5).
+- Current model is Claude: use `subagent_type: deep` (centrally mapped to the GPT-5.6 family).
 
-State the target document, repository root, current model, and reviewer model before dispatching.
+State the target document, repository root, current model, selected `subagent_type`, and reviewer model before dispatching.
 
 ## Dispatch
 
-Use the `subagent` tool once with the mode or explicit model selected above. Give it the repository root, selected document paths, repository instructions, and this role:
+Issue one foreground `subagent` call with a self-contained `prompt`, a 3–5 word `description` such as `Review implementation plan`, the selected `subagent_type`, and an explicit `model` only when `--model` was supplied. Give it the repository root, selected document paths, repository instructions, and this role:
 
 - Act only as a reviewer; do not modify files.
 - Read the documents and repository code needed to verify claims.

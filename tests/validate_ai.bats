@@ -122,6 +122,59 @@ write_pi_prompts() {
   [[ "$output" == *"tracked symlink resolves outside repository"* ]]
 }
 
+@test "validator checks every tracked Pi JSON baseline offline" {
+  run bash "$REPO_ROOT/bin/validate-ai" --verbose
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"settings.json: valid JSON"* ]]
+  [[ "$output" == *"keybindings.json: valid JSON"* ]]
+  [[ "$output" == *"config/modes.json: valid JSON"* ]]
+  [[ "$output" == *"config/permission-system.json: valid JSON"* ]]
+  [[ "$output" == *"config/sandbox.json: valid JSON"* ]]
+  [[ "$output" == *"config/subagents.json: valid JSON"* ]]
+  [[ "$output" == *"config/web-search.json: valid JSON"* ]]
+}
+
+@test "validator rejects invalid tracked Pi JSON" {
+  make_validator_repo
+  printf '{invalid\n' >"$VALIDATOR_REPO/ai/pi/config/sandbox.json"
+
+  run bash "$VALIDATOR_REPO/bin/validate-ai"
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"config/sandbox.json: invalid JSON"* ]]
+}
+
+@test "validator rejects credential-like web configuration properties" {
+  make_validator_repo
+  local web="$VALIDATOR_REPO/ai/pi/config/web-search.json"
+  local temporary="$web.tmp"
+  jq '.searchRouting.apiKey = ""' "$web" >"$temporary"
+  mv "$temporary" "$web"
+
+  run bash "$VALIDATOR_REPO/bin/validate-ai"
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"credential-like property"* ]]
+}
+
+@test "validator rejects web provider shortcuts that bypass ordered routing" {
+  local key
+  for key in provider searchProvider; do
+    make_validator_repo
+    local web="$VALIDATOR_REPO/ai/pi/config/web-search.json"
+    local temporary="$web.tmp"
+    jq --arg key "$key" '.[$key] = "duckduckgo"' "$web" >"$temporary"
+    mv "$temporary" "$web"
+
+    run bash "$VALIDATOR_REPO/bin/validate-ai"
+
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"must not declare $key"* ]]
+    rm -rf "$VALIDATOR_REPO"
+  done
+}
+
 @test "validator avoids Bash-4-only mapfile" {
   run rg -n '(^|[[:space:]])mapfile([[:space:]]|$)' "$REPO_ROOT/bin/validate-ai"
   [ "$status" -eq 1 ]
