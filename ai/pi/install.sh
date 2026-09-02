@@ -30,6 +30,11 @@ resolve_pi_paths() {
     log_warning "PI_CODING_AGENT_DIR must be absolute: $PI_CODING_AGENT_DIR"
     return 1
   fi
+  if [[ "/${PI_CODING_AGENT_DIR:-}/" == *'/./'* ||
+    "/${PI_CODING_AGENT_DIR:-}/" == *'/../'* ]]; then
+    log_warning "PI_CODING_AGENT_DIR must not contain dot segments: $PI_CODING_AGENT_DIR"
+    return 1
+  fi
   case "$PI_AI_RESET_MUTABLE_CONFIG" in
     0 | 1) ;;
     *)
@@ -57,9 +62,32 @@ resolve_pi_paths() {
   fi
 }
 
+is_production_agent_dir() {
+  local production="$HOME/.pi/agent" requested_real production_real
+  [[ "$PI_AGENT_DIR" == "$production" ]] && return 0
+  [[ -d "$PI_AGENT_DIR" && -d "$production" ]] || return 1
+  requested_real=$(cd "$PI_AGENT_DIR" && pwd -P)
+  production_real=$(cd "$production" && pwd -P)
+  [[ "$requested_real" == "$production_real" ]]
+}
+
+require_sandbox_dependencies() {
+  local dependencies=(rg) command missing=()
+  if [[ "$(uname -s)" == Linux ]]; then
+    dependencies+=(bwrap socat)
+  fi
+  for command in "${dependencies[@]}"; do
+    command_exists "$command" || missing+=("$command")
+  done
+  if ((${#missing[@]} > 0)); then
+    log_warning "Pi sandbox requires these missing commands: ${missing[*]}"
+    return 1
+  fi
+}
+
 assert_safe_pi_source() {
   [[ "$MODE" == apply ]] || return 0
-  [[ "$PI_AGENT_DIR" == "$HOME/.pi/agent" ]] || return 0
+  is_production_agent_dir || return 0
   [[ -d "$CANONICAL_DOTFILES_ROOT" ]] || return 0
 
   local canonical_real
@@ -107,7 +135,7 @@ rendered_baseline_contents() {
 atomic_publish_file() {
   local source=$1 destination=$2 file_mode=$3 staged
   staged=$(mktemp "${destination}.tmp.XXXXXX")
-  if ! install -m "$file_mode" "$source" "$staged"; then
+  if ! /usr/bin/install -m "$file_mode" "$source" "$staged"; then
     rm -f "$staged"
     return 1
   fi
@@ -131,7 +159,10 @@ publish_rendered_baseline() {
 backup_regular_contents() {
   local source=$1 destination=$2 backup
   backup=$(next_backup_path "$destination")
-  cp -L -- "$source" "$backup"
+  if ! cp -L -- "$source" "$backup"; then
+    rm -f "$backup"
+    return 1
+  fi
   printf '%s\n' "$backup"
 }
 
@@ -271,11 +302,9 @@ reconcile_pi_settings() {
   fi
 
   mkdir -p "$parent"
-  if [[ -e "$destination" || -L "$destination" ]]; then
-    if [[ -L "$destination" || "$PI_AI_RESET_MUTABLE_CONFIG" == 1 ]]; then
-      backup=$(backup_regular_contents "$destination" "$destination")
-      log_info "Backed up Pi settings to $backup"
-    fi
+  if [[ -e "$destination" && (-L "$destination" || "$PI_AI_RESET_MUTABLE_CONFIG" == 1) ]]; then
+    backup=$(backup_regular_contents "$destination" "$destination")
+    log_info "Backed up Pi settings to $backup"
   fi
 
   raw=$(mktemp "${destination}.candidate.XXXXXX")
@@ -374,17 +403,30 @@ reconcile_authored_extensions() {
   done
 }
 
+reconcile_authored_directory() {
+  local destination=$1 label=$2
+  if [[ -L "$destination" || (-e "$destination" && ! -d "$destination") ]]; then
+    log_warning "Refusing non-directory or symlinked $label at $destination"
+    return 1
+  fi
+  if [[ "$MODE" == check ]]; then
+    if [[ ! -d "$destination" ]]; then
+      log_info "[dry-run] Would create $label at $destination"
+    fi
+    return 0
+  fi
+  mkdir -p "$destination"
+}
+
 reconcile_authored_links() {
-  local destination entry
+  local destination="$PI_AGENT_DIR/agents" entry
+  reconcile_authored_directory "$destination" "Pi agents directory"
+
   reconcile_link "$ROOT/ai/pi/AGENTS.md" "$PI_AGENT_DIR/AGENTS.md" \
     "Pi global AGENTS.md" backup "$MODE"
   reconcile_link "$ROOT/ai/pi/keybindings.json" "$PI_AGENT_DIR/keybindings.json" \
     "Pi keybindings" backup "$MODE"
 
-  destination="$PI_AGENT_DIR/agents"
-  if [[ "$MODE" == apply ]]; then
-    mkdir -p "$destination"
-  fi
   for entry in rush smart deep review; do
     reconcile_link "$ROOT/ai/pi/agents/$entry.md" "$destination/$entry.md" \
       "Pi agent $entry" backup "$MODE"
@@ -395,6 +437,51 @@ install_pi() {
   mkdir -p "$HOME/.local/bin"
   npm install -g --prefix "$HOME/.local" --ignore-scripts \
     "@earendil-works/pi-coding-agent@$PI_VERSION"
+}
+
+ensure_pinned_npm_packages() {
+  local pi_binary="$HOME/.local/bin/pi" specifications package_name package_version
+  local package_manifest installed_version source settings_source="$PI_AGENT_DIR/settings.json"
+  [[ "$MODE" == check ]] && settings_source="$ROOT/ai/pi/settings.json"
+  if ! specifications=$(jq -r '
+    .packages[]
+    | if type == "object" then .source else . end
+    | select(type == "string")
+    | capture("^npm:(?<name>(?:@[^/@]+/)?[^@]+)@(?<version>[^@]+)$")
+    | [.name, .version]
+    | @tsv
+  ' "$settings_source"); then
+    log_warning "Could not enumerate pinned npm packages from Pi settings."
+    return 1
+  fi
+
+  while IFS=$'\t' read -r package_name package_version; do
+    [[ -n "$package_name" && -n "$package_version" ]] || continue
+    package_manifest="$PI_AGENT_DIR/npm/node_modules/$package_name/package.json"
+    installed_version=""
+    if [[ -f "$package_manifest" && ! -L "$package_manifest" ]]; then
+      installed_version=$(jq -r '.version // empty' "$package_manifest" 2>/dev/null || true)
+    fi
+    [[ "$installed_version" == "$package_version" ]] && continue
+
+    source="npm:$package_name@$package_version"
+    if [[ "$MODE" == check ]]; then
+      log_info "[dry-run] Would install missing or mismatched pinned Pi package $source"
+      continue
+    fi
+    PI_CODING_AGENT_DIR="$PI_AGENT_DIR" "$pi_binary" install "$source"
+    if [[ ! -f "$package_manifest" || -L "$package_manifest" ]] ||
+      [[ "$(jq -r '.version // empty' "$package_manifest" 2>/dev/null || true)" != "$package_version" ]]; then
+      log_warning "Pi did not install the expected package version for $source"
+      return 1
+    fi
+  done <<<"$specifications"
+
+  if [[ "$MODE" == apply ]] && ! jq -s -e '.[0].packages == .[1].packages' \
+    "$PI_AGENT_DIR/settings.json" "$ROOT/ai/pi/settings.json" >/dev/null; then
+    log_warning "Pi package installation changed the tracked package inventory unexpectedly."
+    return 1
+  fi
 }
 
 main() {
@@ -412,6 +499,7 @@ main() {
   esac
 
   resolve_pi_paths
+  require_sandbox_dependencies
   assert_safe_pi_source
   migrate_pi_security_stack "$MODE" "$PI_AGENT_DIR" "$AMP_SETTINGS_PATH" \
     "${MANAGED_SOURCE_ROOTS[@]}"
@@ -454,6 +542,7 @@ main() {
   reconcile_mutable_file "$ROOT/ai/pi/config/web-search.json" "$WEB_CONFIG_PATH" \
     "Pi web access settings" 0600
 
+  ensure_pinned_npm_packages
   if [[ "$MODE" == check ]]; then
     log_info "[dry-run] Would reconcile Pi packages from settings.json"
     return 0

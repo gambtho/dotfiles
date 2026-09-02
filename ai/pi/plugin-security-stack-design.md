@@ -54,7 +54,7 @@ New package sources are pinned because extension code executes with the user's f
 | Targeted diagnostics | `@narumitw/pi-lsp` | `0.49.6` | Two on-demand tools, no persistent server fleet, explicit Earendil Pi support |
 | Subagents | `@gotgenes/pi-subagents` | `21.2.0` | In-process children inherit extensions; native permission-system integration and parent prompt forwarding |
 | Permission policy | `@gotgenes/pi-permission-system` | `29.2.0` | Fail-closed Bash parsing, path and external-directory gates, custom-tool and child-session coverage |
-| Parent shell containment | `carderne/pi-sandbox` | commit `53bd1d64d896d4a6bfab3769023201891e76ba72` | Includes the post-0.6.5 subprocess-hang fix; uses Bubblewrap on Linux |
+| Parent shell containment | `carderne/pi-sandbox` | commit `53bd1d64d896d4a6bfab3769023201891e76ba72` | Includes the post-0.6.5 subprocess-hang fix; uses Bubblewrap plus socat on Linux |
 
 `pi-amplike` remains installed in explicitly filtered object form. It retains only `extensions/modes.ts`, `extensions/handoff.ts`, `extensions/btw.ts`, `extensions/session-query.ts`, and `skills/session-query/SKILL.md`. It does not load `extensions/amp-skills.ts`, `extensions/permissions.ts`, `extensions/subagent.ts`, or the Jina web-search/page-visit skills. Prompt and theme filters are empty. Every resource category is explicit so future package resources do not begin autoloading silently.
 
@@ -86,7 +86,7 @@ The global baseline uses a balanced posture:
 - unknown extension tools and MCP operations: `ask`;
 - paths outside the current working directory: `ask`, except Pi infrastructure reads handled by the package;
 - sensitive files and credential roots: `deny` across path-aware tools;
-- Bash: allow curated inspection, repository status, build, test, lint, type-check, and formatting commands; ask for unmatched commands, package installation, Git mutation, remote mutation, deployment, and opaque wrappers; deny catastrophic deletion patterns and explicitly forbidden credential paths.
+- Bash: allow curated inspection, repository status, build, test, lint, type-check, and formatting commands; ask for unmatched commands, package installation, Git mutation, remote mutation, deployment, opaque wrappers, and commands containing unresolved `$` expansion; deny catastrophic deletion patterns and explicitly forbidden credential paths.
 
 Within a permission map, broad rules precede specific exceptions because the package uses last-match-wins semantics.
 
@@ -146,7 +146,7 @@ They are installed under the active Pi agent directory's `agents/` folder. Each 
 | `deep` | `github-copilot/gpt-5.6-terra` | high | read-only built-ins for architecture, security, diagnosis, and broad analysis |
 | `review` | `github-copilot/claude-opus-5` | high | read-only built-ins for independent second opinions |
 
-Read-only agents list `read`, `bash`, `grep`, `find`, and `ls`; they omit `edit` and `write`. Their specialist instructions and permission frontmatter set `path_write`, `write`, and `edit` to `deny`. Curated local inspection commands remain allowed through the global policy, while commands capable of subprocess execution, repository mutation, build side effects, or credential access are raised to `ask` in the agent scope. Agent scopes do not add broad `ask` patterns that overlap global hard denies. They raise only the globally allowed read-only GitHub commands to `ask`; unknown commands already inherit the global fallback, while destructive GitHub commands retain the global hard denies under last-match-wins composition and YOLO. Unmatched Bash also remains `ask` for parent forwarding. `smart` lists all seven built-ins and inherits the balanced global permission policy.
+Read-only agents list `read`, `bash`, `grep`, `find`, and `ls`; they omit `edit` and `write`. Their specialist instructions and permission frontmatter set `path_write`, `write`, and `edit` to `deny`. Curated local inspection commands remain allowed through the global policy, while commands capable of subprocess execution, repository mutation, build side effects, or credential access are raised to `ask` in the agent scope. Agent scopes do not add broad `ask` patterns that overlap global hard denies. They raise only the globally allowed read-only GitHub commands to `ask`; unknown commands already inherit the global fallback, while destructive GitHub commands retain the global hard denies under last-match-wins composition and YOLO. Unmatched Bash also remains `ask` for parent forwarding. `smart` lists all seven built-ins and otherwise inherits the balanced global permission policy. All four named agents add a final hard deny for Bash commands containing `$` expansion, preventing a curated reader from hiding a sensitive path operand through a shell variable even under YOLO.
 
 The tool allowlist is complete, not additive. Extension tools are absent from children unless deliberately named. The subagent package always removes its own three control tools in children, preventing recursive spawning.
 
@@ -210,7 +210,7 @@ The sandbox cannot distinguish a primary checkout from a linked worktree. Allowi
 
 The following are intentionally documented residuals:
 
-- Gotgenes subagent children do not receive OS-level Bubblewrap containment under this design. They do receive the permission system, per-agent tool allowlists, and worktree guard.
+- Gotgenes subagent children do not receive OS-level Bubblewrap containment under this design. They do receive the permission system, per-agent tool allowlists, a hard deny for unresolved `$`-bearing Bash commands, and worktree guard. That deny closes a reviewed direct reader-indirection path but does not make child Bash an isolation boundary for untrusted shell code.
 - `code-actions` `/code run` executes only after explicit user confirmation, but calls `pi.exec()` from an extension command. It does not pass through model tool-call permissions or Bubblewrap. The recommended use is `/code ... insert`, followed by a normal reviewed execution path.
 - Extension factories, event handlers, and package code run with Pi's full user permissions. In particular, language servers started internally by pi-lsp and network requests made internally by pi-web-access are outside the parent Bash sandbox.
 - A permitted build/test/format command can mutate files inside the active working directory. Repository guidance and linked-worktree use remain necessary.
@@ -362,7 +362,8 @@ The current machine's persistent Amp YOLO flag is therefore removed rather than 
 6. install the four global named agent definitions;
 7. retire only positively identified Amp permission state through a focused Pi migration module;
 8. quarantine only the positively identified broken Brave skill through that module;
-9. reconcile the pinned package set through `pi update --extensions` as before.
+9. explicitly install any missing or mismatched version-pinned npm source and verify its exact package version, because ordinary Pi updates skip pinned npm sources;
+10. reconcile already installed packages and pinned Git checkouts through `pi update --extensions`.
 
 `make ai-check` reports all of these actions without writing.
 
@@ -419,12 +420,13 @@ Gotgenes child agents remain permission-enforced but not Bubblewrap-contained. U
 
 - Invalid permission-system project or agent policy fails closed according to the package's documented behavior. Invalid global policy falls back to prompting rather than silently broadening access.
 - A gotgenes child missing its permission node emits the package's `child_node_absent` warning and fails smoke verification. The permission package is never excluded from child loading.
-- `pi-sandbox` is excluded from children, avoiding process-global reset races. A missing Bubblewrap or ripgrep dependency prevents parent sandbox initialization and blocks rollout verification. Both are present on the current WSL host.
+- `pi-sandbox` is excluded from children, avoiding process-global reset races. A missing Linux `bubblewrap`, `socat`, or `ripgrep` dependency prevents parent sandbox initialization. The composed package manifests install all three, and the Pi installer checks them before any migration so rollout fails closed.
 - A missing LSP command produces a diagnostic configuration result and does not trigger automatic installation.
 - A failed web provider routes only through explicitly configured fallback conditions; exhausted providers report individual failures.
 - A failed mutable-config publication preserves the previous regular file through atomic staging behavior.
 - A differing mutable file is preserved during normal installation and reported as drift; it is replaced only through the explicit reset path.
 - A package startup failure blocks completion and is not worked around by silently disabling the permission package.
+- Missing or mismatched pinned npm packages are explicitly installed and version-checked before package update; relying on `pi update --extensions` alone would silently leave first-install pins absent.
 
 ## Testing strategy
 
@@ -507,7 +509,7 @@ Extend the existing pure path-classification tests and add a handler-level harne
 
 ### Host smoke verification
 
-After repository tests pass, apply `make ai` only inside an isolated temporary HOME/`PI_CODING_AGENT_DIR` while the implementation remains in a linked worktree, then use those real pinned packages to verify:
+After repository tests pass, apply `make ai` only inside an isolated temporary HOME/`PI_CODING_AGENT_DIR` while the implementation remains in a linked worktree. Link the fixture's `~/.dotfiles` to that reviewed checkout so the intentionally local `my` package resolves without exposing production state, then use those real pinned packages to verify:
 
 1. Pi starts and reports no extension-load errors.
 2. The loaded command/tool inventory contains queue steering, web tools, gotgenes subagent tools, permission-system, sandbox, and LSP, while Amp permissions/subagents are absent.

@@ -99,12 +99,13 @@ agent_frontmatter() {
           ][]; . as $pattern | $bash[$pattern] == "ask"))
       and .permission.bash["gh repo delete*"] == "deny"
       and .permission.bash["gh api * --method DELETE*"] == "deny"
+      and .permission.bash["*$*"] == "deny"
     ' <<<"$actual"
     [ "$status" -eq 0 ]
   done
 
   actual=$(agent_frontmatter smart)
-  run jq -e 'has("permission") | not' <<<"$actual"
+  run jq -e '.permission == {"bash": {"*$*": "deny"}}' <<<"$actual"
   [ "$status" -eq 0 ]
 }
 

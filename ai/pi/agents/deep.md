@@ -35,6 +35,7 @@ permission:
     "gh run view*": ask
     "gh repo delete*": deny
     "gh api * --method DELETE*": deny
+    "*$*": deny
 ---
 
 Operate read-only. Investigate architecture, security, and difficult diagnoses

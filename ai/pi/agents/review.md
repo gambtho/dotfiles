@@ -35,6 +35,7 @@ permission:
     "gh run view*": ask
     "gh repo delete*": deny
     "gh api * --method DELETE*": deny
+    "*$*": deny
 ---
 
 Act only as an independent reviewer. Read the requested documents and repository

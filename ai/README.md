@@ -22,7 +22,7 @@ Generic runtime behavior comes from pinned packages. The local `my` package rema
 | Diagnostics and preview/apply fixes | `@narumitw/pi-lsp` | Provides `lsp_diagnostics` and `lsp_fix`; mutating fixes remain worktree-guarded |
 | Named child agents | `@gotgenes/pi-subagents` | One `subagent` call starts one agent; background calls return IDs for later polling |
 | Allow/ask/deny policy | `@gotgenes/pi-permission-system` | Gates model-facing tools, paths, shell commands, and forwarded child requests |
-| Parent command containment | `pi-sandbox` | Bubblewrap containment is parent-only because its manager is process-global |
+| Parent command containment | `pi-sandbox` | Bubblewrap containment is parent-only because its manager is process-global; Linux also requires `ripgrep`, `bubblewrap`, and `socat` |
 | Main-session modes, handoff, BTW, and session query | filtered `pi-amplike` | Amp permissions, subagents, prompts, themes, and legacy web skills are not loaded |
 | Structured development methods | `obra/superpowers` | Full pinned package, including the session bootstrap |
 | Long-running iterations | `pi-ralph-wiggum` | Used by the custom `overnight-improve` workflow |
@@ -44,7 +44,7 @@ Interactive browser automation remains opt-in rather than a default dependency.
 
 Each `subagent` invocation supplies one self-contained `prompt`, a 3–5 word `description`, and a `subagent_type`. Parallel work uses sibling calls with `run_in_background: true`; record each returned ID and poll with `get_subagent_result({ agent_id, wait: false })`. An explicit `model` is reserved for a user request or deliberate cross-family review.
 
-`rush`, `deep`, and `review` omit write/edit tools and add restrictive permission frontmatter. `smart` inherits the balanced global policy. Children cannot recursively dispatch more children.
+`rush`, `deep`, and `review` omit write/edit tools and add restrictive permission frontmatter. `smart` otherwise inherits the balanced global policy. Every named child hard-denies Bash commands containing unresolved `$` expansion so a curated reader cannot hide a sensitive operand from path extraction. Children cannot recursively dispatch more children.
 
 ## Permission and containment model
 
@@ -53,13 +53,14 @@ Each `subagent` invocation supplies one self-contained `prompt`, a 3–5 word `d
 - routine reads, linked-worktree edits, common builds/tests/lint, and configured web tools are allowed;
 - unknown tools, mutation-capable commands, external paths, and `lsp_fix` ask;
 - credentials, browser profiles, destructive commands, force operations, subprocess-capable search flags, and primary-checkout writes are denied;
+- parent Bash commands containing `$` expansion ask even when their reader command is normally allowed; named children hard-deny that indirection;
 - `/permission-system` can enable temporary YOLO, which converts asks to allows but preserves explicit denies.
 
 The sandbox baseline in `ai/pi/config/sandbox.json` permits reviewed development registries and caches while denying credential and browser roots. It does not expose SSH/cloud credentials, browser cookies, Docker sockets, unrestricted Unix sockets, or blanket home-directory access.
 
 ### Important containment boundaries
 
-Bubblewrap is **parent-only**. Gotgenes children inherit permission-system and worktree-guard, but intentionally exclude `pi-sandbox`; concurrent in-process children cannot safely share its process-global manager. Child safety therefore depends on complete tool allowlists, permission forwarding, restrictive agent policy, and the worktree guard.
+Bubblewrap is **parent-only**. Gotgenes children inherit permission-system and worktree-guard, but intentionally exclude `pi-sandbox`; concurrent in-process children cannot safely share its process-global manager. Child safety therefore depends on complete tool allowlists, permission forwarding, restrictive agent policy, and the worktree guard. The variable-indirection deny closes the reviewed direct reader bypass, but child Bash is still not an OS isolation boundary and must not be treated as safe execution for untrusted commands.
 
 Sandbox wrapping applies to the parent command paths integrated by `pi-sandbox`, not every operation performed inside another extension:
 
@@ -123,6 +124,8 @@ Authentication, sessions, trust decisions, generated model catalogs, package cac
 
 ## Installation and rollout
 
+On Linux/WSL, the composed APT manifests install `ripgrep`, `bubblewrap`, and `socat`, which the sandbox runtime requires. Run the normal package bootstrap first when any is absent. macOS requires `ripgrep`; its OS sandbox implementation is built in. The Pi installer checks these dependencies before migration and fails closed rather than leaving a configured but disabled sandbox.
+
 Preview without mutation:
 
 ```bash
@@ -135,7 +138,9 @@ Apply from the canonical checkout:
 make ai
 ```
 
-The installer refuses a production-agent-dir apply when invoked from a different linked implementation worktree while the canonical checkout exists. Before integration, use an **isolated pre-integration smoke** with an absolute temporary `PI_CODING_AGENT_DIR`, separate XDG paths, and only a temporary owner-readable authentication copy. Delete the smoke directory afterward. After integration, run `make ai` again from the canonical checkout and inspect its identity-aware migration report.
+The installer refuses a production-agent-dir apply—including one reached through a resolved path alias—when invoked from a different linked implementation worktree while the canonical checkout exists. Before integration, use an **isolated pre-integration smoke** with an absolute temporary `PI_CODING_AGENT_DIR`, separate XDG paths, a temporary owner-readable authentication copy, and `$SMOKE_HOME/.dotfiles` linked to the reviewed checkout so the local `my` package remains available. Delete the smoke directory afterward. After integration, run `make ai` again from the canonical checkout and inspect its identity-aware migration report.
+
+The installer explicitly bootstraps any missing or mismatched version-pinned npm packages before running `pi update --extensions`. Pi intentionally skips pinned npm sources during ordinary updates, so update alone is not a first-install mechanism. The installer verifies exact package versions and confirms that Pi preserved the tracked package inventory.
 
 The migration converts the old whole-extension link to a real directory, preserves unrelated extension entries, and publishes only the two authored links. It removes only exact managed Amp settings links and only the `.permissions` key from valid Amp state. The exact legacy Brave `brave-search` directory is moved intact below `disabled-skills`; sibling skills, mismatches, and collisions are preserved.
 

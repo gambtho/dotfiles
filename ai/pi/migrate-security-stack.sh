@@ -74,13 +74,31 @@ retire_amp_permissions() {
   log_info "Removed retired Amp permissions while preserving other state at $path"
 }
 
+brave_skill_frontmatter_matches() {
+  local skill_file=$1
+  awk '
+    NR == 1 {
+      if ($0 != "---") exit 1
+      next
+    }
+    $0 == "---" {
+      closed = 1
+      exit found ? 0 : 1
+    }
+    /^name:[[:space:]]*brave-search[[:space:]]*$/ { found = 1 }
+    END {
+      if (!closed) exit 1
+    }
+  ' "$skill_file"
+}
+
 quarantine_legacy_brave_skill() {
   local source=$1 destination=$2 mode=$3
   valid_migration_mode "$mode" || return 2
   [[ -e "$source" || -L "$source" ]] || return 0
 
   if [[ ! -d "$source" || -L "$source" || ! -f "$source/SKILL.md" ]] ||
-    ! grep -Eq '^name:[[:space:]]*brave-search[[:space:]]*$' "$source/SKILL.md"; then
+    ! brave_skill_frontmatter_matches "$source/SKILL.md"; then
     log_warning "Preserving Brave skill candidate whose identity is not exact: $source"
     return 0
   fi

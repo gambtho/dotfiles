@@ -7,6 +7,8 @@ setup() {
   export DOTFILES="$REPO_ROOT"
   source "$REPO_ROOT/config/versions.env"
   mkdir -p "$HOME/.pi/agent"
+  stub_command bwrap 'exit 0'
+  stub_command socat 'exit 0'
 }
 
 snapshot_tree() {
@@ -30,6 +32,16 @@ if [[ "${1:-}" == --version ]]; then
   printf '%s\n' "$PI_VERSION"
 else
   printf '%s\n' "$*" >"$HOME/pi-invocation"
+  printf '%s\n' "$*" >>"$HOME/pi-invocations"
+  if [[ "${1:-}" == install && "${2:-}" == npm:*@* ]]; then
+    package_spec=${2#npm:}
+    package_version=${package_spec##*@}
+    package_name=${package_spec%@*}
+    package_root="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/npm/node_modules/$package_name"
+    mkdir -p "$package_root"
+    printf '{"name":"%s","version":"%s"}\n' "$package_name" "$package_version" \
+      >"$package_root/package.json"
+  fi
 fi
 SCRIPT
   chmod +x "$HOME/.local/bin/pi"
@@ -82,11 +94,36 @@ if [[ "\${1:-}" == --version ]]; then
   printf '%s\n' "$PI_VERSION"
 else
   printf '%s\n' "\$*" >"$HOME/pi-invocation"
+  if [[ "\${1:-}" == install && "\${2:-}" == npm:*@* ]]; then
+    package_spec=\${2#npm:}
+    package_version=\${package_spec##*@}
+    package_name=\${package_spec%@*}
+    package_root="\${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/npm/node_modules/\$package_name"
+    mkdir -p "\$package_root"
+    printf '{"name":"%s","version":"%s"}\\n' "\$package_name" "\$package_version" \\
+      >"\$package_root/package.json"
+  fi
 fi
 PI
 chmod +x "$HOME/.local/bin/pi"
 SCRIPT
   chmod +x "$STUB_BIN/npm"
+}
+
+@test "Pi installer fails before migration when sandbox dependencies are missing" {
+  export PI_VERSION
+  stub_existing_pi
+  rm "$STUB_BIN/socat"
+  local before after
+  before=$(snapshot_home)
+
+  run env HOME="$HOME" PATH="$PATH" PI_VERSION="$PI_VERSION" \
+    bash "$REPO_ROOT/ai/pi/install.sh" --check
+
+  after=$(snapshot_home)
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Pi sandbox requires"*socat* ]]
+  [ "$before" = "$after" ]
 }
 
 @test "Pi check mode changes no files with custom agent and XDG roots" {
@@ -139,6 +176,7 @@ SCRIPT
 @test "Pi installer publishes mutable files and individual authored links" {
   export PI_VERSION
   stub_existing_pi
+  stub_command install 'printf "shadow install invoked\\n" >"$HOME/shadow-install"; exit 99'
   cat >"$HOME/.pi/agent/settings.json" <<'JSON'
 {"theme":"custom","lastChangelogVersion":"seen","unknown":{"keep":true},"packages":["old"]}
 JSON
@@ -147,6 +185,7 @@ JSON
     bash "$REPO_ROOT/ai/pi/install.sh"
 
   [ "$status" -eq 0 ]
+  [ ! -e "$HOME/shadow-install" ]
   [ ! -L "$HOME/.pi/agent/settings.json" ]
   run jq -e '
     .theme == "custom"
@@ -294,6 +333,25 @@ EOF
   [ "$status" -eq 0 ]
 }
 
+@test "Pi installer explicitly installs missing pinned npm packages before updating" {
+  export PI_VERSION
+  stub_existing_pi
+
+  run env HOME="$HOME" PATH="$PATH" PI_VERSION="$PI_VERSION" \
+    bash "$REPO_ROOT/ai/pi/install.sh"
+
+  [ "$status" -eq 0 ]
+  for source in \
+    "npm:pi-web-access@$PI_WEB_ACCESS_VERSION" \
+    "npm:@narumitw/pi-lsp@$PI_LSP_VERSION" \
+    "npm:@gotgenes/pi-permission-system@$PI_PERMISSION_SYSTEM_VERSION" \
+    "npm:@gotgenes/pi-subagents@$PI_SUBAGENTS_VERSION"; do
+    run grep -Fx "install $source" "$HOME/pi-invocations"
+    [ "$status" -eq 0 ]
+  done
+  [ "$(tail -1 "$HOME/pi-invocations")" = "update --extensions" ]
+}
+
 @test "Pi filters Amp permissions subagents and legacy web resources" {
   run jq -e '
     [.packages[] | objects | select(.source == "npm:pi-amplike")][0] as $amp
@@ -427,6 +485,27 @@ EOF
     "$REPO_ROOT/ai/pi/extensions/worktree-guard.ts"
 }
 
+@test "Pi installer replaces a dangling recognized settings link with the baseline" {
+  export PI_VERSION
+  stub_existing_pi
+  local agent_dir="$TEST_ROOT/dangling-settings-agent"
+  local canonical="$TEST_ROOT/canonical-dotfiles"
+  mkdir -p "$agent_dir"
+  ln -s "$TEST_ROOT/retired-dotfiles" "$canonical"
+  ln -s "$canonical/ai/pi/settings.json" "$agent_dir/settings.json"
+
+  run env HOME="$HOME" PATH="$PATH" PI_VERSION="$PI_VERSION" \
+    DOTFILES="$canonical" PI_CODING_AGENT_DIR="$agent_dir" \
+    bash "$REPO_ROOT/ai/pi/install.sh"
+
+  [ "$status" -eq 0 ]
+  [ -f "$agent_dir/settings.json" ]
+  [ ! -L "$agent_dir/settings.json" ]
+  cmp "$REPO_ROOT/ai/pi/settings.json" "$agent_dir/settings.json"
+  [ ! -e "$agent_dir/settings.json.backup" ]
+  [[ "$output" != *"Backed up Pi settings"* ]]
+}
+
 @test "Pi installer replaces a dangling recognized modes link with the baseline" {
   export PI_VERSION
   stub_existing_pi
@@ -501,6 +580,19 @@ EOF
   assert_symlink_target "$permission_agent/extensions/pi-permission-system" "$foreign_permission"
   [ "$(cat "$foreign_permission/marker")" = foreign ]
   [ ! -e "$foreign_permission/config.json" ]
+
+  local agents_agent="$TEST_ROOT/foreign-agents-agent"
+  local foreign_agents="$TEST_ROOT/foreign-agents"
+  mkdir -p "$agents_agent" "$foreign_agents"
+  printf 'foreign\n' >"$foreign_agents/marker"
+  ln -s "$foreign_agents" "$agents_agent/agents"
+
+  run env HOME="$HOME" PATH="$PATH" PI_VERSION="$PI_VERSION" \
+    PI_CODING_AGENT_DIR="$agents_agent" bash "$REPO_ROOT/ai/pi/install.sh"
+  [ "$status" -ne 0 ]
+  assert_symlink_target "$agents_agent/agents" "$foreign_agents"
+  [ "$(cat "$foreign_agents/marker")" = foreign ]
+  [ ! -e "$foreign_agents/rush.md" ]
 }
 
 @test "Pi installer rejects relative custom agent directories before mutation" {
@@ -533,6 +625,18 @@ EOF
   [ "$status" -ne 0 ]
   [[ "$output" == *"canonical checkout"* ]]
   [ "$before" = "$after" ]
+
+  run env HOME="$HOME" PATH="$PATH" PI_VERSION="$PI_VERSION" DOTFILES="$canonical" \
+    PI_CODING_AGENT_DIR="$HOME/.pi/agent/." bash "$REPO_ROOT/ai/pi/install.sh"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"canonical checkout"* || "$output" == *"dot segments"* ]]
+
+  local agent_alias="$TEST_ROOT/production-agent-alias"
+  ln -s "$HOME/.pi/agent" "$agent_alias"
+  run env HOME="$HOME" PATH="$PATH" PI_VERSION="$PI_VERSION" DOTFILES="$canonical" \
+    PI_CODING_AGENT_DIR="$agent_alias" bash "$REPO_ROOT/ai/pi/install.sh"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"canonical checkout"* ]]
 
   run env HOME="$HOME" PATH="$PATH" PI_VERSION="$PI_VERSION" DOTFILES="$canonical" \
     PI_CODING_AGENT_DIR="$TEST_ROOT/isolated-agent" bash "$REPO_ROOT/ai/pi/install.sh"
@@ -633,6 +737,7 @@ EOF
   local mismatch_agent="$TEST_ROOT/mismatch-agent"
   local mismatch_source="$mismatch_agent/skills/pi-skills/brave-search"
   make_legacy_brave_skill "$mismatch_source" other-search
+  printf '\nname: brave-search\n' >>"$mismatch_source/SKILL.md"
 
   run_security_migration apply "$mismatch_agent" "$TEST_ROOT/amp/settings.json" "$REPO_ROOT"
   [ "$status" -eq 0 ]

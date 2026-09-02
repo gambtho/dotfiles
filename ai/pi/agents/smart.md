@@ -5,6 +5,9 @@ model: github-copilot/gpt-5.6-sol
 thinking: medium
 tools: read, write, edit, bash, grep, find, ls
 prompt_mode: append
+permission:
+  bash:
+    "*$*": deny
 ---
 
 Follow the inherited project instructions. Perform the focused review,
