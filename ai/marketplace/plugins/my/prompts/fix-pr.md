@@ -279,7 +279,7 @@ Identify connections:
 
 **Skip this section entirely if `DEEP_MODE` is not set.** The default behavior is to plan around reviewer + CI feedback only. Agent dispatch adds preemptive findings, which is useful when the user explicitly opted in but is noisy as a default — those agents are tuned for fresh code, and running them on a PR that already has reviewer comments tends to surface things reviewers chose to ignore.
 
-When `DEEP_MODE` is set, dispatch specialized reviewers in parallel with the `subagent` tool to surface issues that reviewers and CI may have missed. Use one call with mode `smart`, one task per relevant role, and a focused read-only prompt for each:
+When `DEEP_MODE` is set, dispatch specialized reviewers in parallel with the `subagent` tool to surface issues that reviewers and CI may have missed. Issue one sibling call per relevant role with a focused read-only `prompt`, a 3–5 word `description`, `subagent_type: smart`, and `run_in_background: true`:
 
 | Agent role | Purpose |
 |------------|---------|
@@ -295,7 +295,8 @@ For each agent, provide:
 
 **Important:**
 - Only dispatch agents relevant to the changes (e.g. skip silent-failure-hunter if there's no error handling code; skip pr-test-analyzer if the diff introduces no test files and no new untested functionality)
-- Launch all relevant agents in a single parallel call
+- Record each returned agent ID, then poll each with `get_subagent_result({ agent_id, wait: false })`
+- Poll without blocking unrelated work; after the workflow's collection budget, mark unfinished reports late/incomplete and ignore later notifications rather than claiming the agent was stopped
 - Incorporate agent findings into the plan as additional issues (clearly marked as "Proactive — not flagged by reviewers") in the Detailed Plan section
 - If agents are unavailable or fail, proceed without them — agent findings are supplementary
 

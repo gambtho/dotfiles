@@ -108,23 +108,69 @@ agent_frontmatter() {
   [ "$status" -eq 0 ]
 }
 
-@test "PR review batches are partitioned by mode" {
+@test "PR review fan-out is partitioned by named agent type" {
   local prompt="$REPO_ROOT/ai/marketplace/plugins/my/prompts/review-prs.md"
   run grep -F 'partition the selected PRs into `rush`, `smart`, and `deep` groups' "$prompt"
   [ "$status" -eq 0 ]
-  run grep -F 'never mix PRs requiring different modes in the same call' "$prompt"
+  run grep -F 'never mix PRs requiring different `subagent_type` values' "$prompt"
   [ "$status" -eq 0 ]
-  run grep -F 'up to 2 tasks when `RATE_LIMITED=true`' "$prompt"
+  run grep -F 'up to 2 sibling calls when `RATE_LIMITED=true`' "$prompt"
   [ "$status" -eq 0 ]
 }
 
-@test "personal workflows route through named modes instead of hard-coded routine models" {
-  run rg -n 'mode `smart`' \
+@test "Pi workflows contain no Amp batch or mode contract" {
+  run rg -n 'tasks:|one `subagent` tool call|mode `(rush|smart|deep|review)`|one parallel call' \
+    "$REPO_ROOT/ai/pi/AGENTS.md" \
+    "$REPO_ROOT/ai/marketplace/plugins/my/prompts/second-opinion.md" \
+    "$REPO_ROOT/ai/marketplace/plugins/my/prompts/fix-pr.md" \
+    "$REPO_ROOT/ai/marketplace/plugins/my/prompts/review-prs.md" \
+    "$REPO_ROOT/ai/marketplace/plugins/my/skills/polish-core/SKILL.md" \
+    "$REPO_ROOT/ai/marketplace/plugins/my/skills/improve/references/platforms.md"
+  [ "$status" -eq 1 ]
+}
+
+@test "Pi fan-out workflows dispatch sibling agents and poll without blocking" {
+  local workflow
+  for workflow in \
+    "$REPO_ROOT/ai/marketplace/plugins/my/prompts/fix-pr.md" \
+    "$REPO_ROOT/ai/marketplace/plugins/my/prompts/review-prs.md" \
+    "$REPO_ROOT/ai/marketplace/plugins/my/skills/polish-core/SKILL.md" \
+    "$REPO_ROOT/ai/marketplace/plugins/my/skills/improve/references/platforms.md"; do
+    run grep -F 'run_in_background: true' "$workflow"
+    [ "$status" -eq 0 ]
+    run grep -F 'get_subagent_result' "$workflow"
+    [ "$status" -eq 0 ]
+    run grep -F 'wait: false' "$workflow"
+    [ "$status" -eq 0 ]
+  done
+
+  run rg -n 'wait: true|after (90 seconds|5 minutes)|agent timed out' \
+    "$REPO_ROOT/ai/marketplace/plugins/my/prompts/fix-pr.md" \
+    "$REPO_ROOT/ai/marketplace/plugins/my/prompts/review-prs.md" \
+    "$REPO_ROOT/ai/marketplace/plugins/my/skills/polish-core/SKILL.md" \
+    "$REPO_ROOT/ai/marketplace/plugins/my/skills/improve/references/platforms.md"
+  [ "$status" -eq 1 ]
+}
+
+@test "second opinion dispatches one described named reviewer" {
+  local prompt="$REPO_ROOT/ai/marketplace/plugins/my/prompts/second-opinion.md"
+  run grep -F 'subagent_type: review' "$prompt"
+  [ "$status" -eq 0 ]
+  run grep -F 'subagent_type: deep' "$prompt"
+  [ "$status" -eq 0 ]
+  run grep -F 'description' "$prompt"
+  [ "$status" -eq 0 ]
+  run grep -F 'one foreground `subagent` call' "$prompt"
+  [ "$status" -eq 0 ]
+}
+
+@test "personal workflows route through named agent types" {
+  run rg -n 'subagent_type: smart' \
     "$REPO_ROOT/ai/marketplace/plugins/my/prompts/fix-pr.md" \
     "$REPO_ROOT/ai/marketplace/plugins/my/skills/polish-core/SKILL.md"
   [ "$status" -eq 0 ]
 
-  run rg -n 'mode `deep`' \
+  run rg -n 'subagent_type: deep' \
     "$REPO_ROOT/ai/marketplace/plugins/my/skills/improve/references/platforms.md"
   [ "$status" -eq 0 ]
 

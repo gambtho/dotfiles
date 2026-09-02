@@ -33,14 +33,14 @@ take precedence.
 
 ## Subagent model routing
 
-When subagents materially help and the user has not requested a specific model, choose the named mode by task shape:
+When subagents materially help, select the named `subagent_type` by task shape:
 
 - `rush`: bounded searches, inventories, and mechanical checks.
 - `smart`: normal code review, focused investigation, and implementation subtasks.
 - `deep`: architecture, security, difficult diagnosis, or broad cross-cutting analysis.
 - `review`: an independent second opinion from a different model family.
 
-Omit `mode` and `model` when the subagent should intentionally inherit the current session. Use an explicit `model` only when the user requests one or a workflow requires a different model family. A single `subagent` call applies one mode/model to every task in its batch; use separate calls when tasks need different models.
+Each `subagent` call launches exactly one agent and supplies a self-contained `prompt`, a 3–5 word `description`, and the selected `subagent_type`. Use an explicit `model` only when the user requests one or a workflow deliberately requires a different model family. For parallel work, issue sibling calls with `run_in_background: true`, record each returned agent ID, then poll with `get_subagent_result({ agent_id, wait: false })`; a collection budget does not stop unfinished agents.
 
 ## Worktree workflow
 

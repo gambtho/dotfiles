@@ -106,11 +106,12 @@ Walk the detection table against the repo root. Assemble the final checklist as 
    ```
    Filter to those that actually have reviews with comments (not just approvals).
 
-2. For the top 15 with comments (or top 5 if learnings already exist), use the `subagent` tool with mode `rush` (2-5 at a time, or 2 if RATE_LIMITED) to fetch and analyze review comments. Launch each batch in one parallel call. Each subagent should fetch and analyze 3-5 PRs via:
+2. For the top 15 with comments (or top 5 if learnings already exist), use sibling `subagent` calls with `subagent_type: rush` to fetch and analyze review comments. Give each call a self-contained `prompt`, a 3–5 word `description`, and `run_in_background: true`; issue up to 5 sibling calls at a time, or up to 2 sibling calls when `RATE_LIMITED=true`. Each subagent should fetch and analyze 3-5 PRs via:
    ```
    gh api repos/{OWNER}/{REPO}/pulls/{number}/reviews
    gh api repos/{OWNER}/{REPO}/pulls/{number}/comments
    ```
+   Record every returned agent ID, then poll each with `get_subagent_result({ agent_id, wait: false })`.
    Each agent should return:
    - Common tone patterns (direct? gentle? question-based?)
    - Types of feedback given (bugs, style, architecture, testing, etc.)
@@ -276,19 +277,19 @@ If any exist, remove them with `git worktree remove` (for any registered worktre
 
 **Goal**: Deep code review of each PR using parallel agents.
 
-Select the **mode per PR based on size category**; `ai/pi/modes.json` centrally controls the corresponding model and thinking level:
+Select the **`subagent_type` per PR based on size category**; the named agent centrally controls the corresponding model and thinking level:
 
-| Size Category | Mode | Rationale |
-|---------------|------|-----------|
+| Size Category | `subagent_type` | Rationale |
+|---------------|-----------------|-----------|
 | Lockfile-only | `rush` | Trivial changes, just check version sanity |
 | Small | `rush` | Fast and sufficient for small diffs |
 | Medium | `smart` | Good balance of depth and speed |
 | Large | `deep` | Needs careful analysis of impactful files |
 | Very Large | `deep` | Summary-only mode with deeper reasoning |
 
-Before invoking `subagent`, partition the selected PRs into `rush`, `smart`, and `deep` groups according to this table. Preserve the selected PR order within each group. Process every group in batches of up to 5 tasks, or up to 2 tasks when `RATE_LIMITED=true`. Make one parallel `subagent` call per batch with that group's mode, and never mix PRs requiring different modes in the same call.
+Before invoking `subagent`, partition the selected PRs into `rush`, `smart`, and `deep` groups according to this table. Preserve the selected PR order within each group. For each PR, issue one sibling call with a self-contained `prompt`, a 3–5 word `description`, the group's `subagent_type`, and `run_in_background: true`. Process up to 5 sibling calls per group at a time, or up to 2 sibling calls when `RATE_LIMITED=true`; never mix PRs requiring different `subagent_type` values in the same dispatch group. Record every returned agent ID and poll each with `get_subagent_result({ agent_id, wait: false })`.
 
-**Agent timeout guidance**: Give each agent a reasonable scope. If an agent has not returned after 5 minutes, do NOT block the pipeline — mark that PR as "review incomplete — agent timed out" in the report and continue with other results.
+**Collection-budget guidance**: Poll without blocking unrelated work. After the workflow's collection budget, continue without an unfinished result and mark that PR "review incomplete — result arrived late". This does not stop the agent; ignore a later notification for that report.
 
 ### Agent Prompt Template
 

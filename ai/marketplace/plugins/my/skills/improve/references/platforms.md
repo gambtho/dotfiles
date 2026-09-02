@@ -7,7 +7,7 @@ This reference defines the Pi-specific memory and subagent mechanics used by the
 | Concept | Pi implementation |
 |---|---|
 | Project conventions | Root `AGENTS.md`, falling back to `CLAUDE.md` when a project has not migrated |
-| Parallel reviewers | One `subagent` call with three self-contained tasks |
+| Parallel reviewers | Three sibling background `subagent` calls, one self-contained prompt each |
 | Memory path | `.pi/memory/improve_findings.md` in the project root |
 | Language idiom rules | The installed `polish-core/rules/` directory |
 
@@ -17,9 +17,9 @@ Read `.pi/memory/improve_findings.md` from the project root. If it does not exis
 
 ## Dispatch parallel reviewers
 
-Use one `subagent` tool call with a `tasks` array of three prompts: semantic/architectural, correctness/quality, and surface/dependencies. Each task must be self-contained because subagents do not share the parent conversation. Repeat the required priming reads, Phase 1 data, finding format, and output contract in every task.
+Issue three sibling `subagent` calls: semantic/architectural, correctness/quality, and surface/dependencies. Give each call a self-contained `prompt`, a 3–5 word `description`, `subagent_type: deep`, and `run_in_background: true`, because subagents do not share the parent conversation. Repeat the required priming reads, Phase 1 data, finding format, and output contract in every prompt. The correctness/quality agent should read the applicable language file from the installed `polish-core/rules/` directory.
 
-Use mode `deep`; the global Pi modes configuration selects its model and thinking level. The correctness/quality task should read the applicable language file from the installed `polish-core/rules/` directory.
+Record every returned agent ID, then poll each with `get_subagent_result({ agent_id, wait: false })`. Poll without blocking unrelated work; after the workflow's collection budget, mark unfinished reports late/incomplete and ignore later notifications rather than claiming those agents were stopped.
 
 ## Persist findings
 
