@@ -13,7 +13,7 @@ Provide a browser-based control plane for persistent Pi sessions running inside 
 - Run Piface inside Ubuntu 24.04 WSL, where Pi and the project worktrees already live.
 - Install Tailscale inside WSL. Remote access is unavailable whenever WSL is shut down; no Windows wake-up or proxy machinery is in scope.
 - Start Piface automatically whenever WSL's systemd user environment starts.
-- Install the published base package only, pinned to `piface==0.0.4` in a uv-managed Python 3.12 tool environment.
+- Install the published base package only, pinned to `piface==0.0.4` in a uv-managed Python 3.12 project environment with a retained `uv.lock` containing the complete resolved dependency set and distribution hashes.
 - Disable speech, text-to-speech, and direnv for the initial trial.
 - Use Tailscale Serve, never Funnel, as the only remote ingress.
 - Bind Piface itself to `127.0.0.1:7832`.
@@ -64,7 +64,8 @@ Defense-in-depth requirements:
 - The Piface unit receives no secrets through service-specific environment variables.
 - The service uses `UMask=0077`, `NoNewPrivileges=true`, and a private temporary directory where compatible with Pi/Piface operation.
 - Browser-created sessions target only paths already verified by `git worktree list` as linked worktrees.
-- The trial uses a disposable linked worktree for its first session.
+- The trial uses a disposable linked worktree and non-sensitive prompts/files for its first session.
+- Acceptance and rollback account for server-side Pi sessions/uploads and browser-side local/session storage, not only Piface's state file and journal.
 
 Systemd sandboxing must not be represented as complete containment. Piface and its Pi children intentionally need broad user-level access to repositories, Git common directories, Pi session/auth files, build tools, and caches. More restrictive filesystem isolation is deferred until observed access requirements can be measured.
 
@@ -90,11 +91,27 @@ Do not run `tailscale funnel`.
 
 ### Piface
 
-Install the pinned package without changing mise's default Python 3.14 runtime:
+Create a dedicated machine-local uv project at `~/.local/share/piface-runtime/` without changing mise's default Python 3.14 runtime. Its `pyproject.toml` is:
+
+```toml
+[project]
+name = "piface-runtime"
+version = "0.0.0"
+requires-python = ">=3.12,<3.13"
+dependencies = ["piface==0.0.4"]
+
+[tool.uv]
+package = false
+```
+
+Resolve before installing, retain the complete lock, inspect that every package comes from the expected registry with recorded distribution hashes, and then sync without permitting lock changes:
 
 ```bash
-uv tool install --python 3.12 'piface==0.0.4'
+uv lock --directory ~/.local/share/piface-runtime --python 3.12
+uv sync --directory ~/.local/share/piface-runtime --locked --no-dev
 ```
+
+The retained `pyproject.toml` and `uv.lock` are the machine-local trial installation record. Reinstallation must use `uv sync --locked`, not a fresh unconstrained `uv tool install` or `uvx` resolution. Record `uv tree --directory ~/.local/share/piface-runtime --locked` with the trial results.
 
 The machine-local unit lives at `~/.config/systemd/user/piface.service` and has this intended shape:
 
@@ -107,7 +124,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
-ExecStart=/usr/bin/mise exec -- %h/.local/bin/piface serve --host 127.0.0.1 --port 7832 --no-direnv --no-speech --no-tts
+ExecStart=/usr/bin/mise exec -- %h/.local/share/piface-runtime/.venv/bin/piface serve --host 127.0.0.1 --port 7832 --no-direnv --no-speech --no-tts
 Restart=on-failure
 RestartSec=5
 UMask=0077
@@ -120,15 +137,25 @@ WantedBy=default.target
 
 Before enabling the unit, validate it with `systemd-analyze --user verify`. Then run `systemctl --user daemon-reload` and `systemctl --user enable --now piface.service`. Logs are read through `journalctl --user -u piface.service`.
 
-`/usr/bin/mise exec` supplies the active mise toolchain to Piface and its child processes. The trial must verify that `pi --version` resolves to the configured Earendil Pi installation rather than installing or selecting `@mariozechner/pi-coding-agent` separately.
+`/usr/bin/mise exec` supplies the active mise toolchain to Piface and its child processes. A matching version string alone is insufficient proof of runtime identity. Before enabling the service, record the `mise exec` resolution of `pi`, resolve its symlinks, and read the owning npm package's name/version. After Piface creates the disposable trial session, inspect only the Pi child process's executable/cmdline and the `PI_CODING_AGENT_DIR` entry from `/proc/<pid>/environ` (or establish that it is unset and therefore defaults to `~/.pi/agent`). Do not dump the full child environment. The observed child must use the same Earendil CLI path/package and intended agent directory.
+
+## Persistence and sensitive data
+
+The evaluation intentionally creates durable data in more places than Piface's state file:
+
+- `~/.local/share/piface/state.json` stores Piface session metadata and upload references;
+- `~/.pi/agent/sessions/` stores Pi JSONL transcripts, tool results, and Piface uploads under session-local `uploads/_shared/` paths;
+- the browser origin stores theme/skin settings, recent files, session snapshots, composer drafts, per-session scratch text, and view state in `localStorage` and `sessionStorage`.
+
+Use non-sensitive prompts and files for the first trial. Acceptance inspects the permissions and expected contents of the server-side stores, samples the trial JSONL/journal for unintended credential or token retention, and inspects browser site storage for drafts/scratch/snapshots. It does not treat Pi transcripts as secret-free; they are expected to retain user prompts, tool results, and `!command` output. On a remote device, clearing browser site data for the Piface Tailscale origin is the supported complete client-side cleanup.
 
 ## Evaluation procedure
 
 The trial is accepted only after all of these checks pass:
 
-1. `piface --version` or package metadata reports exactly `0.0.4`, and the tool environment uses Python 3.12.
+1. The retained `uv.lock` contains a complete pinned resolution with distribution hashes, `uv sync --locked` succeeds without changing it, package metadata reports exactly Piface `0.0.4`, and the runtime environment uses Python 3.12.
 2. The Piface service is active and restart-on-failure works.
-3. The Piface process and child environment resolve Pi to the installed Earendil build (`pi --version` currently reports `0.84.4`).
+3. The preflight path/package record and the actual Piface-spawned Pi child cmdline identify the installed Earendil package, and the child uses the intended `~/.pi/agent` directory (explicitly or by verified default). `pi --version` currently reports `0.84.4`, but that string is supporting evidence only.
 4. Piface's health endpoint responds on `127.0.0.1:7832`.
 5. Socket inspection shows no Piface listener on `0.0.0.0`, `::`, or the WSL LAN address.
 6. Tailscale reports the WSL node online and Serve reports only a tailnet HTTPS proxy to `127.0.0.1:7832`.
@@ -137,8 +164,9 @@ The trial is accepted only after all of these checks pass:
 9. A session created in a disposable existing linked worktree can stream messages, steer/follow up, abort, display tool calls, answer extension permission dialogs, browse files, and render Git diffs.
 10. Piface rejects or operational procedure prevents use of a primary-checkout path. Because version 0.0.4 does not enforce this in its UI, this remains a documented manual gate during evaluation.
 11. Restarting `piface.service` restores a previously live non-ephemeral session and archived sessions remain readable.
-12. `journalctl` and Piface state are inspected for credentials, tokens, or unexpectedly retained command payloads before the trial is accepted.
-13. Stopping Piface makes the Serve URL fail closed at the backend; disabling the Serve route removes the tailnet endpoint.
+12. `journalctl`, Piface state, the disposable trial's Pi JSONL/upload directory, and browser site storage are inspected according to the persistence section before acceptance.
+13. The trial records the expected transcript and browser-retention behavior and verifies owner-only permissions for machine-local runtime/state files where applicable.
+14. Stopping Piface makes the Serve URL fail closed at the backend; disabling the Serve route removes the tailnet endpoint.
 
 Any Pi RPC incompatibility, missing model inventory, permission-dialog failure, unexpected LAN listener, credential disclosure, or primary-checkout mutation stops the rollout rather than being worked around silently.
 
@@ -149,8 +177,8 @@ Rollback preserves user data by default:
 1. Disable and stop Piface: `systemctl --user disable --now piface.service`.
 2. Remove the Tailscale Serve route.
 3. Remove the machine-local unit and run `systemctl --user daemon-reload`.
-4. Uninstall Piface with `uv tool uninstall piface`.
-5. Leave `~/.local/share/piface/state.json`, Pi sessions, and worktrees intact unless the operator explicitly chooses to delete them.
+4. Remove `~/.local/share/piface-runtime/` only after preserving its `pyproject.toml` and `uv.lock` with the evaluation record if reproducibility is still needed.
+5. By default, leave `~/.local/share/piface/state.json`, Pi sessions/uploads, browser site data, and worktrees intact. Full cleanup is a separate explicit action that deletes the disposable trial session/upload data, Piface state, and the Piface origin's browser site data after confirming nothing should be retained.
 6. Tailscale itself may remain installed for other use; removing the WSL tailnet node is a separate explicit action.
 
 ## Deferred work
@@ -159,8 +187,8 @@ Rollback preserves user data by default:
 
 If the evaluation succeeds, a separate reviewed change will:
 
-- add explicit Piface and, if desired, Tailscale version ownership;
-- add idempotent installation and machine-specific service publication;
+- add explicit Piface and, if desired, Tailscale version ownership, including the reviewed complete Python lock;
+- add idempotent locked installation and machine-specific service publication;
 - preserve mutable Piface state and authentication;
 - add installer, service, rollback, and platform tests;
 - document WSL lifecycle and the lack of application-level authentication.
