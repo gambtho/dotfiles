@@ -114,9 +114,9 @@ setup() {
     and $bash["git *"] == "ask"
     and $bash["*/git *"] == "ask"
     and $bash["git branch *"] == "allow"
-    and $bash["*/git branch *"] == "allow"
+    and ($bash | has("*/git branch *") | not)
     and $bash["git worktree *"] == "allow"
-    and $bash["*/git worktree *"] == "allow"
+    and ($bash | has("*/git worktree *") | not)
     and $bash["git commit *"] == "allow"
     and ($bash | has("git -C * worktree *") | not)
     and $bash["git fetch*"] == "ask"

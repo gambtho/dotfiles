@@ -64,13 +64,8 @@ permission:
     "git branch --show-current *": allow
     "git branch --list *": allow
     "git branch --merged *": allow
-    "*/git branch --show-current *": allow
-    "*/git branch --list *": allow
-    "*/git branch --merged *": allow
     "git worktree list *": allow
-    "*/git worktree list *": allow
     "git reflog show *": allow
-    "*/git reflog show *": allow
     "bats *": ask
     "make *": ask
     "npm *": ask
