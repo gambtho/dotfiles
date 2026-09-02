@@ -6,7 +6,6 @@ setup() {
   setup_dotfiles_test
   CONFIG_DIR="$REPO_ROOT/ai/pi/config"
   PERMISSION_CONFIG="$CONFIG_DIR/permission-system.json"
-  SANDBOX_CONFIG="$CONFIG_DIR/sandbox.json"
   SUBAGENT_CONFIG="$CONFIG_DIR/subagents.json"
   WEB_CONFIG="$CONFIG_DIR/web-search.json"
   SETTINGS="$REPO_ROOT/ai/pi/settings.json"
@@ -17,7 +16,6 @@ setup() {
   for config in \
     "$CONFIG_DIR/modes.json" \
     "$PERMISSION_CONFIG" \
-    "$SANDBOX_CONFIG" \
     "$SUBAGENT_CONFIG" \
     "$WEB_CONFIG"; do
     run jq empty "$config"
@@ -109,10 +107,10 @@ setup() {
   [ "$status" -eq 0 ]
 }
 
-@test "Pi permission Bash policy defaults to allow while guarding risky operations" {
+@test "Pi permission Bash policy asks for unmatched commands while guarding risky operations" {
   run jq -e '
     .permission.bash as $bash
-    | $bash["*"] == "allow"
+    | $bash["*"] == "ask"
     and $bash["git *"] == "ask"
     and $bash["*/git *"] == "ask"
     and $bash["gh *"] == "ask"
@@ -167,33 +165,6 @@ setup() {
   [ "$status" -eq 0 ]
 }
 
-@test "Pi sandbox is parent-only and denies credential and browser roots" {
-  run jq -e '
-    .enabled == true
-    and .permissionPromptTimeoutSeconds == 60
-    and .ignoreViolations == false
-    and .enableWeakerNestedSandbox == false
-    and .allowBrowserProcess == false
-    and .allowPty == false
-    and .network.allowLocalBinding == true
-    and .network.allowUnauthenticatedSocksProxy == false
-    and .network.allowAllUnixSockets == false
-    and .network.sshProxy == false
-    and (.network.allowedDomains | index("*") == null)
-    and (.filesystem.denyRead | index("/home") == null)
-    and (.filesystem.denyRead | index("/Users") == null)
-    and (.filesystem.allowRead | index("~/.config") == null)
-    and (.filesystem.allowRead | index("__PI_AGENT_DIR__/npm") != null)
-    and (.filesystem.allowRead | index("~/.ssh") == null)
-    and (.filesystem.allowWrite | index("~/.ssh") == null)
-    and (.filesystem.denyRead | index("~/.ssh") != null)
-    and (.filesystem.denyWrite | index("~/.ssh") != null)
-    and (.filesystem.denyRead | index("__PI_AGENT_DIR__/auth.json") != null)
-    and (.filesystem.denyWrite | index("__PI_AGENT_DIR__/auth.json") != null)
-  ' "$SANDBOX_CONFIG"
-  [ "$status" -eq 0 ]
-}
-
 @test "Pi web access uses keyless ordered search and local extraction" {
   run jq -e '
     .searchRouting.providers == ["exa", "duckduckgo"]
@@ -233,12 +204,13 @@ setup() {
         "npm:pi-amplike",
         "git:github.com/tmustier/pi-queue-steer@v0.2.0",
         "npm:pi-web-access@0.27.0",
-        "npm:@narumitw/pi-lsp@0.49.6",
-        "git:github.com/carderne/pi-sandbox@53bd1d64d896d4a6bfab3769023201891e76ba72"
+        "npm:@narumitw/pi-lsp@0.49.6"
       ]
     and all($excluded[]; . as $source | $sources | index($source) != null)
     and ($excluded | index("npm:@gotgenes/pi-permission-system@29.2.0") == null)
     and ($excluded | index("npm:@gotgenes/pi-subagents@21.2.0") == null)
+    and ($sources | map(select(contains("pi-sandbox"))) | length == 0)
+    and ($excluded | map(select(contains("pi-sandbox"))) | length == 0)
     and ($excluded | index("git:github.com/obra/superpowers@v6.3.0") == null)
   ' "$SUBAGENT_CONFIG" "$SETTINGS"
   [ "$status" -eq 0 ]
@@ -250,7 +222,7 @@ setup() {
       | (getpath($path) | keys[]) as $key
       | select($key | test("(api[_-]?key|token|secret|password|credential)"; "i"))]
     | length == 0
-  ' "$PERMISSION_CONFIG" "$SANDBOX_CONFIG" "$SUBAGENT_CONFIG" "$WEB_CONFIG"
+  ' "$PERMISSION_CONFIG" "$SUBAGENT_CONFIG" "$WEB_CONFIG"
   [ "$status" -eq 0 ]
 }
 

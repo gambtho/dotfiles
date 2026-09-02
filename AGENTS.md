@@ -16,7 +16,6 @@ ai/
     config/
       modes.json              # Mutable main-session mode baseline
       permission-system.json  # Balanced permission baseline
-      sandbox.json            # Parent Bubblewrap baseline
       subagents.json          # Child runtime defaults/exclusions
       web-search.json         # Keyless web routing baseline
     extensions/

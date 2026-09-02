@@ -56,7 +56,6 @@ list_pins() {
   printf 'npm pi-lsp %s\n' "$PI_LSP_VERSION"
   printf 'npm pi-subagents %s\n' "$PI_SUBAGENTS_VERSION"
   printf 'npm pi-permission-system %s\n' "$PI_PERMISSION_SYSTEM_VERSION"
-  printf 'git pi-sandbox %s\n' "$PI_SANDBOX_REF"
   printf 'artifact nerd-fonts %s\n' "$NERD_FONTS_VERSION"
   printf 'artifact nerd-font-cascadia-mono %s %s\n' "$NERD_FONTS_VERSION" "$NERD_FONT_CASCADIA_MONO_SHA256"
   printf 'artifact nerd-font-hack %s %s\n' "$NERD_FONTS_VERSION" "$NERD_FONT_HACK_SHA256"
@@ -177,7 +176,6 @@ check_pins() {
   check_npm_package pi-lsp @narumitw/pi-lsp "$PI_LSP_VERSION"
   check_npm_package pi-subagents @gotgenes/pi-subagents "$PI_SUBAGENTS_VERSION"
   check_npm_package pi-permission-system @gotgenes/pi-permission-system "$PI_PERMISSION_SYSTEM_VERSION"
-  check_git_ref pi-sandbox https://github.com/carderne/pi-sandbox.git "$PI_SANDBOX_REF"
   check_artifact_release nerd-fonts ryanoasis/nerd-fonts "$NERD_FONTS_VERSION"
   check_artifact_release herdr herdrdev/herdr "$HERDR_VERSION"
 }

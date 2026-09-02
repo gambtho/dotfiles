@@ -1,6 +1,5 @@
 apt-transport-https
 bats
-bubblewrap
 build-essential
 ca-certificates
 curl
@@ -22,7 +21,6 @@ pass
 ripgrep
 shellcheck
 shfmt
-socat
 sudo
 unzip
 wget

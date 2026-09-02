@@ -22,7 +22,6 @@ Generic runtime behavior comes from pinned packages. The local `my` package rema
 | Diagnostics and preview/apply fixes | `@narumitw/pi-lsp` | Provides `lsp_diagnostics` and `lsp_fix`; mutating fixes remain worktree-guarded |
 | Named child agents | `@gotgenes/pi-subagents` | One `subagent` call starts one agent; background calls return IDs for later polling |
 | Allow/ask/deny policy | `@gotgenes/pi-permission-system` | Gates model-facing tools, paths, shell commands, and forwarded child requests |
-| Parent command containment | `pi-sandbox` | Bubblewrap containment is parent-only because its manager is process-global; Linux also requires `ripgrep`, `bubblewrap`, and `socat` |
 | Main-session modes, handoff, BTW, and session query | filtered `pi-amplike` | Amp permissions, subagents, prompts, themes, and legacy web skills are not loaded |
 | Structured development methods | `obra/superpowers` | Full pinned package, including the session bootstrap |
 | Long-running iterations | `pi-ralph-wiggum` | Used by the custom `overnight-improve` workflow |
@@ -50,25 +49,23 @@ Each `subagent` invocation supplies one self-contained `prompt`, a 3–5 word `d
 
 `ai/pi/config/permission-system.json` is a balanced baseline:
 
-- routine tools and unmatched parent Bash commands are allowed inside the parent sandbox;
+- routine inspection, build, test, and validation commands are allowed, while unmatched Bash commands ask;
 - unknown tools, Git and GitHub mutations, remote shell/network commands, recursive deletion, external paths, and `lsp_fix` ask;
 - credentials, browser profiles, root deletion, force operations, subprocess-capable search flags, privilege escalation, and primary-checkout writes are denied;
 - common reader/output commands containing unresolved `$` expansion and direct environment-dump commands ask, while named children hard-deny all unresolved shell-variable indirection;
 - `/permission-system` can enable temporary YOLO, which converts asks to allows but preserves explicit denies.
 
-The sandbox baseline in `ai/pi/config/sandbox.json` permits reviewed development registries, caches, and installed Pi npm packages while denying credential and browser roots. It does not expose SSH/cloud credentials, browser cookies, Docker sockets, unrestricted Unix sockets, or blanket home-directory access.
-
 ### Important containment boundaries
 
-Bubblewrap is **parent-only**. Gotgenes children inherit permission-system and worktree-guard, but intentionally exclude `pi-sandbox`; concurrent in-process children cannot safely share its process-global manager. Child safety therefore depends on complete tool allowlists, permission forwarding, restrictive agent policy, and the worktree guard. The variable-indirection deny closes the reviewed direct reader bypass, but child Bash is still not an OS isolation boundary and must not be treated as safe execution for untrusted commands.
+Parent and child commands are not OS-contained. Gotgenes children inherit permission-system and worktree-guard, with restrictive agent policy and complete tool allowlists providing additional controls. The variable-indirection deny closes the reviewed direct reader bypass, but neither parent nor child Bash is a safe execution boundary for untrusted commands.
 
-Sandbox wrapping applies to the parent command paths integrated by `pi-sandbox`, not every operation performed inside another extension:
+Permission-system gates model-facing calls; an approved process can still read inherited environment variables, access files available to the user, open network connections, and spawn subprocesses. Path rules do not recursively constrain operations performed inside an allowed shell command or extension:
 
-- `/code run` executes through extension-internal `pi.exec()` and is not Bubblewrap-contained.
-- LSP server subprocesses are extension-internal and are not Bubblewrap-contained. Permission-system still gates the model-facing LSP call, and worktree-guard blocks a mutating fix targeting a primary checkout.
-- `pi-web-access network calls` are extension-internal and are not Bubblewrap-contained. The tracked config disables cookie use, remote hosted fetch providers, clone/media/image features, environment proxy trust, and SSRF range exceptions.
+- `/code run` executes through extension-internal `pi.exec()`.
+- LSP server subprocesses are extension-internal. Permission-system still gates the model-facing LSP call, and worktree-guard blocks a mutating fix targeting a primary checkout.
+- `pi-web-access network calls` are extension-internal. The tracked config disables cookie use, remote hosted fetch providers, clone/media/image features, environment proxy trust, and SSRF range exceptions.
 
-Bubblewrap preserves the parent process environment. The permission policy prompts for common direct environment-dump and variable-output forms, but an otherwise allowed program can still inspect inherited variables internally. Do not put secrets in the agent environment or describe these layers as a complete security boundary for untrusted code. Keep extension selection and package pins under review.
+Do not put secrets in the agent environment, approve commands you have not reviewed, enable YOLO for interactive work, or describe these controls as a security boundary for untrusted code. Keep extension selection and package pins under review.
 
 ## Worktree policy
 
@@ -89,7 +86,6 @@ ai/
     config/
       modes.json
       permission-system.json
-      sandbox.json
       subagents.json
       web-search.json
     extensions/
@@ -103,18 +99,17 @@ ai/
     skills/
 ```
 
-Immutable guidance, keybindings, named agents, and the two authored extensions are individual links. The installer owns these **six mutable runtime files** as regular machine-local files:
+Immutable guidance, keybindings, named agents, and the two authored extensions are individual links. The installer owns these **five mutable runtime files** as regular machine-local files:
 
 | Tracked baseline | Runtime destination | Routine install behavior |
 |---|---|---|
 | `ai/pi/settings.json` | `~/.pi/agent/settings.json` | merges only `.packages`; preserves every other runtime key |
 | `ai/pi/config/modes.json` | `~/.pi/agent/modes.json` | installs when missing; preserves drift |
 | `ai/pi/config/permission-system.json` | `~/.pi/agent/extensions/pi-permission-system/config.json` | renders the active agent auth path; preserves drift |
-| `ai/pi/config/sandbox.json` | `~/.pi/agent/sandbox.json` | renders the active agent auth path; preserves drift |
 | `ai/pi/config/subagents.json` | `~/.pi/agent/subagents.json` | installs when missing; preserves drift |
 | `ai/pi/config/web-search.json` | `$PI_CODING_AGENT_DIR/web-search.json`, `$XDG_CONFIG_HOME/pi/web-search.json`, or `~/.pi/web-search.json` | installs when missing; preserves drift |
 
-Use runtime commands such as `/permission-system`, `/sandbox`, and `/subagents:settings` for intentional machine-local changes. To back up differing files and restore every tracked baseline explicitly:
+Use runtime commands such as `/permission-system` and `/subagents:settings` for intentional machine-local changes. To back up differing files and restore every tracked baseline explicitly:
 
 ```bash
 PI_AI_RESET_MUTABLE_CONFIG=1 make ai
@@ -122,9 +117,11 @@ PI_AI_RESET_MUTABLE_CONFIG=1 make ai
 
 Authentication, sessions, trust decisions, generated model catalogs, package caches, permission logs, grants, and runtime credentials remain machine-local and untracked.
 
+During upgrade, the installer backs up and resets the permission policy to the tracked non-YOLO, unmatched-Bash-asks baseline, then removes the retired `pi-sandbox` child exclusion before reconciling packages. A previous `~/.pi/agent/sandbox.json` and cached package checkout are preserved as inactive machine-local state; neither is loaded once the package source is absent from `settings.json`. They may be deleted manually after restarting Pi if rollback is not needed.
+
 ## Installation and rollout
 
-On Linux/WSL, the composed APT manifests install `ripgrep`, `bubblewrap`, and `socat`, which the sandbox runtime requires. Run the normal package bootstrap first when any is absent. macOS requires `ripgrep`; its OS sandbox implementation is built in. The Pi installer checks these dependencies before migration and fails closed rather than leaving a configured but disabled sandbox.
+The composed Linux/WSL APT manifests install `ripgrep` for Pi search workflows. Pi does not install or require an OS sandbox runtime.
 
 Preview without mutation:
 
@@ -150,12 +147,11 @@ Before `overnight-improve`:
 
 1. Work in a clean linked worktree.
 2. Open `/permission-system`, enable YOLO temporarily, and verify status.
-3. Open `/sandbox`, verify enabled, and pre-approve each reviewed parent path/domain.
-4. Run a representative build/test gate through both layers.
-5. Treat any sandbox prompt timeout or permission deny as blocked.
-6. Disable permission-system YOLO and verify it is off during wrap-up.
+3. Run a representative build/test gate and resolve every permission denial before leaving the workflow unattended.
+4. Treat any permission denial or prompt timeout as blocked.
+5. Disable permission-system YOLO and verify it is off during wrap-up.
 
-YOLO never bypasses explicit denies or the sandbox. Children remain permission-enforced and worktree-guarded but are not Bubblewrap-contained.
+YOLO never bypasses explicit denies. Parent and child commands are not OS-contained; direct write/edit and mutating LSP calls remain worktree-guarded, but approved Bash commands can mutate a primary checkout. Use unattended mode only for reviewed code and commands.
 
 ## Validation
 

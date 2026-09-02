@@ -130,19 +130,19 @@ write_pi_prompts() {
   [[ "$output" == *"keybindings.json: valid JSON"* ]]
   [[ "$output" == *"config/modes.json: valid JSON"* ]]
   [[ "$output" == *"config/permission-system.json: valid JSON"* ]]
-  [[ "$output" == *"config/sandbox.json: valid JSON"* ]]
+  [[ "$output" != *"config/sandbox.json"* ]]
   [[ "$output" == *"config/subagents.json: valid JSON"* ]]
   [[ "$output" == *"config/web-search.json: valid JSON"* ]]
 }
 
 @test "validator rejects invalid tracked Pi JSON" {
   make_validator_repo
-  printf '{invalid\n' >"$VALIDATOR_REPO/ai/pi/config/sandbox.json"
+  printf '{invalid\n' >"$VALIDATOR_REPO/ai/pi/config/subagents.json"
 
   run bash "$VALIDATOR_REPO/bin/validate-ai"
 
   [ "$status" -ne 0 ]
-  [[ "$output" == *"config/sandbox.json: invalid JSON"* ]]
+  [[ "$output" == *"config/subagents.json: invalid JSON"* ]]
 }
 
 @test "validator rejects credential-like web configuration properties" {

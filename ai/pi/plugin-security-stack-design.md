@@ -2,7 +2,9 @@
 
 ## Status
 
-Approved after independent `/second-opinion` review and follow-up package analysis on 2026-09-01. The user accepted the review findings and selected a parent-only sandbox after verification showed that `pi-sandbox` is unsafe to bind into concurrent in-process child sessions. Amended on 2026-09-02 to use a relaxed-but-guarded parent Bash policy after the original unmatched-command fallback caused excessive approval prompts.
+**Superseded on 2026-09-02.** This document records the original rollout design; its `pi-sandbox` and Bubblewrap requirements are historical and are not the active security model. See `ai/README.md` for the current permission-only model.
+
+Originally approved after independent `/second-opinion` review and follow-up package analysis on 2026-09-01. The user accepted the review findings and selected a parent-only sandbox after verification showed that `pi-sandbox` is unsafe to bind into concurrent in-process child sessions. Amended on 2026-09-02 to use a relaxed-but-guarded parent Bash policy after the original unmatched-command fallback caused excessive approval prompts.
 
 ## Context
 

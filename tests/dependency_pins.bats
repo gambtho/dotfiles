@@ -33,7 +33,7 @@ setup() {
   [[ "$output" == *"npm pi-lsp 0.49.6"* ]]
   [[ "$output" == *"npm pi-subagents 21.2.0"* ]]
   [[ "$output" == *"npm pi-permission-system 29.2.0"* ]]
-  [[ "$output" == *"git pi-sandbox 53bd1d64d896d4a6bfab3769023201891e76ba72"* ]]
+  [[ "$output" != *"pi-sandbox"* ]]
   [[ "$output" == *"artifact nerd-fonts v3.4.0"* ]]
   [[ "$output" == *"artifact nerd-font-cascadia-mono v3.4.0 $NERD_FONT_CASCADIA_MONO_SHA256"* ]]
   [[ "$output" == *"artifact nerd-font-hack v3.4.0 $NERD_FONT_HACK_SHA256"* ]]
@@ -69,35 +69,38 @@ setup() {
     PI_WEB_ACCESS_VERSION \
     PI_LSP_VERSION \
     PI_SUBAGENTS_VERSION \
-    PI_PERMISSION_SYSTEM_VERSION \
-    PI_SANDBOX_REF; do
+    PI_PERMISSION_SYSTEM_VERSION; do
     run rg -l "^${key}=" "$REPO_ROOT" --glob '!docs/**' --glob '!tests/**'
     [ "$status" -eq 0 ]
     [ "$output" = "$REPO_ROOT/config/versions.env" ]
   done
 }
 
+@test "canonical pin manifest omits retired Pi sandbox" {
+  run rg '^PI_SANDBOX_REF=' "$REPO_ROOT/config/versions.env"
+  [ "$status" -eq 1 ]
+}
+
 @test "Pi package settings match the canonical pin manifest" {
   local versions="$REPO_ROOT/config/versions.env"
   local settings="$REPO_ROOT/ai/pi/settings.json"
-  local queue web lsp subagents permissions sandbox
+  local queue web lsp subagents permissions
   queue=$(awk -F= '$1 == "PI_QUEUE_STEER_REF" { print $2 }' "$versions")
   web=$(awk -F= '$1 == "PI_WEB_ACCESS_VERSION" { print $2 }' "$versions")
   lsp=$(awk -F= '$1 == "PI_LSP_VERSION" { print $2 }' "$versions")
   subagents=$(awk -F= '$1 == "PI_SUBAGENTS_VERSION" { print $2 }' "$versions")
   permissions=$(awk -F= '$1 == "PI_PERMISSION_SYSTEM_VERSION" { print $2 }' "$versions")
-  sandbox=$(awk -F= '$1 == "PI_SANDBOX_REF" { print $2 }' "$versions")
 
   run jq -e \
     --arg queue "git:github.com/tmustier/pi-queue-steer@$queue" \
     --arg web "npm:pi-web-access@$web" \
     --arg lsp "npm:@narumitw/pi-lsp@$lsp" \
     --arg subagents "npm:@gotgenes/pi-subagents@$subagents" \
-    --arg permissions "npm:@gotgenes/pi-permission-system@$permissions" \
-    --arg sandbox "git:github.com/carderne/pi-sandbox@$sandbox" '
+    --arg permissions "npm:@gotgenes/pi-permission-system@$permissions" '
       [.packages[] | if type == "string" then . else .source end] as $sources
-      | all([$queue, $web, $lsp, $subagents, $permissions, $sandbox][];
+      | all([$queue, $web, $lsp, $subagents, $permissions][];
           . as $expected | $sources | index($expected) != null)
+      and ($sources | map(select(contains("pi-sandbox"))) | length == 0)
     ' "$settings"
   [ "$status" -eq 0 ]
 }
@@ -135,7 +138,6 @@ setup() {
 case "\$*" in
   *prezto*) printf '%s\tHEAD\n' '$PREZTO_REF' ;;
   *zsh-defer*) printf '%s\tHEAD\n' '$ZSH_DEFER_REF' ;;
-  *carderne/pi-sandbox*) printf '%s\tHEAD\n' '53bd1d64d896d4a6bfab3769023201891e76ba72' ;;
 esac
 SCRIPT
   chmod +x "$STUB_BIN/git"
@@ -175,7 +177,7 @@ SCRIPT
   [[ "$output" == *"current npm pi-lsp 0.49.6"* ]]
   [[ "$output" == *"current npm pi-subagents 21.2.0"* ]]
   [[ "$output" == *"current npm pi-permission-system 29.2.0"* ]]
-  [[ "$output" == *"current git pi-sandbox 53bd1d64d896d4a6bfab3769023201891e76ba72"* ]]
+  [[ "$output" != *"pi-sandbox"* ]]
 }
 
 @test "versions check reports artifact release lookup failures clearly" {

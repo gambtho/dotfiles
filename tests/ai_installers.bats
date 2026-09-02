@@ -7,8 +7,6 @@ setup() {
   export DOTFILES="$REPO_ROOT"
   source "$REPO_ROOT/config/versions.env"
   mkdir -p "$HOME/.pi/agent"
-  stub_command bwrap 'exit 0'
-  stub_command socat 'exit 0'
 }
 
 snapshot_tree() {
@@ -53,7 +51,8 @@ seed_mutable_pi_drift() {
   mkdir -p "$agent_dir/extensions/pi-permission-system" "$(dirname "$web_config")"
   printf '{"theme":"custom","unknown":true,"packages":["old"]}\n' >"$agent_dir/settings.json"
   printf '{"custom":"modes"}\n' >"$agent_dir/modes.json"
-  printf '{"custom":"permission"}\n' >"$agent_dir/extensions/pi-permission-system/config.json"
+  printf '{"yoloMode":false,"permission":{"bash":{"*":"ask"}},"custom":"permission"}\n' \
+    >"$agent_dir/extensions/pi-permission-system/config.json"
   printf '{"custom":"sandbox"}\n' >"$agent_dir/sandbox.json"
   printf '{"custom":"subagents"}\n' >"$agent_dir/subagents.json"
   printf '{"custom":"web"}\n' >"$web_config"
@@ -110,22 +109,6 @@ SCRIPT
   chmod +x "$STUB_BIN/npm"
 }
 
-@test "Pi installer fails before migration when sandbox dependencies are missing" {
-  export PI_VERSION
-  stub_existing_pi
-  rm "$STUB_BIN/socat"
-  local before after
-  before=$(snapshot_home)
-
-  run env HOME="$HOME" PATH="$PATH" PI_VERSION="$PI_VERSION" \
-    bash "$REPO_ROOT/ai/pi/install.sh" --check
-
-  after=$(snapshot_home)
-  [ "$status" -ne 0 ]
-  [[ "$output" == *"Pi sandbox requires"*socat* ]]
-  [ "$before" = "$after" ]
-}
-
 @test "Pi check mode changes no files with custom agent and XDG roots" {
   local agent_dir="$TEST_ROOT/custom-agent"
   local xdg_dir="$TEST_ROOT/custom-xdg"
@@ -162,7 +145,7 @@ SCRIPT
   [[ "$output" == *"$agent_dir/extensions/herdr-agent-state.ts"* ]]
   [[ "$output" == *"$agent_dir/extensions/worktree-guard.ts"* ]]
   [[ "$output" == *"$agent_dir/extensions/pi-permission-system/config.json"* ]]
-  [[ "$output" == *"$agent_dir/sandbox.json"* ]]
+  [[ "$output" != *"$agent_dir/sandbox.json"* ]]
   [[ "$output" == *"$agent_dir/subagents.json"* ]]
   [[ "$output" == *"$agent_dir/web-search.json"* ]]
   [[ "$output" == *"reconcile Pi packages"* ]]
@@ -209,17 +192,12 @@ JSON
     "$REPO_ROOT/ai/pi/extensions/worktree-guard.ts"
 
   cmp "$REPO_ROOT/ai/pi/config/modes.json" "$HOME/.pi/agent/modes.json"
-  run jq -e --arg auth "$HOME/.pi/agent/auth.json" '
-    (.filesystem.denyRead | index($auth) != null)
-    and (.filesystem.denyWrite | index($auth) != null)
-  ' "$HOME/.pi/agent/sandbox.json"
-  [ "$status" -eq 0 ]
+  [ ! -e "$HOME/.pi/agent/sandbox.json" ]
   cmp "$REPO_ROOT/ai/pi/config/subagents.json" "$HOME/.pi/agent/subagents.json"
   cmp "$REPO_ROOT/ai/pi/config/web-search.json" "$XDG_CONFIG_HOME/pi/web-search.json"
   [ "$(stat -c '%a' "$HOME/.pi/agent/settings.json")" = 644 ]
   [ "$(stat -c '%a' "$HOME/.pi/agent/modes.json")" = 644 ]
   [ "$(stat -c '%a' "$HOME/.pi/agent/extensions/pi-permission-system/config.json")" = 644 ]
-  [ "$(stat -c '%a' "$HOME/.pi/agent/sandbox.json")" = 600 ]
   [ "$(stat -c '%a' "$HOME/.pi/agent/subagents.json")" = 600 ]
   [ "$(stat -c '%a' "$XDG_CONFIG_HOME/pi/web-search.json")" = 600 ]
   [ "$(stat -c '%a' "$HOME/.pi/agent/extensions/pi-permission-system")" = 700 ]
@@ -328,8 +306,90 @@ EOF
     and ($sources | index("npm:@narumitw/pi-lsp@0.49.6")) != null
     and ($sources | index("npm:@gotgenes/pi-subagents@21.2.0")) != null
     and ($sources | index("npm:@gotgenes/pi-permission-system@29.2.0")) != null
-    and ($sources | index("git:github.com/carderne/pi-sandbox@53bd1d64d896d4a6bfab3769023201891e76ba72")) != null
+    and ($sources | map(select(contains("pi-sandbox"))) | length == 0)
   ' "$REPO_ROOT/ai/pi/settings.json"
+  [ "$status" -eq 0 ]
+}
+
+@test "Pi installer resets permissions before disabling sandbox" {
+  export PI_VERSION
+  stub_existing_pi
+  local permission="$HOME/.pi/agent/extensions/pi-permission-system/config.json"
+  mkdir -p "$(dirname "$permission")"
+  printf '{"yoloMode":true,"permission":{"bash":{"*":"allow"}}}\n' >"$permission"
+  jq '.excludedExtensionPackages += ["git:github.com/carderne/pi-sandbox@53bd1d64d896d4a6bfab3769023201891e76ba72"]' \
+    "$REPO_ROOT/ai/pi/config/subagents.json" >"$HOME/.pi/agent/subagents.json"
+  jq '.packages += ["git:github.com/carderne/pi-sandbox@53bd1d64d896d4a6bfab3769023201891e76ba72"]' \
+    "$REPO_ROOT/ai/pi/settings.json" >"$HOME/.pi/agent/settings.json"
+  printf '{"custom":"retired policy"}\n' >"$HOME/.pi/agent/sandbox.json"
+
+  run env HOME="$HOME" PATH="$PATH" PI_VERSION="$PI_VERSION" \
+    bash "$REPO_ROOT/ai/pi/install.sh"
+
+  [ "$status" -eq 0 ]
+  run jq -e '.yoloMode == false and .permission.bash["*"] == "ask"' "$permission"
+  [ "$status" -eq 0 ]
+  run jq -e '
+    [.excludedExtensionPackages[] | select(contains("pi-sandbox"))] | length == 0
+  ' "$HOME/.pi/agent/subagents.json"
+  [ "$status" -eq 0 ]
+  run jq -e '
+    [.packages[] | if type == "string" then . else .source end]
+    | map(select(contains("pi-sandbox"))) | length == 0
+  ' "$HOME/.pi/agent/settings.json"
+  [ "$status" -eq 0 ]
+  [ "$(jq -r .custom "$HOME/.pi/agent/sandbox.json")" = "retired policy" ]
+  [ "$(find "$HOME/.pi/agent" -name '*.backup*' | wc -l)" -eq 2 ]
+
+  run env HOME="$HOME" PATH="$PATH" PI_VERSION="$PI_VERSION" \
+    bash "$REPO_ROOT/ai/pi/install.sh"
+  [ "$status" -eq 0 ]
+  [ "$(find "$HOME/.pi/agent" -name '*.backup*' | wc -l)" -eq 2 ]
+}
+
+@test "Pi installer replaces malformed or partial permissions during sandbox retirement" {
+  export PI_VERSION
+  stub_existing_pi
+  local permission="$HOME/.pi/agent/extensions/pi-permission-system/config.json"
+  mkdir -p "$(dirname "$permission")"
+
+  local policy
+  for policy in '{invalid' '{"yoloMode":true}'; do
+    printf '%s\n' "$policy" >"$permission"
+    jq '.packages += ["git:github.com/carderne/pi-sandbox@53bd1d64d896d4a6bfab3769023201891e76ba72"]' \
+      "$REPO_ROOT/ai/pi/settings.json" >"$HOME/.pi/agent/settings.json"
+
+    run env HOME="$HOME" PATH="$PATH" PI_VERSION="$PI_VERSION" \
+      bash "$REPO_ROOT/ai/pi/install.sh"
+
+    [ "$status" -eq 0 ]
+    run jq -e '.yoloMode == false and .permission.bash["*"] == "ask"' "$permission"
+    [ "$status" -eq 0 ]
+    run jq -e '
+      [.packages[] | if type == "string" then . else .source end]
+      | map(select(contains("pi-sandbox"))) | length == 0
+    ' "$HOME/.pi/agent/settings.json"
+    [ "$status" -eq 0 ]
+  done
+}
+
+@test "Pi installer refuses malformed package entries before disabling sandbox" {
+  export PI_VERSION
+  stub_existing_pi
+  local permission="$HOME/.pi/agent/extensions/pi-permission-system/config.json"
+  mkdir -p "$(dirname "$permission")"
+  printf '{"yoloMode":true,"permission":{"bash":{"*":"allow"}}}\n' >"$permission"
+  jq '.packages += [42, "git:github.com/carderne/pi-sandbox@53bd1d64d896d4a6bfab3769023201891e76ba72"]' \
+    "$REPO_ROOT/ai/pi/settings.json" >"$HOME/.pi/agent/settings.json"
+
+  run env HOME="$HOME" PATH="$PATH" PI_VERSION="$PI_VERSION" \
+    bash "$REPO_ROOT/ai/pi/install.sh"
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Cannot safely inspect Pi package inventory"* ]]
+  run jq -e '
+    [.packages[] | strings | select(contains("pi-sandbox"))] | length == 1
+  ' "$HOME/.pi/agent/settings.json"
   [ "$status" -eq 0 ]
 }
 
@@ -368,11 +428,11 @@ EOF
   [ "$status" -eq 0 ]
 }
 
-@test "Pi loads permission-system before sandbox and enables code actions" {
+@test "Pi loads permission-system and enables code actions without sandbox" {
   run jq -e '
     [.packages[] | if type == "string" then . else .source end] as $sources
-    | ($sources | index("npm:@gotgenes/pi-permission-system@29.2.0"))
-      < ($sources | index("git:github.com/carderne/pi-sandbox@53bd1d64d896d4a6bfab3769023201891e76ba72"))
+    | ($sources | index("npm:@gotgenes/pi-permission-system@29.2.0")) != null
+    and ($sources | map(select(contains("pi-sandbox"))) | length == 0)
     and ([.packages[] | objects | select(.source == "git:github.com/tmustier/pi-extensions")][0].extensions
       | index("code-actions/index.ts")) != null
   ' "$REPO_ROOT/ai/pi/settings.json"
@@ -433,24 +493,20 @@ EOF
   [ -f "$HOME/.pi/agent/settings.json.backup" ]
   [ -f "$HOME/.pi/agent/modes.json.backup" ]
   [ -f "$HOME/.pi/agent/extensions/pi-permission-system/config.json.backup" ]
-  [ -f "$HOME/.pi/agent/sandbox.json.backup" ]
+  [ ! -e "$HOME/.pi/agent/sandbox.json.backup" ]
+  [ "$(jq -r .custom "$HOME/.pi/agent/sandbox.json")" = sandbox ]
   [ -f "$HOME/.pi/agent/subagents.json.backup" ]
   [ -f "$XDG_CONFIG_HOME/pi/web-search.json.backup" ]
   cmp "$REPO_ROOT/ai/pi/settings.json" "$HOME/.pi/agent/settings.json"
   cmp "$REPO_ROOT/ai/pi/config/modes.json" "$HOME/.pi/agent/modes.json"
-  run jq -e --arg auth "$HOME/.pi/agent/auth.json" '
-    (.filesystem.denyRead | index($auth) != null)
-    and (.filesystem.denyWrite | index($auth) != null)
-  ' "$HOME/.pi/agent/sandbox.json"
-  [ "$status" -eq 0 ]
   cmp "$REPO_ROOT/ai/pi/config/subagents.json" "$HOME/.pi/agent/subagents.json"
   cmp "$REPO_ROOT/ai/pi/config/web-search.json" "$XDG_CONFIG_HOME/pi/web-search.json"
-  [ "$(find "$HOME" -name '*.backup*' | wc -l)" -eq 6 ]
+  [ "$(find "$HOME" -name '*.backup*' | wc -l)" -eq 5 ]
 
   run env HOME="$HOME" PATH="$PATH" PI_VERSION="$PI_VERSION" \
     PI_AI_RESET_MUTABLE_CONFIG=1 bash "$REPO_ROOT/ai/pi/install.sh"
   [ "$status" -eq 0 ]
-  [ "$(find "$HOME" -name '*.backup*' | wc -l)" -eq 6 ]
+  [ "$(find "$HOME" -name '*.backup*' | wc -l)" -eq 5 ]
 }
 
 @test "Pi installer converts recognized legacy links without discarding readable state" {
