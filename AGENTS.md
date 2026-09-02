@@ -9,21 +9,26 @@ This repository manages Pi as the coding-agent harness under `ai/`:
 ```text
 ai/
   pi/
-    settings.json             # GitHub Copilot provider and package inventory
-    permissions.json          # Conservative pi-amplike Bash allow policy
-    modes.json                # Central subagent model/thinking routing
+    settings.json             # First-install/reset baseline; package inventory is authoritative
     keybindings.json          # Global Pi shortcuts
     AGENTS.md                 # Global working agreement
+    agents/                   # Named gotgenes subagent definitions
+    config/
+      modes.json              # Mutable main-session mode baseline
+      permission-system.json  # Balanced permission baseline
+      sandbox.json            # Parent Bubblewrap baseline
+      subagents.json          # Child runtime defaults/exclusions
+      web-search.json         # Keyless web routing baseline
     extensions/
       worktree-guard.ts       # Blocks direct writes in primary checkouts
-    install.sh                # Pinned Pi install and config linking
+    install.sh                # Pinned Pi install and runtime reconciliation
   marketplace/plugins/my/    # Local personal Pi package
     prompts/                  # Slash-command prompt templates
     skills/                   # On-demand Agent Skills
     package.json              # Pi resource manifest
 ```
 
-Run `make ai` or `bash ai/pi/install.sh`. The installer links authored configuration into `~/.pi/agent/`, reconciles packages, and leaves authentication, sessions, trust decisions, package caches, and generated model catalogs machine-local.
+Run `make ai` or `bash ai/pi/install.sh`. The installer links immutable authored resources, publishes runtime-mutated settings and security configuration as regular machine-local files, reconciles packages, and leaves authentication, sessions, trust decisions, package caches, logs, and generated model catalogs machine-local. Tracked baselines such as `ai/pi/config/modes.json` and `ai/pi/config/permission-system.json` are first-install/reset inputs, not live runtime files.
 
 Pi authenticates directly to the GitHub Copilot subscription through `/login`. Select any enabled Copilot model with `/model`; press Ctrl+S in the picker to save it as the startup default.
 
@@ -50,7 +55,7 @@ Pi authenticates directly to the GitHub Copilot subscription through `/login`. S
 
 ## Conventions
 
-- Keep Pi configuration in this repository, not directly under `~/.pi/agent/`.
+- Keep authored Pi baselines in this repository; use runtime commands for mutable machine-local files under `~/.pi/agent/`.
 - Never commit `auth.json`, sessions, trust decisions, generated model catalogs, or package caches.
 - Language rules live in `ai/marketplace/plugins/my/skills/polish-core/rules/`.
 - After changing Pi configuration or package resources, run `bash bin/validate-ai` and the relevant tests.

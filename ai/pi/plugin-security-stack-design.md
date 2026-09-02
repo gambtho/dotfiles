@@ -254,7 +254,7 @@ ai/pi/config/
 
 Tracked global agent definitions live under `ai/pi/agents/` and are individually linked or published to the active agent directory.
 
-Permission and sandbox baselines use a JSON string token for the Pi authentication path. The installer renders that token with the absolute active agent directory through jq before comparison/publication, so a custom `PI_CODING_AGENT_DIR` cannot move `auth.json` outside the deny policy.
+Permission and sandbox baselines use a JSON string token for the Pi authentication path. The installer renders that token in both JSON keys and values with the absolute active agent directory through jq before comparison/publication, so a custom `PI_CODING_AGENT_DIR` cannot move `auth.json` outside the deny policy. The permission runtime directory must be a real directory, never a symlink, and is enforced as `0700`.
 
 Runtime destinations are resolved from `PI_CODING_AGENT_DIR` rather than hard-coded. Web configuration follows `pi-web-access`'s `PI_CODING_AGENT_DIR` and XDG/legacy resolution order so the installer writes the same path the extension reads. When the canonical dotfiles checkout exists, an apply targeting the production agent directory fails if the installer source is a different linked worktree; pre-integration smoke must use an isolated HOME/agent directory.
 
@@ -491,7 +491,7 @@ Add failing tests that verify:
 
 Repository tests verify JSON validity, required secure knobs, declared tool actions, explicit child exclusions, absence of credentials, and absence of `provider`/`searchProvider` keys that would bypass the ordered web route. They do not copy the permission package's matcher into Bats.
 
-Post-install focused verification validates the permission config against the exact installed package's published JSON Schema, then loads its TypeScript through Pi's bundled jiti and exercises the actual deterministic `PermissionManager` for representative global, YOLO-preserves-deny, and per-agent decisions. Host smoke tests exercise the higher tool/path gate pipeline, child forwarding, and lifecycle behavior that direct manager calls do not cover.
+Post-install focused verification validates the permission config against the exact installed package's published JSON Schema, then loads its TypeScript through Pi's bundled jiti with Pi's extension-API entry supplied through jiti's alias mechanism and exercises the actual deterministic `PermissionManager` for representative global, YOLO-preserves-deny, and per-agent decisions. Host smoke tests exercise the higher tool/path gate pipeline, child forwarding, and lifecycle behavior that direct manager calls do not cover.
 
 Sandbox configuration tests verify that the parent policy names required Pi infrastructure, cache, and registry allowances; intentionally replaces the blanket home deny with narrow allows and explicit credential denies; omits dangerous broad socket/browser/credential access; and that `subagents.json` excludes the exact pinned sandbox source while retaining permission-system inheritance.
 
