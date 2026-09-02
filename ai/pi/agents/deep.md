@@ -15,6 +15,62 @@ permission:
     "fd *": ask
     "yq *": ask
     "git diff --ext-diff*": ask
+    "git branch *": ask
+    "*/git branch *": ask
+    "git worktree *": ask
+    "*/git worktree *": ask
+    "git add *": ask
+    "*/git add *": ask
+    "git commit *": ask
+    "*/git commit *": ask
+    "git switch *": ask
+    "*/git switch *": ask
+    "git merge *": ask
+    "*/git merge *": ask
+    "git rebase *": ask
+    "*/git rebase *": ask
+    "git cherry-pick *": ask
+    "*/git cherry-pick *": ask
+    "git revert *": ask
+    "*/git revert *": ask
+    "git stash *": ask
+    "*/git stash *": ask
+    "git tag *": ask
+    "*/git tag *": ask
+    "git reset *": ask
+    "*/git reset *": ask
+    "git rm *": ask
+    "*/git rm *": ask
+    "git mv *": ask
+    "*/git mv *": ask
+    "git format-patch *": ask
+    "*/git format-patch *": ask
+    "git apply *": ask
+    "*/git apply *": ask
+    "git am *": ask
+    "*/git am *": ask
+    "git bundle *": ask
+    "*/git bundle *": ask
+    "git fsck *": ask
+    "*/git fsck *": ask
+    "git reflog *": ask
+    "*/git reflog *": ask
+    "git notes *": ask
+    "*/git notes *": ask
+    "git bisect *": ask
+    "*/git bisect *": ask
+    "git sparse-checkout *": ask
+    "*/git sparse-checkout *": ask
+    "git branch --show-current *": allow
+    "git branch --list *": allow
+    "git branch --merged *": allow
+    "*/git branch --show-current *": allow
+    "*/git branch --list *": allow
+    "*/git branch --merged *": allow
+    "git worktree list *": allow
+    "*/git worktree list *": allow
+    "git reflog show *": allow
+    "*/git reflog show *": allow
     "bats *": ask
     "make *": ask
     "npm *": ask

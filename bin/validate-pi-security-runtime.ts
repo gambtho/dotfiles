@@ -237,9 +237,61 @@ try {
   checkBash(manager, "typeset -x", "ask");
   checkBash(manager, "command env", "ask");
   checkBash(manager, "git status", "allow");
-  checkBash(manager, "git commit -am message", "ask");
-  checkBash(manager, "/usr/bin/git commit -am message", "ask");
+  checkBash(manager, "git branch --show-current", "allow");
+  checkBash(manager, "git branch feature/example", "allow");
+  checkBash(manager, "git worktree add /tmp/example -b feature/example", "allow");
+  checkBash(manager, "/usr/bin/git worktree list", "allow");
+  checkBash(manager, "git worktree remove /tmp/example", "allow");
+  checkBash(manager, "git add README.md", "allow");
+  checkBash(manager, "git commit -am message", "allow");
+  checkBash(manager, "/usr/bin/git commit -am message", "allow");
+  checkBash(manager, "git fetch origin", "ask");
+  checkBash(manager, "git -C . pull --ff-only", "ask");
   checkBash(manager, "git push origin main", "ask");
+  checkBash(manager, "git clone https://example.com/repo.git", "ask");
+  checkBash(manager, "git --git-dir=.git push origin main", "ask");
+  checkBash(manager, "git -C . fetch origin status", "ask");
+  checkBash(manager, "git -C . -c 'alias.x=!printf bypass' x status", "ask");
+  checkBash(manager, "git -c core.sshCommand=false fetch origin", "ask");
+  checkBash(manager, "git send-pack origin HEAD:main", "ask");
+  checkBash(manager, "git submodule add https://example.com/repo.git vendor/repo", "ask");
+  checkBash(manager, "git maintenance run --task=prefetch", "ask");
+  checkBash(manager, "git credential fill", "ask");
+  checkBash(manager, "git -c 'alias.x=!printf bypass' x", "ask");
+  checkBash(manager, "git statusx", "ask");
+  checkBash(manager, "git branchx feature/example", "ask");
+  checkBash(manager, "git commitx -am message", "ask");
+  checkBash(manager, "git switch my-feature", "allow");
+  checkBash(manager, "git rm docs/my-file.md", "allow");
+  checkBash(manager, "git worktree remove /tmp/my-feature", "allow");
+  checkBash(manager, "git branch -D feature/example", "ask");
+  checkBash(manager, "git branch -f feature/example HEAD", "ask");
+  checkBash(manager, "git branch --del feature/example", "ask");
+  checkBash(manager, "git branch -M feature/example", "ask");
+  checkBash(manager, "git tag -a -f example HEAD", "ask");
+  checkBash(manager, "git switch -q -f feature/example", "ask");
+  checkBash(manager, "git switch -C feature/example", "ask");
+  checkBash(manager, "git reset --keep HEAD~1", "ask");
+  checkBash(manager, "git rm -f README.md", "ask");
+  checkBash(manager, "git rebase -i -x 'printf example' HEAD~2", "ask");
+  checkBash(manager, "git archive --rem=origin HEAD", "ask");
+  checkBash(manager, "git grep -Oless pattern", "ask");
+  checkBash(manager, "git grep -nOless pattern", "ask");
+  checkBash(manager, "git grep --open=less pattern", "ask");
+  checkBash(manager, "git grep --op=less pattern", "ask");
+  checkBash(manager, "git branch --format='%(refname)'", "allow");
+  checkBash(manager, "git tag --format='%(refname)'", "allow");
+  checkBash(manager, "git push --follow-tags origin main", "ask");
+  checkBash(manager, "git push --no-verify origin main", "ask");
+  checkBash(manager, "git push --repo=foo main", "ask");
+  checkBash(manager, "git diff --ext-d HEAD", "ask");
+  checkBash(manager, "git log --textc -p -1", "ask");
+  checkBash(manager, "git update-ref -d refs/heads/feature/example", "ask");
+  checkBash(manager, "git worktree remove --force /tmp/example", "ask");
+  checkBash(manager, "git -C . worktree remove --force /tmp/example", "ask");
+  checkBash(manager, "git commit --amend --no-edit", "ask");
+  checkBash(manager, "git -C . commit --amend --no-edit", "ask");
+  checkBash(manager, "git restore README.md", "ask");
   checkBash(manager, "gh pr create --title example", "ask");
   checkBash(manager, "/usr/bin/gh pr create --title example", "ask");
   checkBash(manager, "curl https://example.com", "ask");
@@ -266,9 +318,15 @@ try {
   const destructiveCommands = [
     "git push origin main --force",
     "git push -f origin main",
+    "git push -qf origin main",
+    "git push -fq origin main",
+    "git push +HEAD:main",
+    "git push origin +HEAD:main",
+    "git push --mirror origin",
     "git -C . push origin main --force",
     "/usr/bin/git -C . push origin main --force",
     "git reset -q --hard HEAD",
+    "git reset --har HEAD",
     "git --git-dir=.git reset -q --hard HEAD",
     "git clean -df",
     "git -C . clean -df",
@@ -317,6 +375,13 @@ try {
   for (const agentName of ["rush", "deep", "review"] as const) {
     expectState(`${agentName} write tool`, manager.getToolPermission("write", agentName), "deny");
     checkBash(manager, "git status", "allow", agentName);
+    checkBash(manager, "git branch --show-current", "allow", agentName);
+    checkBash(manager, "git worktree list --porcelain", "allow", agentName);
+    checkBash(manager, "git branch feature/example", "ask", agentName);
+    checkBash(manager, "git worktree add /tmp/example -b feature/example", "ask", agentName);
+    checkBash(manager, "git add README.md", "ask", agentName);
+    checkBash(manager, "git commit -am message", "ask", agentName);
+    checkBash(manager, "git reset --hard HEAD", "deny", agentName);
     checkBash(manager, "unknown-reader --version", "ask", agentName);
     checkBash(manager, "gh pr view 1", "ask", agentName);
     checkBash(manager, "make check", "ask", agentName);
@@ -339,6 +404,8 @@ try {
   await checkBashPath(yolo, "ls ~/.ssh", "deny", "smart");
   checkPath(yolo, "path_read", authPath, "deny");
   for (const agentName of ["rush", "deep", "review"] as const) {
+    checkBash(yolo, "git reset --hard HEAD", "deny", agentName);
+    checkBash(yolo, "git push -qf origin main", "deny", agentName);
     checkBash(yolo, "gh repo delete owner/repo", "deny", agentName);
     checkBash(yolo, "gh api repos/o/r --method DELETE", "deny", agentName);
   }

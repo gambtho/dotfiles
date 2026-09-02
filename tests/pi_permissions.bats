@@ -107,12 +107,24 @@ setup() {
   [ "$status" -eq 0 ]
 }
 
-@test "Pi permission Bash policy allows unmatched commands while guarding risky operations" {
+@test "Pi permission Bash policy allows local Git while guarding risky operations" {
   run jq -e '
     .permission.bash as $bash
     | $bash["*"] == "allow"
     and $bash["git *"] == "ask"
     and $bash["*/git *"] == "ask"
+    and $bash["git branch *"] == "allow"
+    and $bash["*/git branch *"] == "allow"
+    and $bash["git worktree *"] == "allow"
+    and $bash["*/git worktree *"] == "allow"
+    and $bash["git commit *"] == "allow"
+    and ($bash | has("git -C * worktree *") | not)
+    and $bash["git fetch*"] == "ask"
+    and $bash["git push*"] == "ask"
+    and $bash["git clone*"] == "ask"
+    and $bash["*git *branch * -D*"] == "ask"
+    and $bash["*git *worktree remove * -f*"] == "ask"
+    and $bash["*git *commit * --am*"] == "ask"
     and $bash["gh *"] == "ask"
     and $bash["*/gh *"] == "ask"
     and $bash["curl *"] == "ask"
@@ -130,13 +142,13 @@ setup() {
     and $bash.printenv == "ask"
     and $bash.export == "ask"
     and $bash["declare *-x*"] == "ask"
-    and $bash["git status*"] == "allow"
-    and $bash["git show *--ext-diff*"] == "ask"
-    and $bash["git show *--textconv*"] == "ask"
-    and $bash["git diff *--ext-diff*"] == "ask"
-    and $bash["git diff *--textconv*"] == "ask"
-    and $bash["git log *--ext-diff*"] == "ask"
-    and $bash["git log *--textconv*"] == "ask"
+    and $bash["git status *"] == "allow"
+    and $bash["git show *--ext-d*"] == "ask"
+    and $bash["git show *--textc*"] == "ask"
+    and $bash["git diff *--ext-d*"] == "ask"
+    and $bash["git diff *--textc*"] == "ask"
+    and $bash["git log *--ext-d*"] == "ask"
+    and $bash["git log *--textc*"] == "ask"
     and $bash["*rg *--pre*"] == "deny"
     and $bash["*fd *--exec*"] == "deny"
     and $bash["*fd *-x*"] == "deny"
@@ -146,9 +158,12 @@ setup() {
     and ($bash | has("*$*") | not)
     and $bash["*cat *$*"] == "ask"
     and $bash["*rg *$*"] == "ask"
-    and $bash["*git *push *--force*"] == "deny"
+    and $bash["*git *push *--for*"] == "deny"
     and $bash["*git *push -f*"] == "deny"
-    and $bash["*git *reset *--hard*"] == "deny"
+    and $bash["*git *push -qf*"] == "deny"
+    and $bash["*git *push * +*"] == "deny"
+    and $bash["*git *push *--mir*"] == "deny"
+    and $bash["*git *reset *--har*"] == "deny"
     and $bash["*git *clean -*f*"] == "deny"
     and $bash["*gh *repo delete*"] == "deny"
     and $bash["*gh *api *DELETE*"] == "deny"

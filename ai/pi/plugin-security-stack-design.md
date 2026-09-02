@@ -88,7 +88,7 @@ The global baseline uses a balanced posture:
 - unknown extension tools and MCP operations: `ask`;
 - paths outside the current working directory: `ask`, except Pi infrastructure reads handled by the package;
 - sensitive files and credential roots: `deny` across path-aware tools;
-- Bash: allow unmatched parent commands inside Bubblewrap; ask for Git/GitHub mutation, remote shell/network commands, recursive deletion, opaque wrappers, direct environment dumps, and common reader/output commands containing unresolved `$` expansion; deny root deletion, force operations, privilege escalation, subprocess-capable search flags, and explicitly forbidden credential paths. Risky command-family rules cover both bare and absolute executable spellings.
+- Bash: allow unmatched parent commands and common local Git subcommands; ask for unknown Git operations, remote and selected destructive Git operations, GitHub mutation, remote shell/network commands, recursive deletion, opaque wrappers, direct environment dumps, and common reader/output commands containing unresolved `$` expansion; deny root deletion, force operations, privilege escalation, subprocess-capable search flags, and explicitly forbidden credential paths. Risky command-family rules cover both bare and absolute executable spellings.
 
 Within a permission map, broad rules precede specific exceptions because the package uses last-match-wins semantics.
 
