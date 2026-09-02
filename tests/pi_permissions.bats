@@ -107,10 +107,10 @@ setup() {
   [ "$status" -eq 0 ]
 }
 
-@test "Pi permission Bash policy asks for unmatched commands while guarding risky operations" {
+@test "Pi permission Bash policy allows unmatched commands while guarding risky operations" {
   run jq -e '
     .permission.bash as $bash
-    | $bash["*"] == "ask"
+    | $bash["*"] == "allow"
     and $bash["git *"] == "ask"
     and $bash["*/git *"] == "ask"
     and $bash["gh *"] == "ask"

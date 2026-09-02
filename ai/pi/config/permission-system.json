@@ -129,7 +129,7 @@
       "*": "allow"
     },
     "bash": {
-      "*": "ask",
+      "*": "allow",
       "rm *": "ask",
       "*/rm *": "ask",
       "git *": "ask",

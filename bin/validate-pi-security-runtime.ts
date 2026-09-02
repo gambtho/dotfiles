@@ -226,9 +226,9 @@ try {
     "ask",
   );
 
-  checkBash(manager, "printf hello", "ask");
+  checkBash(manager, "printf hello", "allow");
   checkBash(manager, 'printf "$HOME"', "ask");
-  checkBash(manager, "node --version", "ask");
+  checkBash(manager, "node --version", "allow");
   checkBash(manager, "env", "ask");
   checkBash(manager, "/usr/bin/env", "ask");
   checkBash(manager, "printenv", "ask");
@@ -323,7 +323,7 @@ try {
     checkBash(manager, "gh repo delete owner/repo", "deny", agentName);
     checkBash(manager, "gh api repos/o/r --method DELETE", "deny", agentName);
   }
-  checkBash(manager, "unknown-tool --version", "ask", "smart");
+  checkBash(manager, "unknown-tool --version", "allow", "smart");
   for (const agentName of ["rush", "smart", "deep", "review"] as const) {
     checkBash(manager, 'cat "$SECRET_PATH"', "deny", agentName);
   }

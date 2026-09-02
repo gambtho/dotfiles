@@ -327,7 +327,7 @@ EOF
     bash "$REPO_ROOT/ai/pi/install.sh"
 
   [ "$status" -eq 0 ]
-  run jq -e '.yoloMode == false and .permission.bash["*"] == "ask"' "$permission"
+  run jq -e '.yoloMode == false and .permission.bash["*"] == "allow"' "$permission"
   [ "$status" -eq 0 ]
   run jq -e '
     [.excludedExtensionPackages[] | select(contains("pi-sandbox"))] | length == 0
@@ -363,7 +363,7 @@ EOF
       bash "$REPO_ROOT/ai/pi/install.sh"
 
     [ "$status" -eq 0 ]
-    run jq -e '.yoloMode == false and .permission.bash["*"] == "ask"' "$permission"
+    run jq -e '.yoloMode == false and .permission.bash["*"] == "allow"' "$permission"
     [ "$status" -eq 0 ]
     run jq -e '
       [.packages[] | if type == "string" then . else .source end]
