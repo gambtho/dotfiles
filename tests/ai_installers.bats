@@ -47,6 +47,29 @@ seed_mutable_pi_drift() {
   printf '{"custom":"web"}\n' >"$web_config"
 }
 
+make_legacy_brave_skill() {
+  local source=$1 name="${2:-brave-search}"
+  mkdir -p "$source"
+  cat >"$source/SKILL.md" <<EOF
+---
+name: $name
+description: Legacy search skill
+---
+EOF
+  printf 'preserve me\n' >"$source/payload.txt"
+}
+
+run_security_migration() {
+  local mode=$1 agent_dir=$2 amp_settings=$3
+  shift 3
+  run env REPO_ROOT="$REPO_ROOT" bash -c '
+    set -euo pipefail
+    source "$REPO_ROOT/bin/common.sh"
+    source "$REPO_ROOT/ai/pi/migrate-security-stack.sh"
+    migrate_pi_security_stack "$@"
+  ' _ "$mode" "$agent_dir" "$amp_settings" "$@"
+}
+
 stub_pi_install() {
   cat >"$STUB_BIN/npm" <<'SCRIPT'
 #!/usr/bin/env bash
@@ -514,6 +537,146 @@ EOF
   run env HOME="$HOME" PATH="$PATH" PI_VERSION="$PI_VERSION" DOTFILES="$canonical" \
     PI_CODING_AGENT_DIR="$TEST_ROOT/isolated-agent" bash "$REPO_ROOT/ai/pi/install.sh"
   [ "$status" -eq 0 ]
+}
+
+@test "Pi security migration removes exact managed Amp settings links" {
+  local agent_dir="$TEST_ROOT/migration-agent"
+  local amp_settings="$TEST_ROOT/amp/settings.json"
+  local current_root="$TEST_ROOT/current-root"
+  local canonical_root="$TEST_ROOT/canonical-root"
+  mkdir -p "$agent_dir" "$(dirname "$amp_settings")"
+
+  ln -s "$current_root/ai/pi/permissions.json" "$amp_settings"
+  run_security_migration apply "$agent_dir" "$amp_settings" "$current_root" "$canonical_root"
+  [ "$status" -eq 0 ]
+  [ ! -L "$amp_settings" ]
+
+  ln -s "$canonical_root/ai/pi/permissions.json" "$amp_settings"
+  run_security_migration apply "$agent_dir" "$amp_settings" "$current_root" "$canonical_root"
+  [ "$status" -eq 0 ]
+  [ ! -L "$amp_settings" ]
+}
+
+@test "Pi security migration preserves real and foreign Amp settings" {
+  local agent_dir="$TEST_ROOT/migration-agent"
+  local amp_settings="$TEST_ROOT/amp/settings.json"
+  local managed_root="$TEST_ROOT/managed-root"
+  mkdir -p "$agent_dir" "$(dirname "$amp_settings")"
+  printf '{"custom":true}\n' >"$amp_settings"
+
+  run_security_migration apply "$agent_dir" "$amp_settings" "$managed_root"
+  [ "$status" -eq 0 ]
+  [ "$(jq -r .custom "$amp_settings")" = true ]
+  [[ "$output" == *"Preserving"* ]]
+
+  rm "$amp_settings"
+  ln -s "$TEST_ROOT/foreign-settings.json" "$amp_settings"
+  run_security_migration apply "$agent_dir" "$amp_settings" "$managed_root"
+  [ "$status" -eq 0 ]
+  assert_symlink_target "$amp_settings" "$TEST_ROOT/foreign-settings.json"
+  [[ "$output" == *"foreign"* ]]
+}
+
+@test "Pi security migration removes only the Amp permissions object" {
+  local agent_dir="$TEST_ROOT/migration-agent"
+  local amp_settings="$TEST_ROOT/amp/settings.json"
+  mkdir -p "$agent_dir"
+  printf '{"permissions":{"mode":"yolo"}}\n' >"$agent_dir/amplike.json"
+
+  run_security_migration apply "$agent_dir" "$amp_settings" "$REPO_ROOT"
+  [ "$status" -eq 0 ]
+  [ ! -e "$agent_dir/amplike.json" ]
+
+  printf '{"permissions":{"mode":"yolo"},"other":{"keep":true}}\n' \
+    >"$agent_dir/amplike.json"
+  run_security_migration apply "$agent_dir" "$amp_settings" "$REPO_ROOT"
+  [ "$status" -eq 0 ]
+  run jq -e '(has("permissions") | not) and .other.keep == true' "$agent_dir/amplike.json"
+  [ "$status" -eq 0 ]
+}
+
+@test "Pi security migration preserves malformed and non-object Amp state" {
+  local agent_dir="$TEST_ROOT/migration-agent"
+  local amp_settings="$TEST_ROOT/amp/settings.json"
+  local value
+  mkdir -p "$agent_dir"
+  for value in 'not json' '[]'; do
+    printf '%s\n' "$value" >"$agent_dir/amplike.json"
+    run_security_migration apply "$agent_dir" "$amp_settings" "$REPO_ROOT"
+    [ "$status" -eq 0 ]
+    [ "$(cat "$agent_dir/amplike.json")" = "$value" ]
+    [[ "$output" == *"Preserving"* ]]
+  done
+}
+
+@test "Pi security migration quarantines only the identified Brave skill intact" {
+  local agent_dir="$TEST_ROOT/migration-agent"
+  local source="$agent_dir/skills/pi-skills/brave-search"
+  local destination="$agent_dir/disabled-skills/pi-skills-brave-search"
+  make_legacy_brave_skill "$source"
+  mkdir -p "$agent_dir/skills/sibling"
+  printf 'sibling\n' >"$agent_dir/skills/sibling/keep"
+
+  run_security_migration apply "$agent_dir" "$TEST_ROOT/amp/settings.json" "$REPO_ROOT"
+  [ "$status" -eq 0 ]
+  [ ! -e "$source" ]
+  [ -f "$destination/SKILL.md" ]
+  [ "$(cat "$destination/payload.txt")" = "preserve me" ]
+  [ "$(cat "$agent_dir/skills/sibling/keep")" = sibling ]
+
+  run_security_migration apply "$agent_dir" "$TEST_ROOT/amp/settings.json" "$REPO_ROOT"
+  [ "$status" -eq 0 ]
+  [ -d "$destination" ]
+}
+
+@test "Pi security migration preserves mismatched or colliding Brave directories" {
+  local mismatch_agent="$TEST_ROOT/mismatch-agent"
+  local mismatch_source="$mismatch_agent/skills/pi-skills/brave-search"
+  make_legacy_brave_skill "$mismatch_source" other-search
+
+  run_security_migration apply "$mismatch_agent" "$TEST_ROOT/amp/settings.json" "$REPO_ROOT"
+  [ "$status" -eq 0 ]
+  [ -d "$mismatch_source" ]
+  [[ "$output" == *"identity"* ]]
+
+  local collision_agent="$TEST_ROOT/collision-agent"
+  local collision_source="$collision_agent/skills/pi-skills/brave-search"
+  local collision_destination="$collision_agent/disabled-skills/pi-skills-brave-search"
+  make_legacy_brave_skill "$collision_source"
+  mkdir -p "$collision_destination"
+  printf 'existing\n' >"$collision_destination/keep"
+
+  run_security_migration apply "$collision_agent" "$TEST_ROOT/amp/settings.json" "$REPO_ROOT"
+  [ "$status" -eq 0 ]
+  [ -d "$collision_source" ]
+  [ "$(cat "$collision_destination/keep")" = existing ]
+  [[ "$output" == *"already exists"* ]]
+}
+
+@test "Pi security migration check mode is mutation-free" {
+  local agent_dir="$TEST_ROOT/check-migration-agent"
+  local amp_settings="$TEST_ROOT/amp/settings.json"
+  mkdir -p "$agent_dir" "$(dirname "$amp_settings")"
+  printf '{"permissions":{"mode":"yolo"},"keep":true}\n' >"$agent_dir/amplike.json"
+  ln -s "$REPO_ROOT/ai/pi/permissions.json" "$amp_settings"
+  make_legacy_brave_skill "$agent_dir/skills/pi-skills/brave-search"
+  local before after
+  before=$(snapshot_tree "$TEST_ROOT")
+
+  run_security_migration check "$agent_dir" "$amp_settings" "$REPO_ROOT"
+
+  after=$(snapshot_tree "$TEST_ROOT")
+  [ "$status" -eq 0 ]
+  [ "$before" = "$after" ]
+  [[ "$output" == *"dry-run"* ]]
+}
+
+@test "Pi installer invokes security migration before package reconciliation" {
+  local migration_line package_line
+  migration_line=$(grep -n 'migrate_pi_security_stack' "$REPO_ROOT/ai/pi/install.sh" | cut -d: -f1)
+  package_line=$(grep -n 'update --extensions' "$REPO_ROOT/ai/pi/install.sh" | cut -d: -f1)
+  [ -n "$migration_line" ]
+  [ "$migration_line" -lt "$package_line" ]
 }
 
 @test "Pi installer callers no longer reference retired tracked modes or permissions" {

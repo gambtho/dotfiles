@@ -9,6 +9,8 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd -P)"
 source "$ROOT/config/versions.env"
 # shellcheck source=ai/pi/cleanup-legacy.sh
 source "$ROOT/ai/pi/cleanup-legacy.sh"
+# shellcheck source=ai/pi/migrate-security-stack.sh
+source "$ROOT/ai/pi/migrate-security-stack.sh"
 
 MODE=apply
 PI_AI_RESET_MUTABLE_CONFIG="${PI_AI_RESET_MUTABLE_CONFIG:-0}"
@@ -411,6 +413,8 @@ main() {
 
   resolve_pi_paths
   assert_safe_pi_source
+  migrate_pi_security_stack "$MODE" "$PI_AGENT_DIR" "$AMP_SETTINGS_PATH" \
+    "${MANAGED_SOURCE_ROOTS[@]}"
 
   if [[ "$MODE" == check ]]; then
     log_info "[dry-run] Would remove positively identified Vekil, Claude, and Codex integration remnants"
