@@ -77,6 +77,8 @@ setup() {
   local preflight="$REPO_ROOT/ai/marketplace/plugins/my/skills/overnight-improve/references/preflight-checklist.md"
   run rg -n '/permission-system|YOLO' "$skill" "$preflight"
   [ "$status" -eq 0 ]
+  run rg -n '/reload|new Pi session' "$skill" "$preflight"
+  [ "$status" -eq 0 ]
   run grep -F '/sandbox' "$skill" "$preflight"
   [ "$status" -eq 1 ]
   run grep -F 'representative' "$preflight"

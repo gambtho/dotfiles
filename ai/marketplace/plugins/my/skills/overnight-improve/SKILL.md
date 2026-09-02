@@ -13,6 +13,7 @@ This workflow uses the packaged `pi-ralph-wiggum` extension through `ralph_start
 
 ## Prerequisites
 
+- Run `/reload` or start a new Pi session before enabling YOLO so this version of the skill—including every cleanup path—is active.
 - Work from a clean linked worktree on a dedicated overnight branch; the worktree guard must remain enabled.
 - Open `/permission-system`, enable YOLO temporarily, and verify its status before starting. YOLO converts asks to allows but preserves explicit denies. Confirm this deliberate relaxation with the user. Disable and verify YOLO before every early exit—including preflight failures, blocked gates, and safety stops—not only during successful wrap-up.
 - Parent and child commands are not OS-contained. Use unattended mode only with reviewed code and commands; keep the permission system and worktree guard enabled.

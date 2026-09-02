@@ -4,10 +4,11 @@ Run these before kicking off the loop. If any check fails, fix it or abort.
 
 ## 0. Verify unattended permission state
 
-1. Open `/permission-system`, enable YOLO temporarily, and verify the status reports YOLO on. YOLO converts asks to allows but preserves explicit denies.
-2. Review every configured gate before approving unattended execution. Parent and child commands are not OS-contained, so use only trusted code and reviewed commands.
-3. Keep the worktree guard enabled. Child agents inherit permission-system and worktree-guard; limit their tools and prompts accordingly.
-4. Exit plan mode before starting; plan mode intentionally blocks writes.
+1. Run `/reload` or start a new Pi session so the current skill and its cleanup rules are active.
+2. Open `/permission-system`, enable YOLO temporarily, and verify the status reports YOLO on. YOLO converts asks to allows but preserves explicit denies.
+3. Review every configured gate before approving unattended execution. Parent and child commands are not OS-contained, so use only trusted code and reviewed commands.
+4. Keep the worktree guard enabled. Child agents inherit permission-system and worktree-guard; limit their tools and prompts accordingly.
+5. Exit plan mode before starting; plan mode intentionally blocks writes.
 
 Before every early exit after YOLO is enabled—including any preflight failure or abort below—return to `/permission-system`, disable YOLO, and verify the status reports YOLO off. Do the same when the loop ends normally.
 
