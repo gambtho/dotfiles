@@ -47,9 +47,9 @@ Each `subagent` invocation supplies one self-contained `prompt`, a 3–5 word `d
 
 ## Permission and containment model
 
-`ai/pi/config/permission-system.json` is a balanced baseline:
+`ai/pi/config/permission-system.json` is a relaxed-but-guarded baseline:
 
-- routine inspection, build, test, and validation commands are allowed, while unmatched Bash commands ask;
+- routine tools and unmatched parent Bash commands are allowed;
 - unknown tools, Git and GitHub mutations, remote shell/network commands, recursive deletion, external paths, and `lsp_fix` ask;
 - credentials, browser profiles, root deletion, force operations, subprocess-capable search flags, privilege escalation, and primary-checkout writes are denied;
 - common reader/output commands containing unresolved `$` expansion and direct environment-dump commands ask, while named children hard-deny all unresolved shell-variable indirection;
@@ -59,13 +59,13 @@ Each `subagent` invocation supplies one self-contained `prompt`, a 3–5 word `d
 
 Parent and child commands are not OS-contained. Gotgenes children inherit permission-system and worktree-guard, with restrictive agent policy and complete tool allowlists providing additional controls. The variable-indirection deny closes the reviewed direct reader bypass, but neither parent nor child Bash is a safe execution boundary for untrusted commands.
 
-Permission-system gates model-facing calls; an approved process can still read inherited environment variables, access files available to the user, open network connections, and spawn subprocesses. Path rules do not recursively constrain operations performed inside an allowed shell command or extension:
+Permission-system gates model-facing calls; an allowed unmatched process can still read inherited environment variables, access files available to the user, open network connections, and spawn subprocesses. Path rules do not recursively constrain operations performed inside an allowed shell command or extension:
 
 - `/code run` executes through extension-internal `pi.exec()`.
 - LSP server subprocesses are extension-internal. Permission-system still gates the model-facing LSP call, and worktree-guard blocks a mutating fix targeting a primary checkout.
 - `pi-web-access network calls` are extension-internal. The tracked config disables cookie use, remote hosted fetch providers, clone/media/image features, environment proxy trust, and SSRF range exceptions.
 
-Do not put secrets in the agent environment, approve commands you have not reviewed, enable YOLO for interactive work, or describe these controls as a security boundary for untrusted code. Keep extension selection and package pins under review.
+Do not put secrets in the agent environment, run Pi against untrusted code, enable YOLO for interactive work, or describe these controls as a security boundary. Keep extension selection and package pins under review.
 
 ## Worktree policy
 
@@ -117,7 +117,7 @@ PI_AI_RESET_MUTABLE_CONFIG=1 make ai
 
 Authentication, sessions, trust decisions, generated model catalogs, package caches, permission logs, grants, and runtime credentials remain machine-local and untracked.
 
-During upgrade, the installer backs up and resets the permission policy to the tracked non-YOLO, unmatched-Bash-asks baseline, then removes the retired `pi-sandbox` child exclusion before reconciling packages. A previous `~/.pi/agent/sandbox.json` and cached package checkout are preserved as inactive machine-local state; neither is loaded once the package source is absent from `settings.json`. They may be deleted manually after restarting Pi if rollback is not needed.
+When retiring a legacy `pi-sandbox` installation, the installer backs up and resets the permission policy to the tracked non-YOLO, unmatched-Bash-allows baseline, then removes the retired `pi-sandbox` child exclusion before reconciling packages. A previous `~/.pi/agent/sandbox.json` and cached package checkout are preserved as inactive machine-local state; neither is loaded once the package source is absent from `settings.json`. They may be deleted manually after restarting Pi if rollback is not needed.
 
 ## Installation and rollout
 
