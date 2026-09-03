@@ -239,6 +239,7 @@ const fs = require('node:fs');
 const [file, bin, root, uid] = process.argv.slice(2);
 let source = fs.readFileSync(file, 'utf8');
 const replacements = new Map([
+  ["TRUST_ANCHOR='/'", `TRUST_ANCHOR='${root}'`],
   ["OS_RELEASE_FILE='/etc/os-release'", `OS_RELEASE_FILE='${root}/os-release'`],
   ["KEY_PATH='/usr/share/keyrings/tailscale-archive-keyring.gpg'", `KEY_PATH='${root}/system-root/usr/share/keyrings/tailscale-archive-keyring.gpg'`],
   ["SOURCE_PATH='/etc/apt/sources.list.d/tailscale.list'", `SOURCE_PATH='${root}/system-root/etc/apt/sources.list.d/tailscale.list'`],
@@ -617,7 +618,7 @@ run_tailscale_helper() {
     TASK4_SERVE_JSON="$TASK4_SERVE_JSON" TASK4_SERVE_HUMAN="$TASK4_SERVE_HUMAN" \
     TASK4_EXACT_JSON="$TASK4_EXACT_JSON" TASK4_EMPTY_JSON="$TASK4_EMPTY_JSON" \
     PI_WEBUI_TEST_STATUS_JSON="${PI_WEBUI_TEST_STATUS_JSON:-}" PI_TEST_LAUNCHER="${PI_TEST_LAUNCHER:-}" \
-    bash "$INSTALLER_REPO/ai/pi/webui/tailscale.sh" "$@"
+    "$INSTALLER_REPO/ai/pi/webui/tailscale.sh" "$@"
 }
 
 run_rollback_helper() {
@@ -625,13 +626,15 @@ run_rollback_helper() {
     TEST_COMMAND_LOG="$TEST_COMMAND_LOG" TASK4_SERVE_JSON="$TASK4_SERVE_JSON" \
     TASK4_SERVE_HUMAN="$TASK4_SERVE_HUMAN" PI_TEST_LAUNCHER="${PI_TEST_LAUNCHER:-}" \
     PI_WEBUI_TEST_STATUS_JSON="${PI_WEBUI_TEST_STATUS_JSON:-}" \
-    bash "$INSTALLER_REPO/ai/pi/webui/rollback.sh" "$@"
+    "$INSTALLER_REPO/ai/pi/webui/rollback.sh" "$@"
 }
 
 @test "tailscale helper help and default are nonmutating explicit interfaces" {
   make_installer_repo
   make_valid_platform
   setup_task4_stubs
+  [ "$(stat -c '%a' "$INSTALLER_REPO/ai/pi/webui/tailscale.sh")" = 755 ]
+  [ "$(stat -c '%a' "$INSTALLER_REPO/ai/pi/webui/rollback.sh")" = 755 ]
 
   run_tailscale_helper
   [ "$status" -eq 0 ]
@@ -1367,10 +1370,80 @@ SCRIPT
     PI_WEBUI_TEST_TRUSTED_BIN_DIR="$malicious" PI_WEBUI_TEST_OS_RELEASE="$release" \
     PI_WEBUI_TEST_SYSTEM_ROOT="$TEST_ROOT/forged-system" PI_WEBUI_TEST_PROC_ROOT="$TEST_ROOT/forged-proc" \
     PI_WEBUI_TEST_PROCESS_CHECK="$malicious/process-check" HOME="$HOME" PATH="$malicious:$PATH" \
-    TEST_ROOT="$TEST_ROOT" /usr/bin/bash "$REPO_ROOT/ai/pi/webui/tailscale.sh" help
+    TEST_ROOT="$TEST_ROOT" "$REPO_ROOT/ai/pi/webui/tailscale.sh" help
 
   [ "$status" -eq 0 ]
   [ ! -e "$TEST_ROOT/forged-executable-ran" ]
+}
+
+@test "direct helper startup ignores hostile Bash startup state and exported functions" {
+  make_task4_managed_service
+  local startup="$TEST_ROOT/hostile-bash-env"
+  cat >"$startup" <<'SCRIPT'
+case "$0" in
+  *tailscale.sh|*rollback.sh)
+    printf 'BASH_ENV ran\n' >>"$TEST_ROOT/startup-injection-ran"
+    trap 'printf "DEBUG trap ran\\n" >>"$TEST_ROOT/startup-injection-ran"' DEBUG
+    ;;
+esac
+SCRIPT
+
+  run env HOME="$HOME" XDG_CONFIG_HOME="$XDG_CONFIG_HOME" PATH="$PATH" TEST_ROOT="$TEST_ROOT" \
+    BASH_ENV="$startup" SHELLOPTS=xtrace BASHOPTS=extdebug CDPATH="$TEST_ROOT" \
+    'BASH_FUNC_cd%%=() { printf "cd function ran\\n" >>"$TEST_ROOT/startup-injection-ran"; builtin cd "$@"; }' \
+    'BASH_FUNC_pwd%%=() { printf "pwd function ran\\n" >>"$TEST_ROOT/startup-injection-ran"; builtin pwd "$@"; }' \
+    'BASH_FUNC_systemctl%%=() { printf "systemctl function ran\\n" >>"$TEST_ROOT/startup-injection-ran"; return 99; }' \
+    'BASH_FUNC_tailscale%%=() { printf "tailscale function ran\\n" >>"$TEST_ROOT/startup-injection-ran"; return 99; }' \
+    "$INSTALLER_REPO/ai/pi/webui/tailscale.sh" help
+  [ "$status" -eq 0 ]
+  [ ! -e "$TEST_ROOT/startup-injection-ran" ]
+
+  BASH_ENV=$startup
+  CDPATH=$TEST_ROOT
+  export BASH_ENV CDPATH
+  cd() {
+    printf 'cd function ran\n' >>"$TEST_ROOT/startup-injection-ran"
+    builtin cd "$@"
+  }
+  pwd() {
+    printf 'pwd function ran\n' >>"$TEST_ROOT/startup-injection-ran"
+    builtin pwd "$@"
+  }
+  systemctl() {
+    printf 'systemctl function ran\n' >>"$TEST_ROOT/startup-injection-ran"
+    return 99
+  }
+  tailscale() {
+    printf 'tailscale function ran\n' >>"$TEST_ROOT/startup-injection-ran"
+    return 99
+  }
+  export -f cd pwd systemctl tailscale
+
+  run_rollback_helper --help
+  [ "$status" -eq 0 ]
+  [ ! -e "$TEST_ROOT/startup-injection-ran" ]
+  run_tailscale_helper check
+  [ "$status" -eq 0 ]
+  run_tailscale_helper serve
+  [ "$status" -eq 0 ]
+  [ ! -e "$TEST_ROOT/startup-injection-ran" ]
+  unset BASH_ENV CDPATH
+  unset -f cd pwd systemctl tailscale
+}
+
+@test "non-privileged Bash invocation is refused after any prior BASH_ENV effects" {
+  make_installer_repo
+  local startup="$TEST_ROOT/nonprivileged-bash-env"
+  cat >"$startup" <<'SCRIPT'
+printf 'prior BASH_ENV effect\n' >"$TEST_ROOT/prior-bash-env-effect"
+SCRIPT
+
+  run env HOME="$HOME" TEST_ROOT="$TEST_ROOT" BASH_ENV="$startup" \
+    /usr/bin/bash "$INSTALLER_REPO/ai/pi/webui/tailscale.sh" help
+
+  [ "$status" -eq 126 ]
+  [[ "$output" == *'must be executed directly'* ]]
+  [ -f "$TEST_ROOT/prior-bash-env-effect" ]
 }
 
 @test "mise resolution falls back only to the validated user path" {
@@ -1403,19 +1476,57 @@ SCRIPT
   cat >"$STUB_BIN/mise" <<'SCRIPT'
 #!/usr/bin/env bash
 if [[ "$1 ${2:-}" == 'which node' ]]; then
-  mv "$0" "$0.before-swap"
-  cp "$0.before-swap" "$0"
-  chmod +x "$0"
+  mv "$MISE_TEST_PATH" "$MISE_TEST_PATH.before-swap"
+  cp "$MISE_TEST_PATH.before-swap" "$MISE_TEST_PATH"
+  chmod +x "$MISE_TEST_PATH"
   printf '%s\n' "$NODE_TEST_BIN"
   exit 0
 fi
 exit 87
 SCRIPT
   chmod +x "$STUB_BIN/mise"
+  MISE_TEST_PATH="$STUB_BIN/mise"
+  export MISE_TEST_PATH
 
   run_tailscale_helper check
   [ "$status" -ne 0 ]
   [[ "$output" == *'mise executable identity changed after validation'* ]]
+}
+
+@test "mise and Node validation rejects permissive parents and Node replacement" {
+  make_installer_repo
+  make_valid_platform
+  setup_task4_stubs
+
+  chmod 0775 "$HOME/.local/share/mise/installs/node/26.5.0/bin"
+  run_tailscale_helper check
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'Node.js'*'parent'* || "$output" == *'unsafe Node.js'* ]]
+  chmod 0755 "$HOME/.local/share/mise/installs/node/26.5.0/bin"
+
+  mkdir -p "$HOME/.local/bin"
+  mv "$STUB_BIN/mise" "$HOME/.local/bin/mise"
+  chmod 0775 "$HOME/.local/bin"
+  run_tailscale_helper check
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'mise'*'parent'* || "$output" == *'safe supported mise'* ]]
+  chmod 0755 "$HOME/.local/bin"
+  mv "$HOME/.local/bin/mise" "$STUB_BIN/mise"
+
+  local real_node
+  real_node=$(node -p 'process.execPath')
+  cat >"$NODE_TEST_BIN" <<SCRIPT
+#!/usr/bin/env bash
+mv "\$NODE_TEST_BIN" "\$NODE_TEST_BIN.before-swap"
+cp "\$NODE_TEST_BIN.before-swap" "\$NODE_TEST_BIN"
+chmod +x "\$NODE_TEST_BIN"
+exec "$real_node" "\$@"
+SCRIPT
+  chmod +x "$NODE_TEST_BIN"
+
+  run_tailscale_helper check
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'Node.js executable identity changed after validation'* ]]
 }
 
 @test "tailscale and rollback enforce an rpc argument boundary" {

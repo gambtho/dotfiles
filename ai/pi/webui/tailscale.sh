@@ -1,6 +1,10 @@
-#!/usr/bin/bash
+#!/usr/bin/bash -p
 # Manage the tailnet-only ingress used by the Pi Web UI.
 
+if [[ $- != *p* ]]; then
+  builtin printf '%s\n' 'error: this helper must be executed directly (privileged Bash startup mode is required)' >&2
+  builtin exit 126
+fi
 set -euo pipefail
 
 PATH='/usr/sbin:/usr/bin:/sbin:/bin'
@@ -24,6 +28,7 @@ AWK_BIN='/usr/bin/awk'
 MISE_SYSTEM_BIN='/usr/bin/mise'
 MISE_SYSTEM_OWNER=0
 MISE_USER_BIN="$HOME/.local/bin/mise"
+TRUST_ANCHOR='/'
 OS_RELEASE_FILE='/etc/os-release'
 PROC_ROOT='/proc'
 REPOSITORY_FILE_OWNER=0
@@ -49,8 +54,10 @@ MISE_BIN=''
 MISE_PATH_IDENTITY=''
 MISE_TARGET=''
 MISE_TARGET_IDENTITY=''
+MISE_HASH=''
 NODE_BIN=''
 NODE_IDENTITY=''
+NODE_HASH=''
 
 usage() {
   printf 'usage: %s [help|check|install|up|serve|serve-off|uninstall]\n' "$0"
@@ -88,15 +95,49 @@ require_executable() {
   }
 }
 
+validate_safe_parent_chain() {
+  local path=$1 directory parent owner mode current_uid
+  [[ "$path" == /* ]] || return 1
+  if [[ "$TRUST_ANCHOR" != / ]]; then
+    case "$path/" in "$TRUST_ANCHOR"/*) ;; *) return 1 ;; esac
+  fi
+  directory=${path%/*}
+  [[ -n "$directory" ]] || directory=/
+  current_uid=$(/usr/bin/id -u)
+  while :; do
+    [[ -d "$directory" && ! -L "$directory" ]] || return 1
+    owner=$("$STAT_BIN" -c '%u' "$directory") || return 1
+    [[ "$owner" == 0 || "$owner" == "$current_uid" ]] || return 1
+    mode=$("$STAT_BIN" -c '%a' "$directory") || return 1
+    (((8#$mode & 022) == 0)) || return 1
+    [[ "$directory" == "$TRUST_ANCHOR" ]] && return 0
+    parent=${directory%/*}
+    [[ -n "$parent" ]] || parent=/
+    [[ "$parent" != "$directory" ]] || return 1
+    directory=$parent
+  done
+}
+
+validate_executable_target() {
+  local path=$1 expected_owner=$2 mode
+  validate_safe_parent_chain "$path" || return 1
+  [[ -f "$path" && ! -L "$path" && -x "$path" &&
+    "$("$STAT_BIN" -c '%u' "$path")" == "$expected_owner" ]] || return 1
+  mode=$("$STAT_BIN" -c '%a' "$path")
+  (((8#$mode & 022) == 0))
+}
+
+hash_file() {
+  "$SHA256SUM_BIN" "$1" | /usr/bin/cut -d' ' -f1
+}
+
 validate_mise_candidate() {
-  local candidate=$1 expected_owner=$2 target mode
+  local candidate=$1 expected_owner=$2 target
   [[ -e "$candidate" || -L "$candidate" ]] || return 1
+  validate_safe_parent_chain "$candidate" || return 1
   [[ ! -d "$candidate" && -x "$candidate" && "$("$STAT_BIN" -c '%u' "$candidate")" == "$expected_owner" ]] || return 1
   target=$(/usr/bin/readlink -f "$candidate") || return 1
-  [[ -f "$target" && ! -L "$target" && -x "$target" &&
-    "$("$STAT_BIN" -c '%u' "$target")" == "$expected_owner" ]] || return 1
-  mode=$("$STAT_BIN" -c '%a' "$target")
-  (((8#$mode & 022) == 0)) || return 1
+  validate_executable_target "$target" "$expected_owner" || return 1
   if [[ "$candidate" == "$MISE_USER_BIN" && "$target" != "$candidate" ]]; then
     case "$target" in "$HOME/.local/share/mise/"*) ;; *) return 1 ;; esac
   fi
@@ -104,80 +145,108 @@ validate_mise_candidate() {
   MISE_PATH_IDENTITY=$("$STAT_BIN" -c '%d:%i' "$candidate")
   MISE_TARGET=$target
   MISE_TARGET_IDENTITY=$("$STAT_BIN" -c '%d:%i' "$target")
+  MISE_HASH=$(hash_file "$target")
+  exec 8<"$target" || return 1
+  [[ "$("$STAT_BIN" -L -c '%d:%i' /proc/self/fd/8)" == "$MISE_TARGET_IDENTITY" &&
+  "$(hash_file /proc/self/fd/8)" == "$MISE_HASH" ]] || return 1
 }
 
 validate_mise_stable() {
   local expected_owner
   if [[ "$MISE_BIN" == "$MISE_SYSTEM_BIN" ]]; then expected_owner=$MISE_SYSTEM_OWNER; else expected_owner=$(/usr/bin/id -u); fi
-  [[ -n "$MISE_BIN" && -n "$MISE_TARGET" &&
-    "$("$STAT_BIN" -c '%d:%i' "$MISE_BIN" 2>/dev/null)" == "$MISE_PATH_IDENTITY" &&
-    "$(/usr/bin/readlink -f "$MISE_BIN" 2>/dev/null)" == "$MISE_TARGET" &&
-    "$("$STAT_BIN" -c '%d:%i' "$MISE_TARGET" 2>/dev/null)" == "$MISE_TARGET_IDENTITY" &&
-    "$("$STAT_BIN" -c '%u' "$MISE_TARGET" 2>/dev/null)" == "$expected_owner" ]] || {
+  if [[ -z "$MISE_BIN" || -z "$MISE_TARGET" ]] ||
+    ! validate_safe_parent_chain "$MISE_BIN" ||
+    ! validate_executable_target "$MISE_TARGET" "$expected_owner"; then
     fail 'mise executable identity changed after validation'
     return 1
-  }
+  fi
+  if [[ "$("$STAT_BIN" -c '%d:%i' "$MISE_BIN" 2>/dev/null)" != "$MISE_PATH_IDENTITY" ||
+  "$(/usr/bin/readlink -f "$MISE_BIN" 2>/dev/null)" != "$MISE_TARGET" ||
+  "$("$STAT_BIN" -c '%d:%i' "$MISE_TARGET" 2>/dev/null)" != "$MISE_TARGET_IDENTITY" ||
+  "$(hash_file "$MISE_TARGET")" != "$MISE_HASH" ||
+  "$("$STAT_BIN" -L -c '%d:%i' /proc/self/fd/8 2>/dev/null)" != "$MISE_TARGET_IDENTITY" ||
+  "$(hash_file /proc/self/fd/8)" != "$MISE_HASH" ]]; then
+    fail 'mise executable identity changed after validation'
+    return 1
+  fi
 }
 
 resolve_mise_and_node() {
-  local relative version mode
+  local relative version current_uid
   [[ -n "$NODE_BIN" ]] && return 0
+  current_uid=$(/usr/bin/id -u)
   if [[ -e "$MISE_SYSTEM_BIN" || -L "$MISE_SYSTEM_BIN" ]]; then
     validate_mise_candidate "$MISE_SYSTEM_BIN" "$MISE_SYSTEM_OWNER" || {
-      fail 'system mise executable is unsafe'
+      fail 'system mise executable or parent chain is unsafe'
       return 1
     }
   else
-    validate_mise_candidate "$MISE_USER_BIN" "$(/usr/bin/id -u)" || {
-      fail 'no safe supported mise executable is available'
+    validate_mise_candidate "$MISE_USER_BIN" "$current_uid" || {
+      fail 'no safe supported mise executable and parent chain is available'
       return 1
     }
   fi
   validate_mise_stable || return 1
-  NODE_BIN=$("$MISE_BIN" which node) || {
+  NODE_BIN=$(/proc/self/fd/8 which node) || {
     fail 'mise cannot resolve Node.js'
     return 1
   }
   validate_mise_stable || return 1
-  [[ "$NODE_BIN" == /* && -f "$NODE_BIN" && ! -L "$NODE_BIN" && -x "$NODE_BIN" &&
-    "$("$STAT_BIN" -c '%u' "$NODE_BIN")" == "$(/usr/bin/id -u)" ]] || {
-    fail 'mise resolved an unsafe Node.js executable'
-    return 1
-  }
   relative=${NODE_BIN#"$HOME/.local/share/mise/installs/node/"}
   version=${relative%%/*}
   [[ -n "$version" && "$relative" == "$version/bin/node" ]] || {
     fail 'mise resolved Node.js outside the expected installs root'
     return 1
   }
-  mode=$("$STAT_BIN" -c '%a' "$NODE_BIN")
-  (((8#$mode & 022) == 0)) || {
-    fail 'mise Node.js executable is writable by group or world'
+  validate_executable_target "$NODE_BIN" "$current_uid" || {
+    fail 'mise resolved an unsafe Node.js executable or parent chain'
     return 1
   }
   NODE_IDENTITY=$("$STAT_BIN" -c '%d:%i' "$NODE_BIN")
+  NODE_HASH=$(hash_file "$NODE_BIN")
+  exec 9<"$NODE_BIN" || return 1
+  [[ "$("$STAT_BIN" -L -c '%d:%i' /proc/self/fd/9)" == "$NODE_IDENTITY" &&
+  "$(hash_file /proc/self/fd/9)" == "$NODE_HASH" ]] || {
+    fail 'Node.js executable changed while opening it'
+    return 1
+  }
 }
 
 validate_node_stable() {
   validate_mise_stable || return 1
-  [[ -n "$NODE_BIN" && "$("$STAT_BIN" -c '%d:%i' "$NODE_BIN" 2>/dev/null)" == "$NODE_IDENTITY" ]] || {
+  if [[ -z "$NODE_BIN" ]] || ! validate_executable_target "$NODE_BIN" "$(/usr/bin/id -u)"; then
     fail 'Node.js executable identity changed after validation'
     return 1
-  }
+  fi
+  if [[ "$("$STAT_BIN" -c '%d:%i' "$NODE_BIN" 2>/dev/null)" != "$NODE_IDENTITY" ||
+  "$(hash_file "$NODE_BIN")" != "$NODE_HASH" ||
+  "$("$STAT_BIN" -L -c '%d:%i' /proc/self/fd/9 2>/dev/null)" != "$NODE_IDENTITY" ||
+  "$(hash_file /proc/self/fd/9)" != "$NODE_HASH" ]]; then
+    fail 'Node.js executable identity changed after validation'
+    return 1
+  fi
 }
 
 run_node() {
-  resolve_mise_and_node || return 1
-  validate_node_stable || return 1
-  "$NODE_BIN" "$@"
-}
-
-validate_installed_runtime() {
   local status=0
   resolve_mise_and_node || return 1
   validate_node_stable || return 1
-  PATH="${NODE_BIN%/*}:/usr/sbin:/usr/bin:/sbin:/bin" \
-    "$BASH_BIN" "$ROOT/bin/validate-pi-webui" --installed-runtime "$CURRENT_RUNTIME" >/dev/null || status=$?
+  /proc/self/fd/9 "$@" || status=$?
+  validate_node_stable || return 1
+  return "$status"
+}
+
+validate_installed_runtime() {
+  local status=0 shim_dir
+  resolve_mise_and_node || return 1
+  validate_node_stable || return 1
+  shim_dir=$(/usr/bin/mktemp -d /tmp/pi-webui-node-shim.XXXXXX) || return 1
+  /usr/bin/chmod 0700 "$shim_dir"
+  printf '%s\n' '#!/usr/bin/bash -p' 'exec /proc/self/fd/9 "$@"' >"$shim_dir/node"
+  /usr/bin/chmod 0700 "$shim_dir/node"
+  PATH="$shim_dir:/usr/sbin:/usr/bin:/sbin:/bin" \
+    "$BASH_BIN" -p "$ROOT/bin/validate-pi-webui" --installed-runtime "$CURRENT_RUNTIME" >/dev/null || status=$?
+  /usr/bin/rm -rf -- "$shim_dir"
   validate_node_stable || return 1
   return "$status"
 }
