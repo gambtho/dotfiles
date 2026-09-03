@@ -131,6 +131,10 @@ hash_file() {
   "$SHA256SUM_BIN" "$1" | /usr/bin/cut -d' ' -f1
 }
 
+run_mise_fd() {
+  "$BASH_BIN" -p -c 'exec -a mise /proc/self/fd/8 "$@"' _ "$@"
+}
+
 validate_mise_candidate() {
   local candidate=$1 expected_owner=$2 target
   [[ -e "$candidate" || -L "$candidate" ]] || return 1
@@ -187,7 +191,7 @@ resolve_mise_and_node() {
     }
   fi
   validate_mise_stable || return 1
-  NODE_BIN=$(/proc/self/fd/8 which node) || {
+  NODE_BIN=$(run_mise_fd which node) || {
     fail 'mise cannot resolve Node.js'
     return 1
   }

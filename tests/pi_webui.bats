@@ -629,6 +629,30 @@ run_rollback_helper() {
     "$INSTALLER_REPO/ai/pi/webui/rollback.sh" "$@"
 }
 
+make_mise_argv_probe() {
+  cat >"$TEST_ROOT/mise-argv-probe.c" <<'C'
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+int main(int argc, char **argv) {
+  const char *log_path = getenv("TEST_COMMAND_LOG");
+  const char *node_path = getenv("NODE_TEST_BIN");
+  FILE *log = log_path ? fopen(log_path, "a") : NULL;
+  if (!log || !node_path) return 92;
+  fprintf(log, "mise-argv0 <%s>\n", argv[0]);
+  fprintf(log, "mise-argc <%d>\n", argc);
+  for (int i = 1; i < argc; i++) fprintf(log, "mise-arg%d <%s>\n", i, argv[i]);
+  fclose(log);
+  if (strcmp(argv[0], "mise") != 0) return 93;
+  if (argc != 3 || strcmp(argv[1], "which") != 0 || strcmp(argv[2], "node") != 0) return 94;
+  puts(node_path);
+  return 0;
+}
+C
+  /usr/bin/cc -o "$STUB_BIN/mise" "$TEST_ROOT/mise-argv-probe.c"
+}
+
 @test "tailscale helper help and default are nonmutating explicit interfaces" {
   make_installer_repo
   make_valid_platform
@@ -1444,6 +1468,35 @@ SCRIPT
   [ "$status" -eq 126 ]
   [[ "$output" == *'must be executed directly'* ]]
   [ -f "$TEST_ROOT/prior-bash-env-effect" ]
+}
+
+@test "FD-backed mise calls preserve argv0 and exact supported arguments without injection" {
+  make_installer_repo
+  make_valid_platform
+  setup_task4_stubs
+  make_mise_argv_probe
+  local injection="$TEST_ROOT/mise-injection-ran"
+
+  MISE_INJECTION="; printf injected >$injection" run_tailscale_helper check
+
+  [ "$status" -eq 0 ]
+  [ ! -e "$injection" ]
+  [ "$(grep -Fxc 'mise-argv0 <mise>' "$TEST_COMMAND_LOG")" -eq 2 ]
+  [ "$(grep -Fxc 'mise-argc <3>' "$TEST_COMMAND_LOG")" -eq 2 ]
+  [ "$(grep -Fxc 'mise-arg1 <which>' "$TEST_COMMAND_LOG")" -eq 2 ]
+  [ "$(grep -Fxc 'mise-arg2 <node>' "$TEST_COMMAND_LOG")" -eq 2 ]
+  run ! grep -Eq '^mise-arg[3-9]' "$TEST_COMMAND_LOG"
+
+  : >"$TEST_COMMAND_LOG"
+  MISE_INJECTION="; printf injected >$injection" run_rollback_helper
+
+  [ "$status" -eq 0 ]
+  [ ! -e "$injection" ]
+  [ "$(grep -Fxc 'mise-argv0 <mise>' "$TEST_COMMAND_LOG")" -eq 1 ]
+  [ "$(grep -Fxc 'mise-argc <3>' "$TEST_COMMAND_LOG")" -eq 1 ]
+  [ "$(grep -Fxc 'mise-arg1 <which>' "$TEST_COMMAND_LOG")" -eq 1 ]
+  [ "$(grep -Fxc 'mise-arg2 <node>' "$TEST_COMMAND_LOG")" -eq 1 ]
+  run ! grep -Eq '^mise-arg[3-9]' "$TEST_COMMAND_LOG"
 }
 
 @test "mise resolution falls back only to the validated user path" {
