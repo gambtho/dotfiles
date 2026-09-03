@@ -9,7 +9,7 @@ ACCEPTED_LOCK_SHA256=39593de061e22a36668a0a0d1449e339b84e644d6c65e6b1618af9d177f
 setup() {
   setup_dotfiles_test
   unset PI_WEBUI_TEST_STATUS_JSON PI_WEBUI_TEST_HEALTH_ATTEMPTS
-  unset TEST_BEFORE_LOCK_HOOK TEST_AFTER_NPM_HOOK
+  unset TEST_BEFORE_LOCK_HOOK TEST_AFTER_NPM_HOOK TEST_BEFORE_TRIAL_STAGE_HOOK
   FIXTURE_RUNTIME="$TEST_ROOT/runtime"
   mkdir -p "$FIXTURE_RUNTIME"
 }
@@ -128,12 +128,14 @@ case "$*" in
       printf "%s\\n" "$PI_WEBUI_TEST_STATUS_JSON"
     else
       status_cwd="$HOME/.local/share/pi-webui/worktrees/dotfiles"
+      status_launcher="$PI_TEST_LAUNCHER"
       if grep -Fq -- 'pi-webui-runtime/node_modules/.bin/pi-webui' \
         "$HOME/.config/systemd/user/pi-webui.service" 2>/dev/null; then
         status_cwd='/home/tng/.dotfiles/tmp/worktrees/piface-smoke'
+        status_launcher="$HOME/.local/share/mise/installs/node/26.5.0/bin/pi"
       fi
       printf '\''{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"host":"127.0.0.1","port":31415,"open":false,"urls":[]},"tabs":[{"cwd":"%s","running":true,"command":"%s --mode rpc"}]}}'\'' \
-        "$status_cwd" "$PI_TEST_LAUNCHER"
+        "$status_cwd" "$status_launcher"
     fi
     ;;
   *api/shutdown*) printf "%s\\n" '\''{"ok":true}'\'' ;;
@@ -227,6 +229,7 @@ run_installer() {
   run env PI_WEBUI_TESTING=1 PI_WEBUI_TEST_OS_RELEASE="$TEST_OS_RELEASE" \
     PI_WEBUI_TEST_BEFORE_LOCK_HOOK="${TEST_BEFORE_LOCK_HOOK:-}" \
     PI_WEBUI_TEST_AFTER_NPM_HOOK="${TEST_AFTER_NPM_HOOK:-}" \
+    PI_WEBUI_TEST_BEFORE_TRIAL_STAGE_HOOK="${TEST_BEFORE_TRIAL_STAGE_HOOK:-}" \
     PI_WEBUI_TEST_PROCESS_CHECK="$PROCESS_CHECK" \
     PI_WEBUI_TEST_PROC_ROOT="$PROC_ROOT" \
     BATS_TEST_TMPDIR="$BATS_TEST_TMPDIR" HOME="$HOME" PATH="$PATH" \
@@ -899,6 +902,26 @@ EOF
   [ -f "$TEST_ROOT/service-active" ]
 }
 
+@test "installer refuses a group-writable backup parent before npm or service stop" {
+  make_installer_repo
+  make_valid_platform
+  make_valid_pi
+  stub_successful_npm_ci
+  run_installer --apply
+  [ "$status" -eq 0 ]
+  local backups="$HOME/.local/share/pi-webui/backups"
+  chmod 0770 "$backups"
+  : >"$TEST_COMMAND_LOG"
+
+  run_installer --apply
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Pi Web UI backup parent must not be group or world writable"* ]]
+  [ "$(stat -c '%a' "$backups")" = 770 ]
+  run ! grep -q '^npm-ci$\|^systemctl --user stop' "$TEST_COMMAND_LOG"
+  [ -f "$TEST_ROOT/service-active" ]
+}
+
 @test "installer refuses a managed unit whose current runtime is missing" {
   make_installer_repo
   make_valid_platform
@@ -1218,6 +1241,41 @@ NODE
   [ "$(grep -c '^npm-ci$' "$TEST_COMMAND_LOG")" -eq 1 ]
 }
 
+@test "trial stage failure validates the unstaged runtime and restores the old service" {
+  make_installer_repo
+  make_valid_platform
+  make_valid_pi
+  stub_successful_npm_ci
+  make_trial_unit_and_runtime
+  local state="$HOME/.local/share/pi-webui"
+  local trial="$HOME/.local/share/pi-webui-runtime"
+  local runtime_before
+  runtime_before=$(directory_fingerprint "$trial")
+  TEST_BEFORE_TRIAL_STAGE_HOOK="$TEST_ROOT/fail-trial-stage"
+  cat >"$TEST_BEFORE_TRIAL_STAGE_HOOK" <<'SCRIPT'
+#!/usr/bin/env bash
+: >"$TEST_ROOT/trial-stage-hook-observed"
+chmod 0500 "$HOME/.local/share/pi-webui/backups"
+SCRIPT
+  chmod +x "$TEST_BEFORE_TRIAL_STAGE_HOOK"
+  export TEST_BEFORE_TRIAL_STAGE_HOOK
+
+  run_installer --apply
+
+  [ "$status" -ne 0 ]
+  [ "$status" -ne 78 ]
+  [ -f "$TEST_ROOT/trial-stage-hook-observed" ]
+  [ -d "$trial" ]
+  [ "$runtime_before" = "$(directory_fingerprint "$trial")" ]
+  [ ! -e "$state/runtimes/current" ]
+  [ ! -e "$state/worktrees/dotfiles" ]
+  [ -d "$state/runtimes/candidate" ]
+  [ -d "$state/transactions/pending" ]
+  [ -f "$TEST_ROOT/service-active" ]
+  [ -f "$TEST_ROOT/service-enabled" ]
+  [ "$(grep -c '^systemctl --user start pi-webui.service$' "$TEST_COMMAND_LOG")" -eq 1 ]
+}
+
 @test "migration health failure restores the exact accepted trial unit runtime and cwd" {
   make_installer_repo
   make_valid_platform
@@ -1236,7 +1294,9 @@ NODE
   run_installer --apply
 
   [ "$status" -ne 0 ]
+  [ "$status" -ne 78 ]
   [[ "$output" == *"exact health check failed"* ]]
+  [[ "$PI_TEST_LAUNCHER" != "$HOME/.local/share/mise/installs/node/26.5.0/bin/pi" ]]
   [ -f "$TEST_ROOT/trial-runtime-move-observed" ]
   [ -f "$TEST_ROOT/trial-runtime-restored-before-start" ]
   [ "$unit_before" = "$(file_tree_hashes "$(dirname "$unit")")" ]

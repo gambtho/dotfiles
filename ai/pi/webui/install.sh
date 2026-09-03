@@ -29,8 +29,8 @@ BACKUP_ROOT="$STATE_ROOT/backups/previous"
 UNIT_TEMPORARY=''
 BACKUP_TEMPORARY=''
 TRIAL_RUNTIME="$HOME/.local/share/pi-webui-runtime"
-TRIAL_WORKTREE="$HOME/.dotfiles/tmp/worktrees/piface-smoke"
 TRIAL_RUNTIME_BACKUP=''
+TRIAL_RUNTIME_STAGED=0
 ACCEPTED_TRIAL_UNIT_SHA256=c3ba39ea60e3b6e7be197f96d13091e61f1c02220ff1d17cb7489dc7a0e8dac4
 SERVICE_TEMPLATE_SHA256=be71933031443393d963e293dd3d2820447eb0307b39c9c873fbabc251f83e32
 LOCK_TOKEN=''
@@ -46,6 +46,8 @@ PRIOR_RUNTIME_MOVED=0
 UNIT_PROMOTED=0
 PRIOR_UNIT_KIND=absent
 PRIOR_RUNTIME_KIND=absent
+PRIOR_HEALTH_WORKTREE=''
+PRIOR_HEALTH_PI_LAUNCHER=''
 PRIOR_ACTIVE=0
 PRIOR_ENABLED=0
 
@@ -319,6 +321,38 @@ unit_matches_rendered() {
   cmp -s "$UNIT_PATH" <(render_unit)
 }
 
+expand_accepted_trial_path() {
+  local encoded=$1 expanded
+  case "$encoded" in
+    %h/*) expanded="$HOME${encoded#%h}" ;;
+    /*) expanded=$encoded ;;
+    *) return 1 ;;
+  esac
+  validate_systemd_path "$expanded" 'accepted trial unit path' || return 1
+  printf '%s\n' "$expanded"
+}
+
+derive_accepted_trial_health_identity() {
+  local line prefix suffix encoded_worktree encoded_launcher
+  prefix='ExecStart=/usr/bin/mise exec -- %h/.local/share/pi-webui-runtime/node_modules/.bin/pi-webui --host 127.0.0.1 --port 31415 --cwd '
+  suffix=' --no-remote-auth --name pi-webui-smoke'
+  [[ "$(grep -c '^ExecStart=' "$UNIT_PATH")" == 1 ]] || return 1
+  line=$(grep '^ExecStart=' "$UNIT_PATH")
+  case "$line" in
+    "$prefix"*' --pi '*"$suffix") ;;
+    *) return 1 ;;
+  esac
+  line=${line#"$prefix"}
+  line=${line%"$suffix"}
+  encoded_worktree=${line%% --pi *}
+  encoded_launcher=${line#* --pi }
+  [[ -n "$encoded_worktree" && -n "$encoded_launcher" &&
+    "$encoded_worktree" != *[[:space:]]* &&
+    "$encoded_launcher" != *[[:space:]]* ]] || return 1
+  PRIOR_HEALTH_WORKTREE=$(expand_accepted_trial_path "$encoded_worktree") || return 1
+  PRIOR_HEALTH_PI_LAUNCHER=$(expand_accepted_trial_path "$encoded_launcher") || return 1
+}
+
 preflight_service() {
   local unit_hash='' fragment_path=''
   if ! fragment_path=$(systemctl --user show --property=FragmentPath --value \
@@ -346,8 +380,14 @@ preflight_service() {
     unit_hash=$(unit_sha256 "$UNIT_PATH")
     if [[ "$unit_hash" == "$ACCEPTED_TRIAL_UNIT_SHA256" ]]; then
       PRIOR_UNIT_KIND=trial
+      derive_accepted_trial_health_identity || {
+        fail 'accepted trial unit shape is invalid'
+        return 1
+      }
     elif unit_matches_rendered; then
       PRIOR_UNIT_KIND=managed
+      PRIOR_HEALTH_WORKTREE=$WORKTREE
+      PRIOR_HEALTH_PI_LAUNCHER=$PI_LAUNCHER
     else
       fail 'existing Pi Web UI unit is foreign'
       return 1
@@ -465,12 +505,8 @@ require_existing_directory() {
 
 require_owned_managed_directory() {
   local directory=$1 label=$2 marker=$3 expected_marker=$4
-  require_existing_directory "$directory" "$label" || return 1
+  require_safe_current_user_directory "$directory" "$label" || return 1
   [[ -e "$directory" ]] || return 0
-  [[ "$(stat -c '%u' "$directory")" == "$(id -u)" ]] || {
-    fail "$label must be owned by the current user"
-    return 1
-  }
   [[ -f "$directory/$marker" && ! -L "$directory/$marker" ]] || {
     fail "$label is not an owned Pi Web UI artifact"
     return 1
@@ -491,15 +527,23 @@ require_current_user_directory() {
   }
 }
 
+require_safe_current_user_directory() {
+  local directory=$1 label=$2 mode
+  require_current_user_directory "$directory" "$label" || return 1
+  [[ -e "$directory" ]] || return 0
+  mode=$(stat -c '%a' "$directory")
+  (((8#$mode & 022) == 0)) || {
+    fail "$label must not be group or world writable"
+    return 1
+  }
+}
+
 require_owned_directory_tree() {
   local root=$1 label=$2 entry
-  require_current_user_directory "$root" "$label" || return 1
+  require_safe_current_user_directory "$root" "$label" || return 1
   [[ -e "$root" ]] || return 0
   while IFS= read -r -d '' entry; do
-    [[ "$(stat -c '%u' "$entry")" == "$(id -u)" ]] || {
-      fail "$label contains a directory not owned by the current user"
-      return 1
-    }
+    require_safe_current_user_directory "$entry" "$label descendant" || return 1
   done < <(find "$root" -type d -print0)
   while IFS= read -r -d '' entry; do
     if [[ -d "$entry" ]]; then
@@ -565,8 +609,8 @@ preflight_worktree_path_components() {
   require_current_user_directory "$HOME" 'HOME directory'
   require_current_user_directory "$HOME/.local" 'HOME .local directory'
   require_current_user_directory "$HOME/.local/share" 'HOME share directory'
-  require_current_user_directory "$STATE_ROOT" 'Pi Web UI state root'
-  require_current_user_directory "$STATE_ROOT/worktrees" 'Pi Web UI worktree parent'
+  require_safe_current_user_directory "$STATE_ROOT" 'Pi Web UI state root'
+  require_safe_current_user_directory "$STATE_ROOT/worktrees" 'Pi Web UI worktree parent'
 }
 
 preflight_handoff_state() {
@@ -581,16 +625,16 @@ preflight_handoff_state() {
 }
 
 preflight_unit_path_components() {
-  require_current_user_directory "$SYSTEMD_CONFIG_HOME" 'systemd configuration root'
-  require_current_user_directory "$SYSTEMD_CONFIG_HOME/systemd" 'systemd configuration directory'
-  require_current_user_directory "$UNIT_DIR" 'systemd user unit directory'
+  require_safe_current_user_directory "$SYSTEMD_CONFIG_HOME" 'systemd configuration root'
+  require_safe_current_user_directory "$SYSTEMD_CONFIG_HOME/systemd" 'systemd configuration directory'
+  require_safe_current_user_directory "$UNIT_DIR" 'systemd user unit directory'
 }
 
 preflight_destinations() {
   preflight_worktree_path_components
   preflight_unit_path_components
-  require_current_user_directory "$RUNTIME_PARENT" 'Pi Web UI runtime parent'
-  require_current_user_directory "$STATE_ROOT/transactions" 'Pi Web UI transaction parent'
+  require_safe_current_user_directory "$RUNTIME_PARENT" 'Pi Web UI runtime parent'
+  require_safe_current_user_directory "$STATE_ROOT/transactions" 'Pi Web UI transaction parent'
   preflight_backup_paths
   preflight_handoff_state
   preflight_apply_lock
@@ -741,6 +785,11 @@ run_test_before_lock_hook() {
 run_test_after_npm_hook() {
   run_restricted_test_hook PI_WEBUI_TEST_AFTER_NPM_HOOK \
     "${PI_WEBUI_TEST_AFTER_NPM_HOOK:-}" after-npm
+}
+
+run_test_before_trial_stage_hook() {
+  run_restricted_test_hook PI_WEBUI_TEST_BEFORE_TRIAL_STAGE_HOOK \
+    "${PI_WEBUI_TEST_BEFORE_TRIAL_STAGE_HOOK:-}" before-trial-stage
 }
 
 revalidate_worktree_before_mutation() {
@@ -1118,29 +1167,40 @@ stop_service_cleanly() {
   return 0
 }
 
+validate_accepted_trial_runtime() {
+  local runtime=$1
+  [[ -d "$runtime" && ! -L "$runtime" &&
+    "$(stat -c '%u' "$runtime")" == "$(id -u)" &&
+    "$(stat -c '%a' "$runtime")" == 700 ]] || return 1
+  bash "$SOURCE_ROOT/bin/validate-pi-webui" --installed-runtime \
+    "$runtime" >/dev/null
+}
+
 stage_trial_runtime() {
+  local staged="$STATE_ROOT/backups/.accepted-trial-runtime.$$"
   [[ "$PRIOR_RUNTIME_KIND" == trial ]] || return 0
-  TRIAL_RUNTIME_BACKUP="$STATE_ROOT/backups/.accepted-trial-runtime.$$"
-  [[ ! -e "$TRIAL_RUNTIME_BACKUP" && ! -L "$TRIAL_RUNTIME_BACKUP" ]] || {
+  [[ ! -e "$staged" && ! -L "$staged" ]] || {
     fail 'temporary accepted trial runtime backup already exists'
     return 1
   }
-  mkdir -p "$STATE_ROOT/backups"
-  chmod 0700 "$STATE_ROOT/backups"
-  mv "$TRIAL_RUNTIME" "$TRIAL_RUNTIME_BACKUP"
+  run_test_before_trial_stage_hook
+  mv "$TRIAL_RUNTIME" "$staged"
+  TRIAL_RUNTIME_BACKUP=$staged
+  TRIAL_RUNTIME_STAGED=1
 }
 
 restore_trial_runtime() {
   [[ "$PRIOR_RUNTIME_KIND" == trial ]] || return 0
-  [[ -n "$TRIAL_RUNTIME_BACKUP" && -d "$TRIAL_RUNTIME_BACKUP" &&
-    ! -L "$TRIAL_RUNTIME_BACKUP" && ! -e "$TRIAL_RUNTIME" &&
+  if [[ "$TRIAL_RUNTIME_STAGED" == 0 ]]; then
+    validate_accepted_trial_runtime "$TRIAL_RUNTIME" || return 1
+    return 0
+  fi
+  [[ -n "$TRIAL_RUNTIME_BACKUP" && ! -e "$TRIAL_RUNTIME" &&
     ! -L "$TRIAL_RUNTIME" ]] || return 1
-  [[ "$(stat -c '%u' "$TRIAL_RUNTIME_BACKUP")" == "$(id -u)" &&
-  "$(stat -c '%a' "$TRIAL_RUNTIME_BACKUP")" == 700 ]] || return 1
-  bash "$SOURCE_ROOT/bin/validate-pi-webui" --installed-runtime \
-    "$TRIAL_RUNTIME_BACKUP" >/dev/null || return 1
+  validate_accepted_trial_runtime "$TRIAL_RUNTIME_BACKUP" || return 1
   mv "$TRIAL_RUNTIME_BACKUP" "$TRIAL_RUNTIME"
   TRIAL_RUNTIME_BACKUP=''
+  TRIAL_RUNTIME_STAGED=0
 }
 
 record_prior_service_state() {
@@ -1149,6 +1209,8 @@ record_prior_service_state() {
   write_metadata_file prior-active "$PRIOR_ACTIVE"
   write_metadata_file prior-enabled "$PRIOR_ENABLED"
   if [[ "$PRIOR_UNIT_KIND" != absent ]]; then
+    write_metadata_file prior-health-worktree "$PRIOR_HEALTH_WORKTREE"
+    write_metadata_file prior-health-pi-launcher "$PRIOR_HEALTH_PI_LAUNCHER"
     cp "$UNIT_PATH" "$TRANSACTION_DIR/prior-unit"
     chmod 0600 "$TRANSACTION_DIR/prior-unit"
   fi
@@ -1316,7 +1378,6 @@ verify_restored_prior_artifacts() {
 }
 
 verify_restored_service_state() {
-  local expected_worktree=$WORKTREE
   verify_restored_prior_artifacts || {
     fail 'restored Pi Web UI unit or runtime does not match the prior service'
     return 1
@@ -1332,8 +1393,7 @@ verify_restored_service_state() {
   fi
   if [[ "$PRIOR_ACTIVE" == 1 ]]; then
     wait_for_service_active
-    [[ "$PRIOR_UNIT_KIND" == trial ]] && expected_worktree=$TRIAL_WORKTREE
-    verify_service_health "$expected_worktree" "$PI_LAUNCHER"
+    verify_service_health "$PRIOR_HEALTH_WORKTREE" "$PRIOR_HEALTH_PI_LAUNCHER"
   else
     if systemctl --user is-active --quiet pi-webui.service; then
       fail 'Pi Web UI service activity was not restored'
