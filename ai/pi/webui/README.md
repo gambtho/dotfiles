@@ -18,8 +18,9 @@ only remote ingress. Never enable Funnel, Firstp1ck's `network-open` control,
 the remote companion, optional packages, or browser-managed updates. The
 helpers neither accept nor persist auth keys or secrets: `tailscale.sh up`
 performs Tailscale's interactive login. The existing Pi permission system is unchanged,
-but it does not gate browser-native operations. No target or helper
-creates a LAN listener.
+but it does not gate browser-native operations. No target or helper exposes the
+Pi Web UI on the WSL LAN; the Web UI listener is confined to `127.0.0.1:31415`.
+Tailscale daemon networking is separate from this Pi Web UI listener boundary.
 
 Tailscale Serve makes tailnet requests appear local to the application. That is
 why any trusted tailnet device has the WSL user's authority even though the

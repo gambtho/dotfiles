@@ -3332,6 +3332,10 @@ SCRIPT
     'network-open' \
     'auth keys or secrets' \
     'permission system is unchanged' \
+    'No target or helper exposes the' \
+    'Pi Web UI on the WSL LAN' \
+    'Web UI listener is confined to `127.0.0.1:31415`' \
+    'Tailscale daemon networking is separate' \
     '.local/share/pi-webui/worktrees/dotfiles' \
     'linked worktree' \
     'run-level Abort is unavailable while a permission modal is open' \
@@ -3343,6 +3347,9 @@ SCRIPT
     run grep -Fi "$phrase" "$readme"
     [ "$status" -eq 0 ]
   done
+
+  run grep -F 'No target or helper creates a LAN listener.' "$readme"
+  [ "$status" -eq 1 ]
 }
 
 @test "Pi Web UI runbook pins identity and documents operations migration and rollback exactly" {
