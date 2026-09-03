@@ -55,7 +55,24 @@ make_valid_platform() {
 #!/usr/bin/env bash
 set -e
 printf 'systemctl %s\n' "$*" >>"$TEST_COMMAND_LOG"
-[[ "$1" == --user ]]
+if [[ "$1" == --version ]]; then
+  printf '%s\n' 'systemd 255'
+  exit 0
+fi
+if [[ "$1" != --user ]]; then
+  case "$1" in
+    is-active) [[ "$2" == tailscaled.service && -f "$TEST_ROOT/tailscaled-active" ]] ;;
+    is-enabled) [[ "$2" == tailscaled.service && -f "$TEST_ROOT/tailscaled-enabled" ]] ;;
+    enable)
+      [[ "$2" == --now && "$3" == tailscaled.service ]]
+      : >"$TEST_ROOT/tailscaled-active"
+      : >"$TEST_ROOT/tailscaled-enabled"
+      ;;
+    daemon-reload) exit 0 ;;
+    *) printf 'unexpected system systemctl: %s\n' "$*" >&2; exit 89 ;;
+  esac
+  exit
+fi
 shift
 case "$1" in
   show-environment) exit 0 ;;
@@ -204,6 +221,12 @@ make_installer_repo() {
   INSTALLER_REPO="$TEST_ROOT/source repo"
   mkdir -p "$INSTALLER_REPO/ai/pi/webui/runtime" "$INSTALLER_REPO/bin"
   cp "$REPO_ROOT/ai/pi/webui/install.sh" "$INSTALLER_REPO/ai/pi/webui/install.sh"
+  if [[ -f "$REPO_ROOT/ai/pi/webui/tailscale.sh" ]]; then
+    cp "$REPO_ROOT/ai/pi/webui/tailscale.sh" "$INSTALLER_REPO/ai/pi/webui/tailscale.sh"
+  fi
+  if [[ -f "$REPO_ROOT/ai/pi/webui/rollback.sh" ]]; then
+    cp "$REPO_ROOT/ai/pi/webui/rollback.sh" "$INSTALLER_REPO/ai/pi/webui/rollback.sh"
+  fi
   if [[ -f "$REPO_ROOT/ai/pi/webui/pi-webui.service.in" ]]; then
     cp "$REPO_ROOT/ai/pi/webui/pi-webui.service.in" \
       "$INSTALLER_REPO/ai/pi/webui/pi-webui.service.in"
@@ -393,6 +416,616 @@ if (rendering === 'compact') {
 }
 fs.writeFileSync(file, rendered);
 NODE
+}
+
+TASK4_EMPTY_JSON='{}'
+TASK4_EXACT_JSON='{"TCP":{"443":{"HTTPS":true}},"Web":{"node.example.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:31415"}}}}}'
+TASK4_FUNNEL_JSON='{"TCP":{"443":{"HTTPS":true}},"Web":{"node.example.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:31415"}}}},"AllowFunnel":{"node.example.ts.net:443":true}}'
+TASK4_FOREIGN_JSON='{"TCP":{"443":{"HTTPS":true}},"Web":{"node.example.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:31415"},"/foreign":{"Proxy":"http://127.0.0.1:9000"}}}},"AllowFunnel":{"node.example.ts.net:443":false}}'
+
+setup_task4_stubs() {
+  TASK4_SYSTEM_ROOT="$TEST_ROOT/system-root"
+  TASK4_SERVE_JSON="$TEST_ROOT/serve.json"
+  TASK4_SERVE_HUMAN="$TEST_ROOT/serve.txt"
+  mkdir -p "$TASK4_SYSTEM_ROOT"
+  printf '%s\n' "$TASK4_EMPTY_JSON" >"$TASK4_SERVE_JSON"
+  printf '%s\n' 'No serve config' >"$TASK4_SERVE_HUMAN"
+  : >"$TEST_ROOT/tailscaled-active"
+  : >"$TEST_ROOT/tailscaled-enabled"
+  export TASK4_SYSTEM_ROOT TASK4_SERVE_JSON TASK4_SERVE_HUMAN
+
+  cat >"$STUB_BIN/tailscale" <<'SCRIPT'
+#!/usr/bin/env bash
+set -e
+printf 'tailscale %s\n' "$*" >>"$TEST_COMMAND_LOG"
+case "$1 ${2:-} ${3:-}" in
+  'status --json ')
+    printf '%s\n' '{"BackendState":"Running","Self":{"Online":true}}'
+    ;;
+  'serve status --json') cat "$TASK4_SERVE_JSON" ;;
+  'serve status ' ) cat "$TASK4_SERVE_HUMAN" ;;
+  'funnel status --json') cat "$TASK4_SERVE_JSON" ;;
+  'funnel status ' ) cat "$TASK4_SERVE_HUMAN" ;;
+  *) printf 'unexpected tailscale command: %s\n' "$*" >&2; exit 88 ;;
+esac
+SCRIPT
+  chmod +x "$STUB_BIN/tailscale"
+
+  cat >"$STUB_BIN/curl" <<'SCRIPT'
+#!/usr/bin/env bash
+set -e
+printf 'curl %s\n' "$*" >>"$TEST_COMMAND_LOG"
+case "$*" in
+  *noble.noarmor.gpg*)
+    output=''
+    while [[ $# -gt 0 ]]; do
+      if [[ "$1" == --output ]]; then output=$2; break; fi
+      shift
+    done
+    [[ -n "$output" ]]
+    printf '%s\n' 'official-key-fixture' >"$output"
+    ;;
+  *127.0.0.1:31415/api/health*)
+    printf '%s\n' '{"ok":true,"webuiVersion":"0.10.3","piVersion":"0.84.4"}'
+    ;;
+  *127.0.0.1:31415/api/webui-status*)
+    printf '%s\n' '{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"host":"127.0.0.1","port":31415,"open":false,"urls":[]}}}'
+    ;;
+  *192.0.2.20:31415*) exit 7 ;;
+  *) printf 'unexpected curl command: %s\n' "$*" >&2; exit 87 ;;
+esac
+SCRIPT
+  chmod +x "$STUB_BIN/curl"
+
+  stub_command ip 'printf "%s\\n" "2: eth0    inet 192.0.2.20/24 scope global eth0"'
+  cat >"$STUB_BIN/sha256sum" <<'SCRIPT'
+#!/usr/bin/env bash
+printf 'sha256sum %s\n' "$*" >>"$TEST_COMMAND_LOG"
+if [[ "$#" == 1 ]] && grep -Fqx 'official-key-fixture' "$1" 2>/dev/null; then
+  printf '%s  %s\n' 3e03dacf222698c60b8e2f990b809ca1b3e104de127767864284e6c228f1fb39 "$1"
+else
+  exec /usr/bin/sha256sum "$@"
+fi
+SCRIPT
+  chmod +x "$STUB_BIN/sha256sum"
+
+  cat >"$STUB_BIN/sudo" <<'SCRIPT'
+#!/usr/bin/env bash
+set -e
+printf 'sudo %s\n' "$*" >>"$TEST_COMMAND_LOG"
+case "$1" in
+  mkdir|install|rm|mktemp|ln) exec "$@" ;;
+  apt-get) exit 0 ;;
+  systemctl) exec "$@" ;;
+  tailscale)
+    shift
+    if [[ "$1" == up && $# == 1 ]]; then exit 0; fi
+    if [[ "$*" == 'serve --bg --https=443 http://127.0.0.1:31415' ]]; then
+      printf '%s\n' "$TASK4_EXACT_JSON" >"$TASK4_SERVE_JSON"
+      printf '%s\n' 'https://node.example.ts.net (tailnet only)' '|-- / proxy http://127.0.0.1:31415' >"$TASK4_SERVE_HUMAN"
+      exit 0
+    fi
+    if [[ "$*" == 'serve --https=443 off' ]]; then
+      printf '%s\n' "$TASK4_EMPTY_JSON" >"$TASK4_SERVE_JSON"
+      printf '%s\n' 'No serve config' >"$TASK4_SERVE_HUMAN"
+      exit 0
+    fi
+    ;;
+esac
+printf 'unexpected sudo command: %s\n' "$*" >&2
+exit 86
+SCRIPT
+  chmod +x "$STUB_BIN/sudo"
+}
+
+make_task4_managed_service() {
+  make_installer_repo
+  make_valid_platform
+  make_valid_pi
+  stub_successful_npm_ci
+  run_installer --apply
+  [ "$status" -eq 0 ]
+  setup_task4_stubs
+  : >"$TEST_COMMAND_LOG"
+}
+
+run_tailscale_helper() {
+  run env PI_WEBUI_TESTING=1 PI_WEBUI_TEST_OS_RELEASE="$TEST_OS_RELEASE" \
+    PI_WEBUI_TEST_SYSTEM_ROOT="$TASK4_SYSTEM_ROOT" \
+    PI_WEBUI_TEST_PROC_ROOT="$PROC_ROOT" BATS_TEST_TMPDIR="$BATS_TEST_TMPDIR" \
+    HOME="$HOME" XDG_CONFIG_HOME="$XDG_CONFIG_HOME" PATH="$PATH" \
+    TEST_ROOT="$TEST_ROOT" TEST_COMMAND_LOG="$TEST_COMMAND_LOG" \
+    TASK4_SERVE_JSON="$TASK4_SERVE_JSON" TASK4_SERVE_HUMAN="$TASK4_SERVE_HUMAN" \
+    TASK4_EXACT_JSON="$TASK4_EXACT_JSON" TASK4_EMPTY_JSON="$TASK4_EMPTY_JSON" \
+    bash "$INSTALLER_REPO/ai/pi/webui/tailscale.sh" "$@"
+}
+
+run_rollback_helper() {
+  run env PI_WEBUI_TESTING=1 PI_WEBUI_TEST_OS_RELEASE="$TEST_OS_RELEASE" \
+    PI_WEBUI_TEST_PROC_ROOT="$PROC_ROOT" PI_WEBUI_TEST_PROCESS_CHECK="$PROCESS_CHECK" \
+    BATS_TEST_TMPDIR="$BATS_TEST_TMPDIR" HOME="$HOME" \
+    XDG_CONFIG_HOME="$XDG_CONFIG_HOME" PATH="$PATH" TEST_ROOT="$TEST_ROOT" \
+    TEST_COMMAND_LOG="$TEST_COMMAND_LOG" TASK4_SERVE_JSON="$TASK4_SERVE_JSON" \
+    TASK4_SERVE_HUMAN="$TASK4_SERVE_HUMAN" \
+    bash "$INSTALLER_REPO/ai/pi/webui/rollback.sh" "$@"
+}
+
+@test "tailscale helper help and default are nonmutating explicit interfaces" {
+  make_installer_repo
+  make_valid_platform
+  setup_task4_stubs
+
+  run_tailscale_helper
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'check|install|up|serve|serve-off|uninstall'* ]]
+  run_tailscale_helper help
+  [ "$status" -eq 0 ]
+  run ! grep -q '^sudo ' "$TEST_COMMAND_LOG"
+}
+
+@test "tailscale helper gates every explicit action to exact Noble WSL" {
+  make_installer_repo
+  make_valid_platform
+  setup_task4_stubs
+  printf 'ID=ubuntu\nVERSION_ID="22.04"\nVERSION_CODENAME=jammy\n' >"$TEST_OS_RELEASE"
+  local action
+  for action in check install up serve serve-off uninstall; do
+    run_tailscale_helper "$action"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *'requires Ubuntu 24.04 Noble under WSL'* ]]
+  done
+  run ! grep -q '^sudo \|^tailscale ' "$TEST_COMMAND_LOG"
+}
+
+@test "tailscale install hashes the user-temp official key before exact sudo publication" {
+  make_installer_repo
+  make_valid_platform
+  setup_task4_stubs
+
+  run_tailscale_helper install
+
+  [ "$status" -eq 0 ]
+  local key="$TASK4_SYSTEM_ROOT/usr/share/keyrings/tailscale-archive-keyring.gpg"
+  local source="$TASK4_SYSTEM_ROOT/etc/apt/sources.list.d/tailscale.list"
+  [ "$(cat "$key")" = official-key-fixture ]
+  [ "$(cat "$source")" = 'deb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg] https://pkgs.tailscale.com/stable/ubuntu noble main' ]
+  local hash_line install_line
+  hash_line=$(grep -n '^sha256sum ' "$TEST_COMMAND_LOG" | head -n1 | cut -d: -f1)
+  install_line=$(grep -n '^sudo install -m 0644 ' "$TEST_COMMAND_LOG" | head -n1 | cut -d: -f1)
+  [ "$hash_line" -lt "$install_line" ]
+  grep -Fqx 'sudo apt-get update' "$TEST_COMMAND_LOG"
+  grep -Fqx 'sudo apt-get install tailscale' "$TEST_COMMAND_LOG"
+  grep -Fqx 'sudo systemctl enable --now tailscaled.service' "$TEST_COMMAND_LOG"
+  run ! grep -Eq 'curl .*[|].*(sh|bash)|wget .*[|].*(sh|bash)|noble\.tailscale-keyring\.list' "$TEST_COMMAND_LOG"
+}
+
+@test "tailscale install requires systemd before download or package mutation" {
+  make_installer_repo
+  make_valid_platform
+  setup_task4_stubs
+  stub_command systemctl 'exit 1'
+
+  run_tailscale_helper install
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'systemd is unavailable'* ]]
+  run ! grep -Eq '^curl |^sudo ' "$TEST_COMMAND_LOG"
+}
+
+@test "tailscale install refuses a repository-file collision that appears during publication" {
+  make_installer_repo
+  make_valid_platform
+  setup_task4_stubs
+  cat >"$STUB_BIN/sudo" <<'SCRIPT'
+#!/usr/bin/env bash
+set -e
+printf 'sudo %s\n' "$*" >>"$TEST_COMMAND_LOG"
+if [[ "$1" == ln && "$*" == *tailscale-archive-keyring.gpg ]]; then
+  destination=${!#}
+  printf '%s\n' 'foreign-race-winner' >"$destination"
+fi
+case "$1" in
+  mkdir|install|mktemp|ln|rm) exec "$@" ;;
+  *) exit 0 ;;
+esac
+SCRIPT
+  chmod +x "$STUB_BIN/sudo"
+
+  run_tailscale_helper install
+
+  [ "$status" -ne 0 ]
+  [ "$(cat "$TASK4_SYSTEM_ROOT/usr/share/keyrings/tailscale-archive-keyring.gpg")" = foreign-race-winner ]
+  run ! grep -q '^sudo apt-get' "$TEST_COMMAND_LOG"
+}
+
+@test "tailscale install refuses mismatched managed repository files before sudo" {
+  make_installer_repo
+  make_valid_platform
+  setup_task4_stubs
+  local source="$TASK4_SYSTEM_ROOT/etc/apt/sources.list.d/tailscale.list"
+  mkdir -p "$(dirname "$source")"
+  printf '%s\n' 'foreign repository' >"$source"
+
+  run_tailscale_helper install
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'existing Tailscale source is not exact'* ]]
+  [ "$(cat "$source")" = 'foreign repository' ]
+  run ! grep -q '^sudo ' "$TEST_COMMAND_LOG"
+}
+
+@test "tailscale up is only the interactive command and contains no auth secret surface" {
+  make_installer_repo
+  make_valid_platform
+  setup_task4_stubs
+
+  run_tailscale_helper up
+
+  [ "$status" -eq 0 ]
+  [ "$(grep '^sudo tailscale ' "$TEST_COMMAND_LOG")" = 'sudo tailscale up' ]
+  run ! grep -Eqi 'auth[-_]?key|oauth|token' "$TEST_COMMAND_LOG"
+}
+
+@test "tailscale check validates daemon authentication and reads shared route state" {
+  make_installer_repo
+  make_valid_platform
+  setup_task4_stubs
+  printf '%s\n' "$TASK4_EXACT_JSON" >"$TASK4_SERVE_JSON"
+  printf '%s\n' 'https://node.example.ts.net (tailnet only)' '|-- / proxy http://127.0.0.1:31415' >"$TASK4_SERVE_HUMAN"
+
+  run_tailscale_helper check
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'route=exact-tailnet-only'* ]]
+  grep -Fqx 'tailscale status --json' "$TEST_COMMAND_LOG"
+  grep -Fqx 'tailscale serve status --json' "$TEST_COMMAND_LOG"
+  grep -Fqx 'tailscale funnel status --json' "$TEST_COMMAND_LOG"
+  grep -Fqx 'tailscale funnel status' "$TEST_COMMAND_LOG"
+  run ! grep -q '^sudo ' "$TEST_COMMAND_LOG"
+}
+
+@test "tailscale serve creates only the exact tailnet route after managed local proof" {
+  make_task4_managed_service
+
+  run_tailscale_helper serve
+
+  [ "$status" -eq 0 ]
+  grep -Fqx 'sudo tailscale serve --bg --https=443 http://127.0.0.1:31415' "$TEST_COMMAND_LOG"
+  [ "$(cat "$TASK4_SERVE_JSON")" = "$TASK4_EXACT_JSON" ]
+  [[ "$(cat "$TASK4_SERVE_HUMAN")" == *'(tailnet only)'* ]]
+  grep -q 'api/health' "$TEST_COMMAND_LOG"
+  grep -q '192.0.2.20:31415' "$TEST_COMMAND_LOG"
+}
+
+@test "tailscale serve is idempotent for exact shared JSON and refuses foreign or Funnel config" {
+  make_task4_managed_service
+  printf '%s\n' "$TASK4_EXACT_JSON" >"$TASK4_SERVE_JSON"
+  printf '%s\n' 'https://node.example.ts.net (tailnet only)' '|-- / proxy http://127.0.0.1:31415' >"$TASK4_SERVE_HUMAN"
+
+  run_tailscale_helper serve
+  [ "$status" -eq 0 ]
+  run ! grep -q '^sudo tailscale serve' "$TEST_COMMAND_LOG"
+
+  printf '%s\n' "$TASK4_FOREIGN_JSON" >"$TASK4_SERVE_JSON"
+  run_tailscale_helper serve
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'foreign or multiple Serve routes'* ]]
+
+  printf '%s\n' "$TASK4_FUNNEL_JSON" >"$TASK4_SERVE_JSON"
+  printf '%s\n' 'https://node.example.ts.net (Funnel on)' >"$TASK4_SERVE_HUMAN"
+  run_tailscale_helper serve
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'Funnel is enabled'* ]]
+}
+
+@test "tailscale serve-off removes only the exact owned route and verifies semantic emptiness" {
+  make_installer_repo
+  make_valid_platform
+  setup_task4_stubs
+  printf '%s\n' "$TASK4_EXACT_JSON" >"$TASK4_SERVE_JSON"
+  printf '%s\n' 'https://node.example.ts.net (tailnet only)' '|-- / proxy http://127.0.0.1:31415' >"$TASK4_SERVE_HUMAN"
+
+  run_tailscale_helper serve-off
+
+  [ "$status" -eq 0 ]
+  grep -Fqx 'sudo tailscale serve --https=443 off' "$TEST_COMMAND_LOG"
+  [ "$(cat "$TASK4_SERVE_JSON")" = "$TASK4_EMPTY_JSON" ]
+
+  printf '%s\n' "$TASK4_FOREIGN_JSON" >"$TASK4_SERVE_JSON"
+  run_tailscale_helper serve-off
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'foreign or multiple Serve routes'* ]]
+}
+
+@test "tailscale uninstall refuses active Serve then removes only exact repository files without purging identity" {
+  make_installer_repo
+  make_valid_platform
+  setup_task4_stubs
+  run_tailscale_helper install
+  [ "$status" -eq 0 ]
+  printf '%s\n' "$TASK4_EXACT_JSON" >"$TASK4_SERVE_JSON"
+  printf '%s\n' 'https://node.example.ts.net (tailnet only)' '|-- / proxy http://127.0.0.1:31415' >"$TASK4_SERVE_HUMAN"
+  : >"$TEST_COMMAND_LOG"
+
+  run_tailscale_helper uninstall
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'remove Serve first'* ]]
+  run ! grep -q '^sudo apt-get remove' "$TEST_COMMAND_LOG"
+
+  printf '%s\n' "$TASK4_EMPTY_JSON" >"$TASK4_SERVE_JSON"
+  printf '%s\n' 'No serve config' >"$TASK4_SERVE_HUMAN"
+  run_tailscale_helper uninstall
+  [ "$status" -eq 0 ]
+  grep -Fqx 'sudo apt-get remove tailscale' "$TEST_COMMAND_LOG"
+  [ ! -e "$TASK4_SYSTEM_ROOT/etc/apt/sources.list.d/tailscale.list" ]
+  [ ! -e "$TASK4_SYSTEM_ROOT/usr/share/keyrings/tailscale-archive-keyring.gpg" ]
+  [[ "$output" == *'Tailscale identity state preserved'* ]]
+  run ! grep -Eq 'purge|/var/lib/tailscale|tailscale logout' "$TEST_COMMAND_LOG"
+}
+
+@test "rollback default refuses Serve and prints the exact prerequisite command" {
+  make_task4_managed_service
+  printf '%s\n' "$TASK4_EXACT_JSON" >"$TASK4_SERVE_JSON"
+  printf '%s\n' 'https://node.example.ts.net (tailnet only)' >"$TASK4_SERVE_HUMAN"
+
+  run_rollback_helper
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"$INSTALLER_REPO/ai/pi/webui/tailscale.sh serve-off"* ]]
+  [ -f "$HOME/.config/systemd/user/pi-webui.service" ]
+  [ -f "$TEST_ROOT/service-active" ]
+}
+
+@test "rollback default removes only the managed unit and preserves all state" {
+  make_task4_managed_service
+  mkdir -p "$HOME/.pi/webui" "$HOME/.local/state/pi-webui" "$HOME/.pi/agent/sessions"
+  printf 'settings\n' >"$HOME/.pi/webui/settings.json"
+  printf 'supervisor\n' >"$HOME/.local/state/pi-webui/state"
+  printf 'transcript\n' >"$HOME/.pi/agent/sessions/session.jsonl"
+  printf 'trial\n' >"$HOME/.local/share/pi-webui/evaluation-2026-09-02.md"
+
+  run_rollback_helper
+
+  [ "$status" -eq 0 ]
+  [ ! -e "$HOME/.config/systemd/user/pi-webui.service" ]
+  [ ! -e "$TEST_ROOT/service-active" ]
+  [ ! -e "$TEST_ROOT/service-enabled" ]
+  [ -d "$HOME/.local/share/pi-webui/runtimes/current" ]
+  [ -d "$HOME/.local/share/pi-webui/worktrees/dotfiles" ]
+  [ -f "$HOME/.pi/webui/settings.json" ]
+  [ -f "$HOME/.local/state/pi-webui/state" ]
+  [ -f "$HOME/.pi/agent/sessions/session.jsonl" ]
+  [ -f "$HOME/.local/share/pi-webui/evaluation-2026-09-02.md" ]
+  grep -Fqx 'systemctl --user disable --now pi-webui.service' "$TEST_COMMAND_LOG"
+  grep -Fqx 'systemctl --user daemon-reload' "$TEST_COMMAND_LOG"
+}
+
+@test "rollback is idempotent when the managed service was never installed" {
+  make_installer_repo
+  make_valid_platform
+  make_valid_pi
+  setup_task4_stubs
+
+  run_rollback_helper
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'Pi Web UI service is not installed'* ]]
+  run_rollback_helper
+  [ "$status" -eq 0 ]
+}
+
+@test "rollback refuses foreign and symlinked units without service mutation" {
+  make_installer_repo
+  make_valid_platform
+  make_valid_pi
+  setup_task4_stubs
+  local unit="$HOME/.config/systemd/user/pi-webui.service"
+  mkdir -p "$(dirname "$unit")"
+  printf '[Service]\nExecStart=/bin/false\n' >"$unit"
+  chmod 0600 "$unit"
+  : >"$TEST_ROOT/service-active"
+
+  run_rollback_helper
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'unit is foreign'* ]]
+  [ -f "$TEST_ROOT/service-active" ]
+  run ! grep -q '^systemctl --user disable' "$TEST_COMMAND_LOG"
+
+  rm "$unit"
+  printf 'foreign target\n' >"$TEST_ROOT/foreign-unit"
+  ln -s "$TEST_ROOT/foreign-unit" "$unit"
+  run_rollback_helper
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'unit is unsafe or foreign'* ]]
+  [ "$(cat "$TEST_ROOT/foreign-unit")" = 'foreign target' ]
+}
+
+@test "rollback destructive flags remove only validated runtime and a clean detached source worktree" {
+  make_task4_managed_service
+  local runtime="$HOME/.local/share/pi-webui/runtimes/current"
+  local worktree="$HOME/.local/share/pi-webui/worktrees/dotfiles"
+
+  run_rollback_helper --remove-runtime --remove-worktree
+
+  [ "$status" -eq 0 ]
+  [ ! -e "$runtime" ]
+  [ ! -e "$worktree" ]
+  local registrations
+  registrations=$(git -C "$INSTALLER_REPO" worktree list --porcelain)
+  [[ "$registrations" != *"worktree $worktree"* ]]
+
+  run_rollback_helper --remove-runtime --remove-worktree
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'already absent'* ]]
+}
+
+@test "rollback destructive guards preserve symlink runtime and dirty or attached worktrees" {
+  make_task4_managed_service
+  local runtime="$HOME/.local/share/pi-webui/runtimes/current"
+  local worktree="$HOME/.local/share/pi-webui/worktrees/dotfiles"
+  local outside="$TEST_ROOT/runtime-outside"
+  mv "$runtime" "$outside"
+  ln -s "$outside" "$runtime"
+
+  run_rollback_helper --remove-runtime
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'runtime must be a real directory'* ]]
+  [ -L "$runtime" ]
+  [ -f "$HOME/.config/systemd/user/pi-webui.service" ]
+
+  rm "$runtime"
+  mv "$outside" "$runtime"
+  printf 'preserve dirty\n' >"$worktree/ignored-local"
+  printf 'ignored-local\n' >>"$(git -C "$worktree" rev-parse --git-path info/exclude)"
+  run_rollback_helper --remove-worktree
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'worktree must be clean, including ignored files'* ]]
+  [ "$(cat "$worktree/ignored-local")" = 'preserve dirty' ]
+  [ -f "$HOME/.config/systemd/user/pi-webui.service" ]
+
+  rm "$worktree/ignored-local"
+  git -C "$worktree" checkout -q -b attached-rollback-test
+  run_rollback_helper --remove-worktree
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'worktree must be detached'* ]]
+  [ -d "$worktree" ]
+}
+
+@test "tailscale install rejects a bad key digest before every sudo command" {
+  make_installer_repo
+  make_valid_platform
+  setup_task4_stubs
+  cat >"$STUB_BIN/sha256sum" <<'SCRIPT'
+#!/usr/bin/env bash
+printf 'sha256sum %s\n' "$*" >>"$TEST_COMMAND_LOG"
+printf '%s  %s\n' aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa "$1"
+SCRIPT
+  chmod +x "$STUB_BIN/sha256sum"
+
+  run_tailscale_helper install
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'Tailscale key SHA-256 mismatch'* ]]
+  run ! grep -q '^sudo ' "$TEST_COMMAND_LOG"
+}
+
+@test "tailscale serve rejects wildcard foreign and directly reachable LAN listeners before route mutation" {
+  make_task4_managed_service
+  : >"$TEST_ROOT/wildcard-listener"
+
+  run_tailscale_helper serve
+  [ "$status" -ne 0 ]
+  run ! grep -q '^sudo tailscale serve' "$TEST_COMMAND_LOG"
+
+  rm "$TEST_ROOT/wildcard-listener"
+  : >"$TEST_ROOT/spoof-listener"
+  run_tailscale_helper serve
+  [ "$status" -ne 0 ]
+  run ! grep -q '^sudo tailscale serve' "$TEST_COMMAND_LOG"
+
+  rm "$TEST_ROOT/spoof-listener"
+  cat >"$STUB_BIN/curl" <<'SCRIPT'
+#!/usr/bin/env bash
+case "$*" in
+  *api/webui-status*) printf '%s\n' '{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"host":"127.0.0.1","port":31415,"open":false,"urls":[]}}}' ;;
+  *api/health*) printf '%s\n' '{"ok":true,"webuiVersion":"0.10.3","piVersion":"0.84.4"}' ;;
+esac
+exit 0
+SCRIPT
+  chmod +x "$STUB_BIN/curl"
+  run_tailscale_helper serve
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'reachable directly from the WSL LAN address'* ]]
+  run ! grep -q '^sudo tailscale serve' "$TEST_COMMAND_LOG"
+}
+
+@test "tailscale serve-off is idempotent when shared Serve and Funnel JSON is semantically empty" {
+  make_installer_repo
+  make_valid_platform
+  setup_task4_stubs
+
+  run_tailscale_helper serve-off
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'no Tailscale Serve route is configured'* ]]
+  run ! grep -q '^sudo tailscale serve' "$TEST_COMMAND_LOG"
+}
+
+@test "rollback gates the platform and refuses foreign residual runtime state" {
+  make_installer_repo
+  make_valid_platform
+  make_valid_pi
+  setup_task4_stubs
+  printf 'ID=ubuntu\nVERSION_ID="22.04"\nVERSION_CODENAME=jammy\n' >"$TEST_OS_RELEASE"
+
+  run_rollback_helper
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'requires Ubuntu 24.04 Noble under WSL'* ]]
+
+  printf 'ID=ubuntu\nVERSION_ID="24.04"\nVERSION_CODENAME=noble\n' >"$TEST_OS_RELEASE"
+  local runtime="$HOME/.local/share/pi-webui/runtimes/current"
+  mkdir -p "$runtime"
+  printf 'foreign\n' >"$runtime/sentinel"
+  run_rollback_helper
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'runtime'*'foreign'* ]]
+  [ "$(cat "$runtime/sentinel")" = foreign ]
+}
+
+@test "rollback leaves a proven unit in place when scoped process cleanup fails" {
+  make_task4_managed_service
+  cat >"$PROCESS_CHECK" <<'SCRIPT'
+#!/usr/bin/env bash
+printf '%s\n' 'scoped Pi child remains' >&2
+exit 43
+SCRIPT
+  chmod +x "$PROCESS_CHECK"
+
+  run_rollback_helper
+
+  [ "$status" -eq 43 ]
+  [[ "$output" == *'scoped Pi child remains'* ]]
+  [ -f "$HOME/.config/systemd/user/pi-webui.service" ]
+  [ ! -e "$TEST_ROOT/service-active" ]
+}
+
+@test "rollback refuses apply locks malformed runtime markers and foreign or symlink worktrees" {
+  make_task4_managed_service
+  local lock="$HOME/.local/share/pi-webui/transactions/apply.lock"
+  mkdir -p "$lock"
+  printf 'foreign lock\n' >"$lock/sentinel"
+
+  run_rollback_helper --remove-runtime
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'apply lock is present'* ]]
+  [ -f "$HOME/.config/systemd/user/pi-webui.service" ]
+
+  rm -rf "$lock"
+  printf 'wrong-marker\n' >"$HOME/.local/share/pi-webui/runtimes/current/.pi-webui-current"
+  run_rollback_helper --remove-runtime
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'runtime marker is missing or foreign'* ]]
+  [ -f "$HOME/.config/systemd/user/pi-webui.service" ]
+
+  printf '%s\n' pi-webui-task3-current-v1 >"$HOME/.local/share/pi-webui/runtimes/current/.pi-webui-current"
+  local worktree="$HOME/.local/share/pi-webui/worktrees/dotfiles"
+  git -C "$INSTALLER_REPO" worktree remove "$worktree"
+  mkdir -p "$TEST_ROOT/worktree-target"
+  ln -s "$TEST_ROOT/worktree-target" "$worktree"
+  run_rollback_helper --remove-worktree
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'worktree must be a real directory'* ]]
+  [ -L "$worktree" ]
+
+  rm "$worktree"
+  git -C "$TEST_ROOT/worktree-target" init -q
+  printf 'foreign\n' >"$TEST_ROOT/worktree-target/sentinel"
+  git -C "$TEST_ROOT/worktree-target" add sentinel
+  git -C "$TEST_ROOT/worktree-target" -c user.name=test -c user.email=test@example.test commit -qm foreign
+  mv "$TEST_ROOT/worktree-target" "$worktree"
+  run_rollback_helper --remove-worktree
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'worktree belongs to a foreign repository'* ]]
+  [ "$(cat "$worktree/sentinel")" = foreign ]
 }
 
 @test "tracked runtime accepts the exact authored package graph by default" {
