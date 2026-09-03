@@ -433,6 +433,9 @@ setup_task4_stubs() {
   : >"$TEST_ROOT/tailscaled-active"
   : >"$TEST_ROOT/tailscaled-enabled"
   export TASK4_SYSTEM_ROOT TASK4_SERVE_JSON TASK4_SERVE_HUMAN
+  if [[ -x "$SANDBOX_TOOL_BIN/node" ]]; then
+    ln -sf "$SANDBOX_TOOL_BIN/node" "$STUB_BIN/node"
+  fi
 
   cat >"$STUB_BIN/tailscale" <<'SCRIPT'
 #!/usr/bin/env bash
@@ -469,7 +472,12 @@ case "$*" in
     printf '%s\n' '{"ok":true,"webuiVersion":"0.10.3","piVersion":"0.84.4"}'
     ;;
   *127.0.0.1:31415/api/webui-status*)
-    printf '%s\n' '{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"host":"127.0.0.1","port":31415,"open":false,"urls":[]}}}'
+    if [[ -n "${PI_WEBUI_TEST_STATUS_JSON:-}" ]]; then
+      printf '%s\n' "$PI_WEBUI_TEST_STATUS_JSON"
+    else
+      printf '{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"host":"127.0.0.1","port":31415,"open":false,"urls":[]},"tabs":[{"cwd":"%s","running":true,"command":"%s --mode rpc"}]}}\n' \
+        "$HOME/.local/share/pi-webui/worktrees/dotfiles" "$PI_TEST_LAUNCHER"
+    fi
     ;;
   *192.0.2.20:31415*) exit 7 ;;
   *) printf 'unexpected curl command: %s\n' "$*" >&2; exit 87 ;;
@@ -492,13 +500,16 @@ SCRIPT
   cat >"$STUB_BIN/sudo" <<'SCRIPT'
 #!/usr/bin/env bash
 set -e
-printf 'sudo %s\n' "$*" >>"$TEST_COMMAND_LOG"
-case "$1" in
-  mkdir|install|rm|mktemp|ln) exec "$@" ;;
+raw=("$@")
+name=${1##*/}
+shift
+printf 'sudo-raw %s\n' "${raw[*]}" >>"$TEST_COMMAND_LOG"
+printf 'sudo %s %s\n' "$name" "$*" >>"$TEST_COMMAND_LOG"
+case "$name" in
+  mkdir|install|rm|mktemp|ln) exec "${raw[@]}" ;;
   apt-get) exit 0 ;;
-  systemctl) exec "$@" ;;
+  systemctl) exec "${raw[@]}" ;;
   tailscale)
-    shift
     if [[ "$1" == up && $# == 1 ]]; then exit 0; fi
     if [[ "$*" == 'serve --bg --https=443 http://127.0.0.1:31415' ]]; then
       printf '%s\n' "$TASK4_EXACT_JSON" >"$TASK4_SERVE_JSON"
@@ -531,22 +542,26 @@ make_task4_managed_service() {
 
 run_tailscale_helper() {
   run env PI_WEBUI_TESTING=1 PI_WEBUI_TEST_OS_RELEASE="$TEST_OS_RELEASE" \
+    PI_WEBUI_TEST_TRUSTED_BIN_DIR="$STUB_BIN" \
     PI_WEBUI_TEST_SYSTEM_ROOT="$TASK4_SYSTEM_ROOT" \
     PI_WEBUI_TEST_PROC_ROOT="$PROC_ROOT" BATS_TEST_TMPDIR="$BATS_TEST_TMPDIR" \
     HOME="$HOME" XDG_CONFIG_HOME="$XDG_CONFIG_HOME" PATH="$PATH" \
     TEST_ROOT="$TEST_ROOT" TEST_COMMAND_LOG="$TEST_COMMAND_LOG" \
     TASK4_SERVE_JSON="$TASK4_SERVE_JSON" TASK4_SERVE_HUMAN="$TASK4_SERVE_HUMAN" \
     TASK4_EXACT_JSON="$TASK4_EXACT_JSON" TASK4_EMPTY_JSON="$TASK4_EMPTY_JSON" \
+    PI_WEBUI_TEST_STATUS_JSON="${PI_WEBUI_TEST_STATUS_JSON:-}" PI_TEST_LAUNCHER="${PI_TEST_LAUNCHER:-}" \
     bash "$INSTALLER_REPO/ai/pi/webui/tailscale.sh" "$@"
 }
 
 run_rollback_helper() {
   run env PI_WEBUI_TESTING=1 PI_WEBUI_TEST_OS_RELEASE="$TEST_OS_RELEASE" \
+    PI_WEBUI_TEST_TRUSTED_BIN_DIR="$STUB_BIN" \
     PI_WEBUI_TEST_PROC_ROOT="$PROC_ROOT" PI_WEBUI_TEST_PROCESS_CHECK="$PROCESS_CHECK" \
     BATS_TEST_TMPDIR="$BATS_TEST_TMPDIR" HOME="$HOME" \
     XDG_CONFIG_HOME="$XDG_CONFIG_HOME" PATH="$PATH" TEST_ROOT="$TEST_ROOT" \
     TEST_COMMAND_LOG="$TEST_COMMAND_LOG" TASK4_SERVE_JSON="$TASK4_SERVE_JSON" \
-    TASK4_SERVE_HUMAN="$TASK4_SERVE_HUMAN" \
+    TASK4_SERVE_HUMAN="$TASK4_SERVE_HUMAN" PI_TEST_LAUNCHER="${PI_TEST_LAUNCHER:-}" \
+    PI_WEBUI_TEST_STATUS_JSON="${PI_WEBUI_TEST_STATUS_JSON:-}" \
     bash "$INSTALLER_REPO/ai/pi/webui/rollback.sh" "$@"
 }
 
@@ -619,13 +634,16 @@ run_rollback_helper() {
   cat >"$STUB_BIN/sudo" <<'SCRIPT'
 #!/usr/bin/env bash
 set -e
-printf 'sudo %s\n' "$*" >>"$TEST_COMMAND_LOG"
-if [[ "$1" == ln && "$*" == *tailscale-archive-keyring.gpg ]]; then
+raw=("$@")
+name=${1##*/}
+printf 'sudo-raw %s\n' "${raw[*]}" >>"$TEST_COMMAND_LOG"
+printf 'sudo %s %s\n' "$name" "${*:2}" >>"$TEST_COMMAND_LOG"
+if [[ "$name" == ln && "$*" == *tailscale-archive-keyring.gpg ]]; then
   destination=${!#}
   printf '%s\n' 'foreign-race-winner' >"$destination"
 fi
-case "$1" in
-  mkdir|install|mktemp|ln|rm) exec "$@" ;;
+case "$name" in
+  mkdir|install|mktemp|ln|rm) exec "${raw[@]}" ;;
   *) exit 0 ;;
 esac
 SCRIPT
@@ -691,6 +709,7 @@ SCRIPT
 
   [ "$status" -eq 0 ]
   grep -Fqx 'sudo tailscale serve --bg --https=443 http://127.0.0.1:31415' "$TEST_COMMAND_LOG"
+  grep -Fqx "sudo-raw $STUB_BIN/tailscale serve --bg --https=443 http://127.0.0.1:31415" "$TEST_COMMAND_LOG"
   [ "$(cat "$TASK4_SERVE_JSON")" = "$TASK4_EXACT_JSON" ]
   [[ "$(cat "$TASK4_SERVE_HUMAN")" == *'(tailnet only)'* ]]
   grep -q 'api/health' "$TEST_COMMAND_LOG"
@@ -926,7 +945,10 @@ SCRIPT
   cat >"$STUB_BIN/curl" <<'SCRIPT'
 #!/usr/bin/env bash
 case "$*" in
-  *api/webui-status*) printf '%s\n' '{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"host":"127.0.0.1","port":31415,"open":false,"urls":[]}}}' ;;
+  *api/webui-status*)
+    printf '{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"host":"127.0.0.1","port":31415,"open":false,"urls":[]},"tabs":[{"cwd":"%s","running":true,"command":"%s --mode rpc"}]}}\n' \
+      "$HOME/.local/share/pi-webui/worktrees/dotfiles" "$PI_TEST_LAUNCHER"
+    ;;
   *api/health*) printf '%s\n' '{"ok":true,"webuiVersion":"0.10.3","piVersion":"0.84.4"}' ;;
 esac
 exit 0
@@ -1026,6 +1048,253 @@ SCRIPT
   [ "$status" -ne 0 ]
   [[ "$output" == *'worktree belongs to a foreign repository'* ]]
   [ "$(cat "$worktree/sentinel")" = foreign ]
+}
+
+@test "rollback refuses a symlinked state root before deleting the external runtime" {
+  make_task4_managed_service
+  local state="$HOME/.local/share/pi-webui"
+  local outside="$TEST_ROOT/outside-state"
+  mv "$state" "$outside"
+  ln -s "$outside" "$state"
+  printf 'preserve\n' >"$outside/runtimes/current/sentinel"
+
+  run_rollback_helper --remove-runtime
+
+  [ "$status" -ne 0 ]
+  [ -L "$state" ]
+  [ "$(cat "$outside/runtimes/current/sentinel")" = preserve ]
+  [ -f "$TEST_ROOT/service-active" ]
+}
+
+@test "rollback refuses symlinked runtimes and worktrees parents before destructive cleanup" {
+  make_task4_managed_service
+  local state="$HOME/.local/share/pi-webui"
+  local outside="$TEST_ROOT/outside-runtimes"
+  mv "$state/runtimes" "$outside"
+  ln -s "$outside" "$state/runtimes"
+  printf 'preserve\n' >"$outside/current/sentinel"
+
+  run_rollback_helper --remove-runtime
+
+  [ "$status" -ne 0 ]
+  [ "$(cat "$outside/current/sentinel")" = preserve ]
+  [ -f "$TEST_ROOT/service-active" ]
+
+  rm "$state/runtimes"
+  mv "$outside" "$state/runtimes"
+  outside="$TEST_ROOT/outside-worktrees"
+  mv "$state/worktrees" "$outside"
+  ln -s "$outside" "$state/worktrees"
+  printf 'preserve\n' >"$outside/sentinel"
+
+  run_rollback_helper --remove-worktree
+
+  [ "$status" -ne 0 ]
+  [ -d "$outside/dotfiles" ]
+  [ "$(cat "$outside/sentinel")" = preserve ]
+  [ -f "$TEST_ROOT/service-active" ]
+}
+
+@test "rollback refuses permissive and foreign-owned managed parents before deletion" {
+  make_task4_managed_service
+  local runtimes="$HOME/.local/share/pi-webui/runtimes"
+  printf 'preserve\n' >"$runtimes/current/sentinel"
+  chmod 0777 "$runtimes"
+
+  run_rollback_helper --remove-runtime
+
+  [ "$status" -ne 0 ]
+  [ "$(cat "$runtimes/current/sentinel")" = preserve ]
+  [ -f "$TEST_ROOT/service-active" ]
+
+  chmod 0700 "$runtimes"
+  cat >"$STUB_BIN/stat" <<'SCRIPT'
+#!/usr/bin/env bash
+last=${!#}
+if [[ "$last" == "$HOME/.local/share/pi-webui/runtimes" && "$1 $2" == '-c %u' ]]; then
+  printf '%s\n' 99999
+  exit 0
+fi
+exec /usr/bin/stat "$@"
+SCRIPT
+  chmod +x "$STUB_BIN/stat"
+
+  run_rollback_helper --remove-runtime
+
+  [ "$status" -ne 0 ]
+  [ "$(cat "$runtimes/current/sentinel")" = preserve ]
+  [ -f "$TEST_ROOT/service-active" ]
+}
+
+@test "tailscale ingress ignores a hostile caller PATH and never trusts fake safe preflight" {
+  make_task4_managed_service
+  local malicious="$TEST_ROOT/malicious-bin"
+  mkdir -p "$malicious"
+  cp -a "$STUB_BIN/." "$malicious/"
+  rm -f "$malicious/node"
+  printf '[Service]\nExecStart=/bin/false\n' >"$HOME/.config/systemd/user/pi-webui.service"
+  chmod 0600 "$HOME/.config/systemd/user/pi-webui.service"
+  cat >"$malicious/node" <<'SCRIPT'
+#!/usr/bin/env bash
+if [[ "$*" == *'const left = classify'* ]]; then
+  if [[ -f "$TEST_ROOT/malicious-sudo-ran" ]]; then printf exact; else printf empty; fi
+fi
+exit 0
+SCRIPT
+  cat >"$malicious/sudo" <<'SCRIPT'
+#!/usr/bin/env bash
+printf 'malicious sudo %s\n' "$*" >>"$TEST_COMMAND_LOG"
+: >"$TEST_ROOT/malicious-sudo-ran"
+exit 0
+SCRIPT
+  chmod +x "$malicious/node" "$malicious/sudo"
+
+  run env PI_WEBUI_TESTING=1 PI_WEBUI_TEST_OS_RELEASE="$TEST_OS_RELEASE" \
+    PI_WEBUI_TEST_TRUSTED_BIN_DIR="$STUB_BIN" PI_WEBUI_TEST_SYSTEM_ROOT="$TASK4_SYSTEM_ROOT" \
+    PI_WEBUI_TEST_PROC_ROOT="$PROC_ROOT" BATS_TEST_TMPDIR="$BATS_TEST_TMPDIR" \
+    HOME="$HOME" XDG_CONFIG_HOME="$XDG_CONFIG_HOME" PATH="$malicious:$PATH" \
+    TEST_ROOT="$TEST_ROOT" TEST_COMMAND_LOG="$TEST_COMMAND_LOG" \
+    TASK4_SERVE_JSON="$TASK4_SERVE_JSON" TASK4_SERVE_HUMAN="$TASK4_SERVE_HUMAN" \
+    TASK4_EXACT_JSON="$TASK4_EXACT_JSON" TASK4_EMPTY_JSON="$TASK4_EMPTY_JSON" \
+    PI_TEST_LAUNCHER="$PI_TEST_LAUNCHER" \
+    bash "$INSTALLER_REPO/ai/pi/webui/tailscale.sh" serve
+
+  [ "$status" -ne 0 ]
+  [ ! -e "$TEST_ROOT/malicious-sudo-ran" ]
+  run ! grep -q '^malicious sudo ' "$TEST_COMMAND_LOG"
+}
+
+@test "tailscale serve requires the exact external Pi launcher owner and owner-only runtime" {
+  make_task4_managed_service
+  printf '%s\n' \
+    '{"name":"@earendil-works/pi-coding-agent","version":"0.84.3","bin":{"pi":"dist/bundle/cli.js"}}' \
+    >"$PI_TEST_PACKAGE/package.json"
+
+  run_tailscale_helper serve
+
+  [ "$status" -ne 0 ]
+  run ! grep -q '^sudo .*tailscale.* serve' "$TEST_COMMAND_LOG"
+
+  printf '%s\n' \
+    '{"name":"@earendil-works/pi-coding-agent","version":"0.84.4","bin":{"pi":"dist/bundle/cli.js"}}' \
+    >"$PI_TEST_PACKAGE/package.json"
+  chmod 0770 "$HOME/.local/share/pi-webui/runtimes/current"
+  run_tailscale_helper serve
+  [ "$status" -ne 0 ]
+  run ! grep -q '^sudo .*tailscale.* serve' "$TEST_COMMAND_LOG"
+}
+
+@test "tailscale serve refuses symlink dirty attached and foreign managed worktrees" {
+  make_task4_managed_service
+  local worktree="$HOME/.local/share/pi-webui/worktrees/dotfiles"
+  local target="$TEST_ROOT/worktree-target"
+  mv "$worktree" "$target"
+  ln -s "$target" "$worktree"
+
+  run_tailscale_helper serve
+  [ "$status" -ne 0 ]
+  run ! grep -q '^sudo .*tailscale.* serve' "$TEST_COMMAND_LOG"
+
+  rm "$worktree"
+  mv "$target" "$worktree"
+  printf 'dirty\n' >"$worktree/dirty"
+  run_tailscale_helper serve
+  [ "$status" -ne 0 ]
+  rm "$worktree/dirty"
+
+  git -C "$worktree" checkout -qb task4-attached
+  run_tailscale_helper serve
+  [ "$status" -ne 0 ]
+  git -C "$worktree" checkout -q --detach
+
+  git -C "$INSTALLER_REPO" worktree remove "$worktree"
+  mkdir -p "$worktree"
+  git -C "$worktree" init -q
+  printf 'foreign\n' >"$worktree/sentinel"
+  git -C "$worktree" add sentinel
+  git -C "$worktree" -c user.name=test -c user.email=test@example.test commit -qm foreign
+  run_tailscale_helper serve
+  [ "$status" -ne 0 ]
+  [ "$(cat "$worktree/sentinel")" = foreign ]
+  run ! grep -q '^sudo .*tailscale.* serve' "$TEST_COMMAND_LOG"
+}
+
+@test "tailscale serve refuses detailed status with a mismatched cwd or Pi command" {
+  make_task4_managed_service
+  # shellcheck disable=SC2089 # Exported JSON is consumed as data, not shell syntax.
+  PI_WEBUI_TEST_STATUS_JSON='{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"host":"127.0.0.1","port":31415,"open":false,"urls":[]},"tabs":[{"cwd":"/foreign","running":true,"command":"/foreign/pi --mode rpc"}]}}'
+  # shellcheck disable=SC2090
+  export PI_WEBUI_TEST_STATUS_JSON
+
+  run_tailscale_helper serve
+
+  [ "$status" -ne 0 ]
+  run ! grep -q '^sudo .*tailscale.* serve' "$TEST_COMMAND_LOG"
+}
+
+@test "rollback default requires exact Pi worktree and detailed tab identity before stop" {
+  make_task4_managed_service
+  printf '%s\n' \
+    '{"name":"@earendil-works/pi-coding-agent","version":"0.84.3","bin":{"pi":"dist/bundle/cli.js"}}' \
+    >"$PI_TEST_PACKAGE/package.json"
+
+  run_rollback_helper
+  [ "$status" -ne 0 ]
+  [ -f "$TEST_ROOT/service-active" ]
+
+  printf '%s\n' \
+    '{"name":"@earendil-works/pi-coding-agent","version":"0.84.4","bin":{"pi":"dist/bundle/cli.js"}}' \
+    >"$PI_TEST_PACKAGE/package.json"
+  printf 'dirty\n' >"$HOME/.local/share/pi-webui/worktrees/dotfiles/dirty"
+  run_rollback_helper
+  [ "$status" -ne 0 ]
+  [ -f "$TEST_ROOT/service-active" ]
+
+  rm "$HOME/.local/share/pi-webui/worktrees/dotfiles/dirty"
+  # shellcheck disable=SC2089 # Exported JSON is consumed as data, not shell syntax.
+  PI_WEBUI_TEST_STATUS_JSON='{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"host":"127.0.0.1","port":31415,"open":false,"urls":[]},"tabs":[{"cwd":"/foreign","running":true,"command":"/foreign/pi --mode rpc"}]}}'
+  # shellcheck disable=SC2090
+  export PI_WEBUI_TEST_STATUS_JSON
+  run_rollback_helper
+  [ "$status" -ne 0 ]
+  [ -f "$TEST_ROOT/service-active" ]
+  run ! grep -q '^systemctl --user disable' "$TEST_COMMAND_LOG"
+}
+
+@test "rollback revalidates runtime inode after clean service stop before recursive removal" {
+  make_task4_managed_service
+  local runtime="$HOME/.local/share/pi-webui/runtimes/current"
+  local retained="$TEST_ROOT/pre-stop-runtime"
+  cat >"$PROCESS_CHECK" <<'SCRIPT'
+#!/usr/bin/env bash
+set -e
+runtime="$HOME/.local/share/pi-webui/runtimes/current"
+retained="$TEST_ROOT/pre-stop-runtime"
+mv "$runtime" "$retained"
+cp -a "$retained" "$runtime"
+printf 'preserve replacement\n' >"$runtime/race-sentinel"
+SCRIPT
+  chmod +x "$PROCESS_CHECK"
+
+  run_rollback_helper --remove-runtime
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'runtime identity changed before removal'* ]]
+  [ "$(cat "$runtime/race-sentinel")" = 'preserve replacement' ]
+  [ -d "$retained" ]
+  [ ! -e "$HOME/.config/systemd/user/pi-webui.service" ]
+}
+
+@test "trusted command-directory seams are unavailable outside the guarded Bats contract" {
+  make_installer_repo
+  make_valid_platform
+  setup_task4_stubs
+
+  run env PI_WEBUI_TEST_TRUSTED_BIN_DIR=/usr/bin HOME="$HOME" PATH="$PATH" \
+    /usr/bin/bash "$INSTALLER_REPO/ai/pi/webui/tailscale.sh" help
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'restricted to the test sandbox'* ]]
 }
 
 @test "tracked runtime accepts the exact authored package graph by default" {

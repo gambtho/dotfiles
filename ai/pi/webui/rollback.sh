@@ -3,6 +3,33 @@
 
 set -euo pipefail
 
+TRUSTED_SYSTEM_PATH='/usr/sbin:/usr/bin:/sbin:/bin'
+if [[ -n "${PI_WEBUI_TEST_TRUSTED_BIN_DIR:-}" ]]; then
+  [[ "${PI_WEBUI_TESTING:-0}" == 1 && -n "${BATS_TEST_TMPDIR:-}" ]] || {
+    printf '%s\n' 'error: PI_WEBUI_TEST_TRUSTED_BIN_DIR is restricted to the test sandbox' >&2
+    exit 1
+  }
+  case "$HOME/" in "$BATS_TEST_TMPDIR"/*) ;; *)
+    printf '%s\n' 'error: test HOME must be below BATS_TEST_TMPDIR' >&2
+    exit 1
+    ;;
+  esac
+  case "$PI_WEBUI_TEST_TRUSTED_BIN_DIR/" in "$BATS_TEST_TMPDIR"/*) ;; *)
+    printf '%s\n' 'error: trusted test bin must be below BATS_TEST_TMPDIR' >&2
+    exit 1
+    ;;
+  esac
+  [[ -d "$PI_WEBUI_TEST_TRUSTED_BIN_DIR" && ! -L "$PI_WEBUI_TEST_TRUSTED_BIN_DIR" &&
+    "$(/usr/bin/stat -c '%u' "$PI_WEBUI_TEST_TRUSTED_BIN_DIR")" == "$(/usr/bin/id -u)" ]] || {
+    printf '%s\n' 'error: trusted test bin must be an owned real directory' >&2
+    exit 1
+  }
+  PATH="$PI_WEBUI_TEST_TRUSTED_BIN_DIR:$TRUSTED_SYSTEM_PATH"
+else
+  PATH=$TRUSTED_SYSTEM_PATH
+fi
+export PATH
+
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd -P)"
 STATE_ROOT="$HOME/.local/share/pi-webui"
 CURRENT_RUNTIME="$STATE_ROOT/runtimes/current"
@@ -14,6 +41,11 @@ SYSTEMD_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
 UNIT_PATH="$SYSTEMD_CONFIG_HOME/systemd/user/pi-webui.service"
 REMOVE_RUNTIME=0
 REMOVE_WORKTREE=0
+MANAGED_PI_LAUNCHER=''
+RUNTIME_IDENTITY=''
+WORKTREE_IDENTITY=''
+WORKTREE_HEAD=''
+WORKTREE_GIT_DIR=''
 
 usage() {
   printf 'usage: %s [--remove-runtime] [--remove-worktree]\n' "$0"
@@ -98,6 +130,45 @@ run_node() {
   fi
 }
 
+require_safe_existing_directory() {
+  local directory=$1 label=$2 mode
+  [[ -e "$directory" || -L "$directory" ]] || return 0
+  [[ -d "$directory" && ! -L "$directory" ]] || {
+    fail "$label must be a real directory"
+    return 1
+  }
+  [[ "$(stat -c '%u' "$directory")" == "$(id -u)" ]] || {
+    fail "$label must be owned by the current user"
+    return 1
+  }
+  mode=$(stat -c '%a' "$directory")
+  (((8#$mode & 022) == 0)) || {
+    fail "$label must not be group or world writable"
+    return 1
+  }
+}
+
+validate_state_parent_chain() {
+  require_safe_existing_directory "$HOME" 'HOME directory'
+  require_safe_existing_directory "$HOME/.local" 'HOME .local directory'
+  require_safe_existing_directory "$HOME/.local/share" 'HOME share directory'
+  require_safe_existing_directory "$STATE_ROOT" 'Pi Web UI state root'
+  require_safe_existing_directory "$STATE_ROOT/runtimes" 'Pi Web UI runtimes parent'
+  require_safe_existing_directory "$STATE_ROOT/worktrees" 'Pi Web UI worktrees parent'
+}
+
+canonical_contained_target() {
+  local target=$1 suffix=$2 canonical_state canonical_target
+  [[ -d "$STATE_ROOT" && ! -L "$STATE_ROOT" && -d "$target" && ! -L "$target" ]] || return 1
+  canonical_state=$(cd "$STATE_ROOT" && pwd -P)
+  canonical_target=$(cd "$target" && pwd -P)
+  [[ "$canonical_target" == "$canonical_state/$suffix" ]] || {
+    fail "managed target escapes the canonical Pi Web UI state root: $target"
+    return 1
+  }
+  printf '%s\n' "$canonical_target"
+}
+
 require_empty_serve() {
   local serve_json funnel_json result
   command -v tailscale >/dev/null 2>&1 || return 0
@@ -137,6 +208,30 @@ try {
   }
 }
 
+validate_pi_launcher() {
+  run_node - "$MANAGED_PI_LAUNCHER" <<'NODE'
+const fs=require('node:fs'), path=require('node:path');
+const launcher=process.argv[2];
+if(!path.isAbsolute(launcher)) process.exit(1);
+const real=fs.realpathSync(launcher);
+let current=path.dirname(real);
+while(true) {
+  const manifestPath=path.join(current,'package.json');
+  if(fs.existsSync(manifestPath)) {
+    const manifest=JSON.parse(fs.readFileSync(manifestPath,'utf8'));
+    if(manifest.name==='@earendil-works/pi-coding-agent') {
+      if(manifest.version!=='0.84.4' || typeof manifest.bin?.pi!=='string' ||
+         fs.realpathSync(path.resolve(current,manifest.bin.pi))!==real) process.exit(1);
+      process.exit(0);
+    }
+  }
+  const parent=path.dirname(current);
+  if(parent===current) process.exit(1);
+  current=parent;
+}
+NODE
+}
+
 validate_unit_shape() {
   [[ -f "$UNIT_PATH" && ! -L "$UNIT_PATH" &&
     "$(stat -c '%u' "$UNIT_PATH")" == "$(id -u)" &&
@@ -144,8 +239,9 @@ validate_unit_shape() {
     fail 'Pi Web UI unit is unsafe or foreign'
     return 1
   }
-  if ! run_node - "$ROOT/ai/pi/webui/pi-webui.service.in" "$UNIT_PATH" \
-    "$CURRENT_RUNTIME/node_modules/.bin/pi-webui" "$WORKTREE" <<'NODE'; then
+  MANAGED_PI_LAUNCHER=$(
+    run_node - "$ROOT/ai/pi/webui/pi-webui.service.in" "$UNIT_PATH" \
+      "$CURRENT_RUNTIME/node_modules/.bin/pi-webui" "$WORKTREE" <<'NODE'
 const fs=require('node:fs');
 const [templatePath, unitPath, runtime, worktree]=process.argv.slice(2);
 const unit=fs.readFileSync(unitPath,'utf8');
@@ -156,10 +252,16 @@ let expected=fs.readFileSync(templatePath,'utf8')
   .replace('@WORKTREE@',JSON.stringify(worktree))
   .replace('@PI_LAUNCHER@',JSON.stringify(match[1]));
 if(unit!==expected || /@[A-Z][A-Z0-9_]*@/.test(expected)) process.exit(1);
+process.stdout.write(match[1]);
 NODE
+  ) || {
     fail 'Pi Web UI unit is foreign'
     return 1
-  fi
+  }
+  validate_pi_launcher || {
+    fail 'Pi Web UI Pi launcher identity is foreign'
+    return 1
+  }
 }
 
 validate_runtime() {
@@ -169,9 +271,8 @@ validate_runtime() {
     return 1
   }
   mode=$(stat -c '%a' "$CURRENT_RUNTIME")
-  [[ "$(stat -c '%u' "$CURRENT_RUNTIME")" == "$(id -u)" &&
-  $((8#$mode & 022)) == 0 ]] || {
-    fail 'managed runtime ownership or mode is unsafe'
+  [[ "$(stat -c '%u' "$CURRENT_RUNTIME")" == "$(id -u)" && "$mode" == 700 ]] || {
+    fail 'managed runtime must be owner-only and current-user-owned'
     return 1
   }
   [[ -f "$marker" && ! -L "$marker" &&
@@ -200,13 +301,18 @@ canonical_git_path() {
 
 validate_worktree() {
   local source_top source_common_raw source_common target_common_raw target_common
-  local target_git_raw target_git status
+  local target_git_raw target_git status mode
   [[ -d "$WORKTREE" && ! -L "$WORKTREE" ]] || {
     fail 'managed worktree must be a real directory'
     return 1
   }
   [[ "$(stat -c '%u' "$WORKTREE")" == "$(id -u)" ]] || {
     fail 'managed worktree has foreign ownership'
+    return 1
+  }
+  mode=$(stat -c '%a' "$WORKTREE")
+  (((8#$mode & 022) == 0)) || {
+    fail 'managed worktree must not be group or world writable'
     return 1
   }
   source_top=$(git -C "$ROOT" rev-parse --show-toplevel)
@@ -251,9 +357,15 @@ validate_destructive_state() {
   fi
   if [[ "$REMOVE_RUNTIME" == 1 && (-e "$CURRENT_RUNTIME" || -L "$CURRENT_RUNTIME") ]]; then
     validate_runtime
+    canonical_contained_target "$CURRENT_RUNTIME" runtimes/current >/dev/null || return 1
+    RUNTIME_IDENTITY=$(stat -c '%d:%i' "$CURRENT_RUNTIME")
   fi
   if [[ "$REMOVE_WORKTREE" == 1 && (-e "$WORKTREE" || -L "$WORKTREE") ]]; then
     validate_worktree
+    canonical_contained_target "$WORKTREE" worktrees/dotfiles >/dev/null || return 1
+    WORKTREE_IDENTITY=$(stat -c '%d:%i' "$WORKTREE")
+    WORKTREE_HEAD=$(git -C "$WORKTREE" rev-parse --verify HEAD)
+    WORKTREE_GIT_DIR=$(canonical_git_path "$WORKTREE" "$(git -C "$WORKTREE" rev-parse --git-dir)")
   fi
 }
 
@@ -265,6 +377,35 @@ loaded_unit_is_local() {
   }
   [[ -z "$fragment" || "$fragment" == "$UNIT_PATH" ]] || {
     fail 'loaded Pi Web UI unit is foreign'
+    return 1
+  }
+}
+
+verify_active_service_identity() {
+  local health status
+  systemctl --user is-active --quiet pi-webui.service || return 0
+  health=$(curl --fail --silent --show-error http://127.0.0.1:31415/api/health)
+  printf '%s' "$health" | run_node -e '
+let input=""; process.stdin.on("data", c => input += c); process.stdin.on("end", () => {
+  const value=JSON.parse(input);
+  if(value.ok!==true || value.webuiVersion!=="0.10.3" || value.piVersion!=="0.84.4") process.exit(1);
+});' || {
+    fail 'active Pi Web UI exact health validation failed'
+    return 1
+  }
+  status=$(curl --fail --silent --show-error \
+    'http://127.0.0.1:31415/api/webui-status?detailed=1&events=0')
+  # shellcheck disable=SC2016 # JavaScript template literal, not shell expansion.
+  printf '%s' "$status" | run_node -e '
+let input=""; process.stdin.on("data", c => input += c); process.stdin.on("end", () => {
+  const [worktree,launcher]=process.argv.slice(1), value=JSON.parse(input), data=value.data, network=data?.network, tabs=data?.tabs;
+  if(value.ok!==true || data?.webuiVersion!=="0.10.3" || data?.piVersion!=="0.84.4" ||
+     network?.host!=="127.0.0.1" || network?.port!==31415 || network?.open!==false ||
+     !Array.isArray(network.urls) || network.urls.length || !Array.isArray(tabs) || tabs.length<1 ||
+     tabs.some(tab => tab.cwd!==worktree || tab.running!==true || typeof tab.command!=="string" ||
+       !tab.command.startsWith(`${launcher} --mode rpc`))) process.exit(1);
+});' "$WORKTREE" "$MANAGED_PI_LAUNCHER" || {
+    fail 'active Pi Web UI detailed identity validation failed'
     return 1
   }
 }
@@ -329,11 +470,19 @@ stop_and_remove_unit() {
 }
 
 remove_runtime() {
+  local observed_identity
   if [[ ! -e "$CURRENT_RUNTIME" && ! -L "$CURRENT_RUNTIME" ]]; then
     printf 'ready: managed Pi Web UI runtime already absent\n'
     return 0
   fi
+  validate_state_parent_chain
   validate_runtime
+  canonical_contained_target "$CURRENT_RUNTIME" runtimes/current >/dev/null || return 1
+  observed_identity=$(stat -c '%d:%i' "$CURRENT_RUNTIME")
+  [[ -n "$RUNTIME_IDENTITY" && "$observed_identity" == "$RUNTIME_IDENTITY" ]] || {
+    fail 'managed runtime identity changed before removal'
+    return 1
+  }
   rm -rf -- "$CURRENT_RUNTIME"
   [[ ! -e "$CURRENT_RUNTIME" && ! -L "$CURRENT_RUNTIME" ]] || {
     fail 'managed runtime removal failed'
@@ -343,13 +492,23 @@ remove_runtime() {
 }
 
 remove_worktree() {
-  local source_top
+  local source_top observed_identity observed_head observed_git_dir
   if [[ ! -e "$WORKTREE" && ! -L "$WORKTREE" ]]; then
     printf 'ready: managed Pi Web UI worktree already absent\n'
     return 0
   fi
-  validate_worktree
   source_top=$(git -C "$ROOT" rev-parse --show-toplevel)
+  validate_state_parent_chain
+  validate_worktree
+  canonical_contained_target "$WORKTREE" worktrees/dotfiles >/dev/null || return 1
+  observed_identity=$(stat -c '%d:%i' "$WORKTREE")
+  observed_head=$(git -C "$WORKTREE" rev-parse --verify HEAD)
+  observed_git_dir=$(canonical_git_path "$WORKTREE" "$(git -C "$WORKTREE" rev-parse --git-dir)")
+  [[ -n "$WORKTREE_IDENTITY" && "$observed_identity" == "$WORKTREE_IDENTITY" &&
+    "$observed_head" == "$WORKTREE_HEAD" && "$observed_git_dir" == "$WORKTREE_GIT_DIR" ]] || {
+    fail 'managed worktree identity changed before removal'
+    return 1
+  }
   git -C "$source_top" worktree remove "$WORKTREE"
   [[ ! -e "$WORKTREE" && ! -L "$WORKTREE" ]] || {
     fail 'managed worktree removal failed'
@@ -383,6 +542,7 @@ parse_arguments() {
 main() {
   parse_arguments "$@"
   require_supported_platform
+  validate_state_parent_chain
   require_empty_serve
   loaded_unit_is_local
   validate_destructive_state
@@ -390,6 +550,8 @@ main() {
   if [[ -e "$UNIT_PATH" || -L "$UNIT_PATH" ]]; then
     validate_unit_shape
     validate_runtime
+    validate_worktree
+    verify_active_service_identity
     stop_and_remove_unit
   else
     if systemctl --user is-active --quiet pi-webui.service ||
