@@ -156,7 +156,7 @@ case "$*" in
         status_cwd='/home/tng/.dotfiles/tmp/worktrees/piface-smoke'
         status_launcher="$HOME/.local/share/mise/installs/node/26.5.0/bin/pi"
       fi
-      printf '\''{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"host":"127.0.0.1","port":31415,"open":false,"urls":[]},"tabs":[{"cwd":"%s","running":true,"command":"%s --mode rpc"}]}}'\'' \
+      printf '\''{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"host":"127.0.0.1","port":31415,"open":false,"networkUrls":[]},"tabs":[{"cwd":"%s","running":true,"command":"%s --mode rpc"}]}}'\'' \
         "$status_cwd" "$status_launcher"
     fi
     ;;
@@ -547,7 +547,7 @@ case "$*" in
     if [[ -n "${PI_WEBUI_TEST_STATUS_JSON:-}" ]]; then
       printf '%s\n' "$PI_WEBUI_TEST_STATUS_JSON"
     else
-      printf '{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"host":"127.0.0.1","port":31415,"open":false,"urls":[]},"tabs":[{"cwd":"%s","running":true,"command":"%s --mode rpc"}]}}\n' \
+      printf '{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"host":"127.0.0.1","port":31415,"open":false,"networkUrls":[]},"tabs":[{"cwd":"%s","running":true,"command":"%s --mode rpc"}]}}\n' \
         "$HOME/.local/share/pi-webui/worktrees/dotfiles" "$PI_TEST_LAUNCHER"
     fi
     ;;
@@ -1051,7 +1051,7 @@ SCRIPT
 #!/usr/bin/env bash
 case "$*" in
   *api/webui-status*)
-    printf '{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"host":"127.0.0.1","port":31415,"open":false,"urls":[]},"tabs":[{"cwd":"%s","running":true,"command":"%s --mode rpc"}]}}\n' \
+    printf '{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"host":"127.0.0.1","port":31415,"open":false,"networkUrls":[]},"tabs":[{"cwd":"%s","running":true,"command":"%s --mode rpc"}]}}\n' \
       "$HOME/.local/share/pi-webui/worktrees/dotfiles" "$PI_TEST_LAUNCHER"
     ;;
   *api/health*) printf '%s\n' '{"ok":true,"webuiVersion":"0.10.3","piVersion":"0.84.4"}' ;;
@@ -1327,7 +1327,7 @@ SCRIPT
 @test "tailscale serve refuses detailed status with a mismatched cwd or Pi command" {
   make_task4_managed_service
   # shellcheck disable=SC2089 # Exported JSON is consumed as data, not shell syntax.
-  PI_WEBUI_TEST_STATUS_JSON='{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"host":"127.0.0.1","port":31415,"open":false,"urls":[]},"tabs":[{"cwd":"/foreign","running":true,"command":"/foreign/pi --mode rpc"}]}}'
+  PI_WEBUI_TEST_STATUS_JSON='{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"host":"127.0.0.1","port":31415,"open":false,"networkUrls":[]},"tabs":[{"cwd":"/foreign","running":true,"command":"/foreign/pi --mode rpc"}]}}'
   # shellcheck disable=SC2090
   export PI_WEBUI_TEST_STATUS_JSON
 
@@ -1357,7 +1357,7 @@ SCRIPT
 
   rm "$HOME/.local/share/pi-webui/worktrees/dotfiles/dirty"
   # shellcheck disable=SC2089 # Exported JSON is consumed as data, not shell syntax.
-  PI_WEBUI_TEST_STATUS_JSON='{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"host":"127.0.0.1","port":31415,"open":false,"urls":[]},"tabs":[{"cwd":"/foreign","running":true,"command":"/foreign/pi --mode rpc"}]}}'
+  PI_WEBUI_TEST_STATUS_JSON='{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"host":"127.0.0.1","port":31415,"open":false,"networkUrls":[]},"tabs":[{"cwd":"/foreign","running":true,"command":"/foreign/pi --mode rpc"}]}}'
   # shellcheck disable=SC2090
   export PI_WEBUI_TEST_STATUS_JSON
   run_rollback_helper
@@ -1619,7 +1619,7 @@ SCRIPT
 @test "tailscale and rollback enforce an rpc argument boundary" {
   make_task4_managed_service
   PI_WEBUI_TEST_STATUS_JSON=$(printf \
-    '{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"host":"127.0.0.1","port":31415,"open":false,"urls":[]},"tabs":[{"cwd":"%s","running":true,"command":"%s --mode rpc-suffix"}]}}' \
+    '{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"host":"127.0.0.1","port":31415,"open":false,"networkUrls":[]},"tabs":[{"cwd":"%s","running":true,"command":"%s --mode rpc-suffix"}]}}' \
     "$HOME/.local/share/pi-webui/worktrees/dotfiles" "$PI_TEST_LAUNCHER")
   export PI_WEBUI_TEST_STATUS_JSON
 
@@ -1633,7 +1633,7 @@ SCRIPT
   run ! grep -q '^systemctl --user disable' "$TEST_COMMAND_LOG"
 
   PI_WEBUI_TEST_STATUS_JSON=$(printf \
-    '{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"host":"127.0.0.1","port":31415,"open":false,"urls":[]},"tabs":[{"cwd":"%s","running":true,"command":null}]}}' \
+    '{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"host":"127.0.0.1","port":31415,"open":false,"networkUrls":[]},"tabs":[{"cwd":"%s","running":true,"command":null}]}}' \
     "$HOME/.local/share/pi-webui/worktrees/dotfiles")
   export PI_WEBUI_TEST_STATUS_JSON
   run_tailscale_helper serve
@@ -1643,7 +1643,7 @@ SCRIPT
   [ -f "$TEST_ROOT/service-active" ]
 
   PI_WEBUI_TEST_STATUS_JSON=$(printf \
-    '{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"host":"127.0.0.1","port":31415,"open":false,"urls":[]},"tabs":[{"cwd":"%s","running":true,"command":"%s --mode rpc --resume accepted"}]}}' \
+    '{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"host":"127.0.0.1","port":31415,"open":false,"networkUrls":[]},"tabs":[{"cwd":"%s","running":true,"command":"%s --mode rpc --resume accepted"}]}}' \
     "$HOME/.local/share/pi-webui/worktrees/dotfiles" "$PI_TEST_LAUNCHER")
   export PI_WEBUI_TEST_STATUS_JSON
   run_tailscale_helper serve
@@ -1661,7 +1661,7 @@ SCRIPT
   stub_successful_npm_ci
   local worktree="$HOME/.local/share/pi-webui/worktrees/dotfiles"
   PI_WEBUI_TEST_STATUS_JSON=$(printf \
-    '{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"host":"127.0.0.1","port":31415,"open":false,"urls":[]},"tabs":[{"cwd":"%s","running":true,"command":"%s --mode rpc-suffix"}]}}' \
+    '{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"host":"127.0.0.1","port":31415,"open":false,"networkUrls":[]},"tabs":[{"cwd":"%s","running":true,"command":"%s --mode rpc-suffix"}]}}' \
     "$worktree" "$PI_TEST_LAUNCHER")
   export PI_WEBUI_TEST_STATUS_JSON
 
@@ -1679,7 +1679,7 @@ SCRIPT
   stub_successful_npm_ci
   local worktree="$HOME/.local/share/pi-webui/worktrees/dotfiles"
   PI_WEBUI_TEST_STATUS_JSON=$(printf \
-    '{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"host":"127.0.0.1","port":31415,"open":false,"urls":[]},"tabs":[{"cwd":"%s","running":true}]}}' \
+    '{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"host":"127.0.0.1","port":31415,"open":false,"networkUrls":[]},"tabs":[{"cwd":"%s","running":true}]}}' \
     "$worktree")
   export PI_WEBUI_TEST_STATUS_JSON
 
@@ -1973,7 +1973,7 @@ SCRIPT
   local state="$HOME/.local/share/pi-webui"
   local worktree="$state/worktrees/dotfiles"
   PI_WEBUI_TEST_STATUS_JSON=$(printf \
-    '{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"host":"127.0.0.1","port":31415,"open":false,"urls":[]},"tabs":[{"cwd":"%s","running":true,"command":"%s --mode rpc"}]}}' \
+    '{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"host":"127.0.0.1","port":31415,"open":false,"networkUrls":[]},"tabs":[{"cwd":"%s","running":true,"command":"%s --mode rpc"}]}}' \
     "$worktree" "$PI_TEST_LAUNCHER")
   export PI_WEBUI_TEST_STATUS_JSON
 
@@ -2027,7 +2027,7 @@ EOF
   make_valid_pi
   stub_successful_npm_ci
   # shellcheck disable=SC2089 # Exported JSON is consumed as data, not shell syntax.
-  PI_WEBUI_TEST_STATUS_JSON='{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"host":"127.0.0.1","port":31415,"open":true,"urls":["http://lan"]},"tabs":[{"cwd":"/foreign","running":true,"command":"/foreign/pi --mode rpc"}]}}'
+  PI_WEBUI_TEST_STATUS_JSON='{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"host":"127.0.0.1","port":31415,"open":true,"networkUrls":["http://lan"]},"tabs":[{"cwd":"/foreign","running":true,"command":"/foreign/pi --mode rpc"}]}}'
   # shellcheck disable=SC2090
   export PI_WEBUI_TEST_STATUS_JSON
   local state="$HOME/.local/share/pi-webui"
@@ -2118,7 +2118,7 @@ EOF
   local state="$HOME/.local/share/pi-webui"
   local worktree="$state/worktrees/dotfiles"
   PI_WEBUI_TEST_STATUS_JSON=$(printf \
-    '{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"host":"127.0.0.1","port":31415,"open":false,"urls":[]},"tabs":[{"cwd":"%s","running":true,"command":"%s --mode rpc"}]}}' \
+    '{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"host":"127.0.0.1","port":31415,"open":false,"networkUrls":[]},"tabs":[{"cwd":"%s","running":true,"command":"%s --mode rpc"}]}}' \
     "$worktree" "$PI_TEST_LAUNCHER")
   export PI_WEBUI_TEST_STATUS_JSON
   run_installer --apply
@@ -3502,4 +3502,333 @@ SCRIPT
     done < <(grep -oE "\./ai/pi/webui/$helper( [^[:space:]\x60]+)*" "$readme" |
       awk '{for (field = 2; field <= NF; field++) print $field}' | sort -u)
   done
+}
+
+assert_installer_rejects_network_urls_shape() {
+  local shape=$1 network
+  make_installer_repo
+  make_valid_platform
+  make_valid_pi
+  stub_successful_npm_ci
+  case "$shape" in
+    missing) network='{"host":"127.0.0.1","port":31415,"open":false}' ;;
+    legacy) network='{"host":"127.0.0.1","port":31415,"open":false,"networkUrls":[],"urls":[]}' ;;
+    non-array) network='{"host":"127.0.0.1","port":31415,"open":false,"networkUrls":"none"}' ;;
+    nonempty) network='{"host":"127.0.0.1","port":31415,"open":false,"networkUrls":["http://lan"]}' ;;
+    *) return 99 ;;
+  esac
+  PI_WEBUI_TEST_STATUS_JSON=$(printf \
+    '{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":%s,"tabs":[{"cwd":"%s","running":true,"command":"%s --mode rpc"}]}}' \
+    "$network" "$HOME/.local/share/pi-webui/worktrees/dotfiles" "$PI_TEST_LAUNCHER")
+  export PI_WEBUI_TEST_STATUS_JSON
+
+  run_installer --apply
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'detailed status validation failed'* ]]
+  [ -d "$HOME/.local/share/pi-webui/runtimes/candidate" ]
+  [ -d "$HOME/.local/share/pi-webui/transactions/pending" ]
+}
+
+@test "installer rejects a missing Firstp1ck networkUrls field" {
+  assert_installer_rejects_network_urls_shape missing
+}
+
+@test "installer rejects the legacy invented Firstp1ck urls field" {
+  assert_installer_rejects_network_urls_shape legacy
+}
+
+@test "installer rejects a non-array Firstp1ck networkUrls field" {
+  assert_installer_rejects_network_urls_shape non-array
+}
+
+@test "installer rejects a nonempty Firstp1ck networkUrls field" {
+  assert_installer_rejects_network_urls_shape nonempty
+}
+
+status_json_with_network() {
+  printf '{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":%s,"tabs":[{"cwd":"%s","running":true,"command":"%s --mode rpc"}]}}' \
+    "$1" "$HOME/.local/share/pi-webui/worktrees/dotfiles" "$PI_TEST_LAUNCHER"
+}
+
+@test "rollback requires networkUrls to be present as an exactly empty array" {
+  make_task4_managed_service
+  local network
+  for network in \
+    '{"host":"127.0.0.1","port":31415,"open":false}' \
+    '{"host":"127.0.0.1","port":31415,"open":false,"networkUrls":[],"urls":[]}' \
+    '{"host":"127.0.0.1","port":31415,"open":false,"networkUrls":null}' \
+    '{"host":"127.0.0.1","port":31415,"open":false,"networkUrls":["http://lan"]}'; do
+    PI_WEBUI_TEST_STATUS_JSON=$(status_json_with_network "$network")
+    export PI_WEBUI_TEST_STATUS_JSON
+    : >"$TEST_COMMAND_LOG"
+
+    run_rollback_helper
+
+    [ "$status" -ne 0 ]
+    [[ "$output" == *'detailed identity validation failed'* ]]
+    [ -f "$TEST_ROOT/service-active" ]
+    run ! grep -q '^systemctl --user stop' "$TEST_COMMAND_LOG"
+  done
+}
+
+@test "Tailscale ingress requires networkUrls to be present as an exactly empty array" {
+  make_task4_managed_service
+  local network
+  for network in \
+    '{"host":"127.0.0.1","port":31415,"open":false}' \
+    '{"host":"127.0.0.1","port":31415,"open":false,"networkUrls":[],"urls":[]}' \
+    '{"host":"127.0.0.1","port":31415,"open":false,"networkUrls":{}}' \
+    '{"host":"127.0.0.1","port":31415,"open":false,"networkUrls":["http://lan"]}'; do
+    PI_WEBUI_TEST_STATUS_JSON=$(status_json_with_network "$network")
+    export PI_WEBUI_TEST_STATUS_JSON
+    : >"$TEST_COMMAND_LOG"
+
+    run_tailscale_helper serve
+
+    [ "$status" -ne 0 ]
+    [[ "$output" == *'local network status is not exact'* ]]
+    run ! grep -q '^sudo .*tailscale.* serve' "$TEST_COMMAND_LOG"
+  done
+}
+
+make_valid_archive_evidence() {
+  local state="$HOME/.local/share/pi-webui"
+  local candidate="$state/runtimes/candidate"
+  local transaction="$state/transactions/pending"
+  ARCHIVE_TOKEN='pi-webui-task2:4242:17'
+  ARCHIVE_ID='pi-webui-task2-4242-17'
+  mkdir -p "$state/runtimes" "$state/transactions"
+  make_installed_fixture
+  mv "$FIXTURE_RUNTIME" "$candidate"
+  FIXTURE_RUNTIME="$TEST_ROOT/runtime"
+  mkdir -p "$FIXTURE_RUNTIME"
+  chmod 0700 "$state" "$state/runtimes" "$state/transactions" "$candidate"
+  printf '%s\n' pi-webui-task2-candidate-v1 >"$candidate/.pi-webui-candidate"
+  printf '%s\n' "$ARCHIVE_TOKEN" >"$candidate/.pi-webui-owner"
+  chmod 0600 "$candidate/.pi-webui-candidate" "$candidate/.pi-webui-owner"
+
+  mkdir -m 0700 "$transaction"
+  printf '%s\n' pi-webui-task2-transaction-v1 >"$transaction/.pi-webui-transaction"
+  printf '%s\n' "$ARCHIVE_TOKEN" >"$transaction/.pi-webui-owner"
+  printf '%s\n' "$SOURCE_HEAD" >"$transaction/source-head"
+  printf '%s\n' "$SOURCE_HEAD" >"$transaction/worktree-head"
+  printf '%s\n' "$INSTALLER_REPO" >"$transaction/source-root"
+  printf '%s\n' "$(git -C "$INSTALLER_REPO" rev-parse --path-format=absolute --git-common-dir)" \
+    >"$transaction/source-common-dir"
+  printf '%s\n' "$candidate" >"$transaction/candidate-runtime"
+  printf '%s\n' "$state/worktrees/dotfiles" >"$transaction/worktree"
+  printf '%s\n' ABSENT >"$transaction/worktree-previous-head"
+  printf '%s\n' /safe/pi >"$transaction/pi-launcher"
+  printf '%s\n' /safe/pi-real >"$transaction/pi-real-executable"
+  find "$transaction" -maxdepth 1 -type f -exec chmod 0600 {} +
+  export ARCHIVE_TOKEN ARCHIVE_ID
+}
+
+assert_archive_did_not_run_live_actions() {
+  run grep -E '^(npm-ci|systemctl |tailscale |sudo .*tailscale|git .* (checkout|worktree))' \
+    "$TEST_COMMAND_LOG"
+  [ "$status" -eq 1 ]
+}
+
+@test "installer archives a real retained failed-service transaction" {
+  make_installer_repo
+  make_valid_platform
+  make_valid_pi
+  stub_successful_npm_ci
+  run_installer --apply
+  [ "$status" -eq 0 ]
+
+  local state="$HOME/.local/share/pi-webui"
+  local worktree="$state/worktrees/dotfiles"
+  local unit="$HOME/.config/systemd/user/pi-webui.service"
+  local runtime_before unit_before head_before
+  runtime_before=$(directory_fingerprint "$state/runtimes/current")
+  unit_before=$(sha256sum "$unit")
+  head_before=$(git -C "$worktree" rev-parse HEAD)
+  PI_WEBUI_TEST_STATUS_JSON=$(printf \
+    '{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"host":"127.0.0.1","port":31415,"open":false,"networkUrls":["http://lan"]},"tabs":[{"cwd":"%s","running":true,"command":"%s --mode rpc"}]}}' \
+    "$worktree" "$PI_TEST_LAUNCHER")
+  export PI_WEBUI_TEST_STATUS_JSON
+  run_installer --apply
+  [ "$status" -eq 78 ]
+  [ -f "$state/transactions/pending/prior-unit" ]
+  unset PI_WEBUI_TEST_STATUS_JSON
+  : >"$TEST_COMMAND_LOG"
+
+  run_installer --archive-pending
+
+  [ "$status" -eq 0 ]
+  [ ! -e "$state/runtimes/candidate" ]
+  [ ! -e "$state/transactions/pending" ]
+  [ "$(find "$state/backups/failures" -mindepth 1 -maxdepth 1 -type d | wc -l)" -eq 1 ]
+  [ "$runtime_before" = "$(directory_fingerprint "$state/runtimes/current")" ]
+  [ "$unit_before" = "$(sha256sum "$unit")" ]
+  [ "$head_before" = "$(git -C "$worktree" rev-parse HEAD)" ]
+  [ -f "$TEST_ROOT/service-active" ]
+  [ -f "$TEST_ROOT/service-enabled" ]
+  assert_archive_did_not_run_live_actions
+}
+
+@test "installer archives matching retained apply evidence without touching live state" {
+  make_installer_repo
+  make_valid_platform
+  make_valid_archive_evidence
+  local state="$HOME/.local/share/pi-webui"
+  local candidate="$state/runtimes/candidate"
+  local transaction="$state/transactions/pending"
+  local unit="$HOME/.config/systemd/user/pi-webui.service"
+  mkdir -p "$state/runtimes/current" "$state/worktrees/dotfiles" "$(dirname "$unit")"
+  printf 'current runtime\n' >"$state/runtimes/current/sentinel"
+  printf 'current worktree\n' >"$state/worktrees/dotfiles/sentinel"
+  printf 'current unit\n' >"$unit"
+  : >"$TEST_ROOT/service-active"
+  local candidate_before transaction_before live_before
+  candidate_before=$(directory_fingerprint "$candidate")
+  transaction_before=$(directory_fingerprint "$transaction")
+  live_before=$(sha256sum "$state/runtimes/current/sentinel" "$state/worktrees/dotfiles/sentinel" "$unit")
+  : >"$TEST_COMMAND_LOG"
+
+  run_installer --archive-pending
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"archived: $state/backups/failures/$ARCHIVE_ID"* ]]
+  local archive="$state/backups/failures/$ARCHIVE_ID"
+  [ ! -e "$candidate" ]
+  [ ! -e "$transaction" ]
+  [ -d "$archive/candidate" ]
+  [ -d "$archive/pending" ]
+  [ "$(stat -c '%a' "$state/backups" "$state/backups/failures" "$archive")" = $'700\n700\n700' ]
+  [ "$candidate_before" = "$(directory_fingerprint "$archive/candidate")" ]
+  [ "$transaction_before" = "$(directory_fingerprint "$archive/pending")" ]
+  [ "$live_before" = "$(sha256sum "$state/runtimes/current/sentinel" "$state/worktrees/dotfiles/sentinel" "$unit")" ]
+  [ -f "$TEST_ROOT/service-active" ]
+  [ ! -e "$state/transactions/apply.lock" ]
+  assert_archive_did_not_run_live_actions
+}
+
+@test "installer archive action is idempotent when no pending evidence exists" {
+  make_installer_repo
+  make_valid_platform
+  : >"$TEST_COMMAND_LOG"
+
+  run_installer --archive-pending
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'no pending candidate/transaction evidence to archive'* ]]
+  [ ! -e "$HOME/.local/share/pi-webui" ]
+  assert_archive_did_not_run_live_actions
+}
+
+@test "installer restores the first artifact when the second archive move fails" {
+  make_installer_repo
+  make_valid_platform
+  make_valid_archive_evidence
+  local state="$HOME/.local/share/pi-webui"
+  local candidate="$state/runtimes/candidate"
+  local transaction="$state/transactions/pending"
+  local candidate_before transaction_before
+  candidate_before=$(directory_fingerprint "$candidate")
+  transaction_before=$(directory_fingerprint "$transaction")
+  cat >"$STUB_BIN/mv" <<'SCRIPT'
+#!/usr/bin/env bash
+if [[ "$*" == *"$HOME/.local/share/pi-webui/transactions/pending"* && "$*" == *'/pending'* ]]; then
+  exit 68
+fi
+exec /usr/bin/mv "$@"
+SCRIPT
+  chmod +x "$STUB_BIN/mv"
+  : >"$TEST_COMMAND_LOG"
+
+  run_installer --archive-pending
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'could not archive pending transaction; restored candidate evidence'* ]]
+  [ "$candidate_before" = "$(directory_fingerprint "$candidate")" ]
+  [ "$transaction_before" = "$(directory_fingerprint "$transaction")" ]
+  [ ! -e "$state/backups/failures/$ARCHIVE_ID" ]
+  [ ! -e "$state/transactions/apply.lock" ]
+  assert_archive_did_not_run_live_actions
+}
+
+@test "installer archive rejects unsafe foreign colliding and concurrent state" {
+  make_installer_repo
+  make_valid_platform
+  make_valid_archive_evidence
+  local state="$HOME/.local/share/pi-webui"
+  local candidate="$state/runtimes/candidate"
+  local transaction="$state/transactions/pending"
+  local failures="$state/backups/failures"
+  local outside="$TEST_ROOT/outside-failures"
+  local evidence_before
+  evidence_before="$(directory_fingerprint "$candidate")$(directory_fingerprint "$transaction")"
+  mkdir -p "$state/backups" "$outside"
+  chmod 0700 "$state/backups" "$outside"
+  printf 'preserve\n' >"$outside/sentinel"
+  ln -s "$outside" "$failures"
+
+  run_installer --archive-pending
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'failure archive parent must be a real directory'* ]]
+  [ "$(cat "$outside/sentinel")" = preserve ]
+  rm "$failures"
+
+  mkdir -m 0770 "$failures"
+  run_installer --archive-pending
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'failure archive parent must not be group or world writable'* ]]
+  chmod 0700 "$failures"
+
+  mkdir -m 0700 "$failures/$ARCHIVE_ID"
+  printf 'collision\n' >"$failures/$ARCHIVE_ID/sentinel"
+  run_installer --archive-pending
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'failure archive destination already exists'* ]]
+  [ "$(cat "$failures/$ARCHIVE_ID/sentinel")" = collision ]
+  rm -rf "$failures/$ARCHIVE_ID"
+
+  printf '%s\n' pi-webui-task2:999:1 >"$transaction/.pi-webui-owner"
+  run_installer --archive-pending
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'ownership tokens do not match'* ]]
+  printf '%s\n' "$ARCHIVE_TOKEN" >"$transaction/.pi-webui-owner"
+
+  local candidate_manifest="$candidate/node_modules/@firstpick/pi-package-webui/package.json"
+  cp "$candidate_manifest" "$TEST_ROOT/candidate-package.json"
+  printf '%s\n' '{"name":"foreign","version":"0.10.3","bin":{"pi-webui":"./bin/pi-webui-launcher.mjs"}}' \
+    >"$candidate_manifest"
+  run_installer --archive-pending
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'candidate runtime failed installed validation'* ]]
+  cp "$TEST_ROOT/candidate-package.json" "$candidate_manifest"
+
+  chmod 0770 "$candidate"
+  run_installer --archive-pending
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'candidate runtime must'* ]]
+  chmod 0700 "$candidate"
+
+  local lock="$state/transactions/apply.lock"
+  mkdir -m 0700 "$lock"
+  printf '%s\n' pi-webui-task2-lock-v1 >"$lock/.pi-webui-lock"
+  printf '%s\n' other-process-token >"$lock/.pi-webui-owner"
+  chmod 0600 "$lock/.pi-webui-lock" "$lock/.pi-webui-owner"
+  run_installer --archive-pending
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'apply lock is already held'* ]]
+
+  [ "$evidence_before" = "$(directory_fingerprint "$candidate")$(directory_fingerprint "$transaction")" ]
+  assert_archive_did_not_run_live_actions
+}
+
+@test "Pi Web UI runbook documents retained-evidence archive contract" {
+  local readme="$REPO_ROOT/ai/pi/webui/README.md"
+  run grep -Fx './ai/pi/webui/install.sh --archive-pending' "$readme"
+  [ "$status" -eq 0 ]
+  run grep -F 'backups/failures/' "$readme"
+  [ "$status" -eq 0 ]
+  run grep -F 'The candidate and pending' "$readme"
+  [ "$status" -eq 0 ]
+  run grep -F 'transaction contents are retained' "$readme"
+  [ "$status" -eq 0 ]
 }

@@ -26,6 +26,7 @@ UNIT_DIR="$SYSTEMD_CONFIG_HOME/systemd/user"
 UNIT_PATH="$UNIT_DIR/pi-webui.service"
 UNIT_CANDIDATE="$STATE_ROOT/transactions/pi-webui.candidate.service"
 BACKUP_ROOT="$STATE_ROOT/backups/previous"
+FAILURE_ROOT="$STATE_ROOT/backups/failures"
 UNIT_TEMPORARY=''
 BACKUP_TEMPORARY=''
 TRIAL_RUNTIME="$HOME/.local/share/pi-webui-runtime"
@@ -50,9 +51,14 @@ PRIOR_HEALTH_WORKTREE=''
 PRIOR_HEALTH_PI_LAUNCHER=''
 PRIOR_ACTIVE=0
 PRIOR_ENABLED=0
+ARCHIVE_ID=''
+ARCHIVE_TEMPORARY=''
+ARCHIVE_DESTINATION=''
+CANDIDATE_OWNER_TOKEN=''
+TRANSACTION_OWNER_TOKEN=''
 
 usage() {
-  printf 'usage: %s --check|--apply\n' "$0"
+  printf 'usage: %s --check|--apply|--archive-pending\n' "$0"
 }
 
 fail() {
@@ -94,7 +100,7 @@ platform_release_file() {
   printf '%s\n' "$PI_WEBUI_TEST_OS_RELEASE"
 }
 
-require_supported_platform() {
+require_platform_identity() {
   local release_file id='' version_id='' codename='' key value kernel
   release_file=$(platform_release_file)
   while IFS='=' read -r key value; do
@@ -112,6 +118,10 @@ require_supported_platform() {
     fail 'Pi Web UI requires Ubuntu 24.04 Noble under WSL'
     return 1
   fi
+}
+
+require_supported_platform() {
+  require_platform_identity
   command -v systemctl >/dev/null 2>&1 || {
     fail 'systemd user manager is unavailable'
     return 1
@@ -603,6 +613,17 @@ preflight_apply_lock() {
   fi
   fail 'apply lock is already held'
   return 1
+}
+
+preflight_archive_path_components() {
+  require_current_user_directory "$HOME" 'HOME directory'
+  require_current_user_directory "$HOME/.local" 'HOME .local directory'
+  require_current_user_directory "$HOME/.local/share" 'HOME share directory'
+  require_safe_current_user_directory "$STATE_ROOT" 'Pi Web UI state root'
+  require_safe_current_user_directory "$RUNTIME_PARENT" 'Pi Web UI runtime parent'
+  require_safe_current_user_directory "$STATE_ROOT/transactions" 'Pi Web UI transaction parent'
+  require_safe_current_user_directory "$STATE_ROOT/backups" 'Pi Web UI backup parent'
+  require_safe_current_user_directory "$FAILURE_ROOT" 'failure archive parent'
 }
 
 preflight_worktree_path_components() {
@@ -1137,7 +1158,8 @@ const data = value.data;
 if (value.ok !== true || data?.webuiVersion !== "0.10.3" || data?.piVersion !== "0.84.4") process.exit(1);
 const network = data.network;
 if (!network || network.host !== "127.0.0.1" || network.port !== 31415 || network.open !== false) process.exit(1);
-if (!Array.isArray(network.urls) || network.urls.length !== 0) process.exit(1);
+if (Object.prototype.hasOwnProperty.call(network, "urls") ||
+    !Array.isArray(network.networkUrls) || network.networkUrls.length !== 0) process.exit(1);
 if (!Array.isArray(data.tabs) || data.tabs.length < 1) process.exit(1);
 const rpcCommand = `${launcher} --mode rpc`;
 for (const tab of data.tabs) {
@@ -1531,6 +1553,309 @@ rollback_failed_apply() {
   exit "$status"
 }
 
+read_archive_metadata() {
+  local name=$1 path="$TRANSACTION_DIR/$1"
+  [[ -f "$path" && ! -L "$path" &&
+    "$(stat -c '%u' "$path")" == "$(id -u)" &&
+    "$(stat -c '%a' "$path")" == 600 ]] || {
+    fail "pending transaction metadata $name is unsafe or missing"
+    return 1
+  }
+  cat "$path"
+}
+
+validate_archive_artifact_root() {
+  local directory=$1 label=$2 marker=$3 expected_marker=$4 token_variable=$5 token
+  require_owned_managed_directory "$directory" "$label" "$marker" "$expected_marker" || return 1
+  [[ -e "$directory" && "$(stat -c '%a' "$directory")" == 700 ]] || {
+    fail "$label must be owner-only"
+    return 1
+  }
+  [[ -f "$directory/.pi-webui-owner" && ! -L "$directory/.pi-webui-owner" &&
+    "$(stat -c '%u' "$directory/.pi-webui-owner")" == "$(id -u)" &&
+    "$(stat -c '%a' "$directory/.pi-webui-owner")" == 600 &&
+    "$(stat -c '%a' "$directory/$marker")" == 600 ]] || {
+    fail "$label ownership metadata is unsafe or missing"
+    return 1
+  }
+  token=$(cat "$directory/.pi-webui-owner")
+  [[ ${#token} -le 80 && "$token" =~ ^pi-webui-task2:[1-9][0-9]*:[0-9]+$ ]] || {
+    fail "$label ownership token is foreign or malformed"
+    return 1
+  }
+  printf -v "$token_variable" '%s' "$token"
+}
+
+validate_archive_transaction() {
+  local entry name source_head source_root source_common candidate_path worktree_path
+  local worktree_head previous_head pi_launcher pi_real prior_unit_kind prior_runtime_kind
+  local prior_active prior_enabled prior_present=0
+  while IFS= read -r -d '' entry; do
+    [[ -f "$entry" && ! -L "$entry" ]] || {
+      fail 'pending transaction contains a non-regular entry'
+      return 1
+    }
+    [[ "$(stat -c '%u' "$entry")" == "$(id -u)" &&
+    "$(stat -c '%a' "$entry")" == 600 ]] || {
+      fail 'pending transaction contains unsafe metadata'
+      return 1
+    }
+    name=${entry##*/}
+    case "$name" in
+      .pi-webui-owner | .pi-webui-transaction | source-head | source-root | \
+        source-common-dir | candidate-runtime | worktree | worktree-previous-head | \
+        worktree-head | pi-launcher | pi-real-executable) ;;
+      prior-unit-kind | prior-runtime-kind | prior-active | prior-enabled | \
+        prior-health-worktree | prior-health-pi-launcher | prior-unit)
+        prior_present=1
+        ;;
+      *)
+        fail "pending transaction contains unrecognized metadata: $name"
+        return 1
+        ;;
+    esac
+  done < <(find "$TRANSACTION_DIR" -mindepth 1 -maxdepth 1 -print0)
+
+  source_head=$(read_archive_metadata source-head) || return 1
+  source_root=$(read_archive_metadata source-root) || return 1
+  source_common=$(read_archive_metadata source-common-dir) || return 1
+  candidate_path=$(read_archive_metadata candidate-runtime) || return 1
+  worktree_path=$(read_archive_metadata worktree) || return 1
+  previous_head=$(read_archive_metadata worktree-previous-head) || return 1
+  worktree_head=$(read_archive_metadata worktree-head) || return 1
+  pi_launcher=$(read_archive_metadata pi-launcher) || return 1
+  pi_real=$(read_archive_metadata pi-real-executable) || return 1
+
+  [[ "$source_root" == "$SOURCE_ROOT" && "$source_common" == "$SOURCE_COMMON_DIR" &&
+    "$candidate_path" == "$CANDIDATE_RUNTIME" && "$worktree_path" == "$WORKTREE" ]] || {
+    fail 'pending transaction paths do not match this installer'
+    return 1
+  }
+  [[ "$source_head" =~ ^[0-9a-f]{40}$ && "$worktree_head" == "$source_head" ]] || {
+    fail 'pending transaction source commit is malformed'
+    return 1
+  }
+  git -C "$SOURCE_ROOT" cat-file -e "$source_head^{commit}" 2>/dev/null || {
+    fail 'pending transaction source commit is unavailable'
+    return 1
+  }
+  if [[ "$previous_head" != ABSENT ]]; then
+    [[ "$previous_head" =~ ^[0-9a-f]{40}$ ]] &&
+      git -C "$SOURCE_ROOT" cat-file -e "$previous_head^{commit}" 2>/dev/null || {
+      fail 'pending transaction previous worktree commit is malformed or unavailable'
+      return 1
+    }
+  fi
+  [[ "$pi_launcher" == /* && "$pi_real" == /* &&
+    "$pi_launcher" != *$'\n'* && "$pi_real" != *$'\n'* ]] || {
+    fail 'pending transaction Pi identity paths are malformed'
+    return 1
+  }
+
+  if [[ "$prior_present" == 1 ]]; then
+    prior_unit_kind=$(read_archive_metadata prior-unit-kind) || return 1
+    prior_runtime_kind=$(read_archive_metadata prior-runtime-kind) || return 1
+    prior_active=$(read_archive_metadata prior-active) || return 1
+    prior_enabled=$(read_archive_metadata prior-enabled) || return 1
+    [[ "$prior_unit_kind" == absent || "$prior_unit_kind" == managed ||
+      "$prior_unit_kind" == trial ]] || {
+      fail 'pending transaction prior unit kind is malformed'
+      return 1
+    }
+    [[ "$prior_runtime_kind" == absent || "$prior_runtime_kind" == managed ||
+      "$prior_runtime_kind" == trial ]] || {
+      fail 'pending transaction prior runtime kind is malformed'
+      return 1
+    }
+    [[ "$prior_active" == 0 || "$prior_active" == 1 ]] &&
+      [[ "$prior_enabled" == 0 || "$prior_enabled" == 1 ]] || {
+      fail 'pending transaction prior service state is malformed'
+      return 1
+    }
+    if [[ "$prior_unit_kind" == absent ]]; then
+      [[ "$prior_runtime_kind" == absent && "$prior_active" == 0 &&
+        "$prior_enabled" == 0 &&
+        ! -e "$TRANSACTION_DIR/prior-unit" && ! -L "$TRANSACTION_DIR/prior-unit" &&
+        ! -e "$TRANSACTION_DIR/prior-health-worktree" &&
+        ! -L "$TRANSACTION_DIR/prior-health-worktree" &&
+        ! -e "$TRANSACTION_DIR/prior-health-pi-launcher" &&
+        ! -L "$TRANSACTION_DIR/prior-health-pi-launcher" ]] || {
+        fail 'pending transaction absent prior service metadata is inconsistent'
+        return 1
+      }
+    else
+      [[ "$prior_runtime_kind" == "$prior_unit_kind" ]] || {
+        fail 'pending transaction prior service/runtime kinds do not match'
+        return 1
+      }
+      read_archive_metadata prior-unit >/dev/null || return 1
+      [[ "$(read_archive_metadata prior-health-worktree)" == /* &&
+      "$(read_archive_metadata prior-health-pi-launcher)" == /* ]] || {
+        fail 'pending transaction prior health identity is malformed'
+        return 1
+      }
+    fi
+  fi
+}
+
+verify_archive_lock() {
+  owned_by_this_apply "$APPLY_LOCK" &&
+    [[ "$(stat -c '%a' "$APPLY_LOCK")" == 700 &&
+    "$(stat -c '%a' "$APPLY_LOCK/.pi-webui-owner")" == 600 &&
+    -f "$APPLY_LOCK/.pi-webui-lock" && ! -L "$APPLY_LOCK/.pi-webui-lock" &&
+    "$(stat -c '%u' "$APPLY_LOCK/.pi-webui-lock")" == "$(id -u)" &&
+    "$(stat -c '%a' "$APPLY_LOCK/.pi-webui-lock")" == 600 &&
+    "$(cat "$APPLY_LOCK/.pi-webui-lock")" == pi-webui-task2-lock-v1 ]] || {
+    fail 'owned archive apply lock changed; refusing evidence moves'
+    return 1
+  }
+}
+
+validate_archive_evidence() {
+  local candidate_present=0 transaction_present=0
+  [[ -e "$CANDIDATE_RUNTIME" || -L "$CANDIDATE_RUNTIME" ]] && candidate_present=1
+  [[ -e "$TRANSACTION_DIR" || -L "$TRANSACTION_DIR" ]] && transaction_present=1
+  [[ "$candidate_present" == "$transaction_present" ]] || {
+    fail 'candidate and pending transaction evidence must both be present'
+    return 1
+  }
+  [[ "$candidate_present" == 1 ]] || return 0
+
+  validate_archive_artifact_root "$CANDIDATE_RUNTIME" 'candidate runtime' \
+    .pi-webui-candidate pi-webui-task2-candidate-v1 CANDIDATE_OWNER_TOKEN || return 1
+  validate_archive_artifact_root "$TRANSACTION_DIR" 'pending transaction' \
+    .pi-webui-transaction pi-webui-task2-transaction-v1 TRANSACTION_OWNER_TOKEN || return 1
+  [[ "$CANDIDATE_OWNER_TOKEN" == "$TRANSACTION_OWNER_TOKEN" ]] || {
+    fail 'candidate and pending transaction ownership tokens do not match'
+    return 1
+  }
+  resolve_source_repository || return 1
+  validate_archive_transaction || return 1
+  bash "$SOURCE_ROOT/bin/validate-pi-webui" --installed-runtime \
+    "$CANDIDATE_RUNTIME" >/dev/null || {
+    fail 'candidate runtime failed installed validation'
+    return 1
+  }
+  ARCHIVE_ID=${CANDIDATE_OWNER_TOKEN//:/-}
+  [[ ${#ARCHIVE_ID} -le 80 && "$ARCHIVE_ID" =~ ^pi-webui-task2-[1-9][0-9]*-[0-9]+$ ]] || {
+    fail 'candidate archive identifier is malformed'
+    return 1
+  }
+}
+
+restore_archive_moves() {
+  local failed=0
+  if [[ -e "$ARCHIVE_TEMPORARY/pending" || -L "$ARCHIVE_TEMPORARY/pending" ]]; then
+    mv -T "$ARCHIVE_TEMPORARY/pending" "$TRANSACTION_DIR" || failed=1
+  fi
+  if [[ -e "$ARCHIVE_TEMPORARY/candidate" || -L "$ARCHIVE_TEMPORARY/candidate" ]]; then
+    mv -T "$ARCHIVE_TEMPORARY/candidate" "$CANDIDATE_RUNTIME" || failed=1
+  fi
+  if [[ "$failed" == 0 ]]; then
+    rmdir "$ARCHIVE_TEMPORARY" || failed=1
+  fi
+  [[ "$failed" == 0 ]]
+}
+
+archive_evidence_under_lock() {
+  local validated_archive_id
+  preflight_archive_path_components || return 1
+  verify_archive_lock || return 1
+  validate_archive_evidence || return 1
+  [[ -n "$ARCHIVE_ID" ]] || {
+    fail 'pending archive evidence disappeared after lock acquisition'
+    return 1
+  }
+  if [[ ! -e "$STATE_ROOT/backups" && ! -L "$STATE_ROOT/backups" ]]; then
+    mkdir -m 0700 "$STATE_ROOT/backups" || {
+      fail 'could not create Pi Web UI backup parent'
+      return 1
+    }
+  fi
+  require_safe_current_user_directory "$STATE_ROOT/backups" 'Pi Web UI backup parent' || return 1
+  [[ "$(stat -c '%a' "$STATE_ROOT/backups")" == 700 ]] || {
+    fail 'Pi Web UI backup parent must be owner-only'
+    return 1
+  }
+  if [[ ! -e "$FAILURE_ROOT" && ! -L "$FAILURE_ROOT" ]]; then
+    mkdir -m 0700 "$FAILURE_ROOT" || {
+      fail 'could not create failure archive parent'
+      return 1
+    }
+  fi
+  require_safe_current_user_directory "$FAILURE_ROOT" 'failure archive parent' || return 1
+  [[ "$(stat -c '%a' "$FAILURE_ROOT")" == 700 ]] || {
+    fail 'failure archive parent must be owner-only'
+    return 1
+  }
+  ARCHIVE_DESTINATION="$FAILURE_ROOT/$ARCHIVE_ID"
+  ARCHIVE_TEMPORARY="$FAILURE_ROOT/.$ARCHIVE_ID.pending"
+  [[ ! -e "$ARCHIVE_DESTINATION" && ! -L "$ARCHIVE_DESTINATION" ]] || {
+    fail 'failure archive destination already exists'
+    return 1
+  }
+  [[ ! -e "$ARCHIVE_TEMPORARY" && ! -L "$ARCHIVE_TEMPORARY" ]] || {
+    fail 'temporary failure archive destination already exists'
+    return 1
+  }
+  validated_archive_id=$ARCHIVE_ID
+  verify_archive_lock || return 1
+  validate_archive_evidence || return 1
+  [[ "$ARCHIVE_ID" == "$validated_archive_id" ]] || {
+    fail 'candidate archive identity changed before evidence moves'
+    return 1
+  }
+  mkdir -m 0700 "$ARCHIVE_TEMPORARY" || {
+    fail 'could not create temporary failure archive'
+    return 1
+  }
+  if ! mv -T "$CANDIDATE_RUNTIME" "$ARCHIVE_TEMPORARY/candidate"; then
+    rmdir "$ARCHIVE_TEMPORARY" 2>/dev/null || true
+    fail 'could not archive candidate runtime'
+    return 1
+  fi
+  if ! mv -T "$TRANSACTION_DIR" "$ARCHIVE_TEMPORARY/pending"; then
+    if restore_archive_moves; then
+      fail 'could not archive pending transaction; restored candidate evidence'
+    else
+      fail "could not archive pending transaction or restore candidate; evidence retained in $ARCHIVE_TEMPORARY"
+    fi
+    return 1
+  fi
+  if ! mv -T "$ARCHIVE_TEMPORARY" "$ARCHIVE_DESTINATION"; then
+    if restore_archive_moves; then
+      fail 'could not publish failure archive; restored candidate and transaction evidence'
+    else
+      fail "could not publish failure archive or restore evidence; evidence retained in $ARCHIVE_TEMPORARY"
+    fi
+    return 1
+  fi
+  ARCHIVE_TEMPORARY=''
+  printf 'archived: %s\n' "$ARCHIVE_DESTINATION"
+}
+
+archive_pending_evidence() {
+  local candidate_present=0 transaction_present=0 status=0
+  preflight_archive_path_components || return 1
+  preflight_apply_lock || return 1
+  [[ -e "$CANDIDATE_RUNTIME" || -L "$CANDIDATE_RUNTIME" ]] && candidate_present=1
+  [[ -e "$TRANSACTION_DIR" || -L "$TRANSACTION_DIR" ]] && transaction_present=1
+  if [[ "$candidate_present" == 0 && "$transaction_present" == 0 ]]; then
+    printf 'ready: no pending candidate/transaction evidence to archive\n'
+    return 0
+  fi
+  [[ "$candidate_present" == "$transaction_present" ]] || {
+    fail 'candidate and pending transaction evidence must both be present'
+    return 1
+  }
+  acquire_apply_lock || return 1
+  archive_evidence_under_lock || status=$?
+  if ! release_apply_lock; then
+    [[ "$status" != 0 ]] || status=76
+  fi
+  return "$status"
+}
+
 apply_installation() {
   trap rollback_failed_apply EXIT
   prepare_private_directories
@@ -1562,11 +1887,17 @@ main() {
   case "$1" in
     --check) MODE=check ;;
     --apply) MODE=apply ;;
+    --archive-pending) MODE=archive-pending ;;
     *)
       usage >&2
       return 2
       ;;
   esac
+  if [[ "$MODE" == archive-pending ]]; then
+    require_platform_identity
+    archive_pending_evidence
+    return
+  fi
   require_supported_platform
   require_commands
   resolve_source_repository

@@ -521,7 +521,8 @@ let input=""; process.stdin.on("data", c => input += c); process.stdin.on("end",
   const [worktree,launcher]=process.argv.slice(1), rpcCommand=`${launcher} --mode rpc`, value=JSON.parse(input), data=value.data, network=data?.network, tabs=data?.tabs;
   if(value.ok!==true || data?.webuiVersion!=="0.10.3" || data?.piVersion!=="0.84.4" ||
      network?.host!=="127.0.0.1" || network?.port!==31415 || network?.open!==false ||
-     !Array.isArray(network.urls) || network.urls.length || !Array.isArray(tabs) || tabs.length<1 ||
+     Object.prototype.hasOwnProperty.call(network, "urls") ||
+     !Array.isArray(network.networkUrls) || network.networkUrls.length || !Array.isArray(tabs) || tabs.length<1 ||
      tabs.some(tab => tab.cwd!==worktree || tab.running!==true || typeof tab.command!=="string" ||
        !(tab.command===rpcCommand ||
          (tab.command.startsWith(rpcCommand) && /\s/.test(tab.command[rpcCommand.length]))))) process.exit(1);

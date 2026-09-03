@@ -128,6 +128,25 @@ runtime, owner-only unit, landing-worktree commit, enablement, and active state;
 candidate/transaction evidence is retained when automatic restoration itself
 cannot be proved.
 
+A retained candidate and pending transaction intentionally block another
+apply. After inspecting the failure and installing the reviewed source fix,
+archive that evidence with:
+
+```bash
+./ai/pi/webui/install.sh --archive-pending
+```
+
+This action validates the Noble/WSL platform, owner-only state paths, matching
+transaction markers and ownership tokens, source metadata, and the complete
+installed candidate before moving anything. It acquires the same atomic apply
+lock, then publishes both directories together under the unique bounded path
+`~/.local/share/pi-webui/backups/failures/<id>`. The candidate and pending
+transaction contents are retained; a failed second move restores the first. The
+action does not run npm, alter the current service/runtime/worktree, or change
+Tailscale routes. Existing symlinked, foreign, permissive, colliding, partial,
+or concurrently locked state is preserved and rejected. With no candidate and
+no pending transaction it reports a successful no-op.
+
 Advancing a pin is a separate review ceremony, not routine operation. In a
 linked update worktree, review the upstream tag/commit and tarball, change the
 exact Firstp1ck and matching Pi versions together, regenerate the complete npm
@@ -152,7 +171,8 @@ journalctl --user -u pi-webui.service -n 150 --no-pager
 ```
 
 Healthy state is an active user service, Web UI `0.10.3`, Pi `0.84.4`, one
-listener at exact loopback, no network-open URLs, an exact managed cwd/Pi
+listener at exact loopback, `network.networkUrls` present as an exactly empty
+array, an exact managed cwd/Pi
 command for every tab, an unreachable WSL-LAN port, and either an empty route or
 the one exact tailnet-only route.
 
