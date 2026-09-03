@@ -1,6 +1,7 @@
 #!/usr/bin/env bats
 
 load test_helper
+bats_require_minimum_version 1.5.0
 
 ACCEPTED_MANIFEST_SHA256=073ba87cad124eb709eb8cafdd77c44c10b5d12bf5841acea140a50ac5177763
 ACCEPTED_LOCK_SHA256=39593de061e22a36668a0a0d1449e339b84e644d6c65e6b1618af9d177fc71d0
@@ -29,6 +30,123 @@ make_installed_fixture() {
     '{"name":"@earendil-works/pi-coding-agent","version":"0.84.4","bin":{"pi":"dist/bundle/cli.js"}}' \
     >"$FIXTURE_RUNTIME/node_modules/@earendil-works/pi-coding-agent/package.json"
   : >"$FIXTURE_RUNTIME/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js"
+}
+
+make_valid_platform() {
+  TEST_OS_RELEASE="$TEST_ROOT/os-release"
+  printf 'ID=ubuntu\nVERSION_ID="24.04"\nVERSION_CODENAME=noble\n' >"$TEST_OS_RELEASE"
+  export TEST_OS_RELEASE
+  stub_command uname 'printf "%s\\n" "6.6.87.2-microsoft-standard-WSL2"'
+  stub_command systemctl '
+if [[ "$1 ${2:-}" == "--user show-environment" ]]; then
+  printf "systemd-user\\n" >>"$TEST_COMMAND_LOG"
+  exit 0
+fi
+printf "unexpected systemctl: %s\\n" "$*" >&2
+exit 90'
+}
+
+make_valid_pi() {
+  PI_TEST_PACKAGE="$TEST_ROOT/mise installs/node/lib/node_modules/@earendil-works/pi-coding-agent"
+  PI_TEST_REAL="$PI_TEST_PACKAGE/dist/bundle/cli.js"
+  PI_TEST_LAUNCHER="$TEST_ROOT/mise installs/node/bin/pi"
+  mkdir -p "$(dirname "$PI_TEST_REAL")" "$(dirname "$PI_TEST_LAUNCHER")"
+  printf '%s\n' \
+    '{"name":"@earendil-works/pi-coding-agent","version":"0.84.4","bin":{"pi":"dist/bundle/cli.js"}}' \
+    >"$PI_TEST_PACKAGE/package.json"
+  printf '#!/usr/bin/env node\n' >"$PI_TEST_REAL"
+  chmod +x "$PI_TEST_REAL"
+  ln -s "../lib/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js" \
+    "$PI_TEST_LAUNCHER"
+  export PI_TEST_PACKAGE PI_TEST_REAL PI_TEST_LAUNCHER
+  cat >"$STUB_BIN/mise" <<'SCRIPT'
+#!/usr/bin/env bash
+set -e
+printf 'mise %s\n' "$*" >>"$TEST_COMMAND_LOG"
+if [[ "$1 ${2:-}" == "which pi" ]]; then
+  printf '%s\n' "$PI_TEST_LAUNCHER"
+  exit 0
+fi
+if [[ "$1 ${2:-}" == "exec --" ]]; then
+  shift 2
+  exec "$@"
+fi
+printf 'unexpected mise invocation: %s\n' "$*" >&2
+exit 91
+SCRIPT
+  chmod +x "$STUB_BIN/mise"
+  stub_command npm '
+if [[ "${1:-}" == --version ]]; then
+  printf "%s\\n" "11.6.2"
+  exit 0
+fi
+printf "unexpected npm invocation before apply fixture: %s\\n" "$*" >&2
+exit 92'
+}
+
+make_installer_repo() {
+  INSTALLER_REPO="$TEST_ROOT/source repo"
+  mkdir -p "$INSTALLER_REPO/ai/pi/webui/runtime" "$INSTALLER_REPO/bin"
+  cp "$REPO_ROOT/ai/pi/webui/install.sh" "$INSTALLER_REPO/ai/pi/webui/install.sh"
+  cp "$REPO_ROOT/ai/pi/webui/runtime/package.json" \
+    "$INSTALLER_REPO/ai/pi/webui/runtime/package.json"
+  cp "$REPO_ROOT/ai/pi/webui/runtime/package-lock.json" \
+    "$INSTALLER_REPO/ai/pi/webui/runtime/package-lock.json"
+  cp "$REPO_ROOT/bin/validate-pi-webui" "$INSTALLER_REPO/bin/validate-pi-webui"
+  git -C "$INSTALLER_REPO" init -q
+  git -C "$INSTALLER_REPO" config user.name 'Pi WebUI Test'
+  git -C "$INSTALLER_REPO" config user.email 'pi-webui@example.test'
+  git -C "$INSTALLER_REPO" add .
+  git -C "$INSTALLER_REPO" commit -qm initial
+  INSTALLER="$INSTALLER_REPO/ai/pi/webui/install.sh"
+  SOURCE_HEAD=$(git -C "$INSTALLER_REPO" rev-parse HEAD)
+  TEST_COMMAND_LOG="$TEST_ROOT/commands.log"
+  : >"$TEST_COMMAND_LOG"
+  export INSTALLER_REPO INSTALLER SOURCE_HEAD TEST_COMMAND_LOG
+}
+
+run_installer() {
+  run env PI_WEBUI_TESTING=1 PI_WEBUI_TEST_OS_RELEASE="$TEST_OS_RELEASE" \
+    BATS_TEST_TMPDIR="$BATS_TEST_TMPDIR" HOME="$HOME" PATH="$PATH" \
+    TEST_COMMAND_LOG="$TEST_COMMAND_LOG" PI_TEST_LAUNCHER="$PI_TEST_LAUNCHER" \
+    INSTALLER_REPO="$INSTALLER_REPO" bash "$INSTALLER" "$@"
+}
+
+stub_successful_npm_ci() {
+  cat >"$STUB_BIN/npm" <<'SCRIPT'
+#!/usr/bin/env bash
+set -e
+if [[ "${1:-}" == --version ]]; then
+  printf '%s\n' '11.6.2'
+  exit 0
+fi
+printf 'npm-ci\n' >>"$TEST_COMMAND_LOG"
+printf '%s\n' "$@" >"$TEST_ROOT/npm-args"
+[[ "$1" == ci && "$2" == --prefix ]]
+prefix=$3
+mkdir -p \
+  "$prefix/node_modules/@firstpick/pi-package-webui/bin" \
+  "$prefix/node_modules/@earendil-works/pi-coding-agent/dist/bundle"
+printf '%s\n' \
+  '{"name":"@firstpick/pi-package-webui","version":"0.10.3","bin":{"pi-webui":"./bin/pi-webui-launcher.mjs"}}' \
+  >"$prefix/node_modules/@firstpick/pi-package-webui/package.json"
+: >"$prefix/node_modules/@firstpick/pi-package-webui/bin/pi-webui-launcher.mjs"
+printf '%s\n' \
+  '{"name":"@earendil-works/pi-coding-agent","version":"0.84.4","bin":{"pi":"dist/bundle/cli.js"}}' \
+  >"$prefix/node_modules/@earendil-works/pi-coding-agent/package.json"
+: >"$prefix/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js"
+SCRIPT
+  chmod +x "$STUB_BIN/npm"
+}
+
+instrument_validator() {
+  mv "$INSTALLER_REPO/bin/validate-pi-webui" "$INSTALLER_REPO/bin/validate-pi-webui.real"
+  cat >"$INSTALLER_REPO/bin/validate-pi-webui" <<'SCRIPT'
+#!/usr/bin/env bash
+printf 'validator %s\n' "$*" >>"$TEST_COMMAND_LOG"
+exec bash "$(dirname "$0")/validate-pi-webui.real" "$@"
+SCRIPT
+  chmod +x "$INSTALLER_REPO/bin/validate-pi-webui"
 }
 
 mutate_json() {
@@ -358,4 +476,374 @@ NODE
 
   [ "$status" -eq 0 ]
   [ "${output%% *}" = "$ACCEPTED_LOCK_SHA256" ]
+}
+
+@test "installer rejects systems other than Ubuntu 24.04 Noble before mutation" {
+  local os_release="$TEST_ROOT/os-release"
+  printf 'ID=ubuntu\nVERSION_ID="22.04"\nVERSION_CODENAME=jammy\n' >"$os_release"
+  local before after
+  before=$(find "$TEST_ROOT" -mindepth 1 -printf '%y %m %P -> %l\n' | sort)
+
+  run env PI_WEBUI_TESTING=1 PI_WEBUI_TEST_OS_RELEASE="$os_release" \
+    BATS_TEST_TMPDIR="$BATS_TEST_TMPDIR" HOME="$HOME" PATH="$PATH" \
+    bash "$REPO_ROOT/ai/pi/webui/install.sh" --check
+
+  after=$(find "$TEST_ROOT" -mindepth 1 -printf '%y %m %P -> %l\n' | sort)
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"requires Ubuntu 24.04 Noble under WSL"* ]]
+  [ "$before" = "$after" ]
+}
+
+@test "installer rejects a non-WSL kernel and unavailable systemd user manager" {
+  make_installer_repo
+  make_valid_platform
+  make_valid_pi
+  stub_command uname 'printf "%s\\n" "6.8.0-generic"'
+
+  run_installer --check
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"requires Ubuntu 24.04 Noble under WSL"* ]]
+  [ ! -e "$HOME/.local/share/pi-webui" ]
+
+  stub_command uname 'printf "%s\\n" "6.6.87.2-microsoft-standard-WSL2"'
+  stub_command systemctl 'exit 1'
+  run_installer --check
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"systemd user manager is unavailable"* ]]
+  [ ! -e "$HOME/.local/share/pi-webui" ]
+}
+
+@test "installer check resolves the exact mise Pi owner and is mutation-free" {
+  make_installer_repo
+  make_valid_platform
+  make_valid_pi
+
+  run_installer --check
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"PI_WEBUI_MODE=check"* ]]
+  [[ "$output" == *"PI_WEBUI_PI_LAUNCHER=$PI_TEST_LAUNCHER"* ]]
+  [[ "$output" == *"PI_WEBUI_CANDIDATE_RUNTIME=$HOME/.local/share/pi-webui/runtimes/candidate"* ]]
+  [[ "$output" == *"PI_WEBUI_WORKTREE=$HOME/.local/share/pi-webui/worktrees/dotfiles"* ]]
+  [[ "$output" == *"would create detached worktree at $SOURCE_HEAD"* ]]
+  [ ! -e "$HOME/.local/share/pi-webui" ]
+  [ -z "$(git -C "$INSTALLER_REPO" status --porcelain --untracked-files=all)" ]
+  run ! grep -q '^mise exec -- npm ci' "$TEST_COMMAND_LOG"
+}
+
+@test "installer rejects the wrong Pi owner or version before npm and mutation" {
+  make_installer_repo
+  make_valid_platform
+  make_valid_pi
+  printf '%s\n' \
+    '{"name":"@earendil-works/pi-coding-agent","version":"0.84.3","bin":{"pi":"dist/bundle/cli.js"}}' \
+    >"$PI_TEST_PACKAGE/package.json"
+
+  run_installer --apply
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"must be @earendil-works/pi-coding-agent@0.84.4"* ]]
+  [ ! -e "$HOME/.local/share/pi-webui" ]
+  run ! grep -q '^mise exec -- npm ci' "$TEST_COMMAND_LOG"
+}
+
+@test "installer test platform override cannot be enabled accidentally" {
+  make_installer_repo
+  make_valid_platform
+  make_valid_pi
+
+  run env PI_WEBUI_TEST_OS_RELEASE="$TEST_OS_RELEASE" HOME="$HOME" PATH="$PATH" \
+    bash "$INSTALLER" --check
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"restricted to the test sandbox"* ]]
+  [ ! -e "$HOME/.local/share/pi-webui" ]
+}
+
+@test "installer refuses a symlink or foreign durable worktree before npm" {
+  make_installer_repo
+  make_valid_platform
+  make_valid_pi
+  local worktree="$HOME/.local/share/pi-webui/worktrees/dotfiles"
+  mkdir -p "$(dirname "$worktree")" "$TEST_ROOT/symlink target"
+  ln -s "$TEST_ROOT/symlink target" "$worktree"
+
+  run_installer --apply
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"durable worktree must not be a symbolic link"* ]]
+  [ -L "$worktree" ]
+  run ! grep -q '^mise exec -- npm ci' "$TEST_COMMAND_LOG"
+
+  rm "$worktree"
+  mkdir -p "$worktree"
+  git -C "$worktree" init -q
+  git -C "$worktree" config user.name 'Foreign Test'
+  git -C "$worktree" config user.email 'foreign@example.test'
+  : >"$worktree/foreign"
+  git -C "$worktree" add foreign
+  git -C "$worktree" commit -qm foreign
+
+  run_installer --apply
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"durable worktree belongs to a foreign repository"* ]]
+  [ -f "$worktree/foreign" ]
+  run ! grep -q '^mise exec -- npm ci' "$TEST_COMMAND_LOG"
+}
+
+@test "installer refuses the source primary checkout as the durable target" {
+  make_installer_repo
+  make_valid_platform
+  make_valid_pi
+  local worktree="$HOME/.local/share/pi-webui/worktrees/dotfiles"
+  mkdir -p "$(dirname "$worktree")"
+  mv "$INSTALLER_REPO" "$worktree"
+  git -C "$worktree" worktree add --detach "$TEST_ROOT/installer runner" -q
+  INSTALLER_REPO="$TEST_ROOT/installer runner"
+  INSTALLER="$INSTALLER_REPO/ai/pi/webui/install.sh"
+  SOURCE_HEAD=$(git -C "$INSTALLER_REPO" rev-parse HEAD)
+  export INSTALLER_REPO INSTALLER SOURCE_HEAD
+
+  run_installer --apply
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"durable worktree must not be the primary checkout"* ]]
+  [ -d "$worktree/.git" ]
+  run ! grep -q '^mise exec -- npm ci' "$TEST_COMMAND_LOG"
+}
+
+@test "installer refuses attached and dirty linked worktrees without changing them" {
+  make_installer_repo
+  make_valid_platform
+  make_valid_pi
+  local worktree="$HOME/.local/share/pi-webui/worktrees/dotfiles"
+  mkdir -p "$(dirname "$worktree")"
+  git -C "$INSTALLER_REPO" worktree add -q -b task2-attached "$worktree" HEAD
+
+  run_installer --apply
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"durable worktree must be detached"* ]]
+  [ "$(git -C "$worktree" symbolic-ref --short HEAD)" = task2-attached ]
+  run ! grep -q '^mise exec -- npm ci' "$TEST_COMMAND_LOG"
+
+  git -C "$INSTALLER_REPO" worktree remove "$worktree"
+  git -C "$INSTALLER_REPO" worktree add -q --detach "$worktree" HEAD
+  printf 'preserve dirty worktree\n' >"$worktree/untracked sentinel"
+
+  run_installer --check
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"durable worktree must be clean, including untracked files"* ]]
+  [ "$(cat "$worktree/untracked sentinel")" = 'preserve dirty worktree' ]
+  run ! grep -q '^mise exec -- npm ci' "$TEST_COMMAND_LOG"
+}
+
+@test "installer apply validates first, uses exact npm ci flags, and creates Task 3 inputs" {
+  make_installer_repo
+  make_valid_platform
+  make_valid_pi
+  stub_successful_npm_ci
+  instrument_validator
+  local state="$HOME/.local/share/pi-webui"
+  mkdir -p "$state/runtimes/current"
+  printf 'live runtime remains\n' >"$state/runtimes/current/sentinel"
+
+  run_installer --apply
+
+  [ "$status" -eq 0 ]
+  local install_output=$output
+  local candidate="$state/runtimes/candidate"
+  local worktree="$state/worktrees/dotfiles"
+  local transaction="$state/transactions/pending"
+  cmp "$INSTALLER_REPO/ai/pi/webui/runtime/package.json" "$candidate/package.json"
+  cmp "$INSTALLER_REPO/ai/pi/webui/runtime/package-lock.json" "$candidate/package-lock.json"
+  [ "$(cat "$TEST_ROOT/npm-args")" = "$(printf '%s\n' ci --prefix "$candidate" --ignore-scripts --omit=optional)" ]
+  [ "$(cat "$state/runtimes/current/sentinel")" = 'live runtime remains' ]
+  [ "$(git -C "$worktree" rev-parse HEAD)" = "$SOURCE_HEAD" ]
+  run ! git -C "$worktree" symbolic-ref -q HEAD
+  [ "$(cat "$transaction/worktree-previous-head")" = ABSENT ]
+  [ "$(cat "$transaction/source-head")" = "$SOURCE_HEAD" ]
+  [ "$(cat "$transaction/pi-launcher")" = "$PI_TEST_LAUNCHER" ]
+  [ "$(cat "$transaction/pi-real-executable")" = "$PI_TEST_REAL" ]
+  [ "$(stat -c '%a' "$state")" = 700 ]
+  [ "$(stat -c '%a' "$state/runtimes")" = 700 ]
+  [[ "$install_output" == *"PI_WEBUI_MODE=apply"* ]]
+  [[ "$install_output" == *"PI_WEBUI_TRANSACTION=$transaction"* ]]
+  [ "$(grep -n '^validator --tracked-only$' "$TEST_COMMAND_LOG" | cut -d: -f1)" -lt \
+    "$(grep -n '^npm-ci$' "$TEST_COMMAND_LOG" | cut -d: -f1)" ]
+  [ "$(grep -c '^npm-ci$' "$TEST_COMMAND_LOG")" -eq 1 ]
+  run ! grep -Eq 'pi install|npx|npm install|systemctl .* (stop|start|enable|disable|daemon-reload)' \
+    "$TEST_COMMAND_LOG"
+}
+
+@test "installer updates a clean detached worktree and records its prior commit" {
+  make_installer_repo
+  make_valid_platform
+  make_valid_pi
+  stub_successful_npm_ci
+  local worktree="$HOME/.local/share/pi-webui/worktrees/dotfiles"
+  mkdir -p "$(dirname "$worktree")"
+  local previous=$SOURCE_HEAD
+  git -C "$INSTALLER_REPO" worktree add -q --detach "$worktree" "$previous"
+  printf 'new source commit\n' >"$INSTALLER_REPO/new-file"
+  git -C "$INSTALLER_REPO" add new-file
+  git -C "$INSTALLER_REPO" commit -qm update
+  SOURCE_HEAD=$(git -C "$INSTALLER_REPO" rev-parse HEAD)
+  export SOURCE_HEAD
+
+  run_installer --apply
+
+  [ "$status" -eq 0 ]
+  [ "$(git -C "$worktree" rev-parse HEAD)" = "$SOURCE_HEAD" ]
+  run ! git -C "$worktree" symbolic-ref -q HEAD
+  [ -z "$(git -C "$worktree" status --porcelain --untracked-files=all)" ]
+  [ "$(cat "$HOME/.local/share/pi-webui/transactions/pending/worktree-previous-head")" = "$previous" ]
+  [ "$(cat "$HOME/.local/share/pi-webui/transactions/pending/worktree-head")" = "$SOURCE_HEAD" ]
+}
+
+@test "installer supports source, Pi, HOME, candidate, and worktree paths with spaces" {
+  HOME="$TEST_ROOT/home with spaces"
+  mkdir -p "$HOME"
+  export HOME
+  make_installer_repo
+  make_valid_platform
+  make_valid_pi
+  stub_successful_npm_ci
+
+  run_installer --apply
+
+  [ "$status" -eq 0 ]
+  [ -d "$HOME/.local/share/pi-webui/runtimes/candidate" ]
+  [ -d "$HOME/.local/share/pi-webui/worktrees/dotfiles" ]
+  [ "$(cat "$HOME/.local/share/pi-webui/transactions/pending/pi-launcher")" = "$PI_TEST_LAUNCHER" ]
+}
+
+@test "installer removes a candidate whose lock is mutated by npm and leaves live state untouched" {
+  make_installer_repo
+  make_valid_platform
+  make_valid_pi
+  stub_successful_npm_ci
+  cat >>"$STUB_BIN/npm" <<'SCRIPT'
+printf '\n' >>"$prefix/package-lock.json"
+SCRIPT
+  local state="$HOME/.local/share/pi-webui"
+  mkdir -p "$state/runtimes/current"
+  printf 'keep live runtime\n' >"$state/runtimes/current/sentinel"
+
+  run_installer --apply
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"candidate lock changed during npm ci"* ]]
+  [ ! -e "$state/runtimes/candidate" ]
+  [ ! -e "$state/transactions/pending" ]
+  [ ! -e "$state/worktrees/dotfiles" ]
+  [ "$(cat "$state/runtimes/current/sentinel")" = 'keep live runtime' ]
+  [ "$(grep -c '^npm-ci$' "$TEST_COMMAND_LOG")" -eq 1 ]
+}
+
+@test "installer cleans a partial candidate when npm ci fails" {
+  make_installer_repo
+  make_valid_platform
+  make_valid_pi
+  cat >"$STUB_BIN/npm" <<'SCRIPT'
+#!/usr/bin/env bash
+if [[ "${1:-}" == --version ]]; then
+  printf '%s\n' '11.6.2'
+  exit 0
+fi
+printf 'npm-ci\n' >>"$TEST_COMMAND_LOG"
+prefix=$3
+mkdir -p "$prefix/node_modules/partial-install"
+printf 'partial\n' >"$prefix/node_modules/partial-install/sentinel"
+exit 47
+SCRIPT
+  chmod +x "$STUB_BIN/npm"
+  local state="$HOME/.local/share/pi-webui"
+
+  run_installer --apply
+
+  [ "$status" -eq 47 ]
+  [ ! -e "$state/runtimes/candidate" ]
+  [ ! -e "$state/transactions/pending" ]
+  [ ! -e "$state/worktrees/dotfiles" ]
+}
+
+@test "installer preserves and rejects an unowned stale candidate before npm" {
+  make_installer_repo
+  make_valid_platform
+  make_valid_pi
+  stub_successful_npm_ci
+  local candidate="$HOME/.local/share/pi-webui/runtimes/candidate"
+  mkdir -p "$candidate"
+  printf 'foreign candidate\n' >"$candidate/sentinel"
+
+  run_installer --apply
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"stale candidate runtime is not an owned Pi Web UI artifact"* ]]
+  [ "$(cat "$candidate/sentinel")" = 'foreign candidate' ]
+  run ! grep -q '^npm-ci$' "$TEST_COMMAND_LOG"
+}
+
+@test "installer check preserves recognized stale transaction inputs" {
+  make_installer_repo
+  make_valid_platform
+  make_valid_pi
+  local state="$HOME/.local/share/pi-webui"
+  local candidate="$state/runtimes/candidate"
+  local transaction="$state/transactions/pending"
+  mkdir -p "$candidate" "$transaction"
+  printf '%s\n' pi-webui-task2-candidate-v1 >"$candidate/.pi-webui-candidate"
+  printf 'stale candidate\n' >"$candidate/sentinel"
+  printf '%s\n' pi-webui-task2-transaction-v1 >"$transaction/.pi-webui-transaction"
+  printf 'stale transaction\n' >"$transaction/sentinel"
+  local candidate_before transaction_before
+  candidate_before=$(find "$candidate" -type f -exec sha256sum {} + | sort)
+  transaction_before=$(find "$transaction" -type f -exec sha256sum {} + | sort)
+
+  run_installer --check
+
+  [ "$status" -eq 0 ]
+  [ "$candidate_before" = "$(find "$candidate" -type f -exec sha256sum {} + | sort)" ]
+  [ "$transaction_before" = "$(find "$transaction" -type f -exec sha256sum {} + | sort)" ]
+  run ! grep -q '^npm-ci$' "$TEST_COMMAND_LOG"
+}
+
+@test "installer restores the prior detached commit when worktree update reports failure" {
+  make_installer_repo
+  make_valid_platform
+  make_valid_pi
+  stub_successful_npm_ci
+  local worktree="$HOME/.local/share/pi-webui/worktrees/dotfiles"
+  mkdir -p "$(dirname "$worktree")"
+  local previous=$SOURCE_HEAD
+  git -C "$INSTALLER_REPO" worktree add -q --detach "$worktree" "$previous"
+  printf 'new source commit\n' >"$INSTALLER_REPO/new-file"
+  git -C "$INSTALLER_REPO" add new-file
+  git -C "$INSTALLER_REPO" commit -qm update
+  SOURCE_HEAD=$(git -C "$INSTALLER_REPO" rev-parse HEAD)
+  export SOURCE_HEAD
+  cat >"$STUB_BIN/git" <<'SCRIPT'
+#!/usr/bin/env bash
+if [[ "$1" == -C && "$2" == "$HOME/.local/share/pi-webui/worktrees/dotfiles" &&
+  "$3" == checkout && "$4" == --detach ]]; then
+  /usr/bin/git "$@"
+  exit 48
+fi
+exec /usr/bin/git "$@"
+SCRIPT
+  chmod +x "$STUB_BIN/git"
+
+  run_installer --apply
+
+  [ "$status" -eq 48 ]
+  [ "$(/usr/bin/git -C "$worktree" rev-parse HEAD)" = "$previous" ]
+  run ! /usr/bin/git -C "$worktree" symbolic-ref -q HEAD
+  [ -z "$(/usr/bin/git -C "$worktree" status --porcelain --untracked-files=all)" ]
+  [ ! -e "$HOME/.local/share/pi-webui/runtimes/candidate" ]
+  [ ! -e "$HOME/.local/share/pi-webui/transactions/pending" ]
 }
