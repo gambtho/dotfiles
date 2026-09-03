@@ -50,7 +50,7 @@ Each `subagent` invocation supplies one self-contained `prompt`, a 3–5 word `d
 `ai/pi/config/permission-system.json` is a relaxed-but-guarded baseline:
 
 - routine tools, unmatched parent Bash commands, and common local Git subcommands are allowed;
-- unknown tools and Git subcommands, remote and selected destructive Git operations, GitHub mutations, remote shell/network commands, recursive deletion, external paths, and `lsp_fix` ask;
+- unknown tools and Git subcommands, remote Git operations other than default/`origin` fetch and argument-free `git pull --ff-only`, selected destructive Git operations, GitHub mutations, remote shell/network commands, recursive deletion, external paths, and `lsp_fix` ask;
 - policy denies recognized credential and browser-profile path access, catastrophic deletion, force operations, subprocess-capable search flags, and privilege escalation; worktree guard separately denies direct model-facing write, edit, and mutating LSP operations in primary checkouts;
 - common reader/output commands containing unresolved `$` expansion and direct environment-dump commands ask, while named children hard-deny all unresolved shell-variable indirection;
 - `/permission-system` can enable temporary YOLO, which converts asks to allows but preserves explicit denies.

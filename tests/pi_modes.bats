@@ -85,6 +85,8 @@ agent_frontmatter() {
       and .permission.write == "deny"
       and .permission.edit == "deny"
       and .permission.bash["*"] == "ask"
+      and .permission.bash["git fetch *"] == "ask"
+      and .permission.bash["git pull --ff-only"] == "ask"
       and (.permission.bash | has("gh *") | not)
       and (.permission.bash as $bash
         | all([
