@@ -8,6 +8,8 @@ ACCEPTED_LOCK_SHA256=39593de061e22a36668a0a0d1449e339b84e644d6c65e6b1618af9d177f
 
 setup() {
   setup_dotfiles_test
+  unset PI_WEBUI_TEST_STATUS_JSON PI_WEBUI_TEST_HEALTH_ATTEMPTS
+  unset TEST_BEFORE_LOCK_HOOK TEST_AFTER_NPM_HOOK
   FIXTURE_RUNTIME="$TEST_ROOT/runtime"
   mkdir -p "$FIXTURE_RUNTIME"
 }
@@ -37,6 +39,18 @@ make_valid_platform() {
   printf 'ID=ubuntu\nVERSION_ID="24.04"\nVERSION_CODENAME=noble\n' >"$TEST_OS_RELEASE"
   export TEST_OS_RELEASE
   stub_command uname 'printf "%s\\n" "6.6.87.2-microsoft-standard-WSL2"'
+  PROC_ROOT="$TEST_ROOT/proc"
+  mkdir -p "$PROC_ROOT/4200" "$PROC_ROOT/4201"
+  printf '%b\n' 'Name:\tmise' 'PPid:\t1' >"$PROC_ROOT/4200/status"
+  printf '%s\n' '4200 (mise) S 1 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 100' >"$PROC_ROOT/4200/stat"
+  printf '%s\n' '0::/user.slice/user-1000.slice/user@1000.service/app.slice/pi-webui.service' \
+    >"$PROC_ROOT/4200/cgroup"
+  printf '%b\n' 'Name:\tnode' 'PPid:\t4200' >"$PROC_ROOT/4201/status"
+  printf '%s\n' '4201 (node wrapper child) S 4200 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 101' \
+    >"$PROC_ROOT/4201/stat"
+  printf '%s\n' '0::/user.slice/user-1000.slice/user@1000.service/app.slice/pi-webui.service' \
+    >"$PROC_ROOT/4201/cgroup"
+  export PROC_ROOT
   cat >"$STUB_BIN/systemctl" <<'SCRIPT'
 #!/usr/bin/env bash
 set -e
@@ -46,15 +60,32 @@ shift
 case "$1" in
   show-environment) exit 0 ;;
   show)
-    if [[ -f "$TEST_ROOT/fragment-path" ]]; then cat "$TEST_ROOT/fragment-path"; fi
+    case "$*" in
+      *--property=FragmentPath*)
+        if [[ -f "$TEST_ROOT/fragment-path" ]]; then cat "$TEST_ROOT/fragment-path"; fi
+        ;;
+      *--property=MainPID*) printf '%s\n' 4200 ;;
+      *--property=ControlGroup*)
+        printf '%s\n' '/user.slice/user-1000.slice/user@1000.service/app.slice/pi-webui.service'
+        ;;
+    esac
     ;;
   is-active) [[ -f "$TEST_ROOT/service-active" ]] ;;
   is-enabled) [[ -f "$TEST_ROOT/service-enabled" ]] ;;
   daemon-reload) exit 0 ;;
   stop) rm -f "$TEST_ROOT/service-active" ;;
   start)
+    if [[ -f "$TEST_ROOT/health-observed" ]] &&
+      grep -Fq -- 'pi-webui-runtime/node_modules/.bin/pi-webui' \
+        "$HOME/.config/systemd/user/pi-webui.service" 2>/dev/null; then
+      [[ -d "$HOME/.local/share/pi-webui-runtime" ]] || exit 67
+      : >"$TEST_ROOT/trial-runtime-restored-before-start"
+    fi
     if [[ -f "$TEST_ROOT/fail-rollback-start" && -f "$TEST_ROOT/health-observed" ]]; then
       exit 66
+    fi
+    if [[ -f "$TEST_ROOT/rollback-start-inactive" && -f "$TEST_ROOT/health-observed" ]]; then
+      exit 0
     fi
     : >"$TEST_ROOT/service-active"
     ;;
@@ -81,7 +112,12 @@ printf "curl %s\\n" "$*" >>"$TEST_COMMAND_LOG"
 case "$*" in
   *api/health*)
     if [[ -f "$TEST_ROOT/health-fail" ]]; then
+      if [[ -f "$TEST_ROOT/expect-trial-runtime-moved" ]]; then
+        [[ ! -e "$HOME/.local/share/pi-webui-runtime" ]] || exit 95
+        : >"$TEST_ROOT/trial-runtime-move-observed"
+      fi
       : >"$TEST_ROOT/health-observed"
+      rm -f "$TEST_ROOT/health-fail"
       printf "%s\\n" '\''{"ok":false,"webuiVersion":"0.10.3","piVersion":"0.84.4"}'\''
       exit 0
     fi
@@ -91,8 +127,13 @@ case "$*" in
     if [[ -n "${PI_WEBUI_TEST_STATUS_JSON:-}" ]]; then
       printf "%s\\n" "$PI_WEBUI_TEST_STATUS_JSON"
     else
+      status_cwd="$HOME/.local/share/pi-webui/worktrees/dotfiles"
+      if grep -Fq -- 'pi-webui-runtime/node_modules/.bin/pi-webui' \
+        "$HOME/.config/systemd/user/pi-webui.service" 2>/dev/null; then
+        status_cwd='/home/tng/.dotfiles/tmp/worktrees/piface-smoke'
+      fi
       printf '\''{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"host":"127.0.0.1","port":31415,"open":false,"urls":[]},"tabs":[{"cwd":"%s","running":true,"command":"%s --mode rpc"}]}}'\'' \
-        "$HOME/.local/share/pi-webui/worktrees/dotfiles" "$PI_TEST_LAUNCHER"
+        "$status_cwd" "$PI_TEST_LAUNCHER"
     fi
     ;;
   *api/shutdown*) printf "%s\\n" '\''{"ok":true}'\'' ;;
@@ -102,9 +143,11 @@ esac'
 printf "ss %s\\n" "$*" >>"$TEST_COMMAND_LOG"
 if [[ -f "$TEST_ROOT/service-active" ]]; then
   if [[ -f "$TEST_ROOT/wildcard-listener" ]]; then
-    printf "%s\\n" "LISTEN 0 511 0.0.0.0:31415 0.0.0.0:*"
+    printf "%s\\n" "LISTEN 0 511 0.0.0.0:31415 0.0.0.0:* users:((\"node\",pid=4201,fd=20))"
+  elif [[ -f "$TEST_ROOT/spoof-listener" ]]; then
+    printf "%s\\n" "LISTEN 0 511 127.0.0.1:31415 0.0.0.0:* users:((\"foreign\",pid=7331,fd=9))"
   else
-    printf "%s\\n" "LISTEN 0 511 127.0.0.1:31415 0.0.0.0:*"
+    printf "%s\\n" "LISTEN 0 511 127.0.0.1:31415 0.0.0.0:* users:((\"node\",pid=4201,fd=20))"
   fi
 fi'
   PROCESS_CHECK="$TEST_ROOT/process-check"
@@ -185,6 +228,7 @@ run_installer() {
     PI_WEBUI_TEST_BEFORE_LOCK_HOOK="${TEST_BEFORE_LOCK_HOOK:-}" \
     PI_WEBUI_TEST_AFTER_NPM_HOOK="${TEST_AFTER_NPM_HOOK:-}" \
     PI_WEBUI_TEST_PROCESS_CHECK="$PROCESS_CHECK" \
+    PI_WEBUI_TEST_PROC_ROOT="$PROC_ROOT" \
     BATS_TEST_TMPDIR="$BATS_TEST_TMPDIR" HOME="$HOME" PATH="$PATH" \
     TEST_COMMAND_LOG="$TEST_COMMAND_LOG" TEST_ROOT="$TEST_ROOT" \
     PI_TEST_LAUNCHER="$PI_TEST_LAUNCHER" \
@@ -702,6 +746,53 @@ EOF
   [ -d "$state/transactions/pending" ]
 }
 
+@test "installer accepts a stable listener descended from the service MainPID" {
+  make_installer_repo
+  make_valid_platform
+  printf '%s\n' '0::/user.slice/foreign.service' >"$PROC_ROOT/4201/cgroup"
+  make_valid_pi
+  stub_successful_npm_ci
+
+  run_installer --apply
+
+  [ "$status" -eq 0 ]
+  [ -f "$TEST_ROOT/service-active" ]
+  [ -f "$TEST_ROOT/service-enabled" ]
+}
+
+@test "installer accepts a wrapper listener in the exact service cgroup" {
+  make_installer_repo
+  make_valid_platform
+  printf '%b\n' 'Name:\tnode' 'PPid:\t1' >"$PROC_ROOT/4201/status"
+  make_valid_pi
+  stub_successful_npm_ci
+
+  run_installer --apply
+
+  [ "$status" -eq 0 ]
+  [ -f "$TEST_ROOT/service-active" ]
+  [ -f "$TEST_ROOT/service-enabled" ]
+}
+
+@test "installer rejects expected Web UI JSON from a foreign loopback listener" {
+  make_installer_repo
+  make_valid_platform
+  make_valid_pi
+  stub_successful_npm_ci
+  : >"$TEST_ROOT/spoof-listener"
+  local state="$HOME/.local/share/pi-webui"
+
+  run_installer --apply
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"listener is not owned by the active Pi Web UI service"* ]]
+  [ ! -e "$state/runtimes/current" ]
+  [ ! -e "$HOME/.config/systemd/user/pi-webui.service" ]
+  [ ! -e "$TEST_ROOT/service-active" ]
+  [ -d "$state/runtimes/candidate" ]
+  [ -d "$state/transactions/pending" ]
+}
+
 @test "installer rolls back a non-loopback listener and leaves no orphan" {
   make_installer_repo
   make_valid_platform
@@ -760,6 +851,9 @@ EOF
   [ -f "$TEST_ROOT/service-active" ]
   [ -d "$state/transactions/pending" ]
   [ -d "$state/runtimes/candidate" ]
+  [ "$(grep -c 'api/health' "$TEST_COMMAND_LOG")" -ge 3 ]
+  [ "$(grep -c 'api/webui-status' "$TEST_COMMAND_LOG")" -ge 2 ]
+  [ "$(grep -c '^ss -H -ltnp ' "$TEST_COMMAND_LOG")" -ge 2 ]
 }
 
 @test "installer refuses a symlinked systemd unit directory without writing through it" {
@@ -778,6 +872,31 @@ EOF
   [ -L "$HOME/.config/systemd/user" ]
   [ ! -e "$outside/pi-webui.service" ]
   run ! grep -q '^npm-ci$\|^systemctl --user stop' "$TEST_COMMAND_LOG"
+}
+
+@test "installer refuses a symlinked backup tree before npm or service stop" {
+  make_installer_repo
+  make_valid_platform
+  make_valid_pi
+  stub_successful_npm_ci
+  run_installer --apply
+  [ "$status" -eq 0 ]
+  local state="$HOME/.local/share/pi-webui"
+  local outside="$TEST_ROOT/foreign-backups"
+  rm -rf "$state/backups"
+  mkdir -p "$outside"
+  printf 'preserve foreign backup target\n' >"$outside/sentinel"
+  ln -s "$outside" "$state/backups"
+  : >"$TEST_COMMAND_LOG"
+
+  run_installer --apply
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Pi Web UI backup parent must be a real directory"* ]]
+  [ -L "$state/backups" ]
+  [ "$(cat "$outside/sentinel")" = 'preserve foreign backup target' ]
+  run ! grep -q '^npm-ci$\|^systemctl --user stop' "$TEST_COMMAND_LOG"
+  [ -f "$TEST_ROOT/service-active" ]
 }
 
 @test "installer refuses a managed unit whose current runtime is missing" {
@@ -851,6 +970,35 @@ EOF
   [ -f "$state/transactions/pending/prior-unit" ]
   [ "$(cat "$state/transactions/pending/prior-active")" = 1 ]
   [ "$(cat "$state/transactions/pending/prior-enabled")" = 1 ]
+}
+
+@test "installer treats rollback start success without activation as rollback failure" {
+  make_installer_repo
+  make_valid_platform
+  make_valid_pi
+  stub_successful_npm_ci
+  run_installer --apply
+  [ "$status" -eq 0 ]
+  : >"$TEST_ROOT/health-fail"
+  : >"$TEST_ROOT/rollback-start-inactive"
+  export PI_WEBUI_TEST_HEALTH_ATTEMPTS=1
+  local state="$HOME/.local/share/pi-webui"
+
+  run_installer --apply
+
+  [ "$status" -eq 78 ]
+  [[ "$output" == *"service rollback failed; candidate and transaction evidence retained"* ]]
+  [ ! -e "$TEST_ROOT/service-active" ]
+  [ -d "$state/runtimes/candidate" ]
+  [ -d "$state/transactions/pending" ]
+  [ -f "$state/transactions/pending/prior-unit" ]
+  local rollback_start_line active_probe_line
+  rollback_start_line=$(grep -n '^systemctl --user start pi-webui.service$' \
+    "$TEST_COMMAND_LOG" | tail -n1 | cut -d: -f1)
+  active_probe_line=$(awk -v start="$rollback_start_line" \
+    'NR > start && $0 == "systemctl --user is-active --quiet pi-webui.service" { print NR; exit }' \
+    "$TEST_COMMAND_LOG")
+  [ -n "$active_probe_line" ]
 }
 
 @test "installer refuses a foreign unit before npm or service stop" {
@@ -981,6 +1129,24 @@ NODE
   [ ! -e "$HOME/.config/systemd/user/pi-webui.service" ]
 }
 
+@test "installer rejects a systemd dollar path before stopping the service" {
+  HOME="$TEST_ROOT/home\$unsafe"
+  XDG_CONFIG_HOME="$HOME/.config"
+  mkdir -p "$HOME"
+  export HOME XDG_CONFIG_HOME
+  make_installer_repo
+  make_valid_platform
+  make_valid_pi
+  stub_successful_npm_ci
+
+  run_installer --apply
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"systemd expansion character (\$)"* ]]
+  run ! grep -q '^systemctl --user stop' "$TEST_COMMAND_LOG"
+  [ ! -e "$HOME/.config/systemd/user/pi-webui.service" ]
+}
+
 @test "installer rejects a systemd percent path before stopping the service" {
   HOME="$TEST_ROOT/home%unsafe"
   XDG_CONFIG_HOME="$HOME/.config"
@@ -1017,6 +1183,41 @@ NODE
   [ ! -e "$HOME/.config/systemd/user/pi-webui.service" ]
 }
 
+@test "successful trial migration retains the exact legacy runtime in the previous backup" {
+  make_installer_repo
+  make_valid_platform
+  make_valid_pi
+  stub_successful_npm_ci
+  make_trial_unit_and_runtime
+  local state="$HOME/.local/share/pi-webui"
+  local trial="$HOME/.local/share/pi-webui-runtime"
+  local retained="$state/backups/previous/accepted-trial-runtime"
+  local runtime_before
+  runtime_before=$(directory_fingerprint "$trial")
+
+  run_installer --apply
+
+  [ "$status" -eq 0 ]
+  [ ! -e "$trial" ]
+  [ -d "$retained" ]
+  [ ! -L "$retained" ]
+  [ "$runtime_before" = "$(directory_fingerprint "$retained")" ]
+  [ -f "$state/runtimes/current/.pi-webui-current" ]
+  [ ! -e "$state/runtimes/candidate" ]
+  [ ! -e "$state/transactions/pending" ]
+  [ -f "$TEST_ROOT/service-active" ]
+  [ -f "$TEST_ROOT/service-enabled" ]
+
+  : >"$TEST_COMMAND_LOG"
+  run_installer --apply
+
+  [ "$status" -eq 0 ]
+  [ ! -e "$trial" ]
+  [ -d "$retained" ]
+  [ "$runtime_before" = "$(directory_fingerprint "$retained")" ]
+  [ "$(grep -c '^npm-ci$' "$TEST_COMMAND_LOG")" -eq 1 ]
+}
+
 @test "migration health failure restores the exact accepted trial unit runtime and cwd" {
   make_installer_repo
   make_valid_platform
@@ -1029,12 +1230,15 @@ NODE
   unit_before=$(file_tree_hashes "$(dirname "$unit")")
   runtime_before=$(file_tree_hashes "$trial")
   : >"$TEST_ROOT/health-fail"
+  : >"$TEST_ROOT/expect-trial-runtime-moved"
   export PI_WEBUI_TEST_HEALTH_ATTEMPTS=1
 
   run_installer --apply
 
   [ "$status" -ne 0 ]
   [[ "$output" == *"exact health check failed"* ]]
+  [ -f "$TEST_ROOT/trial-runtime-move-observed" ]
+  [ -f "$TEST_ROOT/trial-runtime-restored-before-start" ]
   [ "$unit_before" = "$(file_tree_hashes "$(dirname "$unit")")" ]
   [ "$runtime_before" = "$(file_tree_hashes "$trial")" ]
   grep -Fq -- '--cwd /home/tng/.dotfiles/tmp/worktrees/piface-smoke' "$unit"

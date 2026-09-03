@@ -29,6 +29,8 @@ BACKUP_ROOT="$STATE_ROOT/backups/previous"
 UNIT_TEMPORARY=''
 BACKUP_TEMPORARY=''
 TRIAL_RUNTIME="$HOME/.local/share/pi-webui-runtime"
+TRIAL_WORKTREE="$HOME/.dotfiles/tmp/worktrees/piface-smoke"
+TRIAL_RUNTIME_BACKUP=''
 ACCEPTED_TRIAL_UNIT_SHA256=c3ba39ea60e3b6e7be197f96d13091e61f1c02220ff1d17cb7489dc7a0e8dac4
 SERVICE_TEMPLATE_SHA256=be71933031443393d963e293dd3d2820447eb0307b39c9c873fbabc251f83e32
 LOCK_TOKEN=''
@@ -120,7 +122,7 @@ require_supported_platform() {
 
 require_commands() {
   local command_name
-  for command_name in curl git mise sha256sum ss systemd-analyze; do
+  for command_name in curl find git mise sha256sum ss systemd-analyze; do
     command -v "$command_name" >/dev/null 2>&1 || {
       fail "$command_name is required"
       return 1
@@ -229,6 +231,10 @@ validate_systemd_path() {
     return 1
   }
   case "$value" in
+    *'$'*)
+      fail "$label contains a systemd expansion character (\$)"
+      return 1
+      ;;
     *%*)
       fail "$label contains a systemd specifier character (%)"
       return 1
@@ -485,6 +491,52 @@ require_current_user_directory() {
   }
 }
 
+require_owned_directory_tree() {
+  local root=$1 label=$2 entry
+  require_current_user_directory "$root" "$label" || return 1
+  [[ -e "$root" ]] || return 0
+  while IFS= read -r -d '' entry; do
+    [[ "$(stat -c '%u' "$entry")" == "$(id -u)" ]] || {
+      fail "$label contains a directory not owned by the current user"
+      return 1
+    }
+  done < <(find "$root" -type d -print0)
+  while IFS= read -r -d '' entry; do
+    if [[ -d "$entry" ]]; then
+      fail "$label contains a symbolic-link directory"
+      return 1
+    fi
+  done < <(find "$root" -type l -print0)
+}
+
+preflight_backup_paths() {
+  local retained_trial="$BACKUP_ROOT/accepted-trial-runtime"
+  require_owned_directory_tree "$STATE_ROOT/backups" \
+    'Pi Web UI backup parent' || return 1
+  if [[ -e "$BACKUP_ROOT" || -L "$BACKUP_ROOT" ]]; then
+    require_owned_managed_directory "$BACKUP_ROOT" 'previous service backup' \
+      .pi-webui-backup pi-webui-task3-backup-v1 || return 1
+  fi
+  if [[ -e "$retained_trial" || -L "$retained_trial" ]]; then
+    [[ -d "$retained_trial" && ! -L "$retained_trial" &&
+      "$(stat -c '%u' "$retained_trial")" == "$(id -u)" &&
+      "$(stat -c '%a' "$retained_trial")" == 700 ]] || {
+      fail 'retained accepted trial runtime must be an owner-only real directory'
+      return 1
+    }
+    bash "$SOURCE_ROOT/bin/validate-pi-webui" --installed-runtime \
+      "$retained_trial" >/dev/null || return 1
+  fi
+}
+
+remove_previous_backup() {
+  preflight_backup_paths || return 1
+  [[ -e "$BACKUP_ROOT" ]] || return 0
+  require_owned_managed_directory "$BACKUP_ROOT" 'previous service backup' \
+    .pi-webui-backup pi-webui-task3-backup-v1 || return 1
+  rm -rf "$BACKUP_ROOT"
+}
+
 preflight_apply_lock() {
   [[ -e "$APPLY_LOCK" || -L "$APPLY_LOCK" ]] || return 0
   [[ ! -L "$APPLY_LOCK" ]] || {
@@ -510,8 +562,9 @@ preflight_apply_lock() {
 }
 
 preflight_worktree_path_components() {
-  require_existing_directory "$HOME/.local" 'HOME .local directory'
-  require_existing_directory "$HOME/.local/share" 'HOME share directory'
+  require_current_user_directory "$HOME" 'HOME directory'
+  require_current_user_directory "$HOME/.local" 'HOME .local directory'
+  require_current_user_directory "$HOME/.local/share" 'HOME share directory'
   require_current_user_directory "$STATE_ROOT" 'Pi Web UI state root'
   require_current_user_directory "$STATE_ROOT/worktrees" 'Pi Web UI worktree parent'
 }
@@ -538,6 +591,7 @@ preflight_destinations() {
   preflight_unit_path_components
   require_current_user_directory "$RUNTIME_PARENT" 'Pi Web UI runtime parent'
   require_current_user_directory "$STATE_ROOT/transactions" 'Pi Web UI transaction parent'
+  preflight_backup_paths
   preflight_handoff_state
   preflight_apply_lock
 }
@@ -575,8 +629,10 @@ check_plan() {
 }
 
 prepare_private_directories() {
-  mkdir -p "$RUNTIME_PARENT" "$STATE_ROOT/transactions" "$STATE_ROOT/worktrees"
-  chmod 0700 "$STATE_ROOT" "$RUNTIME_PARENT" "$STATE_ROOT/transactions" "$STATE_ROOT/worktrees"
+  mkdir -p "$RUNTIME_PARENT" "$STATE_ROOT/transactions" "$STATE_ROOT/worktrees" \
+    "$STATE_ROOT/backups"
+  chmod 0700 "$STATE_ROOT" "$RUNTIME_PARENT" "$STATE_ROOT/transactions" \
+    "$STATE_ROOT/worktrees" "$STATE_ROOT/backups"
 }
 
 owned_by_this_apply() {
@@ -806,8 +862,8 @@ restore_worktree() {
   fi
   if [[ "$rollback_target" == ABSENT ]]; then
     git -C "$SOURCE_ROOT" worktree remove --force "$WORKTREE" >/dev/null 2>&1 || true
-    verify_absent_worktree_rollback
-    return
+    verify_absent_worktree_rollback || return 1
+    return 0
   fi
   [[ -d "$WORKTREE" && ! -L "$WORKTREE" ]] || return 1
   git -C "$WORKTREE" checkout --detach "$rollback_target" >/dev/null 2>&1 || true
@@ -818,7 +874,7 @@ run_process_check() {
   local hook=${PI_WEBUI_TEST_PROCESS_CHECK:-}
   if [[ -n "$hook" ]]; then
     run_restricted_test_hook PI_WEBUI_TEST_PROCESS_CHECK "$hook" process-check
-    return
+    return 0
   fi
   mise exec -- node - "$WORKTREE" "$HOME/.dotfiles/tmp/worktrees/piface-smoke" \
     "$PI_LAUNCHER" <<'NODE'
@@ -857,28 +913,126 @@ verify_no_listener() {
     fail 'port 31415 still has a listener'
     return 1
   }
+  return 0
+}
+
+listener_process_root() {
+  local process_root=${PI_WEBUI_TEST_PROC_ROOT:-/proc}
+  if [[ "$process_root" != /proc ]]; then
+    [[ "${PI_WEBUI_TESTING:-0}" == 1 && -n "${BATS_TEST_TMPDIR:-}" ]] || {
+      fail 'PI_WEBUI_TEST_PROC_ROOT is restricted to the test sandbox'
+      return 1
+    }
+    case "$process_root/" in
+      "$BATS_TEST_TMPDIR"/*) ;;
+      *)
+        fail 'test proc root must be below BATS_TEST_TMPDIR'
+        return 1
+        ;;
+    esac
+  fi
+  [[ -d "$process_root" && ! -L "$process_root" ]] || {
+    fail 'listener process root must be a real directory'
+    return 1
+  }
+  printf '%s\n' "$process_root"
 }
 
 verify_exact_listener() {
-  local output count=0 line
-  output=$(ss -H -ltn '( sport = :31415 )')
-  while IFS= read -r line; do
-    [[ -n "$line" ]] || continue
-    count=$((count + 1))
-    [[ "$line" == *'127.0.0.1:31415'* && "$line" != *'0.0.0.0:31415'* &&
-      "$line" != *'[::]:31415'* ]] || {
-      fail 'Pi Web UI listener is not confined to exact loopback'
-      return 1
-    }
-  done <<<"$output"
-  [[ "$count" == 1 ]] || {
-    fail 'expected exactly one Pi Web UI listener'
+  local output process_root main_pid control_group status
+  output=$(ss -H -ltnp '( sport = :31415 )')
+  process_root=$(listener_process_root)
+  systemctl --user is-active --quiet pi-webui.service || {
+    fail 'Pi Web UI service is not active while verifying its listener'
     return 1
   }
+  main_pid=$(systemctl --user show --property=MainPID --value pi-webui.service) || {
+    fail 'cannot inspect the Pi Web UI service MainPID'
+    return 1
+  }
+  control_group=$(systemctl --user show --property=ControlGroup --value \
+    pi-webui.service) || {
+    fail 'cannot inspect the Pi Web UI service control group'
+    return 1
+  }
+
+  if mise exec -- node - "$process_root" "$main_pid" "$control_group" "$output" <<'NODE'; then
+const fs = require('node:fs');
+const path = require('node:path');
+const [procRoot, mainPidText, controlGroup, input] = process.argv.slice(2);
+const lines = input.split('\n').filter((line) => line.trim() !== '');
+if (lines.length !== 1) process.exit(41);
+const fields = lines[0].trim().split(/\s+/);
+if (fields[0] !== 'LISTEN' || fields[3] !== '127.0.0.1:31415') process.exit(40);
+const pids = [...new Set([...lines[0].matchAll(/(?:^|,)pid=(\d+)(?:,|\))/g)]
+  .map((match) => Number(match[1])))];
+const mainPid = Number(mainPidText);
+if (pids.length !== 1 || !Number.isSafeInteger(mainPid) || mainPid <= 0) process.exit(42);
+
+const snapshots = new Map();
+function snapshot(pid) {
+  const directory = path.join(procRoot, String(pid));
+  const stat = fs.readFileSync(path.join(directory, 'stat'), 'utf8').trim();
+  const close = stat.lastIndexOf(')');
+  if (close < 0) throw new Error('malformed process stat');
+  const statFields = stat.slice(close + 2).split(/\s+/);
+  if (statFields.length < 20 || !/^\d+$/.test(statFields[19])) {
+    throw new Error('malformed process start time');
+  }
+  const status = fs.readFileSync(path.join(directory, 'status'), 'utf8');
+  const parent = status.match(/^PPid:\s*(\d+)$/m);
+  if (!parent) throw new Error('missing process parent');
+  const cgroups = fs.readFileSync(path.join(directory, 'cgroup'), 'utf8')
+    .trim().split('\n').map((line) => line.split(':').slice(2).join(':'));
+  const value = {pid, startTime: statFields[19], parent: Number(parent[1]), cgroups};
+  snapshots.set(pid, value);
+  return value;
 }
 
-verify_service_health() {
-  local attempt health status_json max_attempts=20
+try {
+  const listenerPid = pids[0];
+  const listener = snapshot(listenerPid);
+  const cgroupOwned = controlGroup.startsWith('/') &&
+    listener.cgroups.some((candidate) => candidate === controlGroup);
+  let ancestryOwned = listenerPid === mainPid;
+  if (!cgroupOwned && !ancestryOwned) {
+    let current = listener.parent;
+    const visited = new Set([listenerPid]);
+    for (let depth = 1; depth < 256 && current > 0 && !visited.has(current); depth += 1) {
+      visited.add(current);
+      const process = snapshot(current);
+      if (current === mainPid) {
+        ancestryOwned = true;
+        break;
+      }
+      current = process.parent;
+    }
+  }
+  if (!ancestryOwned && !cgroupOwned) process.exit(42);
+  for (const process of snapshots.values()) {
+    const stat = fs.readFileSync(path.join(procRoot, String(process.pid), 'stat'), 'utf8').trim();
+    const close = stat.lastIndexOf(')');
+    const fieldsAfterName = close < 0 ? [] : stat.slice(close + 2).split(/\s+/);
+    if (fieldsAfterName[19] !== process.startTime) process.exit(42);
+  }
+} catch (error) {
+  process.exit(42);
+}
+NODE
+    return 0
+  else
+    status=$?
+  fi
+  case "$status" in
+    40) fail 'Pi Web UI listener is not confined to exact loopback' ;;
+    41) fail 'expected exactly one Pi Web UI listener' ;;
+    *) fail 'Pi Web UI listener is not owned by the active Pi Web UI service' ;;
+  esac
+  return 1
+}
+
+service_verification_attempts() {
+  local max_attempts=20
   if [[ -n "${PI_WEBUI_TEST_HEALTH_ATTEMPTS:-}" ]]; then
     [[ "${PI_WEBUI_TESTING:-0}" == 1 && -n "${BATS_TEST_TMPDIR:-}" ]] || {
       fail 'PI_WEBUI_TEST_HEALTH_ATTEMPTS is restricted to the test sandbox'
@@ -890,6 +1044,24 @@ verify_service_health() {
       return 1
     }
   fi
+  printf '%s\n' "$max_attempts"
+}
+
+wait_for_service_active() {
+  local attempt max_attempts
+  max_attempts=$(service_verification_attempts)
+  for attempt in $(seq 1 "$max_attempts"); do
+    systemctl --user is-active --quiet pi-webui.service && return 0
+    [[ "$attempt" == "$max_attempts" ]] || sleep 1
+  done
+  fail 'Pi Web UI service did not become active'
+  return 1
+}
+
+verify_service_health() {
+  local expected_worktree=${1:-$WORKTREE} expected_launcher=${2:-$PI_LAUNCHER}
+  local attempt health status_json max_attempts
+  max_attempts=$(service_verification_attempts)
   for attempt in $(seq 1 "$max_attempts"); do
     if health=$(curl --fail --silent --show-error \
       http://127.0.0.1:31415/api/health 2>/dev/null) &&
@@ -919,10 +1091,16 @@ if (!network || network.host !== "127.0.0.1" || network.port !== 31415 || networ
 if (!Array.isArray(network.urls) || network.urls.length !== 0) process.exit(1);
 if (!Array.isArray(data.tabs) || data.tabs.length < 1) process.exit(1);
 for (const tab of data.tabs) {
-  if (tab.cwd !== worktree || tab.running !== true) process.exit(1);
-  if (typeof tab.command === "string" && !tab.command.startsWith(`${launcher} --mode rpc`)) process.exit(1);
+  if (tab.cwd !== worktree || tab.running !== true) {
+    console.error("Pi Web UI status tab does not match the expected cwd/running state");
+    process.exit(1);
+  }
+  if (typeof tab.command === "string" && !tab.command.startsWith(`${launcher} --mode rpc`)) {
+    console.error("Pi Web UI status tab does not match the expected Pi launcher");
+    process.exit(1);
+  }
 }
-' "$WORKTREE" "$PI_LAUNCHER" || {
+' "$expected_worktree" "$expected_launcher" || {
     fail 'Pi Web UI detailed status validation failed'
     return 1
   }
@@ -937,6 +1115,32 @@ stop_service_cleanly() {
   fi
   verify_no_listener
   run_process_check
+  return 0
+}
+
+stage_trial_runtime() {
+  [[ "$PRIOR_RUNTIME_KIND" == trial ]] || return 0
+  TRIAL_RUNTIME_BACKUP="$STATE_ROOT/backups/.accepted-trial-runtime.$$"
+  [[ ! -e "$TRIAL_RUNTIME_BACKUP" && ! -L "$TRIAL_RUNTIME_BACKUP" ]] || {
+    fail 'temporary accepted trial runtime backup already exists'
+    return 1
+  }
+  mkdir -p "$STATE_ROOT/backups"
+  chmod 0700 "$STATE_ROOT/backups"
+  mv "$TRIAL_RUNTIME" "$TRIAL_RUNTIME_BACKUP"
+}
+
+restore_trial_runtime() {
+  [[ "$PRIOR_RUNTIME_KIND" == trial ]] || return 0
+  [[ -n "$TRIAL_RUNTIME_BACKUP" && -d "$TRIAL_RUNTIME_BACKUP" &&
+    ! -L "$TRIAL_RUNTIME_BACKUP" && ! -e "$TRIAL_RUNTIME" &&
+    ! -L "$TRIAL_RUNTIME" ]] || return 1
+  [[ "$(stat -c '%u' "$TRIAL_RUNTIME_BACKUP")" == "$(id -u)" &&
+  "$(stat -c '%a' "$TRIAL_RUNTIME_BACKUP")" == 700 ]] || return 1
+  bash "$SOURCE_ROOT/bin/validate-pi-webui" --installed-runtime \
+    "$TRIAL_RUNTIME_BACKUP" >/dev/null || return 1
+  mv "$TRIAL_RUNTIME_BACKUP" "$TRIAL_RUNTIME"
+  TRIAL_RUNTIME_BACKUP=''
 }
 
 record_prior_service_state() {
@@ -960,6 +1164,8 @@ promote_runtime_and_unit() {
   if [[ "$PRIOR_RUNTIME_KIND" == managed ]]; then
     mv "$CURRENT_RUNTIME" "$PREVIOUS_RUNTIME"
     PRIOR_RUNTIME_MOVED=1
+  elif [[ "$PRIOR_RUNTIME_KIND" == trial ]]; then
+    stage_trial_runtime
   fi
   printf '%s\n' pi-webui-task3-current-v1 >"$CANDIDATE_RUNTIME/.pi-webui-current"
   chmod 0600 "$CANDIDATE_RUNTIME/.pi-webui-current"
@@ -989,10 +1195,7 @@ start_and_verify_service() {
     systemctl --user start pi-webui.service
   fi
   SERVICE_STARTED=1
-  systemctl --user is-active --quiet pi-webui.service || {
-    fail 'Pi Web UI service did not become active'
-    return 1
-  }
+  wait_for_service_active
   verify_service_health
   if [[ "$PRIOR_UNIT_KIND" != absent && "$PRIOR_ACTIVE" == 0 ]]; then
     stop_service_cleanly
@@ -1001,6 +1204,7 @@ start_and_verify_service() {
 }
 
 retain_previous_backup() {
+  local retained_trial="$BACKUP_ROOT/accepted-trial-runtime"
   BACKUP_TEMPORARY="$STATE_ROOT/backups/.previous.$$"
   mkdir -p "$STATE_ROOT/backups"
   chmod 0700 "$STATE_ROOT/backups"
@@ -1009,17 +1213,26 @@ retain_previous_backup() {
   cp "$TRANSACTION_DIR"/prior-* "$BACKUP_TEMPORARY/"
   cp "$TRANSACTION_DIR/worktree-previous-head" "$TRANSACTION_DIR/worktree-head" \
     "$TRANSACTION_DIR/source-head" "$BACKUP_TEMPORARY/"
-  chmod 0600 "$BACKUP_TEMPORARY"/* "$BACKUP_TEMPORARY/.pi-webui-backup"
+  find "$BACKUP_TEMPORARY" -maxdepth 1 -type f -exec chmod 0600 {} +
+  if [[ -n "$TRIAL_RUNTIME_BACKUP" ]]; then
+    mv "$TRIAL_RUNTIME_BACKUP" "$BACKUP_TEMPORARY/accepted-trial-runtime"
+    TRIAL_RUNTIME_BACKUP="$BACKUP_TEMPORARY/accepted-trial-runtime"
+  elif [[ -d "$retained_trial" && ! -L "$retained_trial" ]]; then
+    mv "$retained_trial" "$BACKUP_TEMPORARY/accepted-trial-runtime"
+    TRIAL_RUNTIME_BACKUP="$BACKUP_TEMPORARY/accepted-trial-runtime"
+  fi
   if [[ -e "$BACKUP_ROOT" || -L "$BACKUP_ROOT" ]]; then
-    require_owned_managed_directory "$BACKUP_ROOT" 'previous service backup' \
-      .pi-webui-backup pi-webui-task3-backup-v1
-    rm -rf "$BACKUP_ROOT"
+    remove_previous_backup
   fi
   mv "$BACKUP_TEMPORARY" "$BACKUP_ROOT"
   BACKUP_TEMPORARY=''
+  if [[ -n "$TRIAL_RUNTIME_BACKUP" ]]; then
+    TRIAL_RUNTIME_BACKUP="$BACKUP_ROOT/accepted-trial-runtime"
+  fi
 }
 
 complete_service_reconciliation() {
+  preflight_backup_paths
   record_prior_service_state
   if [[ "$PRIOR_ACTIVE" == 1 ]]; then
     stop_service_cleanly
@@ -1070,6 +1283,67 @@ cleanup_apply_evidence() {
   [[ "$cleanup_failed" == 0 ]]
 }
 
+verify_restored_prior_artifacts() {
+  case "$PRIOR_UNIT_KIND" in
+    absent)
+      [[ ! -e "$UNIT_PATH" && ! -L "$UNIT_PATH" ]] || return 1
+      ;;
+    managed | trial)
+      [[ -f "$UNIT_PATH" && ! -L "$UNIT_PATH" &&
+        "$(stat -c '%u' "$UNIT_PATH")" == "$(id -u)" &&
+        "$(stat -c '%a' "$UNIT_PATH")" == 600 ]] || return 1
+      cmp -s "$TRANSACTION_DIR/prior-unit" "$UNIT_PATH" || return 1
+      ;;
+    *) return 1 ;;
+  esac
+  case "$PRIOR_RUNTIME_KIND" in
+    absent) ;;
+    managed)
+      require_owned_managed_directory "$CURRENT_RUNTIME" 'restored current runtime' \
+        .pi-webui-current pi-webui-task3-current-v1 || return 1
+      bash "$SOURCE_ROOT/bin/validate-pi-webui" --installed-runtime \
+        "$CURRENT_RUNTIME" >/dev/null || return 1
+      ;;
+    trial)
+      [[ -d "$TRIAL_RUNTIME" && ! -L "$TRIAL_RUNTIME" &&
+        "$(stat -c '%u' "$TRIAL_RUNTIME")" == "$(id -u)" &&
+        "$(stat -c '%a' "$TRIAL_RUNTIME")" == 700 ]] || return 1
+      bash "$SOURCE_ROOT/bin/validate-pi-webui" --installed-runtime \
+        "$TRIAL_RUNTIME" >/dev/null || return 1
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+verify_restored_service_state() {
+  local expected_worktree=$WORKTREE
+  verify_restored_prior_artifacts || {
+    fail 'restored Pi Web UI unit or runtime does not match the prior service'
+    return 1
+  }
+  if [[ "$PRIOR_ENABLED" == 1 ]]; then
+    systemctl --user is-enabled --quiet pi-webui.service || {
+      fail 'Pi Web UI service enablement was not restored'
+      return 1
+    }
+  elif systemctl --user is-enabled --quiet pi-webui.service; then
+    fail 'Pi Web UI service disablement was not restored'
+    return 1
+  fi
+  if [[ "$PRIOR_ACTIVE" == 1 ]]; then
+    wait_for_service_active
+    [[ "$PRIOR_UNIT_KIND" == trial ]] && expected_worktree=$TRIAL_WORKTREE
+    verify_service_health "$expected_worktree" "$PI_LAUNCHER"
+  else
+    if systemctl --user is-active --quiet pi-webui.service; then
+      fail 'Pi Web UI service activity was not restored'
+      return 1
+    fi
+    verify_no_listener
+    run_process_check
+  fi
+}
+
 rollback_service_reconciliation() {
   local failed=0
   if [[ "$SERVICE_STARTED" == 1 ]]; then
@@ -1108,33 +1382,53 @@ rollback_service_reconciliation() {
     mv "$PREVIOUS_RUNTIME" "$CURRENT_RUNTIME" || failed=1
     PRIOR_RUNTIME_MOVED=0
   fi
+  if [[ "$PRIOR_RUNTIME_KIND" == trial ]] && ! restore_trial_runtime; then
+    failed=1
+  fi
   if [[ -n "$UNIT_TEMPORARY" && -f "$UNIT_TEMPORARY" && ! -L "$UNIT_TEMPORARY" ]]; then
     rm -f "$UNIT_TEMPORARY" || failed=1
     UNIT_TEMPORARY=''
   fi
   if [[ -n "$BACKUP_TEMPORARY" && -d "$BACKUP_TEMPORARY" &&
     ! -L "$BACKUP_TEMPORARY" ]]; then
-    if require_owned_managed_directory "$BACKUP_TEMPORARY" 'temporary service backup' \
-      .pi-webui-backup pi-webui-task3-backup-v1; then
-      rm -rf "$BACKUP_TEMPORARY" || failed=1
-      BACKUP_TEMPORARY=''
-    else
-      failed=1
-    fi
+    case "$TRIAL_RUNTIME_BACKUP/" in
+      "$BACKUP_TEMPORARY"/*)
+        fail 'temporary service backup retains the accepted trial runtime; refusing cleanup'
+        failed=1
+        ;;
+      *)
+        if require_owned_managed_directory "$BACKUP_TEMPORARY" 'temporary service backup' \
+          .pi-webui-backup pi-webui-task3-backup-v1; then
+          rm -rf "$BACKUP_TEMPORARY" || failed=1
+          BACKUP_TEMPORARY=''
+        else
+          failed=1
+        fi
+        ;;
+    esac
   fi
   if [[ "$WORKTREE_UPDATE_STARTED" == 1 ]] && ! restore_worktree; then
     failed=1
   fi
-  systemctl --user daemon-reload || failed=1
-  if [[ "$PRIOR_ENABLED" == 1 ]]; then
-    systemctl --user enable pi-webui.service || failed=1
-  else
-    systemctl --user disable pi-webui.service >/dev/null 2>&1 || failed=1
+  if ! verify_restored_prior_artifacts; then
+    fail 'restored Pi Web UI unit or runtime does not match the prior service'
+    failed=1
   fi
-  if [[ "$PRIOR_ACTIVE" == 1 ]]; then
-    systemctl --user start pi-webui.service || failed=1
-  else
-    systemctl --user stop pi-webui.service >/dev/null 2>&1 || failed=1
+  if [[ "$failed" == 0 ]]; then
+    systemctl --user daemon-reload || failed=1
+    if [[ "$PRIOR_ENABLED" == 1 ]]; then
+      systemctl --user enable pi-webui.service || failed=1
+    else
+      systemctl --user disable pi-webui.service >/dev/null 2>&1 || failed=1
+    fi
+    if [[ "$PRIOR_ACTIVE" == 1 ]]; then
+      systemctl --user start pi-webui.service || failed=1
+    else
+      systemctl --user stop pi-webui.service >/dev/null 2>&1 || failed=1
+    fi
+  fi
+  if [[ "$failed" == 0 ]] && ! verify_restored_service_state; then
+    failed=1
   fi
   [[ "$failed" == 0 ]]
 }
