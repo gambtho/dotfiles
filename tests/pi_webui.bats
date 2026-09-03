@@ -653,6 +653,18 @@ C
   /usr/bin/cc -o "$STUB_BIN/mise" "$TEST_ROOT/mise-argv-probe.c"
 }
 
+mutate_mise_trampoline_to_direct_fd() {
+  node - "$1" <<'NODE'
+const fs = require('node:fs');
+const file = process.argv[2];
+const trampoline = `"$BASH_BIN" -p -c 'exec -a mise /proc/self/fd/8 "$@"' _ "$@"`;
+const direct = '/proc/self/fd/8 "$@"';
+const source = fs.readFileSync(file, 'utf8');
+if (!source.includes(trampoline)) throw new Error('mise descriptor trampoline not found');
+fs.writeFileSync(file, source.replace(trampoline, direct));
+NODE
+}
+
 @test "tailscale helper help and default are nonmutating explicit interfaces" {
   make_installer_repo
   make_valid_platform
@@ -1470,32 +1482,54 @@ SCRIPT
   [ -f "$TEST_ROOT/prior-bash-env-effect" ]
 }
 
-@test "FD-backed mise calls preserve argv0 and exact supported arguments without injection" {
-  make_installer_repo
-  make_valid_platform
-  setup_task4_stubs
+@test "FD-backed mise calls preserve argv0 and exact supported arguments on real helper paths" {
+  make_task4_managed_service
   make_mise_argv_probe
-  local injection="$TEST_ROOT/mise-injection-ran"
 
-  MISE_INJECTION="; printf injected >$injection" run_tailscale_helper check
+  : >"$TEST_COMMAND_LOG"
+  run_tailscale_helper serve
 
   [ "$status" -eq 0 ]
-  [ ! -e "$injection" ]
+  grep -Fqx 'sudo tailscale serve --bg --https=443 http://127.0.0.1:31415' "$TEST_COMMAND_LOG"
+  [ "$(cat "$TASK4_SERVE_JSON")" = "$TASK4_EXACT_JSON" ]
+  # The authentication pipeline resolves in a subshell before service validation
+  # resolves and caches Node in the helper's main shell.
   [ "$(grep -Fxc 'mise-argv0 <mise>' "$TEST_COMMAND_LOG")" -eq 2 ]
   [ "$(grep -Fxc 'mise-argc <3>' "$TEST_COMMAND_LOG")" -eq 2 ]
   [ "$(grep -Fxc 'mise-arg1 <which>' "$TEST_COMMAND_LOG")" -eq 2 ]
   [ "$(grep -Fxc 'mise-arg2 <node>' "$TEST_COMMAND_LOG")" -eq 2 ]
   run ! grep -Eq '^mise-arg[3-9]' "$TEST_COMMAND_LOG"
 
-  : >"$TEST_COMMAND_LOG"
-  MISE_INJECTION="; printf injected >$injection" run_rollback_helper
+  printf '%s\n' "$TASK4_EMPTY_JSON" >"$TASK4_SERVE_JSON"
+  printf '%s\n' 'No serve config' >"$TASK4_SERVE_HUMAN"
+  local rollback="$INSTALLER_REPO/ai/pi/webui/rollback.sh"
+  local rollback_pristine="$TEST_ROOT/rollback-pristine"
+  cp "$rollback" "$rollback_pristine"
+  mutate_mise_trampoline_to_direct_fd "$rollback"
 
-  [ "$status" -eq 0 ]
-  [ ! -e "$injection" ]
-  [ "$(grep -Fxc 'mise-argv0 <mise>' "$TEST_COMMAND_LOG")" -eq 1 ]
+  : >"$TEST_COMMAND_LOG"
+  run_rollback_helper
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'mise cannot resolve Node.js'* ]]
+  [ "$(grep -Fxc 'mise-argv0 </proc/self/fd/8>' "$TEST_COMMAND_LOG")" -eq 1 ]
   [ "$(grep -Fxc 'mise-argc <3>' "$TEST_COMMAND_LOG")" -eq 1 ]
   [ "$(grep -Fxc 'mise-arg1 <which>' "$TEST_COMMAND_LOG")" -eq 1 ]
   [ "$(grep -Fxc 'mise-arg2 <node>' "$TEST_COMMAND_LOG")" -eq 1 ]
+  run ! grep -Eq '^mise-arg[3-9]' "$TEST_COMMAND_LOG"
+  [ -f "$HOME/.config/systemd/user/pi-webui.service" ]
+
+  mv "$rollback_pristine" "$rollback"
+  : >"$TEST_COMMAND_LOG"
+  run_rollback_helper
+
+  [ "$status" -eq 0 ]
+  # Route and unit parsing each resolve in command-substitution subshells;
+  # runtime validation then resolves and caches Node in the main shell.
+  [ "$(grep -Fxc 'mise-argv0 <mise>' "$TEST_COMMAND_LOG")" -eq 3 ]
+  [ "$(grep -Fxc 'mise-argc <3>' "$TEST_COMMAND_LOG")" -eq 3 ]
+  [ "$(grep -Fxc 'mise-arg1 <which>' "$TEST_COMMAND_LOG")" -eq 3 ]
+  [ "$(grep -Fxc 'mise-arg2 <node>' "$TEST_COMMAND_LOG")" -eq 3 ]
   run ! grep -Eq '^mise-arg[3-9]' "$TEST_COMMAND_LOG"
 }
 
