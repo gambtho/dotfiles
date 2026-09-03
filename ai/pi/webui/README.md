@@ -153,13 +153,21 @@ mechanism.
 Each rename is atomic on that filesystem, and the final temporary-directory
 rename makes the complete archive visible under the unique bounded path
 `~/.local/share/pi-webui/backups/failures/<id>`. The candidate and pending
-transaction contents are retained. EXIT and INT/TERM/HUP handling restores
-partial moves and releases only an unchanged owned lock; if restoration cannot
-be proved, the helper exits nonzero and identifies the retained temporary
-archive. An interruption after the final rename can return nonzero while
+transaction contents are retained. During apply and archive lock creation,
+HUP/INT/TERM are deferred from the successful lock-directory creation until
+both owner-only markers are complete. The original handlers are then restored
+and any deferred signal is replayed, so archive cleanup sees a fully owned lock.
+A synchronous initialization failure removes only the exact newly created
+partial lock state; changed or unexpected state is preserved as ambiguous.
+EXIT and INT/TERM/HUP handling restores partial moves and releases only an
+unchanged owned lock; if restoration cannot be proved, the helper exits nonzero
+and identifies the retained temporary archive. SIGKILL cannot be deferred or handled.
+It can still leave a partial lock in this tiny initialization window. The next
+invocation rejects and preserves that malformed state for operator inspection.
+An interruption after the final rename can return nonzero while
 retaining the already-complete published archive. The action does not run npm,
-alter the current
-service/runtime/worktree, mutate Git, or change Tailscale routes. Existing
+alter the current service/runtime/worktree, mutate Git, or change Tailscale
+routes. Existing
 symlinked, foreign, permissive, colliding, partial, cross-device, or concurrently
 locked state is preserved and rejected. With no candidate and no pending
 transaction it reports a successful no-op.

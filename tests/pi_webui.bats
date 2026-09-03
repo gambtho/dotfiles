@@ -10,6 +10,7 @@ setup() {
   setup_dotfiles_test
   unset PI_WEBUI_TEST_STATUS_JSON PI_WEBUI_TEST_HEALTH_ATTEMPTS
   unset TEST_BEFORE_LOCK_HOOK TEST_AFTER_NPM_HOOK TEST_BEFORE_TRIAL_STAGE_HOOK
+  unset TEST_LOCK_AFTER_MKDIR_HOOK TEST_LOCK_AFTER_OWNER_HOOK
   unset TEST_ARCHIVE_AFTER_LOCK_HOOK TEST_ARCHIVE_BEFORE_MOVE_HOOK
   unset TEST_ARCHIVE_AFTER_FIRST_MOVE_HOOK TEST_ARCHIVE_AFTER_SECOND_MOVE_HOOK
   unset TEST_ARCHIVE_AFTER_PUBLICATION_HOOK
@@ -340,6 +341,8 @@ run_installer() {
     PI_WEBUI_TEST_BEFORE_LOCK_HOOK="${TEST_BEFORE_LOCK_HOOK:-}" \
     PI_WEBUI_TEST_AFTER_NPM_HOOK="${TEST_AFTER_NPM_HOOK:-}" \
     PI_WEBUI_TEST_BEFORE_TRIAL_STAGE_HOOK="${TEST_BEFORE_TRIAL_STAGE_HOOK:-}" \
+    PI_WEBUI_TEST_LOCK_AFTER_MKDIR_HOOK="${TEST_LOCK_AFTER_MKDIR_HOOK:-}" \
+    PI_WEBUI_TEST_LOCK_AFTER_OWNER_HOOK="${TEST_LOCK_AFTER_OWNER_HOOK:-}" \
     PI_WEBUI_TEST_ARCHIVE_AFTER_LOCK_HOOK="${TEST_ARCHIVE_AFTER_LOCK_HOOK:-}" \
     PI_WEBUI_TEST_ARCHIVE_BEFORE_MOVE_HOOK="${TEST_ARCHIVE_BEFORE_MOVE_HOOK:-}" \
     PI_WEBUI_TEST_ARCHIVE_AFTER_FIRST_MOVE_HOOK="${TEST_ARCHIVE_AFTER_FIRST_MOVE_HOOK:-}" \
@@ -4074,6 +4077,129 @@ SCRIPT
   chmod +x "$hook"
 }
 
+@test "installer archive defers signals across partial lock initialization" {
+  make_installer_repo
+  make_valid_platform
+  make_valid_archive_evidence
+  local state="$HOME/.local/share/pi-webui"
+  local candidate="$state/runtimes/candidate"
+  local transaction="$state/transactions/pending"
+  local candidate_before transaction_before seam hook
+  for seam in mkdir owner; do
+    hook="$TEST_ROOT/lock-after-$seam"
+    candidate_before=$(directory_fingerprint "$candidate")
+    transaction_before=$(directory_fingerprint "$transaction")
+    make_archive_signal_hook "$hook"
+    if [[ "$seam" == mkdir ]]; then
+      TEST_LOCK_AFTER_MKDIR_HOOK=$hook
+      export TEST_LOCK_AFTER_MKDIR_HOOK
+    else
+      TEST_LOCK_AFTER_OWNER_HOOK=$hook
+      export TEST_LOCK_AFTER_OWNER_HOOK
+    fi
+
+    run_installer --archive-pending
+
+    [ "$status" -ne 0 ]
+    [[ "$output" == *'archive action interrupted by TERM'* ]]
+    [ "$candidate_before" = "$(directory_fingerprint "$candidate")" ]
+    [ "$transaction_before" = "$(directory_fingerprint "$transaction")" ]
+    [ ! -e "$state/transactions/apply.lock" ]
+    [ ! -e "$state/backups/failures/$ARCHIVE_ID" ]
+    unset TEST_LOCK_AFTER_MKDIR_HOOK TEST_LOCK_AFTER_OWNER_HOOK
+  done
+}
+
+@test "installer apply defers signals across shared partial lock initialization" {
+  make_installer_repo
+  make_valid_platform
+  make_valid_pi
+  stub_successful_npm_ci
+  local state="$HOME/.local/share/pi-webui"
+  local seam hook
+  for seam in mkdir owner; do
+    hook="$TEST_ROOT/apply-lock-after-$seam"
+    make_archive_signal_hook "$hook"
+    if [[ "$seam" == mkdir ]]; then
+      TEST_LOCK_AFTER_MKDIR_HOOK=$hook
+      export TEST_LOCK_AFTER_MKDIR_HOOK
+    else
+      TEST_LOCK_AFTER_OWNER_HOOK=$hook
+      export TEST_LOCK_AFTER_OWNER_HOOK
+    fi
+
+    run_installer --apply
+
+    [ "$status" -eq 143 ]
+    [ ! -e "$state/transactions/apply.lock" ]
+    [ ! -e "$state/runtimes/candidate" ]
+    [ ! -e "$state/transactions/pending" ]
+    run ! grep -q '^npm-ci$' "$TEST_COMMAND_LOG"
+    unset TEST_LOCK_AFTER_MKDIR_HOOK TEST_LOCK_AFTER_OWNER_HOOK
+  done
+}
+
+@test "installer cleans exact partial lock state after synchronous initialization failures" {
+  make_installer_repo
+  make_valid_platform
+  make_valid_archive_evidence
+  local state="$HOME/.local/share/pi-webui"
+  local candidate="$state/runtimes/candidate"
+  local transaction="$state/transactions/pending"
+  local candidate_before transaction_before seam hook
+  for seam in mkdir owner; do
+    hook="$TEST_ROOT/fail-lock-after-$seam"
+    candidate_before=$(directory_fingerprint "$candidate")
+    transaction_before=$(directory_fingerprint "$transaction")
+    printf '#!/usr/bin/bash -p\nexit 73\n' >"$hook"
+    chmod +x "$hook"
+    if [[ "$seam" == mkdir ]]; then
+      TEST_LOCK_AFTER_MKDIR_HOOK=$hook
+      export TEST_LOCK_AFTER_MKDIR_HOOK
+    else
+      TEST_LOCK_AFTER_OWNER_HOOK=$hook
+      export TEST_LOCK_AFTER_OWNER_HOOK
+    fi
+
+    run_installer --archive-pending
+
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"lock after-$seam lifecycle hook failed"* ]]
+    [ "$candidate_before" = "$(directory_fingerprint "$candidate")" ]
+    [ "$transaction_before" = "$(directory_fingerprint "$transaction")" ]
+    [ ! -e "$state/transactions/apply.lock" ]
+    unset TEST_LOCK_AFTER_MKDIR_HOOK TEST_LOCK_AFTER_OWNER_HOOK
+  done
+}
+
+@test "installer preserves ambiguous partial lock state after initialization failure" {
+  make_installer_repo
+  make_valid_platform
+  make_valid_archive_evidence
+  local state="$HOME/.local/share/pi-webui"
+  local candidate="$state/runtimes/candidate"
+  local transaction="$state/transactions/pending"
+  local candidate_before transaction_before
+  candidate_before=$(directory_fingerprint "$candidate")
+  transaction_before=$(directory_fingerprint "$transaction")
+  TEST_LOCK_AFTER_MKDIR_HOOK="$TEST_ROOT/ambiguous-lock-after-mkdir"
+  cat >"$TEST_LOCK_AFTER_MKDIR_HOOK" <<'SCRIPT'
+#!/usr/bin/bash -p
+printf '%s\n' foreign >"$HOME/.local/share/pi-webui/transactions/apply.lock/unexpected"
+exit 73
+SCRIPT
+  chmod +x "$TEST_LOCK_AFTER_MKDIR_HOOK"
+  export TEST_LOCK_AFTER_MKDIR_HOOK
+
+  run_installer --archive-pending
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'partial apply lock changed; refusing cleanup'* ]]
+  [ "$candidate_before" = "$(directory_fingerprint "$candidate")" ]
+  [ "$transaction_before" = "$(directory_fingerprint "$transaction")" ]
+  [ "$(cat "$state/transactions/apply.lock/unexpected")" = foreign ]
+}
+
 @test "installer archive trap covers the transition immediately after lock acquisition" {
   make_installer_repo
   make_valid_platform
@@ -4336,5 +4462,9 @@ SCRIPT
   run grep -F '/usr/bin/mv -T --no-copy' "$readme"
   [ "$status" -eq 0 ]
   run grep -F 'cannot fall back' "$readme"
+  [ "$status" -eq 0 ]
+  run grep -F 'HUP/INT/TERM are deferred' "$readme"
+  [ "$status" -eq 0 ]
+  run grep -F 'SIGKILL cannot be deferred or handled' "$readme"
   [ "$status" -eq 0 ]
 }

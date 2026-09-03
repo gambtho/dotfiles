@@ -44,6 +44,7 @@ SERVICE_TEMPLATE_SHA256=be71933031443393d963e293dd3d2820447eb0307b39c9c873fbabc2
 LOCK_TOKEN=''
 LOCK_ACQUIRED=0
 LOCK_COMPROMISED=0
+LOCK_INITIALIZATION_SIGNAL=''
 CANDIDATE_CREATED=0
 TRANSACTION_CREATED=0
 TRANSACTION_READY=0
@@ -723,18 +724,128 @@ owned_by_this_apply() {
     "$(cat "$directory/.pi-webui-owner")" == "$LOCK_TOKEN" ]]
 }
 
+defer_lock_initialization_signal() {
+  [[ -n "$LOCK_INITIALIZATION_SIGNAL" ]] || LOCK_INITIALIZATION_SIGNAL=$1
+}
+
+restore_signal_handler() {
+  local signal=$1 definition=$2
+  if [[ -n "$definition" ]]; then
+    eval "$definition"
+  else
+    trap - "$signal"
+  fi
+}
+
+restore_lock_initialization_handlers() {
+  local saved_hup=$1 saved_int=$2 saved_term=$3 pending=$LOCK_INITIALIZATION_SIGNAL
+  restore_signal_handler HUP "$saved_hup"
+  restore_signal_handler INT "$saved_int"
+  restore_signal_handler TERM "$saved_term"
+  LOCK_INITIALIZATION_SIGNAL=''
+  if [[ -n "$pending" ]]; then
+    kill -s "$pending" "$$"
+  fi
+}
+
+partial_apply_lock_matches() {
+  local stage=$1 entry
+  local -a entries=()
+  [[ -d "$APPLY_LOCK" && ! -L "$APPLY_LOCK" &&
+    "$(stat -c '%u' "$APPLY_LOCK")" == "$(id -u)" &&
+    "$(stat -c '%a' "$APPLY_LOCK")" == 700 ]] || return 1
+  while IFS= read -r -d '' entry; do
+    entries+=("$entry")
+  done < <(find "$APPLY_LOCK" -mindepth 1 -maxdepth 1 -print0)
+  case "$stage" in
+    directory)
+      [[ ${#entries[@]} -eq 0 ]]
+      ;;
+    owner)
+      [[ ${#entries[@]} -eq 1 && "${entries[0]}" == "$APPLY_LOCK/.pi-webui-owner" &&
+        -f "$APPLY_LOCK/.pi-webui-owner" && ! -L "$APPLY_LOCK/.pi-webui-owner" &&
+        "$(stat -c '%u' "$APPLY_LOCK/.pi-webui-owner")" == "$(id -u)" &&
+        "$(stat -c '%a' "$APPLY_LOCK/.pi-webui-owner")" == 600 &&
+        "$(cat "$APPLY_LOCK/.pi-webui-owner")" == "$LOCK_TOKEN" ]]
+      ;;
+    complete)
+      [[ ${#entries[@]} -eq 2 &&
+        -f "$APPLY_LOCK/.pi-webui-owner" && ! -L "$APPLY_LOCK/.pi-webui-owner" &&
+        -f "$APPLY_LOCK/.pi-webui-lock" && ! -L "$APPLY_LOCK/.pi-webui-lock" &&
+        "$(stat -c '%u' "$APPLY_LOCK/.pi-webui-owner")" == "$(id -u)" &&
+        "$(stat -c '%u' "$APPLY_LOCK/.pi-webui-lock")" == "$(id -u)" &&
+        "$(stat -c '%a' "$APPLY_LOCK/.pi-webui-owner")" == 600 &&
+        "$(stat -c '%a' "$APPLY_LOCK/.pi-webui-lock")" == 600 &&
+        "$(cat "$APPLY_LOCK/.pi-webui-owner")" == "$LOCK_TOKEN" &&
+        "$(cat "$APPLY_LOCK/.pi-webui-lock")" == pi-webui-task2-lock-v1 ]]
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+cleanup_partial_apply_lock() {
+  local stage=$1
+  partial_apply_lock_matches "$stage" || {
+    fail 'partial apply lock changed; refusing cleanup'
+    return 1
+  }
+  case "$stage" in
+    complete) rm "$APPLY_LOCK/.pi-webui-lock" "$APPLY_LOCK/.pi-webui-owner" ;;
+    owner) rm "$APPLY_LOCK/.pi-webui-owner" ;;
+  esac || {
+    fail 'could not remove partial apply lock markers'
+    return 1
+  }
+  rmdir "$APPLY_LOCK" || {
+    fail 'could not remove partial apply lock directory'
+    return 1
+  }
+}
+
 acquire_apply_lock() {
+  local saved_hup saved_int saved_term stage='' failure=''
   LOCK_TOKEN="pi-webui-task2:$$:$RANDOM"
+  LOCK_INITIALIZATION_SIGNAL=''
+  saved_hup=$(trap -p HUP)
+  saved_int=$(trap -p INT)
+  saved_term=$(trap -p TERM)
+  trap 'defer_lock_initialization_signal HUP' HUP
+  trap 'defer_lock_initialization_signal INT' INT
+  trap 'defer_lock_initialization_signal TERM' TERM
   if ! mkdir -m 0700 "$APPLY_LOCK" 2>/dev/null; then
+    restore_lock_initialization_handlers "$saved_hup" "$saved_int" "$saved_term"
     if preflight_apply_lock; then
       fail 'could not create the apply lock'
     fi
     return 1
   fi
+  stage=directory
+  if ! run_test_lock_after_mkdir_hook; then
+    failure='lock after-mkdir lifecycle hook failed'
+  elif ! (umask 077 && printf '%s\n' "$LOCK_TOKEN" >"$APPLY_LOCK/.pi-webui-owner"); then
+    failure='could not create the apply lock owner marker'
+  else
+    stage=owner
+    if ! run_test_lock_after_owner_hook; then
+      failure='lock after-owner lifecycle hook failed'
+    elif ! (umask 077 && printf '%s\n' pi-webui-task2-lock-v1 >"$APPLY_LOCK/.pi-webui-lock"); then
+      failure='could not create the apply lock marker'
+    else
+      stage=complete
+      if ! chmod 0600 "$APPLY_LOCK/.pi-webui-owner" "$APPLY_LOCK/.pi-webui-lock" ||
+        ! partial_apply_lock_matches complete; then
+        failure='could not verify the initialized apply lock'
+      fi
+    fi
+  fi
+  if [[ -n "$failure" ]]; then
+    fail "$failure"
+    cleanup_partial_apply_lock "$stage" || true
+    restore_lock_initialization_handlers "$saved_hup" "$saved_int" "$saved_term"
+    return 1
+  fi
   LOCK_ACQUIRED=1
-  printf '%s\n' "$LOCK_TOKEN" >"$APPLY_LOCK/.pi-webui-owner"
-  printf '%s\n' pi-webui-task2-lock-v1 >"$APPLY_LOCK/.pi-webui-lock"
-  chmod 0600 "$APPLY_LOCK/.pi-webui-owner" "$APPLY_LOCK/.pi-webui-lock"
+  restore_lock_initialization_handlers "$saved_hup" "$saved_int" "$saved_term"
 }
 
 release_apply_lock() {
@@ -815,6 +926,16 @@ run_restricted_test_hook() {
 run_test_before_lock_hook() {
   run_restricted_test_hook PI_WEBUI_TEST_BEFORE_LOCK_HOOK \
     "${PI_WEBUI_TEST_BEFORE_LOCK_HOOK:-}" before-lock
+}
+
+run_test_lock_after_mkdir_hook() {
+  run_restricted_test_hook PI_WEBUI_TEST_LOCK_AFTER_MKDIR_HOOK \
+    "${PI_WEBUI_TEST_LOCK_AFTER_MKDIR_HOOK:-}" lock-after-mkdir
+}
+
+run_test_lock_after_owner_hook() {
+  run_restricted_test_hook PI_WEBUI_TEST_LOCK_AFTER_OWNER_HOOK \
+    "${PI_WEBUI_TEST_LOCK_AFTER_OWNER_HOOK:-}" lock-after-owner
 }
 
 run_test_after_npm_hook() {
