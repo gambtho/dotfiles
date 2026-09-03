@@ -56,6 +56,7 @@ const [runtimeRoot, trackedRuntime, mode] = process.argv.slice(2);
 const acceptedDependency = '@firstpick/pi-package-webui';
 const acceptedWebuiVersion = '0.10.3';
 const acceptedWebuiIntegrity = 'sha512-46Hmgv/ccINvexRof3w7JzVoutrBcQ06OC2RiLh/aU1MAZvv7Uss6M0CgHkjb8fzzDaspNgihAbu+U0R0TGafQ==';
+const acceptedManifestHash = '073ba87cad124eb709eb8cafdd77c44c10b5d12bf5841acea140a50ac5177763';
 const acceptedLockHash = '39593de061e22a36668a0a0d1449e339b84e644d6c65e6b1618af9d177fc71d0';
 const nestedPrefix = 'node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/';
 const hardenedEntries = {
@@ -89,19 +90,78 @@ function hasOwn(value, key) {
   return Object.prototype.hasOwnProperty.call(value, key);
 }
 
-function requireRegularFile(file, label) {
-  let metadata;
+function lstat(file, label, optional = false) {
   try {
-    metadata = fs.lstatSync(file);
+    return fs.lstatSync(file);
   } catch (error) {
-    fail(`${label} is missing: ${file}`);
-  }
-  if (!metadata.isFile() || metadata.isSymbolicLink()) {
-    fail(`${label} must be a regular file: ${file}`);
+    if (optional && error.code === 'ENOENT') return null;
+    fail(`${label} is unavailable: ${error.message}`);
   }
 }
 
-function validateManifest(manifest) {
+function realpath(file, label) {
+  try {
+    return fs.realpathSync(file);
+  } catch (error) {
+    fail(`${label} cannot be resolved: ${error.message}`);
+  }
+}
+
+function sameFile(left, right) {
+  return left.dev === right.dev && left.ino === right.ino;
+}
+
+function isContained(root, candidate) {
+  return candidate === root || candidate.startsWith(`${root}${path.sep}`);
+}
+
+function requireInstalledRoot(runtime) {
+  // Resolve `.` and trailing separators lexically before lstat so they cannot
+  // make the kernel follow a symlink at the runtime-root boundary.
+  const lexical = path.resolve(runtime);
+  const before = lstat(lexical, 'installed runtime root');
+  if (before.isSymbolicLink()) fail('installed runtime root must not be a symbolic link');
+  if (!before.isDirectory()) fail('installed runtime root must be a directory');
+  const canonical = realpath(lexical, 'installed runtime root');
+  const after = lstat(lexical, 'installed runtime root');
+  if (after.isSymbolicLink() || !sameFile(before, after)) {
+    fail('installed runtime root changed while it was being validated');
+  }
+  return canonical;
+}
+
+function requireSafePath(root, relativePath, label, expectedType) {
+  const components = relativePath.split('/');
+  let current = root;
+  for (let index = 0; index < components.length; index += 1) {
+    current = path.join(current, components[index]);
+    const before = lstat(current, label);
+    if (before.isSymbolicLink()) fail(`${label} contains a symbolic link: ${current}`);
+    if (index < components.length - 1 && !before.isDirectory()) {
+      fail(`${label} contains a non-directory component: ${current}`);
+    }
+    const resolved = realpath(current, label);
+    if (!isContained(root, resolved)) fail(`${label} escapes installed runtime root: ${current}`);
+    const after = lstat(current, label);
+    if (after.isSymbolicLink() || !sameFile(before, after)) {
+      fail(`${label} changed while it was being validated: ${current}`);
+    }
+  }
+  const metadata = lstat(current, label);
+  if (expectedType === 'file' && !metadata.isFile()) fail(`${label} must be a regular file: ${current}`);
+  if (expectedType === 'directory' && !metadata.isDirectory()) fail(`${label} must be a directory: ${current}`);
+  return {file: current, metadata};
+}
+
+function readSafeJson(root, relativePath, label) {
+  const before = requireSafePath(root, relativePath, label, 'file');
+  const result = readJson(before.file, label);
+  const after = requireSafePath(root, relativePath, label, 'file');
+  if (!sameFile(before.metadata, after.metadata)) fail(`${label} changed while it was being read`);
+  return result;
+}
+
+function validateManifest(manifest, manifestRaw) {
   const dependencyNames = Object.keys(manifest.dependencies || {});
   if (dependencyNames.length !== 1 || manifest.dependencies[acceptedDependency] !== acceptedWebuiVersion) {
     fail(`manifest dependency must be exactly ${acceptedDependency}@${acceptedWebuiVersion}`);
@@ -117,6 +177,8 @@ function validateManifest(manifest) {
   if (JSON.stringify(actualKeys) !== JSON.stringify(acceptedKeys)) {
     fail('runtime manifest contains unexpected root properties');
   }
+  const hash = crypto.createHash('sha256').update(manifestRaw).digest('hex');
+  if (hash !== acceptedManifestHash) fail(`manifest SHA-256 must be ${acceptedManifestHash}; got ${hash}`);
 }
 
 function validateLock(lock, lockRaw) {
@@ -173,47 +235,129 @@ function validateLock(lock, lockRaw) {
   return packageEntries.length;
 }
 
-function validateInstalled(runtime, trackedManifestRaw, trackedLockRaw) {
-  const manifestPath = path.join(runtime, 'package.json');
-  const lockPath = path.join(runtime, 'package-lock.json');
-  if (fs.readFileSync(manifestPath, 'utf8') !== trackedManifestRaw) {
+function packageDirectories(nodeModules, label) {
+  let entries;
+  try {
+    entries = fs.readdirSync(nodeModules, {withFileTypes: true});
+  } catch (error) {
+    fail(`${label} cannot be searched: ${error.message}`);
+  }
+  const packages = [];
+  for (const entry of entries) {
+    if (entry.name === '.bin') continue;
+    const entryPath = path.join(nodeModules, entry.name);
+    const metadata = lstat(entryPath, label);
+    if (entry.name === 'node-pty') fail(`node-pty must not be installed: ${entryPath}`);
+    if (metadata.isSymbolicLink()) {
+      let target;
+      try {
+        target = fs.statSync(entryPath);
+      } catch (error) {
+        fail(`${label} contains an unreadable symbolic link: ${entryPath}: ${error.message}`);
+      }
+      if (target.isDirectory()) fail(`${label} cannot safely search symbolic-link directory: ${entryPath}`);
+      continue;
+    }
+    if (!metadata.isDirectory()) continue;
+    if (entry.name.startsWith('@')) {
+      let scopedEntries;
+      try {
+        scopedEntries = fs.readdirSync(entryPath, {withFileTypes: true});
+      } catch (error) {
+        fail(`${label} cannot search scope ${entryPath}: ${error.message}`);
+      }
+      for (const scopedEntry of scopedEntries) {
+        const packagePath = path.join(entryPath, scopedEntry.name);
+        const packageMetadata = lstat(packagePath, label);
+        if (packageMetadata.isSymbolicLink()) {
+          fail(`${label} cannot safely search symbolic-link package: ${packagePath}`);
+        }
+        if (packageMetadata.isDirectory()) packages.push(packagePath);
+      }
+    } else {
+      packages.push(entryPath);
+    }
+  }
+  return packages;
+}
+
+function rejectInstalledNodePty(runtime) {
+  const pending = [requireSafePath(runtime, 'node_modules', 'installed node_modules', 'directory').file];
+  const visited = new Set();
+  while (pending.length > 0) {
+    const nodeModules = pending.pop();
+    const canonical = realpath(nodeModules, 'installed node_modules search');
+    if (!isContained(runtime, canonical)) fail(`installed node_modules search escapes runtime: ${nodeModules}`);
+    if (visited.has(canonical)) continue;
+    visited.add(canonical);
+    for (const packageRoot of packageDirectories(nodeModules, 'installed node_modules search')) {
+      const nested = path.join(packageRoot, 'node_modules');
+      const metadata = lstat(nested, 'nested node_modules', true);
+      if (metadata === null) continue;
+      if (metadata.isSymbolicLink()) fail(`installed node_modules search contains a symbolic link: ${nested}`);
+      if (!metadata.isDirectory()) fail(`nested node_modules must be a directory: ${nested}`);
+      pending.push(nested);
+    }
+  }
+}
+
+function validateInstalled(runtime, runtimeManifestRaw, runtimeLockRaw, trackedManifestRaw, trackedLockRaw) {
+  if (runtimeManifestRaw !== trackedManifestRaw) {
     fail('installed runtime manifest differs from the tracked manifest');
   }
-  if (fs.readFileSync(lockPath, 'utf8') !== trackedLockRaw) {
+  if (runtimeLockRaw !== trackedLockRaw) {
     fail('installed runtime lock differs from the tracked lock');
   }
 
-  const webuiRoot = path.join(runtime, 'node_modules', '@firstpick', 'pi-package-webui');
-  const installedWebui = readJson(path.join(webuiRoot, 'package.json'), 'installed Firstp1ck package').value;
+  const installedWebui = readSafeJson(
+    runtime,
+    'node_modules/@firstpick/pi-package-webui/package.json',
+    'installed Firstp1ck path',
+  ).value;
   if (installedWebui.name !== acceptedDependency || installedWebui.version !== acceptedWebuiVersion ||
       installedWebui.bin?.['pi-webui'] !== './bin/pi-webui-launcher.mjs') {
     fail(`installed Firstp1ck identity must be ${acceptedDependency}@${acceptedWebuiVersion}`);
   }
-  requireRegularFile(path.join(webuiRoot, 'bin', 'pi-webui-launcher.mjs'), 'Firstp1ck launcher');
+  requireSafePath(
+    runtime,
+    'node_modules/@firstpick/pi-package-webui/bin/pi-webui-launcher.mjs',
+    'installed Firstp1ck path',
+    'file',
+  );
 
-  const piRoot = path.join(runtime, 'node_modules', '@earendil-works', 'pi-coding-agent');
-  const installedPi = readJson(path.join(piRoot, 'package.json'), 'installed Pi package').value;
+  const installedPi = readSafeJson(
+    runtime,
+    'node_modules/@earendil-works/pi-coding-agent/package.json',
+    'installed Pi path',
+  ).value;
   if (installedPi.name !== '@earendil-works/pi-coding-agent' || installedPi.version !== '0.84.4' ||
       installedPi.bin?.pi !== 'dist/bundle/cli.js') {
     fail('installed Pi identity must be @earendil-works/pi-coding-agent@0.84.4');
   }
-  requireRegularFile(path.join(piRoot, 'dist', 'bundle', 'cli.js'), 'Pi launcher');
-
-  if (fs.existsSync(path.join(runtime, 'node_modules', 'node-pty'))) {
-    fail('node-pty must not be installed');
-  }
+  requireSafePath(
+    runtime,
+    'node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js',
+    'installed Pi path',
+    'file',
+  );
+  rejectInstalledNodePty(runtime);
 }
 
 try {
-  const manifestFile = readJson(path.join(runtimeRoot, 'package.json'), 'runtime manifest');
-  const lockFile = readJson(path.join(runtimeRoot, 'package-lock.json'), 'runtime lock');
-  validateManifest(manifestFile.value);
+  const runtime = mode === 'installed' ? requireInstalledRoot(runtimeRoot) : runtimeRoot;
+  const manifestFile = mode === 'installed'
+    ? readSafeJson(runtime, 'package.json', 'runtime manifest')
+    : readJson(path.join(runtime, 'package.json'), 'runtime manifest');
+  const lockFile = mode === 'installed'
+    ? readSafeJson(runtime, 'package-lock.json', 'runtime lock')
+    : readJson(path.join(runtime, 'package-lock.json'), 'runtime lock');
+  validateManifest(manifestFile.value, manifestFile.raw);
   const packageCount = validateLock(lockFile.value, lockFile.raw);
 
   if (mode === 'installed') {
     const trackedManifest = readJson(path.join(trackedRuntime, 'package.json'), 'tracked runtime manifest');
     const trackedLock = readJson(path.join(trackedRuntime, 'package-lock.json'), 'tracked runtime lock');
-    validateInstalled(runtimeRoot, trackedManifest.raw, trackedLock.raw);
+    validateInstalled(runtime, manifestFile.raw, lockFile.raw, trackedManifest.raw, trackedLock.raw);
   }
   console.log(`validated ${packageCount} registry packages`);
 } catch (error) {
