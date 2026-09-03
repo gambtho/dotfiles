@@ -4,6 +4,7 @@
 set -euo pipefail
 
 ARCHIVE_PATH='/usr/bin:/bin'
+ARCHIVE_MV='/usr/bin/mv'
 if [[ "${1:-}" == --archive-pending ]]; then
   PATH=$ARCHIVE_PATH
   export PATH
@@ -826,6 +827,11 @@ run_test_before_trial_stage_hook() {
     "${PI_WEBUI_TEST_BEFORE_TRIAL_STAGE_HOOK:-}" before-trial-stage
 }
 
+run_test_archive_after_lock_hook() {
+  run_restricted_test_hook PI_WEBUI_TEST_ARCHIVE_AFTER_LOCK_HOOK \
+    "${PI_WEBUI_TEST_ARCHIVE_AFTER_LOCK_HOOK:-}" archive-after-lock
+}
+
 run_test_archive_before_move_hook() {
   run_restricted_test_hook PI_WEBUI_TEST_ARCHIVE_BEFORE_MOVE_HOOK \
     "${PI_WEBUI_TEST_ARCHIVE_BEFORE_MOVE_HOOK:-}" archive-before-move
@@ -834,6 +840,16 @@ run_test_archive_before_move_hook() {
 run_test_archive_after_first_move_hook() {
   run_restricted_test_hook PI_WEBUI_TEST_ARCHIVE_AFTER_FIRST_MOVE_HOOK \
     "${PI_WEBUI_TEST_ARCHIVE_AFTER_FIRST_MOVE_HOOK:-}" archive-after-first-move
+}
+
+run_test_archive_after_second_move_hook() {
+  run_restricted_test_hook PI_WEBUI_TEST_ARCHIVE_AFTER_SECOND_MOVE_HOOK \
+    "${PI_WEBUI_TEST_ARCHIVE_AFTER_SECOND_MOVE_HOOK:-}" archive-after-second-move
+}
+
+run_test_archive_after_publication_hook() {
+  run_restricted_test_hook PI_WEBUI_TEST_ARCHIVE_AFTER_PUBLICATION_HOOK \
+    "${PI_WEBUI_TEST_ARCHIVE_AFTER_PUBLICATION_HOOK:-}" archive-after-publication
 }
 
 revalidate_worktree_before_mutation() {
@@ -1815,7 +1831,7 @@ restore_archive_moves() {
   fi
   if [[ "$ARCHIVE_SECOND_MOVED" == 1 ]]; then
     if [[ ! -e "$TRANSACTION_DIR" && ! -L "$TRANSACTION_DIR" ]] &&
-      mv -T "$ARCHIVE_TEMPORARY/pending" "$TRANSACTION_DIR"; then
+      "$ARCHIVE_MV" -T --no-copy "$ARCHIVE_TEMPORARY/pending" "$TRANSACTION_DIR"; then
       ARCHIVE_SECOND_MOVED=0
     else
       failed=1
@@ -1823,7 +1839,7 @@ restore_archive_moves() {
   fi
   if [[ "$ARCHIVE_FIRST_MOVED" == 1 ]]; then
     if [[ ! -e "$CANDIDATE_RUNTIME" && ! -L "$CANDIDATE_RUNTIME" ]] &&
-      mv -T "$ARCHIVE_TEMPORARY/candidate" "$CANDIDATE_RUNTIME"; then
+      "$ARCHIVE_MV" -T --no-copy "$ARCHIVE_TEMPORARY/candidate" "$CANDIDATE_RUNTIME"; then
       ARCHIVE_FIRST_MOVED=0
     else
       failed=1
@@ -1849,9 +1865,14 @@ archive_exit_handler() {
   trap - EXIT INT TERM HUP
   [[ "$ARCHIVE_TRAP_ACTIVE" == 1 ]] || exit "$status"
   ARCHIVE_TRAP_ACTIVE=0
+  [[ "$LOCK_ACQUIRED" == 1 ]] || exit "$status"
   if [[ "$ARCHIVE_PUBLISHED" == 0 ]]; then
     if restore_archive_moves; then
-      printf '%s\n' 'error: archive evidence restored after interruption or failure' >&2
+      if [[ "$ARCHIVE_PUBLISHED" == 1 ]]; then
+        printf '%s\n' 'error: completed archive publication retained after interruption' >&2
+      else
+        printf '%s\n' 'error: archive evidence restored after interruption or failure' >&2
+      fi
     else
       restore_failed=1
       if [[ ! -e "$retained_location" && ! -L "$retained_location" &&
@@ -1880,6 +1901,18 @@ archive_signal_handler() {
   trap - "$signal"
   printf 'error: archive action interrupted by %s\n' "$signal" >&2
   exit "$status"
+}
+
+require_archive_mv_no_copy() {
+  local help
+  help=$(LC_ALL=C "$ARCHIVE_MV" --help 2>&1) || {
+    fail 'could not inspect fixed mv no-copy support'
+    return 1
+  }
+  [[ "$help" == *'--no-copy'* ]] || {
+    fail 'mv --no-copy support is required for atomic evidence archival'
+    return 1
+  }
 }
 
 archive_arm_traps() {
@@ -1951,7 +1984,7 @@ archive_evidence_under_lock() {
   }
   verify_archive_lock || return 1
   archive_same_device || return 1
-  if ! mv -T "$CANDIDATE_RUNTIME" "$ARCHIVE_TEMPORARY/candidate"; then
+  if ! "$ARCHIVE_MV" -T --no-copy "$CANDIDATE_RUNTIME" "$ARCHIVE_TEMPORARY/candidate"; then
     fail 'could not archive candidate runtime'
     return 1
   fi
@@ -1962,19 +1995,27 @@ archive_evidence_under_lock() {
   }
   verify_archive_lock || return 1
   archive_remaining_paths_same_device || return 1
-  if ! mv -T "$TRANSACTION_DIR" "$ARCHIVE_TEMPORARY/pending"; then
+  if ! "$ARCHIVE_MV" -T --no-copy "$TRANSACTION_DIR" "$ARCHIVE_TEMPORARY/pending"; then
     fail 'could not archive pending transaction'
     return 1
   fi
   ARCHIVE_SECOND_MOVED=1
+  run_test_archive_after_second_move_hook || {
+    fail 'archive after-second-move lifecycle hook failed'
+    return 1
+  }
   verify_archive_lock || return 1
   archive_path_matches_device "$FAILURE_ROOT" 'failure archive root' || return 1
   archive_path_matches_device "$ARCHIVE_TEMPORARY" 'temporary failure archive' || return 1
   ARCHIVE_PUBLICATION_STARTED=1
-  if ! mv -T "$ARCHIVE_TEMPORARY" "$ARCHIVE_DESTINATION"; then
+  if ! "$ARCHIVE_MV" -T --no-copy "$ARCHIVE_TEMPORARY" "$ARCHIVE_DESTINATION"; then
     fail 'could not publish failure archive'
     return 1
   fi
+  run_test_archive_after_publication_hook || {
+    fail 'archive after-publication lifecycle hook failed'
+    return 1
+  }
   ARCHIVE_PUBLISHED=1
   ARCHIVE_TEMP_CREATED=0
   printf 'archived: %s\n' "$ARCHIVE_DESTINATION"
@@ -1994,8 +2035,16 @@ archive_pending_evidence() {
     fail 'candidate and pending transaction evidence must both be present'
     return 1
   }
-  acquire_apply_lock || return 1
+  require_archive_mv_no_copy || return 1
   archive_arm_traps
+  if ! acquire_apply_lock; then
+    archive_disarm_traps
+    return 1
+  fi
+  run_test_archive_after_lock_hook || {
+    fail 'archive after-lock lifecycle hook failed'
+    return 1
+  }
   archive_evidence_under_lock || return $?
   if ! release_apply_lock; then
     status=76

@@ -10,7 +10,9 @@ setup() {
   setup_dotfiles_test
   unset PI_WEBUI_TEST_STATUS_JSON PI_WEBUI_TEST_HEALTH_ATTEMPTS
   unset TEST_BEFORE_LOCK_HOOK TEST_AFTER_NPM_HOOK TEST_BEFORE_TRIAL_STAGE_HOOK
-  unset TEST_ARCHIVE_BEFORE_MOVE_HOOK TEST_ARCHIVE_AFTER_FIRST_MOVE_HOOK
+  unset TEST_ARCHIVE_AFTER_LOCK_HOOK TEST_ARCHIVE_BEFORE_MOVE_HOOK
+  unset TEST_ARCHIVE_AFTER_FIRST_MOVE_HOOK TEST_ARCHIVE_AFTER_SECOND_MOVE_HOOK
+  unset TEST_ARCHIVE_AFTER_PUBLICATION_HOOK
   FIXTURE_RUNTIME="$TEST_ROOT/runtime"
   mkdir -p "$FIXTURE_RUNTIME"
 }
@@ -281,6 +283,9 @@ let source = fs.readFileSync(file, 'utf8');
 const authored = "ARCHIVE_PATH='/usr/bin:/bin'";
 if (!source.includes(authored)) throw new Error('archive path constant not found');
 source = source.replace(authored, `ARCHIVE_PATH='${archiveBin}:/usr/bin:/bin'`);
+const authoredMv = "ARCHIVE_MV='/usr/bin/mv'";
+if (!source.includes(authoredMv)) throw new Error('archive mv constant not found');
+source = source.replace(authoredMv, `ARCHIVE_MV='${archiveBin}/mv'`);
 fs.writeFileSync(file, source);
 NODE
   cat >"$ARCHIVE_TEST_BIN/git" <<'SCRIPT'
@@ -294,9 +299,8 @@ printf 'archive-mv %s\n' "$*" >>"$TEST_COMMAND_LOG"
 exec /usr/bin/mv "$@"
 SCRIPT
   chmod +x "$ARCHIVE_TEST_BIN/git" "$ARCHIVE_TEST_BIN/mv"
-  local archive_real_node
-  archive_real_node=$(node -p 'process.execPath')
-  printf '#!/usr/bin/bash -p\nexec %q "$@"\n' "$archive_real_node" >"$ARCHIVE_TEST_BIN/node"
+  ARCHIVE_REAL_NODE=$(node -p 'process.execPath')
+  printf '#!/usr/bin/bash -p\nexec %q "$@"\n' "$ARCHIVE_REAL_NODE" >"$ARCHIVE_TEST_BIN/node"
   chmod +x "$ARCHIVE_TEST_BIN/node"
   if [[ -f "$REPO_ROOT/ai/pi/webui/tailscale.sh" ]]; then
     cp "$REPO_ROOT/ai/pi/webui/tailscale.sh" "$INSTALLER_REPO/ai/pi/webui/tailscale.sh"
@@ -328,7 +332,7 @@ SCRIPT
   SOURCE_HEAD=$(git -C "$INSTALLER_REPO" rev-parse HEAD)
   TEST_COMMAND_LOG="$TEST_ROOT/commands.log"
   : >"$TEST_COMMAND_LOG"
-  export INSTALLER_REPO INSTALLER SOURCE_HEAD TEST_COMMAND_LOG ARCHIVE_TEST_BIN
+  export INSTALLER_REPO INSTALLER SOURCE_HEAD TEST_COMMAND_LOG ARCHIVE_TEST_BIN ARCHIVE_REAL_NODE
 }
 
 run_installer() {
@@ -336,8 +340,11 @@ run_installer() {
     PI_WEBUI_TEST_BEFORE_LOCK_HOOK="${TEST_BEFORE_LOCK_HOOK:-}" \
     PI_WEBUI_TEST_AFTER_NPM_HOOK="${TEST_AFTER_NPM_HOOK:-}" \
     PI_WEBUI_TEST_BEFORE_TRIAL_STAGE_HOOK="${TEST_BEFORE_TRIAL_STAGE_HOOK:-}" \
+    PI_WEBUI_TEST_ARCHIVE_AFTER_LOCK_HOOK="${TEST_ARCHIVE_AFTER_LOCK_HOOK:-}" \
     PI_WEBUI_TEST_ARCHIVE_BEFORE_MOVE_HOOK="${TEST_ARCHIVE_BEFORE_MOVE_HOOK:-}" \
     PI_WEBUI_TEST_ARCHIVE_AFTER_FIRST_MOVE_HOOK="${TEST_ARCHIVE_AFTER_FIRST_MOVE_HOOK:-}" \
+    PI_WEBUI_TEST_ARCHIVE_AFTER_SECOND_MOVE_HOOK="${TEST_ARCHIVE_AFTER_SECOND_MOVE_HOOK:-}" \
+    PI_WEBUI_TEST_ARCHIVE_AFTER_PUBLICATION_HOOK="${TEST_ARCHIVE_AFTER_PUBLICATION_HOOK:-}" \
     PI_WEBUI_TEST_PROCESS_CHECK="$PROCESS_CHECK" \
     PI_WEBUI_TEST_PROC_ROOT="$PROC_ROOT" \
     BATS_TEST_TMPDIR="$BATS_TEST_TMPDIR" HOME="$HOME" PATH="$PATH" \
@@ -3657,6 +3664,16 @@ make_valid_archive_evidence() {
   export ARCHIVE_TOKEN ARCHIVE_ID
 }
 
+assert_archive_mv_uses_no_copy() {
+  local command saw_move=0
+  while IFS= read -r command; do
+    [[ "$command" == 'archive-mv --help' ]] && continue
+    saw_move=1
+    [[ "$command" == 'archive-mv -T --no-copy '* ]]
+  done < <(grep '^archive-mv ' "$TEST_COMMAND_LOG" || true)
+  [ "$saw_move" -eq 1 ]
+}
+
 assert_archive_did_not_run_live_actions() {
   run grep -E '^(npm-ci|systemctl |tailscale |sudo .*tailscale|archive-git .* (checkout|worktree|reset|clean|switch|branch|commit|merge|rebase|update-ref))' \
     "$TEST_COMMAND_LOG"
@@ -3746,6 +3763,7 @@ assert_archive_did_not_run_live_actions() {
   [ "$live_before" = "$(sha256sum "$state/runtimes/current/sentinel" "$state/worktrees/dotfiles/sentinel" "$unit")" ]
   [ -f "$TEST_ROOT/service-active" ]
   [ ! -e "$state/transactions/apply.lock" ]
+  assert_archive_mv_uses_no_copy
   assert_archive_did_not_run_live_actions
 }
 
@@ -3865,6 +3883,76 @@ SCRIPT
   assert_archive_did_not_run_live_actions
 }
 
+@test "installer archive requires mv no-copy support before acquiring its lock" {
+  make_installer_repo
+  make_valid_platform
+  make_valid_archive_evidence
+  local state="$HOME/.local/share/pi-webui"
+  local candidate="$state/runtimes/candidate"
+  local transaction="$state/transactions/pending"
+  local candidate_before transaction_before
+  candidate_before=$(directory_fingerprint "$candidate")
+  transaction_before=$(directory_fingerprint "$transaction")
+  cat >"$ARCHIVE_TEST_BIN/mv" <<'SCRIPT'
+#!/usr/bin/bash -p
+printf 'archive-mv %s\n' "$*" >>"$TEST_COMMAND_LOG"
+if [[ "$1" == --help ]]; then
+  printf '%s\n' 'usage: mv SOURCE DEST'
+  exit 0
+fi
+exit 91
+SCRIPT
+  chmod +x "$ARCHIVE_TEST_BIN/mv"
+  : >"$TEST_COMMAND_LOG"
+
+  run_installer --archive-pending
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'mv --no-copy support is required'* ]]
+  [ "$candidate_before" = "$(directory_fingerprint "$candidate")" ]
+  [ "$transaction_before" = "$(directory_fingerprint "$transaction")" ]
+  [ "$(grep -c '^archive-mv ' "$TEST_COMMAND_LOG")" -eq 1 ]
+  [ ! -e "$state/transactions/apply.lock" ]
+}
+
+@test "installer archive no-copy rename preserves evidence on simulated EXDEV" {
+  make_installer_repo
+  make_valid_platform
+  make_valid_archive_evidence
+  local state="$HOME/.local/share/pi-webui"
+  local candidate="$state/runtimes/candidate"
+  local transaction="$state/transactions/pending"
+  local candidate_before transaction_before
+  candidate_before=$(directory_fingerprint "$candidate")
+  transaction_before=$(directory_fingerprint "$transaction")
+  cat >"$ARCHIVE_TEST_BIN/mv" <<'SCRIPT'
+#!/usr/bin/bash -p
+printf 'archive-mv %s\n' "$*" >>"$TEST_COMMAND_LOG"
+if [[ "$1" == --help ]]; then
+  /usr/bin/mv --help
+  exit
+fi
+if [[ "$*" == *"$HOME/.local/share/pi-webui/runtimes/candidate"* ]]; then
+  [[ " $* " == *' --no-copy '* ]] || : >"$TEST_ROOT/archive-mv-missing-no-copy"
+  exit 18
+fi
+exec /usr/bin/mv "$@"
+SCRIPT
+  chmod +x "$ARCHIVE_TEST_BIN/mv"
+  : >"$TEST_COMMAND_LOG"
+
+  run_installer --archive-pending
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'could not archive candidate runtime'* ]]
+  [ ! -e "$TEST_ROOT/archive-mv-missing-no-copy" ]
+  [ "$candidate_before" = "$(directory_fingerprint "$candidate")" ]
+  [ "$transaction_before" = "$(directory_fingerprint "$transaction")" ]
+  [ ! -e "$state/backups/failures/$ARCHIVE_ID" ]
+  [ ! -e "$state/transactions/apply.lock" ]
+  grep -Fq 'archive-mv -T --no-copy ' "$TEST_COMMAND_LOG"
+}
+
 @test "installer archive rejects cross-device evidence before any move" {
   make_installer_repo
   make_valid_platform
@@ -3893,7 +3981,9 @@ SCRIPT
   [[ "$output" == *'same filesystem'* ]]
   [ "$candidate_before" = "$(directory_fingerprint "$candidate")" ]
   [ "$transaction_before" = "$(directory_fingerprint "$transaction")" ]
-  run ! grep -q '^archive-mv ' "$TEST_COMMAND_LOG"
+  local move_count
+  move_count=$(grep '^archive-mv ' "$TEST_COMMAND_LOG" | grep -vc '^archive-mv --help$' || true)
+  [ "$move_count" -eq 0 ]
   [ ! -e "$state/transactions/apply.lock" ]
 }
 
@@ -3933,7 +4023,9 @@ SCRIPT
   [[ "$output" == *'same filesystem'* ]]
   [ "$candidate_before" = "$(directory_fingerprint "$candidate")" ]
   [ "$transaction_before" = "$(directory_fingerprint "$transaction")" ]
-  run ! grep -q '^archive-mv ' "$TEST_COMMAND_LOG"
+  local move_count
+  move_count=$(grep '^archive-mv ' "$TEST_COMMAND_LOG" | grep -vc '^archive-mv --help$' || true)
+  [ "$move_count" -eq 0 ]
   [ ! -e "$state/transactions/apply.lock" ]
 }
 
@@ -3965,7 +4057,9 @@ SCRIPT
   [[ "$output" == *'temporary failure archive must be on the same filesystem'* ]]
   [ "$candidate_before" = "$(directory_fingerprint "$candidate")" ]
   [ "$transaction_before" = "$(directory_fingerprint "$transaction")" ]
-  run ! grep -q '^archive-mv ' "$TEST_COMMAND_LOG"
+  local move_count
+  move_count=$(grep '^archive-mv ' "$TEST_COMMAND_LOG" | grep -vc '^archive-mv --help$' || true)
+  [ "$move_count" -eq 0 ]
   [ ! -e "$state/backups/failures/.$ARCHIVE_ID.pending" ]
   [ ! -e "$state/transactions/apply.lock" ]
 }
@@ -3978,6 +4072,30 @@ kill -TERM "$PPID"
 sleep 1
 SCRIPT
   chmod +x "$hook"
+}
+
+@test "installer archive trap covers the transition immediately after lock acquisition" {
+  make_installer_repo
+  make_valid_platform
+  make_valid_archive_evidence
+  local state="$HOME/.local/share/pi-webui"
+  local candidate="$state/runtimes/candidate"
+  local transaction="$state/transactions/pending"
+  local candidate_before transaction_before
+  candidate_before=$(directory_fingerprint "$candidate")
+  transaction_before=$(directory_fingerprint "$transaction")
+  TEST_ARCHIVE_AFTER_LOCK_HOOK="$TEST_ROOT/archive-after-lock"
+  make_archive_signal_hook "$TEST_ARCHIVE_AFTER_LOCK_HOOK"
+  export TEST_ARCHIVE_AFTER_LOCK_HOOK
+
+  run_installer --archive-pending
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'archive action interrupted by TERM'* ]]
+  [ "$candidate_before" = "$(directory_fingerprint "$candidate")" ]
+  [ "$transaction_before" = "$(directory_fingerprint "$transaction")" ]
+  [ ! -e "$state/transactions/apply.lock" ]
+  [ ! -e "$state/backups/failures/$ARCHIVE_ID" ]
 }
 
 @test "installer archive trap releases its lock after a pre-move signal" {
@@ -4029,6 +4147,59 @@ SCRIPT
   [ ! -e "$state/backups/failures/$ARCHIVE_ID" ]
 }
 
+@test "installer archive trap restores both evidence trees after the pending move" {
+  make_installer_repo
+  make_valid_platform
+  make_valid_archive_evidence
+  local state="$HOME/.local/share/pi-webui"
+  local candidate="$state/runtimes/candidate"
+  local transaction="$state/transactions/pending"
+  local candidate_before transaction_before
+  candidate_before=$(directory_fingerprint "$candidate")
+  transaction_before=$(directory_fingerprint "$transaction")
+  TEST_ARCHIVE_AFTER_SECOND_MOVE_HOOK="$TEST_ROOT/archive-after-second-move"
+  make_archive_signal_hook "$TEST_ARCHIVE_AFTER_SECOND_MOVE_HOOK"
+  export TEST_ARCHIVE_AFTER_SECOND_MOVE_HOOK
+
+  run_installer --archive-pending
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'archive action interrupted by TERM'* ]]
+  [[ "$output" == *'archive evidence restored after interruption or failure'* ]]
+  [ "$candidate_before" = "$(directory_fingerprint "$candidate")" ]
+  [ "$transaction_before" = "$(directory_fingerprint "$transaction")" ]
+  [ ! -e "$state/transactions/apply.lock" ]
+  [ ! -e "$state/backups/failures/$ARCHIVE_ID" ]
+}
+
+@test "installer archive trap preserves a completed publication interrupted before bookkeeping" {
+  make_installer_repo
+  make_valid_platform
+  make_valid_archive_evidence
+  local state="$HOME/.local/share/pi-webui"
+  local candidate="$state/runtimes/candidate"
+  local transaction="$state/transactions/pending"
+  local candidate_before transaction_before
+  candidate_before=$(directory_fingerprint "$candidate")
+  transaction_before=$(directory_fingerprint "$transaction")
+  TEST_ARCHIVE_AFTER_PUBLICATION_HOOK="$TEST_ROOT/archive-after-publication"
+  make_archive_signal_hook "$TEST_ARCHIVE_AFTER_PUBLICATION_HOOK"
+  export TEST_ARCHIVE_AFTER_PUBLICATION_HOOK
+
+  run_installer --archive-pending
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'archive action interrupted by TERM'* ]]
+  [[ "$output" == *'completed archive publication retained after interruption'* ]]
+  local archive="$state/backups/failures/$ARCHIVE_ID"
+  [ ! -e "$candidate" ]
+  [ ! -e "$transaction" ]
+  [ "$candidate_before" = "$(directory_fingerprint "$archive/candidate")" ]
+  [ "$transaction_before" = "$(directory_fingerprint "$archive/pending")" ]
+  [ ! -e "$state/transactions/apply.lock" ]
+  [[ "$output" != *'could not restore archived evidence'* ]]
+}
+
 @test "installer archive trap retains the temporary path when restoration fails" {
   make_installer_repo
   make_valid_platform
@@ -4048,7 +4219,8 @@ SCRIPT
   cat >"$ARCHIVE_TEST_BIN/mv" <<'SCRIPT'
 #!/usr/bin/bash -p
 printf 'archive-mv %s\n' "$*" >>"$TEST_COMMAND_LOG"
-if [[ "$1" == -T && "$2" == */candidate && "$3" == "$HOME/.local/share/pi-webui/runtimes/candidate" ]]; then
+if [[ "$1 ${2:-}" == '-T --no-copy' && "$3" == */candidate &&
+  "$4" == "$HOME/.local/share/pi-webui/runtimes/candidate" ]]; then
   exit 74
 fi
 exec /usr/bin/mv "$@"
@@ -4064,6 +4236,61 @@ SCRIPT
   [ -d "$state/backups/failures/.$ARCHIVE_ID.pending/candidate" ]
   [ "$transaction_before" = "$(directory_fingerprint "$transaction")" ]
   [ ! -e "$state/transactions/apply.lock" ]
+}
+
+@test "installer archive validator falls back to trusted mise without a PATH node" {
+  make_installer_repo
+  make_valid_platform
+  make_valid_archive_evidence
+  rm "$ARCHIVE_TEST_BIN/node"
+  local trusted_command
+  for trusted_command in cat chmod dirname find grep id mkdir rm rmdir stat; do
+    ln -s "/usr/bin/$trusted_command" "$ARCHIVE_TEST_BIN/$trusted_command"
+  done
+  rm "$ARCHIVE_TEST_BIN/uname"
+  cat >"$ARCHIVE_TEST_BIN/uname" <<'SCRIPT'
+#!/usr/bin/bash -p
+printf '%s\n' '6.6.87.2-microsoft-standard-WSL2'
+SCRIPT
+  chmod +x "$ARCHIVE_TEST_BIN/uname"
+  "$ARCHIVE_REAL_NODE" - "$INSTALLER" "$ARCHIVE_TEST_BIN" <<'NODE'
+const fs = require('node:fs');
+const [file, archiveBin] = process.argv.slice(2);
+const source = fs.readFileSync(file, 'utf8');
+const withSystem = `ARCHIVE_PATH='${archiveBin}:/usr/bin:/bin'`;
+if (!source.includes(withSystem)) throw new Error('patched archive path not found');
+fs.writeFileSync(file, source.replace(withSystem, `ARCHIVE_PATH='${archiveBin}'`));
+NODE
+  cat >"$ARCHIVE_TEST_BIN/mise" <<'SCRIPT'
+#!/usr/bin/bash -p
+printf 'archive-mise %s\n' "$*" >>"$TEST_COMMAND_LOG"
+if [[ "$1 ${2:-} ${3:-}" == 'exec -- node' ]]; then
+  shift 3
+  exec "$ARCHIVE_REAL_NODE" "$@"
+fi
+exit 96
+SCRIPT
+  chmod +x "$ARCHIVE_TEST_BIN/mise"
+  cat >"$STUB_BIN/node" <<'SCRIPT'
+#!/usr/bin/bash -p
+: >"$TEST_ROOT/inherited-node-ran"
+exit 97
+SCRIPT
+  cat >"$STUB_BIN/mise" <<'SCRIPT'
+#!/usr/bin/bash -p
+: >"$TEST_ROOT/inherited-mise-ran"
+exit 98
+SCRIPT
+  chmod +x "$STUB_BIN/node" "$STUB_BIN/mise"
+  : >"$TEST_COMMAND_LOG"
+
+  run_installer --archive-pending
+
+  [ "$status" -eq 0 ]
+  grep -Fq 'archive-mise exec -- node - ' "$TEST_COMMAND_LOG"
+  [ ! -e "$TEST_ROOT/inherited-node-ran" ]
+  [ ! -e "$TEST_ROOT/inherited-mise-ran" ]
+  assert_archive_mv_uses_no_copy
 }
 
 @test "installer archive ignores malicious inherited command paths" {
@@ -4105,5 +4332,9 @@ SCRIPT
   run grep -F 'read-only Git' "$readme"
   [ "$status" -eq 0 ]
   run grep -F 'same filesystem' "$readme"
+  [ "$status" -eq 0 ]
+  run grep -F '/usr/bin/mv -T --no-copy' "$readme"
+  [ "$status" -eq 0 ]
+  run grep -F 'cannot fall back' "$readme"
   [ "$status" -eq 0 ]
 }

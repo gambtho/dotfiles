@@ -142,16 +142,23 @@ installed candidate before moving anything. Archive-critical commands resolve
 only from the authored `/usr/bin:/bin` path, and the validator runs through
 `/usr/bin/bash -p`. The action uses read-only Git `rev-parse` and `cat-file`
 calls to validate source evidence; no mutating Git command is used. It acquires
-the same atomic apply lock and requires the candidate, transaction, failure
-root, and temporary
-archive to remain on the same filesystem before moving evidence.
+the same apply lock and requires the candidate, transaction, failure root, and
+temporary archive to remain on the same filesystem before moving evidence.
+Before locking, it verifies that fixed coreutils `/usr/bin/mv` supports
+`--no-copy`. Every evidence, publication, and restoration rename uses
+`/usr/bin/mv -T --no-copy`, so an unexpected `EXDEV` failure cannot fall back
+to copy-and-delete. Device checks are additional diagnostics, not the atomicity
+mechanism.
 
-The complete archive is published under the unique bounded path
+Each rename is atomic on that filesystem, and the final temporary-directory
+rename makes the complete archive visible under the unique bounded path
 `~/.local/share/pi-webui/backups/failures/<id>`. The candidate and pending
 transaction contents are retained. EXIT and INT/TERM/HUP handling restores
 partial moves and releases only an unchanged owned lock; if restoration cannot
 be proved, the helper exits nonzero and identifies the retained temporary
-archive. The action does not run npm, alter the current
+archive. An interruption after the final rename can return nonzero while
+retaining the already-complete published archive. The action does not run npm,
+alter the current
 service/runtime/worktree, mutate Git, or change Tailscale routes. Existing
 symlinked, foreign, permissive, colliding, partial, cross-device, or concurrently
 locked state is preserved and rejected. With no candidate and no pending
