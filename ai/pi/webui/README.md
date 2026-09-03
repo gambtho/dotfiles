@@ -129,21 +129,27 @@ candidate/transaction evidence is retained when automatic restoration itself
 cannot be proved.
 
 A retained candidate and pending transaction intentionally block another
-apply. After inspecting the failure and installing the reviewed source fix,
-archive that evidence with:
+apply. A staged candidate service unit is optional because a Task 2-only
+handoff can precede unit rendering, but a unit without recognized pending
+handoff evidence is ambiguous and blocks check, apply, and archive. Archive all
+present artifacts only after the failure is inspected and its source fix is
+installed; the action includes all present candidate artifacts:
 
 ```bash
 ./ai/pi/webui/install.sh --archive-pending
 ```
 
 This action validates the Noble/WSL platform, owner-only state paths, matching
-transaction markers and ownership tokens, source metadata, and the complete
-installed candidate before moving anything. Archive-critical commands resolve
+transaction markers and ownership tokens, source metadata, the complete
+installed candidate, and any staged unit's fixed path, owner-only regular-file
+shape, transaction hash when recorded, and rendered pinned-template content
+before moving anything. Archive-critical commands resolve
 only from the authored `/usr/bin:/bin` path, and the validator runs through
 `/usr/bin/bash -p`. The action uses read-only Git `rev-parse` and `cat-file`
 calls to validate source evidence; no mutating Git command is used. It acquires
-the same apply lock and requires the candidate, transaction, failure root, and
-temporary archive to remain on the same filesystem before moving evidence.
+the same apply lock and requires the candidate runtime, pending transaction,
+any staged candidate service unit, failure root, and temporary archive to
+remain on the same filesystem before moving evidence.
 Before locking, it verifies that fixed coreutils `/usr/bin/mv` supports
 `--no-copy`. Every evidence, publication, and restoration rename uses
 `/usr/bin/mv -T --no-copy`, so an unexpected `EXDEV` failure cannot fall back
@@ -152,8 +158,8 @@ mechanism.
 
 Each rename is atomic on that filesystem, and the final temporary-directory
 rename makes the complete archive visible under the unique bounded path
-`~/.local/share/pi-webui/backups/failures/<id>`. The candidate and pending
-transaction contents are retained. During apply and archive lock creation,
+`~/.local/share/pi-webui/backups/failures/<id>`. The candidate runtime, pending
+transaction, and any staged candidate service unit are retained exactly. During apply and archive lock creation,
 HUP/INT/TERM are deferred from the successful lock-directory creation until
 both owner-only markers are complete. The original handlers are then restored
 and any deferred signal is replayed, so archive cleanup sees a fully owned lock.

@@ -68,6 +68,9 @@ ARCHIVE_TRAP_ACTIVE=0
 ARCHIVE_TEMP_CREATED=0
 ARCHIVE_FIRST_MOVED=0
 ARCHIVE_SECOND_MOVED=0
+ARCHIVE_THIRD_MOVED=0
+ARCHIVE_UNIT_PRESENT=0
+ARCHIVE_UNIT_SHA256=''
 ARCHIVE_PUBLICATION_STARTED=0
 ARCHIVE_PUBLISHED=0
 ARCHIVE_DEVICE_ID=''
@@ -286,16 +289,18 @@ quote_systemd_argument() {
 }
 
 render_unit() {
+  local runtime_launcher=${1:-$CURRENT_RUNTIME/node_modules/.bin/pi-webui}
+  local worktree=${2:-$WORKTREE}
+  local pi_launcher=${3:-$PI_LAUNCHER}
   local template="$SOURCE_ROOT/ai/pi/webui/pi-webui.service.in"
-  local runtime_launcher="$CURRENT_RUNTIME/node_modules/.bin/pi-webui"
   local rendered token count replacement
   [[ -f "$template" && ! -L "$template" ]] || {
     fail 'tracked Pi Web UI service template is missing or unsafe'
     return 1
   }
   validate_systemd_path "$runtime_launcher" 'runtime launcher path'
-  validate_systemd_path "$WORKTREE" 'durable worktree path'
-  validate_systemd_path "$PI_LAUNCHER" 'Pi launcher path'
+  validate_systemd_path "$worktree" 'durable worktree path'
+  validate_systemd_path "$pi_launcher" 'Pi launcher path'
   rendered=$(cat "$template") || return 1
   for token in @RUNTIME_LAUNCHER@ @WORKTREE@ @PI_LAUNCHER@; do
     count=$(printf '%s' "$rendered" | grep -o "$token" | wc -l)
@@ -305,8 +310,8 @@ render_unit() {
     }
     case "$token" in
       @RUNTIME_LAUNCHER@) replacement=$(quote_systemd_argument "$runtime_launcher") ;;
-      @WORKTREE@) replacement=$(quote_systemd_argument "$WORKTREE") ;;
-      @PI_LAUNCHER@) replacement=$(quote_systemd_argument "$PI_LAUNCHER") ;;
+      @WORKTREE@) replacement=$(quote_systemd_argument "$worktree") ;;
+      @PI_LAUNCHER@) replacement=$(quote_systemd_argument "$pi_launcher") ;;
     esac
     rendered=${rendered//$token/$replacement}
   done
@@ -654,6 +659,13 @@ preflight_handoff_state() {
     .pi-webui-candidate pi-webui-task2-candidate-v1
   require_owned_managed_directory "$TRANSACTION_DIR" 'stale pending transaction' \
     .pi-webui-transaction pi-webui-task2-transaction-v1
+  if [[ -e "$UNIT_CANDIDATE" || -L "$UNIT_CANDIDATE" ]]; then
+    if [[ ! -e "$CANDIDATE_RUNTIME" || ! -e "$TRANSACTION_DIR" ]]; then
+      fail 'candidate service unit has no recognized pending handoff'
+      return 1
+    fi
+    validate_archive_evidence || return 1
+  fi
   if [[ "$MODE" == apply && (-e "$TRANSACTION_DIR" || -L "$TRANSACTION_DIR") ]]; then
     fail 'pending transaction already exists; Task 3 must consume or discard it explicitly'
     return 1
@@ -968,6 +980,11 @@ run_test_archive_after_second_move_hook() {
     "${PI_WEBUI_TEST_ARCHIVE_AFTER_SECOND_MOVE_HOOK:-}" archive-after-second-move
 }
 
+run_test_archive_after_third_move_hook() {
+  run_restricted_test_hook PI_WEBUI_TEST_ARCHIVE_AFTER_THIRD_MOVE_HOOK \
+    "${PI_WEBUI_TEST_ARCHIVE_AFTER_THIRD_MOVE_HOOK:-}" archive-after-third-move
+}
+
 run_test_archive_after_publication_hook() {
   run_restricted_test_hook PI_WEBUI_TEST_ARCHIVE_AFTER_PUBLICATION_HOOK \
     "${PI_WEBUI_TEST_ARCHIVE_AFTER_PUBLICATION_HOOK:-}" archive-after-publication
@@ -1042,6 +1059,7 @@ verify_apply_ownership() {
     return 1
   }
   if ! verify_transaction_metadata_file .pi-webui-transaction pi-webui-task2-transaction-v1 ||
+    ! verify_transaction_metadata_file candidate-unit "$UNIT_CANDIDATE" ||
     ! verify_transaction_metadata_file source-head "$SOURCE_HEAD" ||
     ! verify_transaction_metadata_file source-root "$SOURCE_ROOT" ||
     ! verify_transaction_metadata_file source-common-dir "$SOURCE_COMMON_DIR" ||
@@ -1053,6 +1071,19 @@ verify_apply_ownership() {
     ! verify_transaction_metadata_file pi-real-executable "$PI_REAL_EXECUTABLE"; then
     LOCK_COMPROMISED=1
     fail 'apply transaction metadata changed; retaining evidence'
+    return 1
+  fi
+  if [[ -e "$UNIT_CANDIDATE" || -L "$UNIT_CANDIDATE" ]]; then
+    verify_transaction_metadata_file candidate-unit-sha256 \
+      "$(unit_sha256 "$UNIT_CANDIDATE")" || {
+      LOCK_COMPROMISED=1
+      fail 'apply candidate unit metadata changed; retaining evidence'
+      return 1
+    }
+  elif [[ -e "$TRANSACTION_DIR/candidate-unit-sha256" ||
+    -L "$TRANSACTION_DIR/candidate-unit-sha256" ]]; then
+    LOCK_COMPROMISED=1
+    fail 'apply candidate unit metadata is inconsistent; retaining evidence'
     return 1
   fi
 }
@@ -1067,6 +1098,7 @@ write_transaction() {
   chmod 0600 "$TRANSACTION_DIR/.pi-webui-owner"
   TRANSACTION_CREATED=1
   write_metadata_file .pi-webui-transaction pi-webui-task2-transaction-v1
+  write_metadata_file candidate-unit "$UNIT_CANDIDATE"
   write_metadata_file source-head "$SOURCE_HEAD"
   write_metadata_file source-root "$SOURCE_ROOT"
   write_metadata_file source-common-dir "$SOURCE_COMMON_DIR"
@@ -1763,8 +1795,9 @@ validate_archive_transaction() {
     name=${entry##*/}
     case "$name" in
       .pi-webui-owner | .pi-webui-transaction | source-head | source-root | \
-        source-common-dir | candidate-runtime | worktree | worktree-previous-head | \
-        worktree-head | pi-launcher | pi-real-executable) ;;
+        source-common-dir | candidate-runtime | candidate-unit | candidate-unit-sha256 | \
+        worktree | worktree-previous-head | worktree-head | pi-launcher | \
+        pi-real-executable) ;;
       prior-unit-kind | prior-runtime-kind | prior-active | prior-enabled | \
         prior-health-worktree | prior-health-pi-launcher | prior-unit)
         prior_present=1
@@ -1812,6 +1845,8 @@ validate_archive_transaction() {
     return 1
   }
 
+  validate_archive_candidate_unit "$worktree_path" "$pi_launcher" || return 1
+
   if [[ "$prior_present" == 1 ]]; then
     prior_unit_kind=$(read_archive_metadata prior-unit-kind) || return 1
     prior_runtime_kind=$(read_archive_metadata prior-runtime-kind) || return 1
@@ -1856,6 +1891,58 @@ validate_archive_transaction() {
       }
     fi
   fi
+}
+
+validate_archive_candidate_unit() {
+  local worktree_path=$1 pi_launcher=$2 metadata_path='' expected_hash='' observed_hash
+  local unit_present=0
+  [[ -e "$UNIT_CANDIDATE" || -L "$UNIT_CANDIDATE" ]] && unit_present=1
+  ARCHIVE_UNIT_PRESENT=$unit_present
+  ARCHIVE_UNIT_SHA256=''
+
+  if [[ -e "$TRANSACTION_DIR/candidate-unit" || -L "$TRANSACTION_DIR/candidate-unit" ]]; then
+    metadata_path=$(read_archive_metadata candidate-unit) || return 1
+    [[ "$metadata_path" == "$UNIT_CANDIDATE" ]] || {
+      fail 'pending transaction candidate unit path does not match this installer'
+      return 1
+    }
+  fi
+  if [[ -e "$TRANSACTION_DIR/candidate-unit-sha256" ||
+    -L "$TRANSACTION_DIR/candidate-unit-sha256" ]]; then
+    [[ -n "$metadata_path" ]] || {
+      fail 'pending transaction candidate unit hash has no path relationship'
+      return 1
+    }
+    expected_hash=$(read_archive_metadata candidate-unit-sha256) || return 1
+    [[ "$expected_hash" =~ ^[0-9a-f]{64}$ ]] || {
+      fail 'pending transaction candidate unit hash is malformed'
+      return 1
+    }
+  fi
+  if [[ "$unit_present" == 0 ]]; then
+    [[ -z "$expected_hash" ]] || {
+      fail 'pending transaction candidate unit hash exists but the unit is absent'
+      return 1
+    }
+    return 0
+  fi
+  [[ -f "$UNIT_CANDIDATE" && ! -L "$UNIT_CANDIDATE" &&
+    "$(stat -c '%u' "$UNIT_CANDIDATE")" == "$(id -u)" &&
+    "$(stat -c '%a' "$UNIT_CANDIDATE")" == 600 ]] || {
+    fail 'candidate service unit must be an owner-only real file'
+    return 1
+  }
+  observed_hash=$(unit_sha256 "$UNIT_CANDIDATE") || return 1
+  ARCHIVE_UNIT_SHA256=$observed_hash
+  [[ -z "$expected_hash" || "$observed_hash" == "$expected_hash" ]] || {
+    fail 'candidate service unit hash does not match pending transaction metadata'
+    return 1
+  }
+  cmp -s "$UNIT_CANDIDATE" <(render_unit \
+    "$CURRENT_RUNTIME/node_modules/.bin/pi-webui" "$worktree_path" "$pi_launcher") || {
+    fail 'candidate service unit does not match the expected rendered template'
+    return 1
+  }
 }
 
 verify_archive_lock() {
@@ -1915,6 +2002,9 @@ archive_path_matches_device() {
 archive_same_device() {
   ARCHIVE_DEVICE_ID=$(stat -c '%d' "$CANDIDATE_RUNTIME") || return 1
   archive_path_matches_device "$TRANSACTION_DIR" 'pending transaction' || return 1
+  if [[ "$ARCHIVE_UNIT_PRESENT" == 1 ]]; then
+    archive_path_matches_device "$UNIT_CANDIDATE" 'candidate service unit' || return 1
+  fi
   archive_path_matches_device "$FAILURE_ROOT" 'failure archive root' || return 1
   if [[ "$ARCHIVE_TEMP_CREATED" == 1 ]]; then
     archive_path_matches_device "$ARCHIVE_TEMPORARY" 'temporary failure archive' || return 1
@@ -1923,6 +2013,9 @@ archive_same_device() {
 
 archive_remaining_paths_same_device() {
   archive_path_matches_device "$TRANSACTION_DIR" 'pending transaction' || return 1
+  if [[ "$ARCHIVE_UNIT_PRESENT" == 1 ]]; then
+    archive_path_matches_device "$UNIT_CANDIDATE" 'candidate service unit' || return 1
+  fi
   archive_path_matches_device "$FAILURE_ROOT" 'failure archive root' || return 1
   archive_path_matches_device "$ARCHIVE_TEMPORARY" 'temporary failure archive' || return 1
 }
@@ -1930,7 +2023,8 @@ archive_remaining_paths_same_device() {
 published_archive_is_complete() {
   local expected_token=$CANDIDATE_OWNER_TOKEN archived_candidate_token archived_transaction_token
   [[ ! -e "$CANDIDATE_RUNTIME" && ! -L "$CANDIDATE_RUNTIME" &&
-    ! -e "$TRANSACTION_DIR" && ! -L "$TRANSACTION_DIR" ]] || return 1
+    ! -e "$TRANSACTION_DIR" && ! -L "$TRANSACTION_DIR" &&
+    ! -e "$UNIT_CANDIDATE" && ! -L "$UNIT_CANDIDATE" ]] || return 1
   validate_archive_artifact_root "$ARCHIVE_DESTINATION/candidate" \
     'published candidate runtime' .pi-webui-candidate \
     pi-webui-task2-candidate-v1 archived_candidate_token || return 1
@@ -1938,7 +2032,17 @@ published_archive_is_complete() {
     'published pending transaction' .pi-webui-transaction \
     pi-webui-task2-transaction-v1 archived_transaction_token || return 1
   [[ "$archived_candidate_token" == "$expected_token" &&
-    "$archived_transaction_token" == "$expected_token" ]]
+    "$archived_transaction_token" == "$expected_token" ]] || return 1
+  if [[ "$ARCHIVE_UNIT_PRESENT" == 1 ]]; then
+    [[ -f "$ARCHIVE_DESTINATION/pi-webui.candidate.service" &&
+      ! -L "$ARCHIVE_DESTINATION/pi-webui.candidate.service" &&
+      "$(stat -c '%u' "$ARCHIVE_DESTINATION/pi-webui.candidate.service")" == "$(id -u)" &&
+      "$(stat -c '%a' "$ARCHIVE_DESTINATION/pi-webui.candidate.service")" == 600 &&
+      "$(unit_sha256 "$ARCHIVE_DESTINATION/pi-webui.candidate.service")" == "$ARCHIVE_UNIT_SHA256" ]]
+  else
+    [[ ! -e "$ARCHIVE_DESTINATION/pi-webui.candidate.service" &&
+      ! -L "$ARCHIVE_DESTINATION/pi-webui.candidate.service" ]]
+  fi
 }
 
 restore_archive_moves() {
@@ -1949,6 +2053,24 @@ restore_archive_moves() {
     published_archive_is_complete >/dev/null 2>&1; then
     ARCHIVE_PUBLISHED=1
     return 0
+  fi
+  if [[ "$ARCHIVE_UNIT_PRESENT" == 1 && "$ARCHIVE_THIRD_MOVED" == 0 &&
+    ! -e "$UNIT_CANDIDATE" && ! -L "$UNIT_CANDIDATE" &&
+    -f "$ARCHIVE_TEMPORARY/pi-webui.candidate.service" &&
+    ! -L "$ARCHIVE_TEMPORARY/pi-webui.candidate.service" &&
+    "$(stat -c '%u' "$ARCHIVE_TEMPORARY/pi-webui.candidate.service")" == "$(id -u)" &&
+    "$(stat -c '%a' "$ARCHIVE_TEMPORARY/pi-webui.candidate.service")" == 600 &&
+    "$(unit_sha256 "$ARCHIVE_TEMPORARY/pi-webui.candidate.service")" == "$ARCHIVE_UNIT_SHA256" ]]; then
+    ARCHIVE_THIRD_MOVED=1
+  fi
+  if [[ "$ARCHIVE_THIRD_MOVED" == 1 ]]; then
+    if [[ ! -e "$UNIT_CANDIDATE" && ! -L "$UNIT_CANDIDATE" ]] &&
+      "$ARCHIVE_MV" -T --no-copy "$ARCHIVE_TEMPORARY/pi-webui.candidate.service" \
+        "$UNIT_CANDIDATE"; then
+      ARCHIVE_THIRD_MOVED=0
+    else
+      failed=1
+    fi
   fi
   if [[ "$ARCHIVE_SECOND_MOVED" == 1 ]]; then
     if [[ ! -e "$TRANSACTION_DIR" && ! -L "$TRANSACTION_DIR" ]] &&
@@ -2125,6 +2247,21 @@ archive_evidence_under_lock() {
     fail 'archive after-second-move lifecycle hook failed'
     return 1
   }
+  if [[ "$ARCHIVE_UNIT_PRESENT" == 1 ]]; then
+    verify_archive_lock || return 1
+    archive_path_matches_device "$UNIT_CANDIDATE" 'candidate service unit' || return 1
+    archive_path_matches_device "$ARCHIVE_TEMPORARY" 'temporary failure archive' || return 1
+    if ! "$ARCHIVE_MV" -T --no-copy "$UNIT_CANDIDATE" \
+      "$ARCHIVE_TEMPORARY/pi-webui.candidate.service"; then
+      fail 'could not archive candidate service unit'
+      return 1
+    fi
+    ARCHIVE_THIRD_MOVED=1
+    run_test_archive_after_third_move_hook || {
+      fail 'archive after-third-move lifecycle hook failed'
+      return 1
+    }
+  fi
   verify_archive_lock || return 1
   archive_path_matches_device "$FAILURE_ROOT" 'failure archive root' || return 1
   archive_path_matches_device "$ARCHIVE_TEMPORARY" 'temporary failure archive' || return 1
@@ -2143,11 +2280,17 @@ archive_evidence_under_lock() {
 }
 
 archive_pending_evidence() {
-  local candidate_present=0 transaction_present=0 status=0
+  local candidate_present=0 transaction_present=0 unit_present=0 status=0
   preflight_archive_path_components || return 1
   preflight_apply_lock || return 1
   [[ -e "$CANDIDATE_RUNTIME" || -L "$CANDIDATE_RUNTIME" ]] && candidate_present=1
   [[ -e "$TRANSACTION_DIR" || -L "$TRANSACTION_DIR" ]] && transaction_present=1
+  [[ -e "$UNIT_CANDIDATE" || -L "$UNIT_CANDIDATE" ]] && unit_present=1
+  if [[ "$unit_present" == 1 &&
+    ("$candidate_present" == 0 || "$transaction_present" == 0) ]]; then
+    fail 'candidate service unit has no recognized pending handoff'
+    return 1
+  fi
   if [[ "$candidate_present" == 0 && "$transaction_present" == 0 ]]; then
     printf 'ready: no pending candidate/transaction evidence to archive\n'
     return 0
@@ -2187,6 +2330,7 @@ apply_installation() {
   revalidate_worktree_before_mutation
   update_worktree
   render_and_verify_candidate_unit
+  write_metadata_file candidate-unit-sha256 "$(unit_sha256 "$UNIT_CANDIDATE")"
   verify_apply_ownership
   TRANSACTION_READY=1
   complete_service_reconciliation

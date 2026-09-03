@@ -13,7 +13,7 @@ setup() {
   unset TEST_LOCK_AFTER_MKDIR_HOOK TEST_LOCK_AFTER_OWNER_HOOK
   unset TEST_ARCHIVE_AFTER_LOCK_HOOK TEST_ARCHIVE_BEFORE_MOVE_HOOK
   unset TEST_ARCHIVE_AFTER_FIRST_MOVE_HOOK TEST_ARCHIVE_AFTER_SECOND_MOVE_HOOK
-  unset TEST_ARCHIVE_AFTER_PUBLICATION_HOOK
+  unset TEST_ARCHIVE_AFTER_THIRD_MOVE_HOOK TEST_ARCHIVE_AFTER_PUBLICATION_HOOK
   FIXTURE_RUNTIME="$TEST_ROOT/runtime"
   mkdir -p "$FIXTURE_RUNTIME"
 }
@@ -347,6 +347,7 @@ run_installer() {
     PI_WEBUI_TEST_ARCHIVE_BEFORE_MOVE_HOOK="${TEST_ARCHIVE_BEFORE_MOVE_HOOK:-}" \
     PI_WEBUI_TEST_ARCHIVE_AFTER_FIRST_MOVE_HOOK="${TEST_ARCHIVE_AFTER_FIRST_MOVE_HOOK:-}" \
     PI_WEBUI_TEST_ARCHIVE_AFTER_SECOND_MOVE_HOOK="${TEST_ARCHIVE_AFTER_SECOND_MOVE_HOOK:-}" \
+    PI_WEBUI_TEST_ARCHIVE_AFTER_THIRD_MOVE_HOOK="${TEST_ARCHIVE_AFTER_THIRD_MOVE_HOOK:-}" \
     PI_WEBUI_TEST_ARCHIVE_AFTER_PUBLICATION_HOOK="${TEST_ARCHIVE_AFTER_PUBLICATION_HOOK:-}" \
     PI_WEBUI_TEST_PROCESS_CHECK="$PROCESS_CHECK" \
     PI_WEBUI_TEST_PROC_ROOT="$PROC_ROOT" \
@@ -3667,6 +3668,26 @@ make_valid_archive_evidence() {
   export ARCHIVE_TOKEN ARCHIVE_ID
 }
 
+make_valid_archive_candidate_unit() {
+  local state="$HOME/.local/share/pi-webui"
+  local unit="$state/transactions/pi-webui.candidate.service"
+  mkdir -p "$(dirname "$unit")"
+  node - "$INSTALLER_REPO/ai/pi/webui/pi-webui.service.in" "$unit" \
+    "$state/runtimes/current/node_modules/.bin/pi-webui" \
+    "$state/worktrees/dotfiles" /safe/pi <<'NODE'
+const fs = require('node:fs');
+const [template, output, runtime, worktree, launcher] = process.argv.slice(2);
+const rendered = fs.readFileSync(template, 'utf8')
+  .replace('@RUNTIME_LAUNCHER@', JSON.stringify(runtime))
+  .replace('@WORKTREE@', JSON.stringify(worktree))
+  .replace('@PI_LAUNCHER@', JSON.stringify(launcher));
+fs.writeFileSync(output, rendered, {mode: 0o600});
+NODE
+  chmod 0600 "$unit"
+  ARCHIVE_UNIT="$unit"
+  export ARCHIVE_UNIT
+}
+
 assert_archive_mv_uses_no_copy() {
   local command saw_move=0
   while IFS= read -r command; do
@@ -3770,6 +3791,27 @@ assert_archive_did_not_run_live_actions() {
   assert_archive_did_not_run_live_actions
 }
 
+@test "installer archives the optional staged candidate unit with exact evidence" {
+  make_installer_repo
+  make_valid_platform
+  make_valid_archive_evidence
+  make_valid_archive_candidate_unit
+  local state="$HOME/.local/share/pi-webui"
+  local unit_before
+  unit_before=$(sha256sum "$ARCHIVE_UNIT" | cut -d' ' -f1)
+  : >"$TEST_COMMAND_LOG"
+
+  run_installer --archive-pending
+
+  [ "$status" -eq 0 ]
+  local archive="$state/backups/failures/$ARCHIVE_ID"
+  [ ! -e "$ARCHIVE_UNIT" ]
+  [ -f "$archive/pi-webui.candidate.service" ]
+  [ "$(stat -c '%a' "$archive/pi-webui.candidate.service")" = 600 ]
+  [ "$unit_before" = "$(sha256sum "$archive/pi-webui.candidate.service" | cut -d' ' -f1)" ]
+  assert_archive_mv_uses_no_copy
+}
+
 @test "installer archive action is idempotent when no pending evidence exists" {
   make_installer_repo
   make_valid_platform
@@ -3781,6 +3823,65 @@ assert_archive_did_not_run_live_actions() {
   [[ "$output" == *'no pending candidate/transaction evidence to archive'* ]]
   [ ! -e "$HOME/.local/share/pi-webui" ]
   assert_archive_did_not_run_live_actions
+}
+
+@test "installer rejects unit-only state for check apply and archive without mutation" {
+  make_installer_repo
+  make_valid_platform
+  make_valid_pi
+  make_valid_archive_candidate_unit
+  local unit_before
+  unit_before=$(sha256sum "$ARCHIVE_UNIT")
+  local mode
+  for mode in --check --apply --archive-pending; do
+    : >"$TEST_COMMAND_LOG"
+    run_installer "$mode"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *'candidate service unit has no recognized pending handoff'* ]]
+    [ "$unit_before" = "$(sha256sum "$ARCHIVE_UNIT")" ]
+    run ! grep -q '^npm-ci$' "$TEST_COMMAND_LOG"
+  done
+}
+
+@test "installer archive rejects unsafe or unrelated candidate units intact" {
+  make_installer_repo
+  make_valid_platform
+  make_valid_archive_evidence
+  make_valid_archive_candidate_unit
+  local transaction="$HOME/.local/share/pi-webui/transactions/pending"
+  local pristine="$TEST_ROOT/pristine-unit" kind
+  cp "$ARCHIVE_UNIT" "$pristine"
+  for kind in symlink permissive invalid metadata-path metadata-hash; do
+    case "$kind" in
+      symlink)
+        rm "$ARCHIVE_UNIT"
+        ln -s "$pristine" "$ARCHIVE_UNIT"
+        ;;
+      permissive) chmod 0644 "$ARCHIVE_UNIT" ;;
+      invalid) printf 'foreign unit\n' >"$ARCHIVE_UNIT" ;;
+      metadata-path)
+        printf '%s\n' "$TEST_ROOT/foreign.service" >"$transaction/candidate-unit"
+        chmod 0600 "$transaction/candidate-unit"
+        ;;
+      metadata-hash)
+        printf '%064d\n' 0 >"$transaction/candidate-unit-sha256"
+        chmod 0600 "$transaction/candidate-unit-sha256"
+        ;;
+    esac
+    local candidate_before transaction_before
+    candidate_before=$(directory_fingerprint "$HOME/.local/share/pi-webui/runtimes/candidate")
+    transaction_before=$(directory_fingerprint "$transaction")
+
+    run_installer --archive-pending
+
+    [ "$status" -ne 0 ]
+    [ -e "$ARCHIVE_UNIT" ] || [ -L "$ARCHIVE_UNIT" ]
+    [ "$candidate_before" = "$(directory_fingerprint "$HOME/.local/share/pi-webui/runtimes/candidate")" ]
+    [ "$transaction_before" = "$(directory_fingerprint "$transaction")" ]
+    rm -f "$ARCHIVE_UNIT" "$transaction/candidate-unit" "$transaction/candidate-unit-sha256"
+    cp "$pristine" "$ARCHIVE_UNIT"
+    chmod 0600 "$ARCHIVE_UNIT"
+  done
 }
 
 @test "installer restores the first artifact when the second archive move fails" {
@@ -3916,6 +4017,103 @@ SCRIPT
   [ "$transaction_before" = "$(directory_fingerprint "$transaction")" ]
   [ "$(grep -c '^archive-mv ' "$TEST_COMMAND_LOG")" -eq 1 ]
   [ ! -e "$state/transactions/apply.lock" ]
+}
+
+@test "installer restores all evidence when the candidate-unit archive move fails" {
+  make_installer_repo
+  make_valid_platform
+  make_valid_archive_evidence
+  make_valid_archive_candidate_unit
+  local state="$HOME/.local/share/pi-webui"
+  local candidate_before transaction_before unit_before
+  candidate_before=$(directory_fingerprint "$state/runtimes/candidate")
+  transaction_before=$(directory_fingerprint "$state/transactions/pending")
+  unit_before=$(sha256sum "$ARCHIVE_UNIT")
+  cat >"$ARCHIVE_TEST_BIN/mv" <<'SCRIPT'
+#!/usr/bin/bash -p
+printf 'archive-mv %s\n' "$*" >>"$TEST_COMMAND_LOG"
+if [[ "$*" == *'pi-webui.candidate.service'* ]]; then
+  [[ " $* " == *' --no-copy '* ]] || : >"$TEST_ROOT/archive-unit-missing-no-copy"
+  exit 18
+fi
+exec /usr/bin/mv "$@"
+SCRIPT
+  chmod +x "$ARCHIVE_TEST_BIN/mv"
+
+  run_installer --archive-pending
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'could not archive candidate service unit'* ]]
+  [ "$candidate_before" = "$(directory_fingerprint "$state/runtimes/candidate")" ]
+  [ "$transaction_before" = "$(directory_fingerprint "$state/transactions/pending")" ]
+  [ "$unit_before" = "$(sha256sum "$ARCHIVE_UNIT")" ]
+  [ ! -e "$TEST_ROOT/archive-unit-missing-no-copy" ]
+  [ ! -e "$state/backups/failures/$ARCHIVE_ID" ]
+}
+
+@test "installer infers and restores a completed third move before bookkeeping" {
+  make_installer_repo
+  make_valid_platform
+  make_valid_archive_evidence
+  make_valid_archive_candidate_unit
+  local state="$HOME/.local/share/pi-webui"
+  local candidate_before transaction_before unit_before
+  candidate_before=$(directory_fingerprint "$state/runtimes/candidate")
+  transaction_before=$(directory_fingerprint "$state/transactions/pending")
+  unit_before=$(sha256sum "$ARCHIVE_UNIT")
+  cat >"$ARCHIVE_TEST_BIN/mv" <<'SCRIPT'
+#!/usr/bin/bash -p
+printf 'archive-mv %s\n' "$*" >>"$TEST_COMMAND_LOG"
+if [[ "$3" == "$HOME/.local/share/pi-webui/transactions/pi-webui.candidate.service" ]]; then
+  /usr/bin/mv "$@"
+  exit 73
+fi
+exec /usr/bin/mv "$@"
+SCRIPT
+  chmod +x "$ARCHIVE_TEST_BIN/mv"
+
+  run_installer --archive-pending
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'archive evidence restored after interruption or failure'* ]]
+  [ "$candidate_before" = "$(directory_fingerprint "$state/runtimes/candidate")" ]
+  [ "$transaction_before" = "$(directory_fingerprint "$state/transactions/pending")" ]
+  [ "$unit_before" = "$(sha256sum "$ARCHIVE_UNIT")" ]
+  [ ! -e "$state/backups/failures/.$ARCHIVE_ID.pending" ]
+}
+
+@test "installer rejects a cross-device candidate unit before any archive move" {
+  make_installer_repo
+  make_valid_platform
+  make_valid_archive_evidence
+  make_valid_archive_candidate_unit
+  local state="$HOME/.local/share/pi-webui"
+  local candidate_before transaction_before unit_before
+  candidate_before=$(directory_fingerprint "$state/runtimes/candidate")
+  transaction_before=$(directory_fingerprint "$state/transactions/pending")
+  unit_before=$(sha256sum "$ARCHIVE_UNIT")
+  cat >"$ARCHIVE_TEST_BIN/stat" <<'SCRIPT'
+#!/usr/bin/bash -p
+if [[ "$1 ${2:-}" == '-c %d' && "$3" == *'/pi-webui.candidate.service' ]]; then
+  device=$(/usr/bin/stat -c '%d' "$3")
+  printf '%s\n' "$((device + 1))"
+  exit 0
+fi
+exec /usr/bin/stat "$@"
+SCRIPT
+  chmod +x "$ARCHIVE_TEST_BIN/stat"
+  : >"$TEST_COMMAND_LOG"
+
+  run_installer --archive-pending
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'candidate service unit must be on the same filesystem'* ]]
+  [ "$candidate_before" = "$(directory_fingerprint "$state/runtimes/candidate")" ]
+  [ "$transaction_before" = "$(directory_fingerprint "$state/transactions/pending")" ]
+  [ "$unit_before" = "$(sha256sum "$ARCHIVE_UNIT")" ]
+  local move_count
+  move_count=$(grep '^archive-mv ' "$TEST_COMMAND_LOG" | grep -vc '^archive-mv --help$' || true)
+  [ "$move_count" -eq 0 ]
 }
 
 @test "installer archive no-copy rename preserves evidence on simulated EXDEV" {
@@ -4308,12 +4506,14 @@ SCRIPT
   make_installer_repo
   make_valid_platform
   make_valid_archive_evidence
+  make_valid_archive_candidate_unit
   local state="$HOME/.local/share/pi-webui"
   local candidate="$state/runtimes/candidate"
   local transaction="$state/transactions/pending"
-  local candidate_before transaction_before
+  local candidate_before transaction_before unit_before
   candidate_before=$(directory_fingerprint "$candidate")
   transaction_before=$(directory_fingerprint "$transaction")
+  unit_before=$(sha256sum "$ARCHIVE_UNIT")
   TEST_ARCHIVE_AFTER_SECOND_MOVE_HOOK="$TEST_ROOT/archive-after-second-move"
   make_archive_signal_hook "$TEST_ARCHIVE_AFTER_SECOND_MOVE_HOOK"
   export TEST_ARCHIVE_AFTER_SECOND_MOVE_HOOK
@@ -4325,20 +4525,48 @@ SCRIPT
   [[ "$output" == *'archive evidence restored after interruption or failure'* ]]
   [ "$candidate_before" = "$(directory_fingerprint "$candidate")" ]
   [ "$transaction_before" = "$(directory_fingerprint "$transaction")" ]
+  [ "$unit_before" = "$(sha256sum "$ARCHIVE_UNIT")" ]
   [ ! -e "$state/transactions/apply.lock" ]
   [ ! -e "$state/backups/failures/$ARCHIVE_ID" ]
+}
+
+@test "installer archive trap restores three moved artifacts after a signal" {
+  make_installer_repo
+  make_valid_platform
+  make_valid_archive_evidence
+  make_valid_archive_candidate_unit
+  local state="$HOME/.local/share/pi-webui"
+  local candidate_before transaction_before unit_before
+  candidate_before=$(directory_fingerprint "$state/runtimes/candidate")
+  transaction_before=$(directory_fingerprint "$state/transactions/pending")
+  unit_before=$(sha256sum "$ARCHIVE_UNIT")
+  TEST_ARCHIVE_AFTER_THIRD_MOVE_HOOK="$TEST_ROOT/archive-after-third-move"
+  make_archive_signal_hook "$TEST_ARCHIVE_AFTER_THIRD_MOVE_HOOK"
+  export TEST_ARCHIVE_AFTER_THIRD_MOVE_HOOK
+
+  run_installer --archive-pending
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'archive action interrupted by TERM'* ]]
+  [[ "$output" == *'archive evidence restored after interruption or failure'* ]]
+  [ "$candidate_before" = "$(directory_fingerprint "$state/runtimes/candidate")" ]
+  [ "$transaction_before" = "$(directory_fingerprint "$state/transactions/pending")" ]
+  [ "$unit_before" = "$(sha256sum "$ARCHIVE_UNIT")" ]
+  [ ! -e "$state/transactions/apply.lock" ]
 }
 
 @test "installer archive trap preserves a completed publication interrupted before bookkeeping" {
   make_installer_repo
   make_valid_platform
   make_valid_archive_evidence
+  make_valid_archive_candidate_unit
   local state="$HOME/.local/share/pi-webui"
   local candidate="$state/runtimes/candidate"
   local transaction="$state/transactions/pending"
-  local candidate_before transaction_before
+  local candidate_before transaction_before unit_before
   candidate_before=$(directory_fingerprint "$candidate")
   transaction_before=$(directory_fingerprint "$transaction")
+  unit_before=$(sha256sum "$ARCHIVE_UNIT" | cut -d' ' -f1)
   TEST_ARCHIVE_AFTER_PUBLICATION_HOOK="$TEST_ROOT/archive-after-publication"
   make_archive_signal_hook "$TEST_ARCHIVE_AFTER_PUBLICATION_HOOK"
   export TEST_ARCHIVE_AFTER_PUBLICATION_HOOK
@@ -4353,6 +4581,8 @@ SCRIPT
   [ ! -e "$transaction" ]
   [ "$candidate_before" = "$(directory_fingerprint "$archive/candidate")" ]
   [ "$transaction_before" = "$(directory_fingerprint "$archive/pending")" ]
+  [ "$unit_before" = "$(sha256sum "$archive/pi-webui.candidate.service" | cut -d' ' -f1)" ]
+  [ ! -e "$ARCHIVE_UNIT" ]
   [ ! -e "$state/transactions/apply.lock" ]
   [[ "$output" != *'could not restore archived evidence'* ]]
 }
@@ -4482,9 +4712,11 @@ SCRIPT
   [ "$status" -eq 0 ]
   run grep -F 'backups/failures/' "$readme"
   [ "$status" -eq 0 ]
-  run grep -F 'The candidate and pending' "$readme"
+  run grep -F 'all present candidate artifacts' "$readme"
   [ "$status" -eq 0 ]
-  run grep -F 'transaction contents are retained' "$readme"
+  run grep -F 'The candidate runtime, pending' "$readme"
+  [ "$status" -eq 0 ]
+  run grep -F 'staged candidate service unit are retained exactly' "$readme"
   [ "$status" -eq 0 ]
   run grep -F 'read-only Git' "$readme"
   [ "$status" -eq 0 ]
