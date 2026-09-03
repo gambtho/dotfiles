@@ -10,6 +10,7 @@ setup() {
   setup_dotfiles_test
   unset PI_WEBUI_TEST_STATUS_JSON PI_WEBUI_TEST_HEALTH_ATTEMPTS
   unset TEST_BEFORE_LOCK_HOOK TEST_AFTER_NPM_HOOK TEST_BEFORE_TRIAL_STAGE_HOOK
+  unset TEST_ARCHIVE_BEFORE_MOVE_HOOK TEST_ARCHIVE_AFTER_FIRST_MOVE_HOOK
   FIXTURE_RUNTIME="$TEST_ROOT/runtime"
   mkdir -p "$FIXTURE_RUNTIME"
 }
@@ -39,6 +40,9 @@ make_valid_platform() {
   printf 'ID=ubuntu\nVERSION_ID="24.04"\nVERSION_CODENAME=noble\n' >"$TEST_OS_RELEASE"
   export TEST_OS_RELEASE
   stub_command uname 'printf "%s\\n" "6.6.87.2-microsoft-standard-WSL2"'
+  if [[ -n "${ARCHIVE_TEST_BIN:-}" ]]; then
+    ln -sf "$STUB_BIN/uname" "$ARCHIVE_TEST_BIN/uname"
+  fi
   cat >"$STUB_BIN/stat" <<'SCRIPT'
 #!/usr/bin/env bash
 exec /usr/bin/stat "$@"
@@ -267,8 +271,33 @@ NODE
 
 make_installer_repo() {
   INSTALLER_REPO="$TEST_ROOT/source repo"
-  mkdir -p "$INSTALLER_REPO/ai/pi/webui/runtime" "$INSTALLER_REPO/bin"
+  ARCHIVE_TEST_BIN="$TEST_ROOT/archive-trusted-bin"
+  mkdir -p "$INSTALLER_REPO/ai/pi/webui/runtime" "$INSTALLER_REPO/bin" "$ARCHIVE_TEST_BIN"
   cp "$REPO_ROOT/ai/pi/webui/install.sh" "$INSTALLER_REPO/ai/pi/webui/install.sh"
+  node - "$INSTALLER_REPO/ai/pi/webui/install.sh" "$ARCHIVE_TEST_BIN" <<'NODE'
+const fs = require('node:fs');
+const [file, archiveBin] = process.argv.slice(2);
+let source = fs.readFileSync(file, 'utf8');
+const authored = "ARCHIVE_PATH='/usr/bin:/bin'";
+if (!source.includes(authored)) throw new Error('archive path constant not found');
+source = source.replace(authored, `ARCHIVE_PATH='${archiveBin}:/usr/bin:/bin'`);
+fs.writeFileSync(file, source);
+NODE
+  cat >"$ARCHIVE_TEST_BIN/git" <<'SCRIPT'
+#!/usr/bin/bash -p
+printf 'archive-git %s\n' "$*" >>"$TEST_COMMAND_LOG"
+exec /usr/bin/git "$@"
+SCRIPT
+  cat >"$ARCHIVE_TEST_BIN/mv" <<'SCRIPT'
+#!/usr/bin/bash -p
+printf 'archive-mv %s\n' "$*" >>"$TEST_COMMAND_LOG"
+exec /usr/bin/mv "$@"
+SCRIPT
+  chmod +x "$ARCHIVE_TEST_BIN/git" "$ARCHIVE_TEST_BIN/mv"
+  local archive_real_node
+  archive_real_node=$(node -p 'process.execPath')
+  printf '#!/usr/bin/bash -p\nexec %q "$@"\n' "$archive_real_node" >"$ARCHIVE_TEST_BIN/node"
+  chmod +x "$ARCHIVE_TEST_BIN/node"
   if [[ -f "$REPO_ROOT/ai/pi/webui/tailscale.sh" ]]; then
     cp "$REPO_ROOT/ai/pi/webui/tailscale.sh" "$INSTALLER_REPO/ai/pi/webui/tailscale.sh"
   fi
@@ -299,7 +328,7 @@ make_installer_repo() {
   SOURCE_HEAD=$(git -C "$INSTALLER_REPO" rev-parse HEAD)
   TEST_COMMAND_LOG="$TEST_ROOT/commands.log"
   : >"$TEST_COMMAND_LOG"
-  export INSTALLER_REPO INSTALLER SOURCE_HEAD TEST_COMMAND_LOG
+  export INSTALLER_REPO INSTALLER SOURCE_HEAD TEST_COMMAND_LOG ARCHIVE_TEST_BIN
 }
 
 run_installer() {
@@ -307,6 +336,8 @@ run_installer() {
     PI_WEBUI_TEST_BEFORE_LOCK_HOOK="${TEST_BEFORE_LOCK_HOOK:-}" \
     PI_WEBUI_TEST_AFTER_NPM_HOOK="${TEST_AFTER_NPM_HOOK:-}" \
     PI_WEBUI_TEST_BEFORE_TRIAL_STAGE_HOOK="${TEST_BEFORE_TRIAL_STAGE_HOOK:-}" \
+    PI_WEBUI_TEST_ARCHIVE_BEFORE_MOVE_HOOK="${TEST_ARCHIVE_BEFORE_MOVE_HOOK:-}" \
+    PI_WEBUI_TEST_ARCHIVE_AFTER_FIRST_MOVE_HOOK="${TEST_ARCHIVE_AFTER_FIRST_MOVE_HOOK:-}" \
     PI_WEBUI_TEST_PROCESS_CHECK="$PROCESS_CHECK" \
     PI_WEBUI_TEST_PROC_ROOT="$PROC_ROOT" \
     BATS_TEST_TMPDIR="$BATS_TEST_TMPDIR" HOME="$HOME" PATH="$PATH" \
@@ -314,7 +345,8 @@ run_installer() {
     PI_TEST_LAUNCHER="$PI_TEST_LAUNCHER" \
     PI_WEBUI_TEST_STATUS_JSON="${PI_WEBUI_TEST_STATUS_JSON:-}" \
     PI_WEBUI_TEST_HEALTH_ATTEMPTS="${PI_WEBUI_TEST_HEALTH_ATTEMPTS:-}" \
-    INSTALLER_REPO="$INSTALLER_REPO" bash "$INSTALLER" "$@"
+    INSTALLER_REPO="$INSTALLER_REPO" ARCHIVE_TEST_BIN="$ARCHIVE_TEST_BIN" \
+    /usr/bin/bash -p "$INSTALLER" "$@"
 }
 
 file_tree_hashes() {
@@ -3626,9 +3658,19 @@ make_valid_archive_evidence() {
 }
 
 assert_archive_did_not_run_live_actions() {
-  run grep -E '^(npm-ci|systemctl |tailscale |sudo .*tailscale|git .* (checkout|worktree))' \
+  run grep -E '^(npm-ci|systemctl |tailscale |sudo .*tailscale|archive-git .* (checkout|worktree|reset|clean|switch|branch|commit|merge|rebase|update-ref))' \
     "$TEST_COMMAND_LOG"
   [ "$status" -eq 1 ]
+  local command
+  while IFS= read -r command; do
+    case "$command" in
+      *' rev-parse '* | *' cat-file -e '*) ;;
+      *)
+        printf 'unexpected archive Git command: %s\n' "$command" >&2
+        return 1
+        ;;
+    esac
+  done < <(grep '^archive-git ' "$TEST_COMMAND_LOG" || true)
 }
 
 @test "installer archives a real retained failed-service transaction" {
@@ -3730,20 +3772,22 @@ assert_archive_did_not_run_live_actions() {
   local candidate_before transaction_before
   candidate_before=$(directory_fingerprint "$candidate")
   transaction_before=$(directory_fingerprint "$transaction")
-  cat >"$STUB_BIN/mv" <<'SCRIPT'
-#!/usr/bin/env bash
+  cat >"$ARCHIVE_TEST_BIN/mv" <<'SCRIPT'
+#!/usr/bin/bash -p
+printf 'archive-mv %s\n' "$*" >>"$TEST_COMMAND_LOG"
 if [[ "$*" == *"$HOME/.local/share/pi-webui/transactions/pending"* && "$*" == *'/pending'* ]]; then
   exit 68
 fi
 exec /usr/bin/mv "$@"
 SCRIPT
-  chmod +x "$STUB_BIN/mv"
+  chmod +x "$ARCHIVE_TEST_BIN/mv"
   : >"$TEST_COMMAND_LOG"
 
   run_installer --archive-pending
 
   [ "$status" -ne 0 ]
-  [[ "$output" == *'could not archive pending transaction; restored candidate evidence'* ]]
+  [[ "$output" == *'could not archive pending transaction'* ]]
+  [[ "$output" == *'archive evidence restored after interruption or failure'* ]]
   [ "$candidate_before" = "$(directory_fingerprint "$candidate")" ]
   [ "$transaction_before" = "$(directory_fingerprint "$transaction")" ]
   [ ! -e "$state/backups/failures/$ARCHIVE_ID" ]
@@ -3821,6 +3865,233 @@ SCRIPT
   assert_archive_did_not_run_live_actions
 }
 
+@test "installer archive rejects cross-device evidence before any move" {
+  make_installer_repo
+  make_valid_platform
+  make_valid_archive_evidence
+  local state="$HOME/.local/share/pi-webui"
+  local candidate="$state/runtimes/candidate"
+  local transaction="$state/transactions/pending"
+  local candidate_before transaction_before
+  candidate_before=$(directory_fingerprint "$candidate")
+  transaction_before=$(directory_fingerprint "$transaction")
+  cat >"$ARCHIVE_TEST_BIN/stat" <<'SCRIPT'
+#!/usr/bin/bash -p
+if [[ "$1 ${2:-}" == '-c %d' && "$3" == "$HOME/.local/share/pi-webui/transactions/pending" ]]; then
+  device=$(/usr/bin/stat -c '%d' "$3")
+  printf '%s\n' "$((device + 1))"
+  exit 0
+fi
+exec /usr/bin/stat "$@"
+SCRIPT
+  chmod +x "$ARCHIVE_TEST_BIN/stat"
+  : >"$TEST_COMMAND_LOG"
+
+  run_installer --archive-pending
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'same filesystem'* ]]
+  [ "$candidate_before" = "$(directory_fingerprint "$candidate")" ]
+  [ "$transaction_before" = "$(directory_fingerprint "$transaction")" ]
+  run ! grep -q '^archive-mv ' "$TEST_COMMAND_LOG"
+  [ ! -e "$state/transactions/apply.lock" ]
+}
+
+@test "installer archive rechecks devices after the pre-move lifecycle seam" {
+  make_installer_repo
+  make_valid_platform
+  make_valid_archive_evidence
+  local state="$HOME/.local/share/pi-webui"
+  local candidate="$state/runtimes/candidate"
+  local transaction="$state/transactions/pending"
+  local candidate_before transaction_before
+  candidate_before=$(directory_fingerprint "$candidate")
+  transaction_before=$(directory_fingerprint "$transaction")
+  TEST_ARCHIVE_BEFORE_MOVE_HOOK="$TEST_ROOT/archive-device-shift"
+  cat >"$TEST_ARCHIVE_BEFORE_MOVE_HOOK" <<'SCRIPT'
+#!/usr/bin/bash -p
+: >"$TEST_ROOT/archive-device-shifted"
+SCRIPT
+  chmod +x "$TEST_ARCHIVE_BEFORE_MOVE_HOOK"
+  export TEST_ARCHIVE_BEFORE_MOVE_HOOK
+  cat >"$ARCHIVE_TEST_BIN/stat" <<'SCRIPT'
+#!/usr/bin/bash -p
+if [[ -f "$TEST_ROOT/archive-device-shifted" && "$1 ${2:-}" == '-c %d' &&
+  "$3" == "$HOME/.local/share/pi-webui/transactions/pending" ]]; then
+  device=$(/usr/bin/stat -c '%d' "$3")
+  printf '%s\n' "$((device + 1))"
+  exit 0
+fi
+exec /usr/bin/stat "$@"
+SCRIPT
+  chmod +x "$ARCHIVE_TEST_BIN/stat"
+  : >"$TEST_COMMAND_LOG"
+
+  run_installer --archive-pending
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'same filesystem'* ]]
+  [ "$candidate_before" = "$(directory_fingerprint "$candidate")" ]
+  [ "$transaction_before" = "$(directory_fingerprint "$transaction")" ]
+  run ! grep -q '^archive-mv ' "$TEST_COMMAND_LOG"
+  [ ! -e "$state/transactions/apply.lock" ]
+}
+
+@test "installer archive rejects a cross-device temporary directory before evidence moves" {
+  make_installer_repo
+  make_valid_platform
+  make_valid_archive_evidence
+  local state="$HOME/.local/share/pi-webui"
+  local candidate="$state/runtimes/candidate"
+  local transaction="$state/transactions/pending"
+  local candidate_before transaction_before
+  candidate_before=$(directory_fingerprint "$candidate")
+  transaction_before=$(directory_fingerprint "$transaction")
+  cat >"$ARCHIVE_TEST_BIN/stat" <<SCRIPT
+#!/usr/bin/bash -p
+if [[ "\$1 \${2:-}" == '-c %d' && "\$3" == "$state/backups/failures/.$ARCHIVE_ID.pending" ]]; then
+  device=\$(/usr/bin/stat -c '%d' "\$3")
+  printf '%s\\n' "\$((device + 1))"
+  exit 0
+fi
+exec /usr/bin/stat "\$@"
+SCRIPT
+  chmod +x "$ARCHIVE_TEST_BIN/stat"
+  : >"$TEST_COMMAND_LOG"
+
+  run_installer --archive-pending
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'temporary failure archive must be on the same filesystem'* ]]
+  [ "$candidate_before" = "$(directory_fingerprint "$candidate")" ]
+  [ "$transaction_before" = "$(directory_fingerprint "$transaction")" ]
+  run ! grep -q '^archive-mv ' "$TEST_COMMAND_LOG"
+  [ ! -e "$state/backups/failures/.$ARCHIVE_ID.pending" ]
+  [ ! -e "$state/transactions/apply.lock" ]
+}
+
+make_archive_signal_hook() {
+  local hook=$1
+  cat >"$hook" <<'SCRIPT'
+#!/usr/bin/bash -p
+kill -TERM "$PPID"
+sleep 1
+SCRIPT
+  chmod +x "$hook"
+}
+
+@test "installer archive trap releases its lock after a pre-move signal" {
+  make_installer_repo
+  make_valid_platform
+  make_valid_archive_evidence
+  local state="$HOME/.local/share/pi-webui"
+  local candidate="$state/runtimes/candidate"
+  local transaction="$state/transactions/pending"
+  local candidate_before transaction_before
+  candidate_before=$(directory_fingerprint "$candidate")
+  transaction_before=$(directory_fingerprint "$transaction")
+  TEST_ARCHIVE_BEFORE_MOVE_HOOK="$TEST_ROOT/archive-before-move"
+  make_archive_signal_hook "$TEST_ARCHIVE_BEFORE_MOVE_HOOK"
+  export TEST_ARCHIVE_BEFORE_MOVE_HOOK
+
+  run_installer --archive-pending
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'archive action interrupted by TERM'* ]]
+  [ "$candidate_before" = "$(directory_fingerprint "$candidate")" ]
+  [ "$transaction_before" = "$(directory_fingerprint "$transaction")" ]
+  [ ! -e "$state/transactions/apply.lock" ]
+  [ ! -e "$state/backups/failures/$ARCHIVE_ID" ]
+}
+
+@test "installer archive trap restores first-moved evidence after a signal" {
+  make_installer_repo
+  make_valid_platform
+  make_valid_archive_evidence
+  local state="$HOME/.local/share/pi-webui"
+  local candidate="$state/runtimes/candidate"
+  local transaction="$state/transactions/pending"
+  local candidate_before transaction_before
+  candidate_before=$(directory_fingerprint "$candidate")
+  transaction_before=$(directory_fingerprint "$transaction")
+  TEST_ARCHIVE_AFTER_FIRST_MOVE_HOOK="$TEST_ROOT/archive-after-first-move"
+  make_archive_signal_hook "$TEST_ARCHIVE_AFTER_FIRST_MOVE_HOOK"
+  export TEST_ARCHIVE_AFTER_FIRST_MOVE_HOOK
+
+  run_installer --archive-pending
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'archive action interrupted by TERM'* ]]
+  [[ "$output" == *'archive evidence restored after interruption or failure'* ]]
+  [ "$candidate_before" = "$(directory_fingerprint "$candidate")" ]
+  [ "$transaction_before" = "$(directory_fingerprint "$transaction")" ]
+  [ ! -e "$state/transactions/apply.lock" ]
+  [ ! -e "$state/backups/failures/$ARCHIVE_ID" ]
+}
+
+@test "installer archive trap retains the temporary path when restoration fails" {
+  make_installer_repo
+  make_valid_platform
+  make_valid_archive_evidence
+  local state="$HOME/.local/share/pi-webui"
+  local candidate="$state/runtimes/candidate"
+  local transaction="$state/transactions/pending"
+  local transaction_before
+  transaction_before=$(directory_fingerprint "$transaction")
+  TEST_ARCHIVE_AFTER_FIRST_MOVE_HOOK="$TEST_ROOT/archive-after-first-failure"
+  cat >"$TEST_ARCHIVE_AFTER_FIRST_MOVE_HOOK" <<'SCRIPT'
+#!/usr/bin/bash -p
+exit 73
+SCRIPT
+  chmod +x "$TEST_ARCHIVE_AFTER_FIRST_MOVE_HOOK"
+  export TEST_ARCHIVE_AFTER_FIRST_MOVE_HOOK
+  cat >"$ARCHIVE_TEST_BIN/mv" <<'SCRIPT'
+#!/usr/bin/bash -p
+printf 'archive-mv %s\n' "$*" >>"$TEST_COMMAND_LOG"
+if [[ "$1" == -T && "$2" == */candidate && "$3" == "$HOME/.local/share/pi-webui/runtimes/candidate" ]]; then
+  exit 74
+fi
+exec /usr/bin/mv "$@"
+SCRIPT
+  chmod +x "$ARCHIVE_TEST_BIN/mv"
+
+  run_installer --archive-pending
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'could not restore archived evidence'* ]]
+  [[ "$output" == *"evidence retained in $state/backups/failures/.$ARCHIVE_ID.pending"* ]]
+  [ ! -e "$candidate" ]
+  [ -d "$state/backups/failures/.$ARCHIVE_ID.pending/candidate" ]
+  [ "$transaction_before" = "$(directory_fingerprint "$transaction")" ]
+  [ ! -e "$state/transactions/apply.lock" ]
+}
+
+@test "installer archive ignores malicious inherited command paths" {
+  make_installer_repo
+  make_valid_platform
+  make_valid_archive_evidence
+  local command
+  for command in node mise bash git stat mv; do
+    cat >"$STUB_BIN/$command" <<SCRIPT
+#!/usr/bin/bash -p
+printf 'malicious $command ran\n' >"$TEST_ROOT/malicious-$command"
+exit 97
+SCRIPT
+    chmod +x "$STUB_BIN/$command"
+  done
+  : >"$TEST_COMMAND_LOG"
+
+  run_installer --archive-pending
+
+  [ "$status" -eq 0 ]
+  for command in node mise bash git stat mv; do
+    [ ! -e "$TEST_ROOT/malicious-$command" ]
+  done
+  grep -Eq '^archive-git -C .+ rev-parse ' "$TEST_COMMAND_LOG"
+  grep -Eq '^archive-git -C .+ cat-file -e ' "$TEST_COMMAND_LOG"
+  assert_archive_did_not_run_live_actions
+}
+
 @test "Pi Web UI runbook documents retained-evidence archive contract" {
   local readme="$REPO_ROOT/ai/pi/webui/README.md"
   run grep -Fx './ai/pi/webui/install.sh --archive-pending' "$readme"
@@ -3830,5 +4101,9 @@ SCRIPT
   run grep -F 'The candidate and pending' "$readme"
   [ "$status" -eq 0 ]
   run grep -F 'transaction contents are retained' "$readme"
+  [ "$status" -eq 0 ]
+  run grep -F 'read-only Git' "$readme"
+  [ "$status" -eq 0 ]
+  run grep -F 'same filesystem' "$readme"
   [ "$status" -eq 0 ]
 }

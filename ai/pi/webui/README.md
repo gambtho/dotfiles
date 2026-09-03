@@ -138,14 +138,24 @@ archive that evidence with:
 
 This action validates the Noble/WSL platform, owner-only state paths, matching
 transaction markers and ownership tokens, source metadata, and the complete
-installed candidate before moving anything. It acquires the same atomic apply
-lock, then publishes both directories together under the unique bounded path
+installed candidate before moving anything. Archive-critical commands resolve
+only from the authored `/usr/bin:/bin` path, and the validator runs through
+`/usr/bin/bash -p`. The action uses read-only Git `rev-parse` and `cat-file`
+calls to validate source evidence; no mutating Git command is used. It acquires
+the same atomic apply lock and requires the candidate, transaction, failure
+root, and temporary
+archive to remain on the same filesystem before moving evidence.
+
+The complete archive is published under the unique bounded path
 `~/.local/share/pi-webui/backups/failures/<id>`. The candidate and pending
-transaction contents are retained; a failed second move restores the first. The
-action does not run npm, alter the current service/runtime/worktree, or change
-Tailscale routes. Existing symlinked, foreign, permissive, colliding, partial,
-or concurrently locked state is preserved and rejected. With no candidate and
-no pending transaction it reports a successful no-op.
+transaction contents are retained. EXIT and INT/TERM/HUP handling restores
+partial moves and releases only an unchanged owned lock; if restoration cannot
+be proved, the helper exits nonzero and identifies the retained temporary
+archive. The action does not run npm, alter the current
+service/runtime/worktree, mutate Git, or change Tailscale routes. Existing
+symlinked, foreign, permissive, colliding, partial, cross-device, or concurrently
+locked state is preserved and rejected. With no candidate and no pending
+transaction it reports a successful no-op.
 
 Advancing a pin is a separate review ceremony, not routine operation. In a
 linked update worktree, review the upstream tag/commit and tarball, change the

@@ -1,8 +1,14 @@
-#!/usr/bin/env bash
+#!/usr/bin/bash -p
 # Prepare the pinned Pi Web UI runtime and durable worktree for service publication.
 
 set -euo pipefail
 
+ARCHIVE_PATH='/usr/bin:/bin'
+if [[ "${1:-}" == --archive-pending ]]; then
+  PATH=$ARCHIVE_PATH
+  export PATH
+  hash -r
+fi
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd -P)"
 MODE=''
 SOURCE_ROOT=''
@@ -56,6 +62,13 @@ ARCHIVE_TEMPORARY=''
 ARCHIVE_DESTINATION=''
 CANDIDATE_OWNER_TOKEN=''
 TRANSACTION_OWNER_TOKEN=''
+ARCHIVE_TRAP_ACTIVE=0
+ARCHIVE_TEMP_CREATED=0
+ARCHIVE_FIRST_MOVED=0
+ARCHIVE_SECOND_MOVED=0
+ARCHIVE_PUBLICATION_STARTED=0
+ARCHIVE_PUBLISHED=0
+ARCHIVE_DEVICE_ID=''
 
 usage() {
   printf 'usage: %s --check|--apply|--archive-pending\n' "$0"
@@ -811,6 +824,16 @@ run_test_after_npm_hook() {
 run_test_before_trial_stage_hook() {
   run_restricted_test_hook PI_WEBUI_TEST_BEFORE_TRIAL_STAGE_HOOK \
     "${PI_WEBUI_TEST_BEFORE_TRIAL_STAGE_HOOK:-}" before-trial-stage
+}
+
+run_test_archive_before_move_hook() {
+  run_restricted_test_hook PI_WEBUI_TEST_ARCHIVE_BEFORE_MOVE_HOOK \
+    "${PI_WEBUI_TEST_ARCHIVE_BEFORE_MOVE_HOOK:-}" archive-before-move
+}
+
+run_test_archive_after_first_move_hook() {
+  run_restricted_test_hook PI_WEBUI_TEST_ARCHIVE_AFTER_FIRST_MOVE_HOOK \
+    "${PI_WEBUI_TEST_ARCHIVE_AFTER_FIRST_MOVE_HOOK:-}" archive-after-first-move
 }
 
 revalidate_worktree_before_mutation() {
@@ -1731,7 +1754,7 @@ validate_archive_evidence() {
   }
   resolve_source_repository || return 1
   validate_archive_transaction || return 1
-  bash "$SOURCE_ROOT/bin/validate-pi-webui" --installed-runtime \
+  /usr/bin/bash -p "$SOURCE_ROOT/bin/validate-pi-webui" --installed-runtime \
     "$CANDIDATE_RUNTIME" >/dev/null || {
     fail 'candidate runtime failed installed validation'
     return 1
@@ -1743,18 +1766,128 @@ validate_archive_evidence() {
   }
 }
 
+archive_path_matches_device() {
+  local path=$1 label=$2 observed_device
+  observed_device=$(stat -c '%d' "$path") || return 1
+  [[ "$observed_device" == "$ARCHIVE_DEVICE_ID" ]] || {
+    fail "$label must be on the same filesystem as the archive evidence"
+    return 1
+  }
+}
+
+archive_same_device() {
+  ARCHIVE_DEVICE_ID=$(stat -c '%d' "$CANDIDATE_RUNTIME") || return 1
+  archive_path_matches_device "$TRANSACTION_DIR" 'pending transaction' || return 1
+  archive_path_matches_device "$FAILURE_ROOT" 'failure archive root' || return 1
+  if [[ "$ARCHIVE_TEMP_CREATED" == 1 ]]; then
+    archive_path_matches_device "$ARCHIVE_TEMPORARY" 'temporary failure archive' || return 1
+  fi
+}
+
+archive_remaining_paths_same_device() {
+  archive_path_matches_device "$TRANSACTION_DIR" 'pending transaction' || return 1
+  archive_path_matches_device "$FAILURE_ROOT" 'failure archive root' || return 1
+  archive_path_matches_device "$ARCHIVE_TEMPORARY" 'temporary failure archive' || return 1
+}
+
+published_archive_is_complete() {
+  local expected_token=$CANDIDATE_OWNER_TOKEN archived_candidate_token archived_transaction_token
+  [[ ! -e "$CANDIDATE_RUNTIME" && ! -L "$CANDIDATE_RUNTIME" &&
+    ! -e "$TRANSACTION_DIR" && ! -L "$TRANSACTION_DIR" ]] || return 1
+  validate_archive_artifact_root "$ARCHIVE_DESTINATION/candidate" \
+    'published candidate runtime' .pi-webui-candidate \
+    pi-webui-task2-candidate-v1 archived_candidate_token || return 1
+  validate_archive_artifact_root "$ARCHIVE_DESTINATION/pending" \
+    'published pending transaction' .pi-webui-transaction \
+    pi-webui-task2-transaction-v1 archived_transaction_token || return 1
+  [[ "$archived_candidate_token" == "$expected_token" &&
+    "$archived_transaction_token" == "$expected_token" ]]
+}
+
 restore_archive_moves() {
   local failed=0
-  if [[ -e "$ARCHIVE_TEMPORARY/pending" || -L "$ARCHIVE_TEMPORARY/pending" ]]; then
-    mv -T "$ARCHIVE_TEMPORARY/pending" "$TRANSACTION_DIR" || failed=1
+  [[ "$ARCHIVE_PUBLISHED" == 0 ]] || return 0
+  if [[ "$ARCHIVE_PUBLICATION_STARTED" == 1 &&
+    ! -e "$ARCHIVE_TEMPORARY" && ! -L "$ARCHIVE_TEMPORARY" ]] &&
+    published_archive_is_complete >/dev/null 2>&1; then
+    ARCHIVE_PUBLISHED=1
+    return 0
   fi
-  if [[ -e "$ARCHIVE_TEMPORARY/candidate" || -L "$ARCHIVE_TEMPORARY/candidate" ]]; then
-    mv -T "$ARCHIVE_TEMPORARY/candidate" "$CANDIDATE_RUNTIME" || failed=1
+  if [[ "$ARCHIVE_SECOND_MOVED" == 1 ]]; then
+    if [[ ! -e "$TRANSACTION_DIR" && ! -L "$TRANSACTION_DIR" ]] &&
+      mv -T "$ARCHIVE_TEMPORARY/pending" "$TRANSACTION_DIR"; then
+      ARCHIVE_SECOND_MOVED=0
+    else
+      failed=1
+    fi
   fi
-  if [[ "$failed" == 0 ]]; then
-    rmdir "$ARCHIVE_TEMPORARY" || failed=1
+  if [[ "$ARCHIVE_FIRST_MOVED" == 1 ]]; then
+    if [[ ! -e "$CANDIDATE_RUNTIME" && ! -L "$CANDIDATE_RUNTIME" ]] &&
+      mv -T "$ARCHIVE_TEMPORARY/candidate" "$CANDIDATE_RUNTIME"; then
+      ARCHIVE_FIRST_MOVED=0
+    else
+      failed=1
+    fi
+  fi
+  if [[ "$failed" == 0 && "$ARCHIVE_TEMP_CREATED" == 1 ]]; then
+    if rmdir "$ARCHIVE_TEMPORARY"; then
+      ARCHIVE_TEMP_CREATED=0
+    else
+      failed=1
+    fi
   fi
   [[ "$failed" == 0 ]]
+}
+
+archive_disarm_traps() {
+  trap - EXIT INT TERM HUP
+  ARCHIVE_TRAP_ACTIVE=0
+}
+
+archive_exit_handler() {
+  local status=$1 restore_failed=0 lock_failed=0 retained_location=$ARCHIVE_TEMPORARY
+  trap - EXIT INT TERM HUP
+  [[ "$ARCHIVE_TRAP_ACTIVE" == 1 ]] || exit "$status"
+  ARCHIVE_TRAP_ACTIVE=0
+  if [[ "$ARCHIVE_PUBLISHED" == 0 ]]; then
+    if restore_archive_moves; then
+      printf '%s\n' 'error: archive evidence restored after interruption or failure' >&2
+    else
+      restore_failed=1
+      if [[ ! -e "$retained_location" && ! -L "$retained_location" &&
+        (-e "$ARCHIVE_DESTINATION" || -L "$ARCHIVE_DESTINATION") ]]; then
+        retained_location=$ARCHIVE_DESTINATION
+      fi
+      printf 'error: could not restore archived evidence; evidence retained in %s\n' \
+        "$retained_location" >&2
+    fi
+  fi
+  if ! release_apply_lock; then
+    lock_failed=1
+    printf '%s\n' 'error: archive apply lock changed; refusing cleanup' >&2
+  fi
+  if [[ "$status" == 0 ]]; then
+    status=79
+  fi
+  if [[ "$restore_failed" == 1 || "$lock_failed" == 1 ]]; then
+    status=79
+  fi
+  exit "$status"
+}
+
+archive_signal_handler() {
+  local signal=$1 status=$2
+  trap - "$signal"
+  printf 'error: archive action interrupted by %s\n' "$signal" >&2
+  exit "$status"
+}
+
+archive_arm_traps() {
+  ARCHIVE_TRAP_ACTIVE=1
+  trap 'archive_exit_handler $?' EXIT
+  trap 'archive_signal_handler INT 130' INT
+  trap 'archive_signal_handler TERM 143' TERM
+  trap 'archive_signal_handler HUP 129' HUP
 }
 
 archive_evidence_under_lock() {
@@ -1805,32 +1938,45 @@ archive_evidence_under_lock() {
     fail 'candidate archive identity changed before evidence moves'
     return 1
   }
+  archive_same_device || return 1
   mkdir -m 0700 "$ARCHIVE_TEMPORARY" || {
     fail 'could not create temporary failure archive'
     return 1
   }
+  ARCHIVE_TEMP_CREATED=1
+  archive_same_device || return 1
+  run_test_archive_before_move_hook || {
+    fail 'archive before-move lifecycle hook failed'
+    return 1
+  }
+  verify_archive_lock || return 1
+  archive_same_device || return 1
   if ! mv -T "$CANDIDATE_RUNTIME" "$ARCHIVE_TEMPORARY/candidate"; then
-    rmdir "$ARCHIVE_TEMPORARY" 2>/dev/null || true
     fail 'could not archive candidate runtime'
     return 1
   fi
+  ARCHIVE_FIRST_MOVED=1
+  run_test_archive_after_first_move_hook || {
+    fail 'archive after-first-move lifecycle hook failed'
+    return 1
+  }
+  verify_archive_lock || return 1
+  archive_remaining_paths_same_device || return 1
   if ! mv -T "$TRANSACTION_DIR" "$ARCHIVE_TEMPORARY/pending"; then
-    if restore_archive_moves; then
-      fail 'could not archive pending transaction; restored candidate evidence'
-    else
-      fail "could not archive pending transaction or restore candidate; evidence retained in $ARCHIVE_TEMPORARY"
-    fi
+    fail 'could not archive pending transaction'
     return 1
   fi
+  ARCHIVE_SECOND_MOVED=1
+  verify_archive_lock || return 1
+  archive_path_matches_device "$FAILURE_ROOT" 'failure archive root' || return 1
+  archive_path_matches_device "$ARCHIVE_TEMPORARY" 'temporary failure archive' || return 1
+  ARCHIVE_PUBLICATION_STARTED=1
   if ! mv -T "$ARCHIVE_TEMPORARY" "$ARCHIVE_DESTINATION"; then
-    if restore_archive_moves; then
-      fail 'could not publish failure archive; restored candidate and transaction evidence'
-    else
-      fail "could not publish failure archive or restore evidence; evidence retained in $ARCHIVE_TEMPORARY"
-    fi
+    fail 'could not publish failure archive'
     return 1
   fi
-  ARCHIVE_TEMPORARY=''
+  ARCHIVE_PUBLISHED=1
+  ARCHIVE_TEMP_CREATED=0
   printf 'archived: %s\n' "$ARCHIVE_DESTINATION"
 }
 
@@ -1849,10 +1995,12 @@ archive_pending_evidence() {
     return 1
   }
   acquire_apply_lock || return 1
-  archive_evidence_under_lock || status=$?
+  archive_arm_traps
+  archive_evidence_under_lock || return $?
   if ! release_apply_lock; then
-    [[ "$status" != 0 ]] || status=76
+    status=76
   fi
+  archive_disarm_traps
   return "$status"
 }
 
@@ -1894,6 +2042,9 @@ main() {
       ;;
   esac
   if [[ "$MODE" == archive-pending ]]; then
+    PATH=$ARCHIVE_PATH
+    export PATH
+    hash -r
     require_platform_identity
     archive_pending_evidence
     return
