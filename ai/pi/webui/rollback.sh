@@ -52,6 +52,10 @@ MISE_HASH=''
 NODE_BIN=''
 NODE_IDENTITY=''
 NODE_HASH=''
+MANAGED_PLAN_FILE_COUNT=0
+MANAGED_PLAN_MAX_FILES=100
+MANAGED_PLAN_MAX_FILE_SIZE=1048576
+MANAGED_PLAN_MAX_TOTAL_SIZE=10485760
 
 usage() {
   printf 'usage: %s [--remove-runtime] [--remove-worktree]\n' "$0"
@@ -419,9 +423,107 @@ canonical_git_path() {
   fi
 }
 
+validate_managed_plan_tree() {
+  local pi_root="$WORKTREE/.pi" plans_root="$WORKTREE/.pi/plans"
+  local current_uid canonical_worktree canonical_pi canonical_plans entry
+  local entry_parent mode links size total_size=0
+  MANAGED_PLAN_FILE_COUNT=0
+  [[ -e "$pi_root" || -L "$pi_root" ]] || return 0
+  [[ -d "$pi_root" && ! -L "$pi_root" ]] || {
+    fail 'managed Pi plan tree must use real directories'
+    return 1
+  }
+  current_uid=$("$ID_BIN" -u)
+  canonical_worktree=$(cd "$WORKTREE" && pwd -P) || return 1
+  canonical_pi=$(cd "$pi_root" && pwd -P) || return 1
+  [[ "$canonical_pi" == "$canonical_worktree/.pi" ]] || {
+    fail 'managed Pi plan tree escapes the worktree'
+    return 1
+  }
+  if [[ -e "$plans_root" || -L "$plans_root" ]]; then
+    [[ -d "$plans_root" && ! -L "$plans_root" ]] || {
+      fail 'managed Pi plan tree must use real directories'
+      return 1
+    }
+    canonical_plans=$(cd "$plans_root" && pwd -P) || return 1
+    [[ "$canonical_plans" == "$canonical_pi/plans" ]] || {
+      fail 'managed Pi plan tree escapes the worktree'
+      return 1
+    }
+  else
+    canonical_plans="$canonical_pi/plans"
+  fi
+  for entry in "$pi_root" "$plans_root"; do
+    [[ -e "$entry" ]] || continue
+    [[ "$("$STAT_BIN" -c '%u' "$entry")" == "$current_uid" ]] || {
+      fail 'managed Pi plan tree must be owned by the current user'
+      return 1
+    }
+    mode=$("$STAT_BIN" -c '%a' "$entry")
+    (((8#$mode & 022) == 0)) || {
+      fail 'managed Pi plan tree must not be group or world writable'
+      return 1
+    }
+  done
+  while IFS= read -r -d '' entry; do
+    if [[ "$entry" == "$plans_root" ]]; then
+      continue
+    fi
+    case "$entry" in
+      "$plans_root"/*) ;;
+      *)
+        fail 'managed Pi plan tree contains an unsupported entry'
+        return 1
+        ;;
+    esac
+    [[ ! -L "$entry" && -f "$entry" ]] || {
+      fail 'managed Pi plan tree contains an unsupported entry'
+      return 1
+    }
+    entry_parent=$(cd "$(/usr/bin/dirname "$entry")" && pwd -P) || return 1
+    [[ "$entry_parent" == "$canonical_plans" ]] || {
+      fail 'managed Pi plan tree contains nested or escaping entries'
+      return 1
+    }
+    [[ "$("$STAT_BIN" -c '%u' "$entry")" == "$current_uid" ]] || {
+      fail 'managed Pi plan files must be owned by the current user'
+      return 1
+    }
+    mode=$("$STAT_BIN" -c '%a' "$entry")
+    (((8#$mode & 022) == 0)) || {
+      fail 'managed Pi plan files must not be group or world writable'
+      return 1
+    }
+    links=$("$STAT_BIN" -c '%h' "$entry")
+    [[ "$links" == 1 ]] || {
+      fail 'managed Pi plan files must not have additional hard links'
+      return 1
+    }
+    size=$("$STAT_BIN" -c '%s' "$entry")
+    [[ "$size" =~ ^[0-9]+$ && "$size" -le "$MANAGED_PLAN_MAX_FILE_SIZE" ]] || {
+      fail 'managed Pi plan file exceeds the 1 MiB limit'
+      return 1
+    }
+    MANAGED_PLAN_FILE_COUNT=$((MANAGED_PLAN_FILE_COUNT + 1))
+    total_size=$((total_size + size))
+    [[ "$MANAGED_PLAN_FILE_COUNT" -le "$MANAGED_PLAN_MAX_FILES" &&
+      "$total_size" -le "$MANAGED_PLAN_MAX_TOTAL_SIZE" ]] || {
+      fail 'managed Pi plan tree exceeds 100 files or 10 MiB'
+      return 1
+    }
+  done < <(/usr/bin/find -P "$pi_root" -mindepth 1 -print0)
+}
+
+require_no_managed_plan_files() {
+  [[ "$MANAGED_PLAN_FILE_COUNT" == 0 ]] || {
+    fail 'managed Pi plan files must be removed or archived first'
+    return 1
+  }
+}
+
 validate_worktree() {
   local source_top source_common_raw source_common target_common_raw target_common
-  local target_git_raw target_git status mode
+  local target_git_raw target_git status ignored_status line mode
   [[ -d "$WORKTREE" && ! -L "$WORKTREE" ]] || {
     fail 'managed worktree must be a real directory'
     return 1
@@ -458,11 +560,24 @@ validate_worktree() {
     fail 'managed worktree must be detached'
     return 1
   fi
-  status=$("$GIT_BIN" -C "$WORKTREE" status --porcelain --untracked-files=all --ignored=matching)
+  status=$("$GIT_BIN" -C "$WORKTREE" status --porcelain --untracked-files=all)
   [[ -z "$status" ]] || {
     fail 'managed worktree must be clean, including ignored files'
     return 1
   }
+  ignored_status=$("$GIT_BIN" -C "$WORKTREE" status --porcelain --untracked-files=all --ignored=matching)
+  if [[ -n "$ignored_status" ]]; then
+    while IFS= read -r line; do
+      case "$line" in
+        '!! .pi/' | '!! .pi/plans/' | '!! .pi/plans/'*) ;;
+        *)
+          fail 'managed worktree must be clean, including ignored files'
+          return 1
+          ;;
+      esac
+    done <<<"$ignored_status"
+  fi
+  validate_managed_plan_tree
 }
 
 validate_destructive_state() {
@@ -482,6 +597,7 @@ validate_destructive_state() {
   fi
   if [[ "$REMOVE_WORKTREE" == 1 && (-e "$WORKTREE" || -L "$WORKTREE") ]]; then
     validate_worktree
+    require_no_managed_plan_files
     canonical_contained_target "$WORKTREE" worktrees/dotfiles >/dev/null || return 1
     WORKTREE_IDENTITY=$("$STAT_BIN" -c '%d:%i' "$WORKTREE")
     WORKTREE_HEAD=$("$GIT_BIN" -C "$WORKTREE" rev-parse --verify HEAD)
@@ -620,6 +736,7 @@ remove_worktree() {
   source_top=$("$GIT_BIN" -C "$ROOT" rev-parse --show-toplevel)
   validate_state_parent_chain
   validate_worktree
+  require_no_managed_plan_files
   canonical_contained_target "$WORKTREE" worktrees/dotfiles >/dev/null || return 1
   observed_identity=$("$STAT_BIN" -c '%d:%i' "$WORKTREE")
   observed_head=$("$GIT_BIN" -C "$WORKTREE" rev-parse --verify HEAD)

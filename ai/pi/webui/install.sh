@@ -18,6 +18,10 @@ SOURCE_HEAD=''
 WORKTREE_PREVIOUS_HEAD=ABSENT
 INITIAL_WORKTREE_PREVIOUS_HEAD=ABSENT
 WORKTREE_UPDATE_STARTED=0
+MANAGED_PLAN_FILE_COUNT=0
+MANAGED_PLAN_MAX_FILES=100
+MANAGED_PLAN_MAX_FILE_SIZE=1048576
+MANAGED_PLAN_MAX_TOTAL_SIZE=10485760
 PI_LAUNCHER=''
 PI_REAL_EXECUTABLE=''
 STATE_ROOT="$HOME/.local/share/pi-webui"
@@ -472,8 +476,108 @@ canonical_git_path() {
   fi
 }
 
+validate_managed_plan_tree() {
+  local worktree=$1 label=$2 pi_root="$1/.pi" plans_root="$1/.pi/plans"
+  local current_uid canonical_worktree canonical_pi canonical_plans entry
+  local entry_parent mode links size total_size=0
+  MANAGED_PLAN_FILE_COUNT=0
+  [[ -e "$pi_root" || -L "$pi_root" ]] || return 0
+  [[ -d "$pi_root" && ! -L "$pi_root" ]] || {
+    fail "$label managed Pi plan tree must use real directories"
+    return 1
+  }
+  current_uid=$(id -u)
+  canonical_worktree=$(canonical_directory "$worktree") || return 1
+  canonical_pi=$(canonical_directory "$pi_root") || return 1
+  [[ "$canonical_pi" == "$canonical_worktree/.pi" ]] || {
+    fail "$label managed Pi plan tree escapes the worktree"
+    return 1
+  }
+  if [[ -e "$plans_root" || -L "$plans_root" ]]; then
+    [[ -d "$plans_root" && ! -L "$plans_root" ]] || {
+      fail "$label managed Pi plan tree must use real directories"
+      return 1
+    }
+    canonical_plans=$(canonical_directory "$plans_root") || return 1
+    [[ "$canonical_plans" == "$canonical_pi/plans" ]] || {
+      fail "$label managed Pi plan tree escapes the worktree"
+      return 1
+    }
+  else
+    canonical_plans="$canonical_pi/plans"
+  fi
+  for entry in "$pi_root" "$plans_root"; do
+    [[ -e "$entry" ]] || continue
+    [[ "$(stat -c '%u' "$entry")" == "$current_uid" ]] || {
+      fail "$label managed Pi plan tree must be owned by the current user"
+      return 1
+    }
+    mode=$(stat -c '%a' "$entry")
+    (((8#$mode & 022) == 0)) || {
+      fail "$label managed Pi plan tree must not be group or world writable"
+      return 1
+    }
+  done
+  while IFS= read -r -d '' entry; do
+    if [[ "$entry" == "$plans_root" ]]; then
+      continue
+    fi
+    case "$entry" in
+      "$plans_root"/*) ;;
+      *)
+        fail "$label managed Pi plan tree contains an unsupported entry"
+        return 1
+        ;;
+    esac
+    [[ ! -L "$entry" && -f "$entry" ]] || {
+      fail "$label managed Pi plan tree contains an unsupported entry"
+      return 1
+    }
+    entry_parent=$(canonical_directory "$(dirname "$entry")") || return 1
+    [[ "$entry_parent" == "$canonical_plans" ]] || {
+      fail "$label managed Pi plan tree contains nested or escaping entries"
+      return 1
+    }
+    [[ "$(stat -c '%u' "$entry")" == "$current_uid" ]] || {
+      fail "$label managed Pi plan files must be owned by the current user"
+      return 1
+    }
+    mode=$(stat -c '%a' "$entry")
+    (((8#$mode & 022) == 0)) || {
+      fail "$label managed Pi plan files must not be group or world writable"
+      return 1
+    }
+    links=$(stat -c '%h' "$entry")
+    [[ "$links" == 1 ]] || {
+      fail "$label managed Pi plan files must not have additional hard links"
+      return 1
+    }
+    size=$(stat -c '%s' "$entry")
+    [[ "$size" =~ ^[0-9]+$ && "$size" -le "$MANAGED_PLAN_MAX_FILE_SIZE" ]] || {
+      fail "$label managed Pi plan file exceeds the 1 MiB limit"
+      return 1
+    }
+    MANAGED_PLAN_FILE_COUNT=$((MANAGED_PLAN_FILE_COUNT + 1))
+    total_size=$((total_size + size))
+    [[ "$MANAGED_PLAN_FILE_COUNT" -le "$MANAGED_PLAN_MAX_FILES" &&
+      "$total_size" -le "$MANAGED_PLAN_MAX_TOTAL_SIZE" ]] || {
+      fail "$label managed Pi plan tree exceeds 100 files or 10 MiB"
+      return 1
+    }
+  done < <(find -P "$pi_root" -mindepth 1 -print0)
+}
+
+require_source_without_managed_pi_collision() {
+  local collision
+  collision=$(git -C "$SOURCE_ROOT" ls-tree "$SOURCE_HEAD" -- .pi)
+  [[ -z "$collision" ]] || {
+    fail 'target source commit tracks .pi; refusing managed plan collision'
+    return 1
+  }
+}
+
 preflight_worktree() {
-  local target_common_raw target_common target_git_raw target_git status
+  local target_common_raw target_common target_git_raw target_git status ignored_status line
   [[ -e "$WORKTREE" || -L "$WORKTREE" ]] || {
     WORKTREE_PREVIOUS_HEAD=ABSENT
     return 0
@@ -516,11 +620,24 @@ preflight_worktree() {
     fail 'durable worktree must be detached'
     return 1
   fi
-  status=$(git -C "$WORKTREE" status --porcelain --untracked-files=all --ignored=matching)
+  status=$(git -C "$WORKTREE" status --porcelain --untracked-files=all)
   [[ -z "$status" ]] || {
     fail 'durable worktree must be clean, including untracked and ignored files'
     return 1
   }
+  ignored_status=$(git -C "$WORKTREE" status --porcelain --untracked-files=all --ignored=matching)
+  if [[ -n "$ignored_status" ]]; then
+    while IFS= read -r line; do
+      case "$line" in
+        '!! .pi/' | '!! .pi/plans/' | '!! .pi/plans/'*) ;;
+        *)
+          fail 'durable worktree must be clean, including untracked and ignored files'
+          return 1
+          ;;
+      esac
+    done <<<"$ignored_status"
+  fi
+  validate_managed_plan_tree "$WORKTREE" 'durable worktree' || return 1
   WORKTREE_PREVIOUS_HEAD=$(git -C "$WORKTREE" rev-parse --verify HEAD)
 }
 
@@ -1016,6 +1133,7 @@ verify_worktree_at() {
 
 update_worktree() {
   revalidate_worktree_before_mutation
+  require_source_without_managed_pi_collision
   WORKTREE_UPDATE_STARTED=1
   if [[ "$WORKTREE_PREVIOUS_HEAD" == ABSENT ]]; then
     git -C "$SOURCE_ROOT" worktree add --detach "$WORKTREE" "$SOURCE_HEAD"
@@ -1123,7 +1241,11 @@ restore_worktree() {
     WORKTREE_PREVIOUS_HEAD=$rollback_target
   fi
   if [[ "$rollback_target" == ABSENT ]]; then
-    git -C "$SOURCE_ROOT" worktree remove --force "$WORKTREE" >/dev/null 2>&1 || true
+    [[ "$MANAGED_PLAN_FILE_COUNT" == 0 ]] || {
+      fail 'managed Pi plan files appeared; refusing automatic worktree removal'
+      return 1
+    }
+    git -C "$SOURCE_ROOT" worktree remove "$WORKTREE" >/dev/null 2>&1 || true
     verify_absent_worktree_rollback || return 1
     return 0
   fi
@@ -2368,6 +2490,7 @@ main() {
   resolve_source_repository
   resolve_pi_identity
   validate_tracked_runtime
+  require_source_without_managed_pi_collision
   preflight_destinations
   preflight_worktree
   preflight_service

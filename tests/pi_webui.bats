@@ -324,6 +324,7 @@ SCRIPT
   cp "$REPO_ROOT/ai/pi/webui/runtime/package-lock.json" \
     "$INSTALLER_REPO/ai/pi/webui/runtime/package-lock.json"
   cp "$REPO_ROOT/bin/validate-pi-webui" "$INSTALLER_REPO/bin/validate-pi-webui"
+  cp "$REPO_ROOT/.gitignore" "$INSTALLER_REPO/.gitignore"
   git -C "$INSTALLER_REPO" init -q
   git -C "$INSTALLER_REPO" config user.name 'Pi WebUI Test'
   git -C "$INSTALLER_REPO" config user.email 'pi-webui@example.test'
@@ -864,6 +865,21 @@ SCRIPT
   grep -q '192.0.2.20:31415' "$TEST_COMMAND_LOG"
 }
 
+@test "tailscale service preflight accepts bounded managed Pi plan files" {
+  make_task4_managed_service
+  local worktree="$HOME/.local/share/pi-webui/worktrees/dotfiles"
+  mkdir -p "$worktree/.pi/plans"
+  chmod 0700 "$worktree/.pi" "$worktree/.pi/plans"
+  printf '%s\n' '# deployment plan' >"$worktree/.pi/plans/deploy.md"
+  chmod 0600 "$worktree/.pi/plans/deploy.md"
+
+  run_tailscale_helper serve
+
+  [ "$status" -eq 0 ]
+  [ "$(cat "$worktree/.pi/plans/deploy.md")" = '# deployment plan' ]
+  grep -Fqx 'sudo tailscale serve --bg --https=443 http://127.0.0.1:31415' "$TEST_COMMAND_LOG"
+}
+
 @test "tailscale serve is idempotent for exact shared JSON and refuses foreign or Funnel config" {
   make_task4_managed_service
   printf '%s\n' "$TASK4_EXACT_JSON" >"$TASK4_SERVE_JSON"
@@ -1010,6 +1026,8 @@ SCRIPT
   make_task4_managed_service
   local runtime="$HOME/.local/share/pi-webui/runtimes/current"
   local worktree="$HOME/.local/share/pi-webui/worktrees/dotfiles"
+  mkdir -p "$worktree/.pi/plans"
+  chmod 0700 "$worktree/.pi" "$worktree/.pi/plans"
 
   run_rollback_helper --remove-runtime --remove-worktree
 
@@ -1023,6 +1041,39 @@ SCRIPT
   run_rollback_helper --remove-runtime --remove-worktree
   [ "$status" -eq 0 ]
   [[ "$output" == *'already absent'* ]]
+}
+
+@test "rollback default accepts and preserves bounded managed Pi plan files" {
+  make_task4_managed_service
+  local worktree="$HOME/.local/share/pi-webui/worktrees/dotfiles"
+  mkdir -p "$worktree/.pi/plans"
+  chmod 0700 "$worktree/.pi" "$worktree/.pi/plans"
+  printf '%s\n' 'preserve plan' >"$worktree/.pi/plans/plan.md"
+  chmod 0600 "$worktree/.pi/plans/plan.md"
+
+  run_rollback_helper
+
+  [ "$status" -eq 0 ]
+  [ "$(cat "$worktree/.pi/plans/plan.md")" = 'preserve plan' ]
+  [ ! -e "$HOME/.config/systemd/user/pi-webui.service" ]
+}
+
+@test "rollback refuses destructive worktree removal when Pi plan data exists" {
+  make_task4_managed_service
+  local worktree="$HOME/.local/share/pi-webui/worktrees/dotfiles"
+  mkdir -p "$worktree/.pi/plans"
+  chmod 0700 "$worktree/.pi" "$worktree/.pi/plans"
+  printf '%s\n' 'preserve plan' >"$worktree/.pi/plans/plan.md"
+  chmod 0600 "$worktree/.pi/plans/plan.md"
+
+  run_rollback_helper --remove-worktree
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'managed Pi plan files must be removed or archived first'* ]]
+  [ "$(cat "$worktree/.pi/plans/plan.md")" = 'preserve plan' ]
+  [ -f "$HOME/.config/systemd/user/pi-webui.service" ]
+  [ -f "$TEST_ROOT/service-active" ]
+  run ! grep -q '^systemctl --user disable' "$TEST_COMMAND_LOG"
 }
 
 @test "rollback destructive guards preserve symlink runtime and dirty or attached worktrees" {
@@ -2904,6 +2955,139 @@ SCRIPT
   [ "$(cat "$HOME/.local/share/pi-webui/backups/previous/worktree-head")" = "$SOURCE_HEAD" ]
 }
 
+@test "installer preserves bounded managed Pi plan files across worktree updates" {
+  make_installer_repo
+  make_valid_platform
+  make_valid_pi
+  stub_successful_npm_ci
+  local worktree="$HOME/.local/share/pi-webui/worktrees/dotfiles"
+  mkdir -p "$(dirname "$worktree")"
+  local previous=$SOURCE_HEAD
+  git -C "$INSTALLER_REPO" worktree add -q --detach "$worktree" "$previous"
+  mkdir -p "$worktree/.pi/plans"
+  chmod 0700 "$worktree/.pi" "$worktree/.pi/plans"
+  printf '%s\n' 'preserve plan' >"$worktree/.pi/plans/update.md"
+  chmod 0600 "$worktree/.pi/plans/update.md"
+  printf 'new source commit\n' >"$INSTALLER_REPO/new-file"
+  git -C "$INSTALLER_REPO" add new-file
+  git -C "$INSTALLER_REPO" commit -qm update
+  SOURCE_HEAD=$(git -C "$INSTALLER_REPO" rev-parse HEAD)
+  export SOURCE_HEAD
+
+  run_installer --apply
+
+  [ "$status" -eq 0 ]
+  [ "$(git -C "$worktree" rev-parse HEAD)" = "$SOURCE_HEAD" ]
+  [ "$(cat "$worktree/.pi/plans/update.md")" = 'preserve plan' ]
+  [ "$(stat -c '%a' "$worktree/.pi" "$worktree/.pi/plans" "$worktree/.pi/plans/update.md")" = $'700\n700\n600' ]
+}
+
+@test "installer rejects a group-writable managed Pi plan directory" {
+  make_installer_repo
+  make_valid_platform
+  make_valid_pi
+  local worktree="$HOME/.local/share/pi-webui/worktrees/dotfiles"
+  mkdir -p "$(dirname "$worktree")"
+  git -C "$INSTALLER_REPO" worktree add -q --detach "$worktree" HEAD
+  mkdir -p "$worktree/.pi/plans"
+  chmod 0700 "$worktree/.pi"
+  chmod 0722 "$worktree/.pi/plans"
+
+  run_installer --check
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'managed Pi plan tree'*'group or world writable'* ]]
+  [ -d "$worktree/.pi/plans" ]
+}
+
+@test "installer rejects a symlink in the managed Pi plan tree" {
+  make_installer_repo
+  make_valid_platform
+  make_valid_pi
+  local worktree="$HOME/.local/share/pi-webui/worktrees/dotfiles"
+  mkdir -p "$(dirname "$worktree")"
+  git -C "$INSTALLER_REPO" worktree add -q --detach "$worktree" HEAD
+  mkdir -p "$worktree/.pi/plans"
+  chmod 0700 "$worktree/.pi" "$worktree/.pi/plans"
+  printf '%s\n' 'outside' >"$TEST_ROOT/outside-plan"
+  ln -s "$TEST_ROOT/outside-plan" "$worktree/.pi/plans/linked.md"
+
+  run_installer --check
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'managed Pi plan tree contains an unsupported entry'* ]]
+  [ -L "$worktree/.pi/plans/linked.md" ]
+  [ "$(cat "$TEST_ROOT/outside-plan")" = outside ]
+}
+
+@test "installer rejects unrelated ignored state beside a safe managed Pi plan tree" {
+  make_installer_repo
+  make_valid_platform
+  make_valid_pi
+  local worktree="$HOME/.local/share/pi-webui/worktrees/dotfiles"
+  mkdir -p "$(dirname "$worktree")"
+  git -C "$INSTALLER_REPO" worktree add -q --detach "$worktree" HEAD
+  mkdir -p "$worktree/.pi/plans"
+  chmod 0700 "$worktree/.pi" "$worktree/.pi/plans"
+  printf '%s\n' 'other-ignored' >>"$(git -C "$worktree" rev-parse --git-path info/exclude)"
+  printf '%s\n' 'preserve other' >"$worktree/other-ignored"
+
+  run_installer --check
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'durable worktree must be clean, including untracked and ignored files'* ]]
+  [ "$(cat "$worktree/other-ignored")" = 'preserve other' ]
+}
+
+@test "installer refuses a source commit that tracks the managed Pi path before building" {
+  make_installer_repo
+  make_valid_platform
+  make_valid_pi
+  stub_successful_npm_ci
+  mkdir -p "$INSTALLER_REPO/.pi/plans"
+  printf '%s\n' 'source collision' >"$INSTALLER_REPO/.pi/plans/source.md"
+  git -C "$INSTALLER_REPO" add -f .pi/plans/source.md
+  git -C "$INSTALLER_REPO" commit -qm 'track managed Pi path'
+
+  run_installer --apply
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'target source commit tracks .pi'* ]]
+  [ ! -e "$HOME/.local/share/pi-webui/worktrees/dotfiles" ]
+  run ! grep -q '^npm-ci$' "$TEST_COMMAND_LOG"
+}
+
+@test "installer rechecks the source Pi collision immediately before checkout" {
+  make_installer_repo
+  make_valid_platform
+  make_valid_pi
+  stub_successful_npm_ci
+  cat >"$STUB_BIN/git" <<'SCRIPT'
+#!/usr/bin/env bash
+if [[ "$1" == -C && "$3" == ls-tree && "${6:-}" == .pi ]]; then
+  count=0
+  [[ ! -f "$TEST_ROOT/ls-tree-count" ]] || count=$(cat "$TEST_ROOT/ls-tree-count")
+  count=$((count + 1))
+  printf '%s\n' "$count" >"$TEST_ROOT/ls-tree-count"
+  if [[ "$count" -ge 2 ]]; then
+    printf '%s\n' '040000 tree 1111111111111111111111111111111111111111'"$'\t'"'.pi'
+    exit 0
+  fi
+fi
+exec /usr/bin/git "$@"
+SCRIPT
+  chmod +x "$STUB_BIN/git"
+
+  run_installer --apply
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'target source commit tracks .pi'* ]]
+  [ "$(cat "$TEST_ROOT/ls-tree-count")" -eq 2 ]
+  [ ! -e "$HOME/.local/share/pi-webui/worktrees/dotfiles" ]
+  [ ! -e "$HOME/.local/share/pi-webui/runtimes/candidate" ]
+  [ ! -e "$HOME/.local/share/pi-webui/transactions/pending" ]
+}
+
 @test "installer supports source, Pi, HOME, candidate, and worktree paths with spaces" {
   HOME="$TEST_ROOT/home with spaces"
   XDG_CONFIG_HOME="$HOME/.config"
@@ -3515,6 +3699,27 @@ SCRIPT
     run grep -Fx "$command" "$readme"
     [ "$status" -eq 0 ]
   done
+}
+
+@test "Pi Web UI runbook documents managed landing-worktree plan state exactly" {
+  local readme="$REPO_ROOT/ai/pi/webui/README.md"
+  local phrase
+  for phrase in \
+    'tracked and untracked non-ignored state must remain empty' \
+    'only ignored exception is `.pi/` with `.pi/plans/`' \
+    '100 regular files' \
+    '1 MiB per file' \
+    '10 MiB total' \
+    'must not track any `.pi` path' \
+    'Plan files are preserved across checkout' \
+    '`--remove-worktree` refuses nonempty plan files' \
+    'exact empty `.pi/` and `.pi/plans/` directories'; do
+    run grep -Fi "$phrase" "$readme"
+    [ "$status" -eq 0 ]
+  done
+
+  run grep -F 'With no candidate, pending transaction, or staged candidate service unit' "$readme"
+  [ "$status" -eq 0 ]
 }
 
 @test "public docs link to the single Pi Web UI operations runbook" {

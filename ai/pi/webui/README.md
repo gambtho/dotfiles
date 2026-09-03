@@ -82,6 +82,21 @@ The service opens in the managed landing checkout
 detached linked worktree and advances it to the reviewed source commit. Do not
 attach a branch, edit files, or store project work there.
 
+Tracked and untracked non-ignored state must remain empty.
+The only ignored exception is `.pi/` with `.pi/plans/`: those are the only permitted directories,
+and only regular files may appear directly below `.pi/plans/`. Every accepted
+entry must be current-user-owned, must not be group or world writable, and must
+remain canonically inside the landing worktree. Symlinks, nested directories,
+devices, sockets, FIFOs, files with additional hard links, and all other ignored
+paths are rejected. The bounded plan allowance is at most 100 regular files,
+1 MiB per file, and 10 MiB total.
+
+Before creating or advancing the landing worktree, the reviewed target commit
+must not track any `.pi` path. The installer checks this during preflight and
+again immediately before checkout. Plan files are preserved across checkout;
+the update fails closed before checkout if the tree or source collision check is
+unsafe.
+
 For real work, select an existing project linked worktree as the tab/workspace
 working directory. If one does not exist, create it outside the primary
 checkout first, then select that absolute path in the Web UI:
@@ -175,8 +190,8 @@ retaining the already-complete published archive. The action does not run npm,
 alter the current service/runtime/worktree, mutate Git, or change Tailscale
 routes. Existing
 symlinked, foreign, permissive, colliding, partial, cross-device, or concurrently
-locked state is preserved and rejected. With no candidate and no pending
-transaction it reports a successful no-op.
+locked state is preserved and rejected. With no candidate, pending transaction, or staged candidate service unit it
+reports a successful no-op.
 
 Advancing a pin is a separate review ceremony, not routine operation. In a
 linked update worktree, review the upstream tag/commit and tarball, change the
@@ -273,7 +288,9 @@ landing worktree. It never deletes uploads or unrelated Pi state.
 The following destructive choices exactly match the helper interface. They are
 optional and remove only a validated owner-only runtime and/or a clean detached
 managed worktree; dirty, attached, foreign, symlinked, or transaction-active
-state is retained with an error:
+state is retained with an error. `--remove-worktree` refuses nonempty plan files
+so they can be reviewed and removed or archived explicitly, but it allows the
+exact empty `.pi/` and `.pi/plans/` directories:
 
 ```bash
 ./ai/pi/webui/rollback.sh --remove-runtime
