@@ -139,6 +139,20 @@ The installer refuses a production-agent-dir apply—including one reached throu
 
 The installer explicitly bootstraps any missing or mismatched version-pinned npm packages before running `pi update --extensions`. Pi intentionally skips pinned npm sources during ordinary updates, so update alone is not a first-install mechanism. The installer verifies exact package versions and confirms that Pi preserved the tracked package inventory.
 
+### Opt-in Web UI
+
+Ubuntu 24.04 Noble under WSL can run the separately managed Firstp1ck browser
+interface. It is never installed by normal `make ai` or `bin/install`:
+
+```bash
+make ai-webui-check  # read-only prerequisite, runtime, service, and ingress checks
+make ai-webui        # explicitly install/update the user service
+```
+
+The Web UI grants trusted tailnet clients account-level browser operations that
+are outside Pi permissions. Follow the single [Pi Web UI setup, operations,
+security, update, and rollback runbook](pi/webui/README.md) before opting in.
+
 The migration converts the old whole-extension link to a real directory, preserves unrelated extension entries, and publishes only the two authored links. It removes only exact managed Amp settings links and only the `.permissions` key from valid Amp state. The exact legacy Brave `brave-search` directory is moved intact below `disabled-skills`; sibling skills, mismatches, and collisions are preserved.
 
 ## Unattended operation

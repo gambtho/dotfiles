@@ -3231,3 +3231,181 @@ SCRIPT
   [ ! -e "$state/transactions/apply.lock" ]
   run ! grep -q '^npm-ci$' "$TEST_COMMAND_LOG"
 }
+
+make_public_target_fixture() {
+  PUBLIC_TARGET_REPO="$TEST_ROOT/repository path with spaces"
+  PUBLIC_TARGET_LOG="$TEST_ROOT/public-targets.log"
+  mkdir -p "$PUBLIC_TARGET_REPO/ai/pi/webui" "$PUBLIC_TARGET_REPO/bin"
+  cp "$REPO_ROOT/Makefile" "$PUBLIC_TARGET_REPO/Makefile"
+  : >"$PUBLIC_TARGET_LOG"
+  export PUBLIC_TARGET_REPO PUBLIC_TARGET_LOG
+
+  local helper
+  for helper in install.sh tailscale.sh; do
+    cat >"$PUBLIC_TARGET_REPO/ai/pi/webui/$helper" <<'SCRIPT'
+#!/usr/bin/bash -p
+[[ $- == *p* ]] || exit 126
+printf '%s|%s\n' "${0##*/}" "$*" >>"$PUBLIC_TARGET_LOG"
+SCRIPT
+    chmod +x "$PUBLIC_TARGET_REPO/ai/pi/webui/$helper"
+  done
+  cat >"$PUBLIC_TARGET_REPO/bin/validate-pi-webui" <<'SCRIPT'
+#!/usr/bin/bash -p
+[[ $- == *p* ]] || exit 126
+printf '%s|%s\n' "${0##*/}" "$*" >>"$PUBLIC_TARGET_LOG"
+SCRIPT
+  chmod +x "$PUBLIC_TARGET_REPO/bin/validate-pi-webui"
+}
+
+@test "public Make targets invoke Web UI interfaces directly and support spaced repository paths" {
+  make_public_target_fixture
+
+  run make -C "$PUBLIC_TARGET_REPO" ai-webui
+  [ "$status" -eq 0 ]
+  [ "$(cat "$PUBLIC_TARGET_LOG")" = 'install.sh|--apply' ]
+
+  : >"$PUBLIC_TARGET_LOG"
+  run make -C "$PUBLIC_TARGET_REPO" ai-webui-check
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'installed runtime absent; skipping installed-runtime validation'* ]]
+  [ "$(cat "$PUBLIC_TARGET_LOG")" = "$(printf '%s\n' \
+    'validate-pi-webui|--tracked-only' \
+    'install.sh|--check' \
+    'tailscale.sh|check')" ]
+
+  mkdir -p "$HOME/.local/share/pi-webui/runtimes/current"
+  : >"$PUBLIC_TARGET_LOG"
+  run make -C "$PUBLIC_TARGET_REPO" ai-webui-check
+  [ "$status" -eq 0 ]
+  [ "$(cat "$PUBLIC_TARGET_LOG")" = "$(printf '%s\n' \
+    'validate-pi-webui|--tracked-only' \
+    "validate-pi-webui|--installed-runtime $HOME/.local/share/pi-webui/runtimes/current" \
+    'install.sh|--check' \
+    'tailscale.sh|check')" ]
+}
+
+@test "public Web UI targets do not add sudo or alter normal AI and global orchestration" {
+  run make -n -C "$REPO_ROOT" ai-webui ai-webui-check
+  [ "$status" -eq 0 ]
+  [[ "$output" != *'bash ./ai/pi/webui/'* ]]
+  [[ "$output" != *'bash ai/pi/webui/'* ]]
+  [[ "$output" != *sudo* ]]
+
+  run grep -F 'check: syntax lint test python-test validate' "$REPO_ROOT/Makefile"
+  [ "$status" -eq 0 ]
+  run grep -F 'test:' "$REPO_ROOT/Makefile"
+  [[ "$output" == *'test:'* ]]
+  run make -n -C "$REPO_ROOT" ai ai-check
+  [ "$status" -eq 0 ]
+  [[ "$output" != *'ai/pi/webui/'* ]]
+  run grep -F 'ai/pi/webui' "$REPO_ROOT/bin/install"
+  [ "$status" -eq 1 ]
+}
+
+@test "Pi Web UI runbook documents exact setup order trust boundaries and accepted limits" {
+  local readme="$REPO_ROOT/ai/pi/webui/README.md"
+  [ -f "$readme" ]
+
+  local previous=0 line command
+  for command in \
+    'make ai' \
+    'make ai-webui-check' \
+    './ai/pi/webui/tailscale.sh install' \
+    './ai/pi/webui/tailscale.sh up' \
+    'make ai-webui' \
+    './ai/pi/webui/tailscale.sh serve'; do
+    line=$(grep -nFx "$command" "$readme" | head -n1 | cut -d: -f1)
+    [ -n "$line" ]
+    [ "$line" -gt "$previous" ]
+    previous=$line
+  done
+  line=$(grep -nFx 'make ai-webui-check' "$readme" | tail -n1 | cut -d: -f1)
+  [ "$line" -gt "$previous" ]
+
+  local phrase
+  for phrase in \
+    'Ubuntu 24.04 Noble under WSL' \
+    'full WSL-account control' \
+    'trusted devices only' \
+    '127.0.0.1:31415' \
+    'Funnel' \
+    'network-open' \
+    'auth keys or secrets' \
+    'permission system is unchanged' \
+    '.local/share/pi-webui/worktrees/dotfiles' \
+    'linked worktree' \
+    'run-level Abort is unavailable while a permission modal is open' \
+    'Deny/Cancel' \
+    'fresh tab' \
+    'manually resume' \
+    'installed runtime absent' \
+    'Tailscale Funnel status shares the Serve graph'; do
+    run grep -Fi "$phrase" "$readme"
+    [ "$status" -eq 0 ]
+  done
+}
+
+@test "Pi Web UI runbook pins identity and documents operations migration and rollback exactly" {
+  local readme="$REPO_ROOT/ai/pi/webui/README.md"
+  local phrase
+  for phrase in \
+    '@firstpick/pi-package-webui` `0.10.3' \
+    '@earendil-works/pi-coding-agent` `0.84.4' \
+    '39593de061e22a36668a0a0d1449e339b84e644d6c65e6b1618af9d177fc71d0' \
+    'npm ci --ignore-scripts --omit=optional' \
+    'do not use the browser self-update' \
+    'accepted trial runtime' \
+    'evaluation-2026-09-02.md' \
+    'settings, supervisor state, transcripts, Tailscale identity, trial evidence, and backups' \
+    'Tailscale identity state'; do
+    run grep -Fi "$phrase" "$readme"
+    [ "$status" -eq 0 ]
+  done
+
+  local command
+  for command in \
+    'systemctl --user status pi-webui.service' \
+    'systemctl --user stop pi-webui.service' \
+    'systemctl --user start pi-webui.service' \
+    "curl --fail --silent http://127.0.0.1:31415/api/health" \
+    "journalctl --user -u pi-webui.service -n 150 --no-pager" \
+    './ai/pi/webui/tailscale.sh serve-off' \
+    './ai/pi/webui/rollback.sh' \
+    './ai/pi/webui/rollback.sh --remove-runtime' \
+    './ai/pi/webui/rollback.sh --remove-worktree' \
+    './ai/pi/webui/rollback.sh --remove-runtime --remove-worktree' \
+    './ai/pi/webui/tailscale.sh uninstall'; do
+    run grep -Fx "$command" "$readme"
+    [ "$status" -eq 0 ]
+  done
+}
+
+@test "public docs link to the single Pi Web UI operations runbook" {
+  run grep -F 'ai/pi/webui/README.md' "$REPO_ROOT/README.md"
+  [ "$status" -eq 0 ]
+  run grep -F 'pi/webui/README.md' "$REPO_ROOT/ai/README.md"
+  [ "$status" -eq 0 ]
+  run grep -F 'make ai-webui' "$REPO_ROOT/README.md"
+  [ "$status" -eq 0 ]
+  run grep -F 'make ai-webui-check' "$REPO_ROOT/ai/README.md"
+  [ "$status" -eq 0 ]
+}
+
+@test "every documented Pi Web UI helper action is declared by mutation-free help" {
+  local readme="$REPO_ROOT/ai/pi/webui/README.md"
+  local helper action help_output
+
+  for helper in install.sh tailscale.sh rollback.sh; do
+    run "$REPO_ROOT/ai/pi/webui/$helper" --help
+    if [[ "$helper" == install.sh ]]; then
+      [ "$status" -eq 2 ]
+    else
+      [ "$status" -eq 0 ]
+    fi
+    help_output=$output
+    while IFS= read -r action; do
+      [[ "$help_output" == *"$action"* ]]
+    done < <(grep -oE "\./ai/pi/webui/$helper( [^[:space:]\x60]+)*" "$readme" |
+      awk '{for (field = 2; field <= NF; field++) print $field}' | sort -u)
+  done
+}

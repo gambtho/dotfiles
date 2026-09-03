@@ -369,6 +369,12 @@ make ai-check    # dry-run without changing the machine
 
 The full installer also runs Pi setup during Phase 9. Authentication remains machine-local: start `pi`, run `/login`, and choose **GitHub Copilot**. Use `/model` to select any Copilot model enabled for the subscription and Ctrl+S to save the highlighted model as the default.
 
+An opt-in browser interface is available only for Ubuntu 24.04 Noble under WSL:
+`make ai-webui` installs or updates it and `make ai-webui-check` performs its
+read-only checks. It is not part of normal Pi or full installation. Read the
+[Pi Web UI operations and security runbook](ai/pi/webui/README.md) before
+enabling its tailnet ingress.
+
 The installer links the authored extension directory, and `ai/pi/settings.json` loads the local `my` package. The guard blocks Pi's direct file-write tools in primary checkouts; use a linked worktree, or place an intentional exception in `~/.pi/worktree-guard-allow`.
 
 The personal package provides `/fix-pr`, `/polish`, `/polish-pr`, `/review-prs`, and `/second-opinion`, plus the `improve`, `overnight-improve`, `polish-core`, `blindspot-pass`, `implementation-plan`, and `change-explainer` skills. See `AGENTS.md` and `ai/marketplace/plugins/my/README.md` for details.
