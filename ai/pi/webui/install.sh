@@ -839,9 +839,9 @@ acquire_apply_lock() {
     fi
   fi
   if [[ -n "$failure" ]]; then
-    fail "$failure"
     cleanup_partial_apply_lock "$stage" || true
     restore_lock_initialization_handlers "$saved_hup" "$saved_int" "$saved_term"
+    fail "$failure" || true
     return 1
   fi
   LOCK_ACQUIRED=1

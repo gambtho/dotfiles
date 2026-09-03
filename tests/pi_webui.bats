@@ -4172,6 +4172,37 @@ SCRIPT
   done
 }
 
+@test "installer apply cleans exact partial lock state after synchronous initialization failures" {
+  make_installer_repo
+  make_valid_platform
+  make_valid_pi
+  stub_successful_npm_ci
+  local state="$HOME/.local/share/pi-webui"
+  local seam hook
+  for seam in mkdir owner; do
+    hook="$TEST_ROOT/fail-apply-lock-after-$seam"
+    printf '#!/usr/bin/bash -p\nexit 73\n' >"$hook"
+    chmod +x "$hook"
+    if [[ "$seam" == mkdir ]]; then
+      TEST_LOCK_AFTER_MKDIR_HOOK=$hook
+      export TEST_LOCK_AFTER_MKDIR_HOOK
+    else
+      TEST_LOCK_AFTER_OWNER_HOOK=$hook
+      export TEST_LOCK_AFTER_OWNER_HOOK
+    fi
+
+    run_installer --apply
+
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"lock after-$seam lifecycle hook failed"* ]]
+    [ ! -e "$state/transactions/apply.lock" ]
+    [ ! -e "$state/runtimes/candidate" ]
+    [ ! -e "$state/transactions/pending" ]
+    run ! grep -q '^npm-ci$' "$TEST_COMMAND_LOG"
+    unset TEST_LOCK_AFTER_MKDIR_HOOK TEST_LOCK_AFTER_OWNER_HOOK
+  done
+}
+
 @test "installer preserves ambiguous partial lock state after initialization failure" {
   make_installer_repo
   make_valid_platform
