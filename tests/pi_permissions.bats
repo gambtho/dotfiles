@@ -119,7 +119,14 @@ setup() {
     and ($bash | has("*/git worktree *") | not)
     and $bash["git commit *"] == "allow"
     and ($bash | has("git -C * worktree *") | not)
+    and $bash["git fetch"] == "allow"
+    and $bash["git fetch origin"] == "allow"
     and $bash["git fetch*"] == "ask"
+    and $bash["git pull*"] == "ask"
+    and $bash["git pull --ff-only"] == "allow"
+    and $bash["*/git pull*"] == "ask"
+    and ($bash | has("git pull --ff-only *") | not)
+    and ($bash | has("git -C * pull --ff-only *") | not)
     and $bash["git push*"] == "ask"
     and $bash["git clone*"] == "ask"
     and $bash["*git *branch * -D*"] == "ask"

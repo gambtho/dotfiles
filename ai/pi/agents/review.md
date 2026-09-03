@@ -23,6 +23,8 @@ permission:
     "*/git add *": ask
     "git commit *": ask
     "*/git commit *": ask
+    "git fetch *": ask
+    "git pull --ff-only": ask
     "git switch *": ask
     "*/git switch *": ask
     "git merge *": ask
