@@ -107,9 +107,14 @@ make_installer_repo() {
 
 run_installer() {
   run env PI_WEBUI_TESTING=1 PI_WEBUI_TEST_OS_RELEASE="$TEST_OS_RELEASE" \
+    PI_WEBUI_TEST_AFTER_NPM_HOOK="${TEST_AFTER_NPM_HOOK:-}" \
     BATS_TEST_TMPDIR="$BATS_TEST_TMPDIR" HOME="$HOME" PATH="$PATH" \
     TEST_COMMAND_LOG="$TEST_COMMAND_LOG" PI_TEST_LAUNCHER="$PI_TEST_LAUNCHER" \
     INSTALLER_REPO="$INSTALLER_REPO" bash "$INSTALLER" "$@"
+}
+
+file_tree_hashes() {
+  find "$1" -type f -exec sha256sum {} + | sort
 }
 
 stub_successful_npm_ci() {
@@ -637,7 +642,7 @@ NODE
   run_installer --check
 
   [ "$status" -ne 0 ]
-  [[ "$output" == *"durable worktree must be clean, including untracked files"* ]]
+  [[ "$output" == *"durable worktree must be clean, including untracked and ignored files"* ]]
   [ "$(cat "$worktree/untracked sentinel")" = 'preserve dirty worktree' ]
   run ! grep -q '^mise exec -- npm ci' "$TEST_COMMAND_LOG"
 }
@@ -671,6 +676,7 @@ NODE
   [ "$(cat "$transaction/pi-real-executable")" = "$PI_TEST_REAL" ]
   [ "$(stat -c '%a' "$state")" = 700 ]
   [ "$(stat -c '%a' "$state/runtimes")" = 700 ]
+  [ ! -e "$state/transactions/apply.lock" ]
   [[ "$install_output" == *"PI_WEBUI_MODE=apply"* ]]
   [[ "$install_output" == *"PI_WEBUI_TRANSACTION=$transaction"* ]]
   [ "$(grep -n '^validator --tracked-only$' "$TEST_COMMAND_LOG" | cut -d: -f1)" -lt \
@@ -700,7 +706,7 @@ NODE
   [ "$status" -eq 0 ]
   [ "$(git -C "$worktree" rev-parse HEAD)" = "$SOURCE_HEAD" ]
   run ! git -C "$worktree" symbolic-ref -q HEAD
-  [ -z "$(git -C "$worktree" status --porcelain --untracked-files=all)" ]
+  [ -z "$(git -C "$worktree" status --porcelain --untracked-files=all --ignored=matching)" ]
   [ "$(cat "$HOME/.local/share/pi-webui/transactions/pending/worktree-previous-head")" = "$previous" ]
   [ "$(cat "$HOME/.local/share/pi-webui/transactions/pending/worktree-head")" = "$SOURCE_HEAD" ]
 }
@@ -843,7 +849,238 @@ SCRIPT
   [ "$status" -eq 48 ]
   [ "$(/usr/bin/git -C "$worktree" rev-parse HEAD)" = "$previous" ]
   run ! /usr/bin/git -C "$worktree" symbolic-ref -q HEAD
-  [ -z "$(/usr/bin/git -C "$worktree" status --porcelain --untracked-files=all)" ]
+  [ -z "$(/usr/bin/git -C "$worktree" status --porcelain --untracked-files=all --ignored=matching)" ]
   [ ! -e "$HOME/.local/share/pi-webui/runtimes/candidate" ]
   [ ! -e "$HOME/.local/share/pi-webui/transactions/pending" ]
+}
+
+@test "installer refuses an ignored file that a source update would start tracking" {
+  make_installer_repo
+  make_valid_platform
+  make_valid_pi
+  stub_successful_npm_ci
+  printf 'future-file\n' >"$INSTALLER_REPO/.gitignore"
+  git -C "$INSTALLER_REPO" add .gitignore
+  git -C "$INSTALLER_REPO" commit -qm 'ignore future file'
+  local previous
+  previous=$(git -C "$INSTALLER_REPO" rev-parse HEAD)
+  local worktree="$HOME/.local/share/pi-webui/worktrees/dotfiles"
+  mkdir -p "$(dirname "$worktree")"
+  git -C "$INSTALLER_REPO" worktree add -q --detach "$worktree" "$previous"
+  printf 'preserve local ignored content\n' >"$worktree/future-file"
+  : >"$INSTALLER_REPO/.gitignore"
+  printf 'tracked source content\n' >"$INSTALLER_REPO/future-file"
+  git -C "$INSTALLER_REPO" add .gitignore future-file
+  git -C "$INSTALLER_REPO" commit -qm 'track future file'
+
+  run_installer --apply
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"must be clean, including untracked and ignored files"* ]]
+  [ "$(cat "$worktree/future-file")" = 'preserve local ignored content' ]
+  [ "$(git -C "$worktree" rev-parse HEAD)" = "$previous" ]
+  run ! grep -q '^npm-ci$' "$TEST_COMMAND_LOG"
+}
+
+@test "repeated apply refuses a valid pending transaction without changing evidence" {
+  make_installer_repo
+  make_valid_platform
+  make_valid_pi
+  stub_successful_npm_ci
+
+  run_installer --apply
+  [ "$status" -eq 0 ]
+
+  local state="$HOME/.local/share/pi-webui"
+  local candidate="$state/runtimes/candidate"
+  local transaction="$state/transactions/pending"
+  local worktree="$state/worktrees/dotfiles"
+  local candidate_before transaction_before head_before
+  candidate_before=$(file_tree_hashes "$candidate")
+  transaction_before=$(file_tree_hashes "$transaction")
+  head_before=$(git -C "$worktree" rev-parse HEAD)
+  : >"$TEST_COMMAND_LOG"
+
+  run_installer --apply
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"pending transaction already exists; Task 3 must consume or discard it explicitly"* ]]
+  [ "$candidate_before" = "$(file_tree_hashes "$candidate")" ]
+  [ "$transaction_before" = "$(file_tree_hashes "$transaction")" ]
+  [ "$(git -C "$worktree" rev-parse HEAD)" = "$head_before" ]
+  [ -z "$(git -C "$worktree" status --porcelain --untracked-files=all --ignored=matching)" ]
+  run ! grep -q '^npm-ci$' "$TEST_COMMAND_LOG"
+}
+
+@test "installer surfaces failed rollback and retains candidate transaction evidence" {
+  make_installer_repo
+  make_valid_platform
+  make_valid_pi
+  stub_successful_npm_ci
+  local worktree="$HOME/.local/share/pi-webui/worktrees/dotfiles"
+  mkdir -p "$(dirname "$worktree")"
+  local previous=$SOURCE_HEAD
+  git -C "$INSTALLER_REPO" worktree add -q --detach "$worktree" "$previous"
+  printf 'new source commit\n' >"$INSTALLER_REPO/new-file"
+  git -C "$INSTALLER_REPO" add new-file
+  git -C "$INSTALLER_REPO" commit -qm update
+  SOURCE_HEAD=$(git -C "$INSTALLER_REPO" rev-parse HEAD)
+  export SOURCE_HEAD
+  cat >"$STUB_BIN/git" <<'SCRIPT'
+#!/usr/bin/env bash
+if [[ "$1" == -C && "$2" == "$HOME/.local/share/pi-webui/worktrees/dotfiles" &&
+  "$3" == checkout && "$4" == --detach ]]; then
+  if [[ "$5" == "$SOURCE_HEAD" ]]; then
+    /usr/bin/git "$@"
+    exit 48
+  fi
+  exit 49
+fi
+exec /usr/bin/git "$@"
+SCRIPT
+  chmod +x "$STUB_BIN/git"
+
+  run_installer --apply
+
+  [ "$status" -eq 75 ]
+  [[ "$output" == *"worktree rollback failed; candidate and transaction evidence retained"* ]]
+  [ "$(/usr/bin/git -C "$worktree" rev-parse HEAD)" = "$SOURCE_HEAD" ]
+  [ -d "$HOME/.local/share/pi-webui/runtimes/candidate" ]
+  [ "$(cat "$HOME/.local/share/pi-webui/transactions/pending/worktree-previous-head")" = "$previous" ]
+  [ ! -e "$HOME/.local/share/pi-webui/transactions/apply.lock" ]
+}
+
+@test "installer refuses symlink non-directory and foreign apply lock collisions" {
+  make_installer_repo
+  make_valid_platform
+  make_valid_pi
+  stub_successful_npm_ci
+  local transactions="$HOME/.local/share/pi-webui/transactions"
+  local lock="$transactions/apply.lock"
+  local outside="$TEST_ROOT/foreign lock target"
+  local kind
+  mkdir -p "$transactions" "$outside"
+  printf 'preserve foreign lock\n' >"$outside/sentinel"
+
+  for kind in symlink file foreign-directory; do
+    rm -rf "$lock"
+    case "$kind" in
+      symlink) ln -s "$outside" "$lock" ;;
+      file) printf 'preserve lock file\n' >"$lock" ;;
+      foreign-directory) mkdir "$lock"; printf 'foreign\n' >"$lock/sentinel" ;;
+    esac
+    : >"$TEST_COMMAND_LOG"
+
+    run_installer --apply
+
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"apply lock"* ]]
+    run ! grep -q '^npm-ci$' "$TEST_COMMAND_LOG"
+    case "$kind" in
+      symlink) [ -L "$lock" ]; [ "$(cat "$outside/sentinel")" = 'preserve foreign lock' ] ;;
+      file) [ "$(cat "$lock")" = 'preserve lock file' ] ;;
+      foreign-directory) [ "$(cat "$lock/sentinel")" = foreign ] ;;
+    esac
+  done
+}
+
+@test "installer refuses an existing owned apply lock repeatedly without cleaning it" {
+  make_installer_repo
+  make_valid_platform
+  make_valid_pi
+  stub_successful_npm_ci
+  local lock="$HOME/.local/share/pi-webui/transactions/apply.lock"
+  mkdir -p "$lock"
+  printf '%s\n' pi-webui-task2-lock-v1 >"$lock/.pi-webui-lock"
+  printf '%s\n' other-process-token >"$lock/.pi-webui-owner"
+  local before
+  before=$(file_tree_hashes "$lock")
+
+  run_installer --apply
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"apply lock is already held"* ]]
+  [ "$before" = "$(file_tree_hashes "$lock")" ]
+
+  run_installer --apply
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"apply lock is already held"* ]]
+  [ "$before" = "$(file_tree_hashes "$lock")" ]
+  run ! grep -q '^npm-ci$' "$TEST_COMMAND_LOG"
+}
+
+@test "installer revalidates worktree cleanliness after npm before mutation" {
+  make_installer_repo
+  make_valid_platform
+  make_valid_pi
+  stub_successful_npm_ci
+  local worktree="$HOME/.local/share/pi-webui/worktrees/dotfiles"
+  mkdir -p "$(dirname "$worktree")"
+  git -C "$INSTALLER_REPO" worktree add -q --detach "$worktree" HEAD
+  TEST_AFTER_NPM_HOOK="$TEST_ROOT/after-npm-hook"
+  cat >"$TEST_AFTER_NPM_HOOK" <<'SCRIPT'
+#!/usr/bin/env bash
+printf 'post-preflight dirtiness\n' >"$HOME/.local/share/pi-webui/worktrees/dotfiles/post-preflight"
+SCRIPT
+  chmod +x "$TEST_AFTER_NPM_HOOK"
+  export TEST_AFTER_NPM_HOOK
+  local head_before
+  head_before=$(git -C "$worktree" rev-parse HEAD)
+
+  run_installer --apply
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"must be clean, including untracked and ignored files"* ]]
+  [ "$(cat "$worktree/post-preflight")" = 'post-preflight dirtiness' ]
+  [ "$(git -C "$worktree" rev-parse HEAD)" = "$head_before" ]
+  [ ! -e "$HOME/.local/share/pi-webui/runtimes/candidate" ]
+  [ ! -e "$HOME/.local/share/pi-webui/transactions/pending" ]
+  [ ! -e "$HOME/.local/share/pi-webui/transactions/apply.lock" ]
+}
+
+@test "installer never removes an apply lock whose ownership token changes" {
+  make_installer_repo
+  make_valid_platform
+  make_valid_pi
+  stub_successful_npm_ci
+  TEST_AFTER_NPM_HOOK="$TEST_ROOT/replace-lock-owner"
+  cat >"$TEST_AFTER_NPM_HOOK" <<'SCRIPT'
+#!/usr/bin/env bash
+printf '%s\n' foreign-process-token >"$HOME/.local/share/pi-webui/transactions/apply.lock/.pi-webui-owner"
+SCRIPT
+  chmod +x "$TEST_AFTER_NPM_HOOK"
+  export TEST_AFTER_NPM_HOOK
+  local lock="$HOME/.local/share/pi-webui/transactions/apply.lock"
+
+  run_installer --apply
+
+  [ "$status" -eq 76 ]
+  [[ "$output" == *"owned apply lock changed; refusing cleanup"* ]]
+  [[ "$output" == *"apply lock cleanup failed; transaction evidence retained"* ]]
+  [ "$(cat "$lock/.pi-webui-owner")" = foreign-process-token ]
+  [ -d "$HOME/.local/share/pi-webui/runtimes/candidate" ]
+  [ -d "$HOME/.local/share/pi-webui/transactions/pending" ]
+}
+
+@test "installer after-npm seam is unavailable outside its Bats sandbox" {
+  make_installer_repo
+  make_valid_platform
+  make_valid_pi
+  stub_successful_npm_ci
+  local hook="$TEST_ROOT/forbidden-after-npm-hook"
+  cat >"$hook" <<'SCRIPT'
+#!/usr/bin/env bash
+printf 'hook ran\n' >"$HOME/hook-ran"
+SCRIPT
+  chmod +x "$hook"
+
+  run env -u PI_WEBUI_TESTING -u BATS_TEST_TMPDIR \
+    PI_WEBUI_TEST_AFTER_NPM_HOOK="$hook" HOME="$HOME" PATH="$PATH" \
+    TEST_COMMAND_LOG="$TEST_COMMAND_LOG" PI_TEST_LAUNCHER="$PI_TEST_LAUNCHER" \
+    bash "$INSTALLER" --apply
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"PI_WEBUI_TEST_AFTER_NPM_HOOK is restricted to the test sandbox"* ]]
+  [ ! -e "$HOME/hook-ran" ]
+  [ ! -e "$HOME/.local/share/pi-webui/runtimes/candidate" ]
+  [ ! -e "$HOME/.local/share/pi-webui/transactions/apply.lock" ]
 }

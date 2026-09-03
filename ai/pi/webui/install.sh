@@ -9,6 +9,7 @@ SOURCE_ROOT=''
 SOURCE_COMMON_DIR=''
 SOURCE_HEAD=''
 WORKTREE_PREVIOUS_HEAD=ABSENT
+INITIAL_WORKTREE_PREVIOUS_HEAD=ABSENT
 WORKTREE_UPDATE_STARTED=0
 PI_LAUNCHER=''
 PI_REAL_EXECUTABLE=''
@@ -16,7 +17,14 @@ STATE_ROOT="$HOME/.local/share/pi-webui"
 RUNTIME_PARENT="$STATE_ROOT/runtimes"
 CANDIDATE_RUNTIME="$RUNTIME_PARENT/candidate"
 TRANSACTION_DIR="$STATE_ROOT/transactions/pending"
+APPLY_LOCK="$STATE_ROOT/transactions/apply.lock"
 WORKTREE="$STATE_ROOT/worktrees/dotfiles"
+LOCK_TOKEN=''
+LOCK_ACQUIRED=0
+CANDIDATE_CREATED=0
+TRANSACTION_CREATED=0
+TRANSACTION_READY=0
+APPLY_COMPLETE=0
 
 usage() {
   printf 'usage: %s --check|--apply\n' "$0"
@@ -246,9 +254,9 @@ preflight_worktree() {
     fail 'durable worktree must be detached'
     return 1
   fi
-  status=$(git -C "$WORKTREE" status --porcelain --untracked-files=all)
+  status=$(git -C "$WORKTREE" status --porcelain --untracked-files=all --ignored=matching)
   [[ -z "$status" ]] || {
-    fail 'durable worktree must be clean, including untracked files'
+    fail 'durable worktree must be clean, including untracked and ignored files'
     return 1
   }
   WORKTREE_PREVIOUS_HEAD=$(git -C "$WORKTREE" rev-parse --verify HEAD)
@@ -282,23 +290,59 @@ require_owned_managed_directory() {
   }
 }
 
-preflight_destinations() {
+require_current_user_directory() {
+  local directory=$1 label=$2
+  require_existing_directory "$directory" "$label" || return 1
+  [[ ! -e "$directory" || "$(stat -c '%u' "$directory")" == "$(id -u)" ]] || {
+    fail "$label must be owned by the current user"
+    return 1
+  }
+}
+
+preflight_apply_lock() {
+  [[ -e "$APPLY_LOCK" || -L "$APPLY_LOCK" ]] || return 0
+  [[ ! -L "$APPLY_LOCK" ]] || {
+    fail 'apply lock must not be a symbolic link'
+    return 1
+  }
+  [[ -d "$APPLY_LOCK" ]] || {
+    fail 'apply lock collision must be a directory'
+    return 1
+  }
+  if [[ "$(stat -c '%u' "$APPLY_LOCK")" != "$(id -u)" ||
+    ! -f "$APPLY_LOCK/.pi-webui-lock" || -L "$APPLY_LOCK/.pi-webui-lock" ||
+    ! -f "$APPLY_LOCK/.pi-webui-owner" || -L "$APPLY_LOCK/.pi-webui-owner" ||
+    "$(stat -c '%u' "$APPLY_LOCK/.pi-webui-lock")" != "$(id -u)" ||
+    "$(stat -c '%u' "$APPLY_LOCK/.pi-webui-owner")" != "$(id -u)" ||
+    "$(cat "$APPLY_LOCK/.pi-webui-lock")" != pi-webui-task2-lock-v1 ||
+    -z "$(cat "$APPLY_LOCK/.pi-webui-owner")" ]]; then
+    fail 'apply lock collision is foreign or malformed'
+    return 1
+  fi
+  fail 'apply lock is already held'
+  return 1
+}
+
+preflight_worktree_path_components() {
   require_existing_directory "$HOME/.local" 'HOME .local directory'
   require_existing_directory "$HOME/.local/share" 'HOME share directory'
-  require_existing_directory "$STATE_ROOT" 'Pi Web UI state root'
-  require_existing_directory "$RUNTIME_PARENT" 'Pi Web UI runtime parent'
-  require_existing_directory "$STATE_ROOT/transactions" 'Pi Web UI transaction parent'
-  require_existing_directory "$STATE_ROOT/worktrees" 'Pi Web UI worktree parent'
-  if [[ -e "$STATE_ROOT" ]]; then
-    [[ "$(stat -c '%u' "$STATE_ROOT")" == "$(id -u)" ]] || {
-      fail 'Pi Web UI state root must be owned by the current user'
-      return 1
-    }
-  fi
+  require_current_user_directory "$STATE_ROOT" 'Pi Web UI state root'
+  require_current_user_directory "$STATE_ROOT/worktrees" 'Pi Web UI worktree parent'
+}
+
+preflight_destinations() {
+  preflight_worktree_path_components
+  require_current_user_directory "$RUNTIME_PARENT" 'Pi Web UI runtime parent'
+  require_current_user_directory "$STATE_ROOT/transactions" 'Pi Web UI transaction parent'
   require_owned_managed_directory "$CANDIDATE_RUNTIME" 'stale candidate runtime' \
     .pi-webui-candidate pi-webui-task2-candidate-v1
   require_owned_managed_directory "$TRANSACTION_DIR" 'stale pending transaction' \
     .pi-webui-transaction pi-webui-task2-transaction-v1
+  if [[ "$MODE" == apply && -e "$TRANSACTION_DIR" ]]; then
+    fail 'pending transaction already exists; Task 3 must consume or discard it explicitly'
+    return 1
+  fi
+  preflight_apply_lock
 }
 
 print_interface() {
@@ -324,11 +368,62 @@ prepare_private_directories() {
   chmod 0700 "$STATE_ROOT" "$RUNTIME_PARENT" "$STATE_ROOT/transactions" "$STATE_ROOT/worktrees"
 }
 
-build_candidate_runtime() {
+owned_by_this_apply() {
+  local directory=$1
+  [[ -d "$directory" && ! -L "$directory" &&
+    "$(stat -c '%u' "$directory")" == "$(id -u)" &&
+    -f "$directory/.pi-webui-owner" && ! -L "$directory/.pi-webui-owner" &&
+    "$(stat -c '%u' "$directory/.pi-webui-owner")" == "$(id -u)" &&
+    "$(cat "$directory/.pi-webui-owner")" == "$LOCK_TOKEN" ]]
+}
+
+acquire_apply_lock() {
+  LOCK_TOKEN="pi-webui-task2:$$:$RANDOM"
+  if ! mkdir -m 0700 "$APPLY_LOCK" 2>/dev/null; then
+    if preflight_apply_lock; then
+      fail 'could not create the apply lock'
+    fi
+    return 1
+  fi
+  LOCK_ACQUIRED=1
+  printf '%s\n' "$LOCK_TOKEN" >"$APPLY_LOCK/.pi-webui-owner"
+  printf '%s\n' pi-webui-task2-lock-v1 >"$APPLY_LOCK/.pi-webui-lock"
+  chmod 0600 "$APPLY_LOCK/.pi-webui-owner" "$APPLY_LOCK/.pi-webui-lock"
+}
+
+release_apply_lock() {
+  [[ "$LOCK_ACQUIRED" == 1 ]] || return 0
+  if ! owned_by_this_apply "$APPLY_LOCK" ||
+    [[ ! -f "$APPLY_LOCK/.pi-webui-lock" || -L "$APPLY_LOCK/.pi-webui-lock" ]] ||
+    [[ "$(cat "$APPLY_LOCK/.pi-webui-lock")" != pi-webui-task2-lock-v1 ]]; then
+    fail 'owned apply lock changed; refusing cleanup'
+    return 1
+  fi
+  if ! rm "$APPLY_LOCK/.pi-webui-owner" "$APPLY_LOCK/.pi-webui-lock"; then
+    fail 'could not remove owned apply lock markers'
+    return 1
+  fi
+  if ! rmdir "$APPLY_LOCK"; then
+    fail 'owned apply lock contains unexpected entries; refusing recursive cleanup'
+    return 1
+  fi
+  LOCK_ACQUIRED=0
+}
+
+remove_stale_candidate() {
+  [[ -e "$CANDIDATE_RUNTIME" || -L "$CANDIDATE_RUNTIME" ]] || return 0
+  require_owned_managed_directory "$CANDIDATE_RUNTIME" 'stale candidate runtime' \
+    .pi-webui-candidate pi-webui-task2-candidate-v1
   rm -rf "$CANDIDATE_RUNTIME"
+}
+
+build_candidate_runtime() {
+  remove_stale_candidate
   mkdir -m 0700 "$CANDIDATE_RUNTIME"
+  printf '%s\n' "$LOCK_TOKEN" >"$CANDIDATE_RUNTIME/.pi-webui-owner"
+  CANDIDATE_CREATED=1
   printf '%s\n' pi-webui-task2-candidate-v1 >"$CANDIDATE_RUNTIME/.pi-webui-candidate"
-  chmod 0600 "$CANDIDATE_RUNTIME/.pi-webui-candidate"
+  chmod 0600 "$CANDIDATE_RUNTIME/.pi-webui-owner" "$CANDIDATE_RUNTIME/.pi-webui-candidate"
   cp "$SOURCE_ROOT/ai/pi/webui/runtime/package.json" "$CANDIDATE_RUNTIME/package.json"
   cp "$SOURCE_ROOT/ai/pi/webui/runtime/package-lock.json" "$CANDIDATE_RUNTIME/package-lock.json"
   chmod 0600 "$CANDIDATE_RUNTIME/package.json" "$CANDIDATE_RUNTIME/package-lock.json"
@@ -344,25 +439,61 @@ build_candidate_runtime() {
   bash "$SOURCE_ROOT/bin/validate-pi-webui" --installed-runtime "$CANDIDATE_RUNTIME" >/dev/null
 }
 
+run_test_after_npm_hook() {
+  local hook=${PI_WEBUI_TEST_AFTER_NPM_HOOK:-}
+  [[ -n "$hook" ]] || return 0
+  if [[ "${PI_WEBUI_TESTING:-0}" != 1 || -z "${BATS_TEST_TMPDIR:-}" ]]; then
+    fail 'PI_WEBUI_TEST_AFTER_NPM_HOOK is restricted to the test sandbox'
+    return 1
+  fi
+  case "$HOME/" in
+    "$BATS_TEST_TMPDIR"/*) ;;
+    *) fail 'test HOME must be below BATS_TEST_TMPDIR'; return 1 ;;
+  esac
+  case "$hook" in
+    "$BATS_TEST_TMPDIR"/*) ;;
+    *) fail 'test after-npm hook must be below BATS_TEST_TMPDIR'; return 1 ;;
+  esac
+  [[ -f "$hook" && ! -L "$hook" && -x "$hook" ]] || {
+    fail 'test after-npm hook must be an executable regular file'
+    return 1
+  }
+  "$hook"
+}
+
+revalidate_worktree_before_mutation() {
+  local observed_previous
+  preflight_worktree_path_components
+  preflight_worktree
+  observed_previous=$WORKTREE_PREVIOUS_HEAD
+  WORKTREE_PREVIOUS_HEAD=$INITIAL_WORKTREE_PREVIOUS_HEAD
+  [[ "$observed_previous" == "$INITIAL_WORKTREE_PREVIOUS_HEAD" ]] || {
+    fail 'durable worktree changed after initial preflight'
+    return 1
+  }
+}
+
+verify_worktree_at() {
+  local expected=$1 saved_previous=$WORKTREE_PREVIOUS_HEAD observed
+  preflight_worktree_path_components || return 1
+  preflight_worktree || return 1
+  observed=$WORKTREE_PREVIOUS_HEAD
+  WORKTREE_PREVIOUS_HEAD=$saved_previous
+  [[ "$observed" == "$expected" ]] || {
+    fail "durable worktree HEAD is $observed; expected $expected"
+    return 1
+  }
+}
+
 update_worktree() {
+  revalidate_worktree_before_mutation
   WORKTREE_UPDATE_STARTED=1
   if [[ "$WORKTREE_PREVIOUS_HEAD" == ABSENT ]]; then
     git -C "$SOURCE_ROOT" worktree add --detach "$WORKTREE" "$SOURCE_HEAD"
   else
     git -C "$WORKTREE" checkout --detach "$SOURCE_HEAD"
   fi
-  [[ "$(git -C "$WORKTREE" rev-parse --verify HEAD)" == "$SOURCE_HEAD" ]] || {
-    fail 'durable worktree did not reach the source HEAD'
-    return 1
-  }
-  ! git -C "$WORKTREE" symbolic-ref -q HEAD >/dev/null 2>&1 || {
-    fail 'durable worktree became attached during update'
-    return 1
-  }
-  [[ -z "$(git -C "$WORKTREE" status --porcelain --untracked-files=all)" ]] || {
-    fail 'durable worktree became dirty during update'
-    return 1
-  }
+  verify_worktree_at "$SOURCE_HEAD"
 }
 
 write_metadata_file() {
@@ -372,8 +503,14 @@ write_metadata_file() {
 }
 
 write_transaction() {
-  rm -rf "$TRANSACTION_DIR"
+  [[ ! -e "$TRANSACTION_DIR" && ! -L "$TRANSACTION_DIR" ]] || {
+    fail 'pending transaction appeared after preflight'
+    return 1
+  }
   mkdir -m 0700 "$TRANSACTION_DIR"
+  printf '%s\n' "$LOCK_TOKEN" >"$TRANSACTION_DIR/.pi-webui-owner"
+  chmod 0600 "$TRANSACTION_DIR/.pi-webui-owner"
+  TRANSACTION_CREATED=1
   write_metadata_file .pi-webui-transaction pi-webui-task2-transaction-v1
   write_metadata_file source-head "$SOURCE_HEAD"
   write_metadata_file source-root "$SOURCE_ROOT"
@@ -386,39 +523,93 @@ write_transaction() {
   write_metadata_file pi-real-executable "$PI_REAL_EXECUTABLE"
 }
 
-rollback_failed_apply() {
-  local status=$?
-  trap - EXIT
-  if [[ "${APPLY_COMPLETE:-0}" != 1 ]]; then
-    if [[ "$WORKTREE_UPDATE_STARTED" == 1 ]]; then
-      if [[ "$WORKTREE_PREVIOUS_HEAD" == ABSENT ]]; then
-        git -C "$SOURCE_ROOT" worktree remove --force "$WORKTREE" >/dev/null 2>&1 || true
-      elif [[ -d "$WORKTREE" && ! -L "$WORKTREE" ]]; then
-        git -C "$WORKTREE" checkout --detach "$WORKTREE_PREVIOUS_HEAD" >/dev/null 2>&1 || true
+verify_absent_worktree_rollback() {
+  [[ ! -e "$WORKTREE" && ! -L "$WORKTREE" ]] || return 1
+  ! git -C "$SOURCE_ROOT" worktree list --porcelain | grep -Fqx "worktree $WORKTREE"
+}
+
+restore_worktree() {
+  local rollback_target=$WORKTREE_PREVIOUS_HEAD
+  preflight_worktree_path_components || return 1
+  if [[ -e "$WORKTREE" || -L "$WORKTREE" ]]; then
+    preflight_worktree || return 1
+    WORKTREE_PREVIOUS_HEAD=$rollback_target
+  fi
+  if [[ "$rollback_target" == ABSENT ]]; then
+    git -C "$SOURCE_ROOT" worktree remove --force "$WORKTREE" >/dev/null 2>&1 || true
+    verify_absent_worktree_rollback
+    return
+  fi
+  [[ -d "$WORKTREE" && ! -L "$WORKTREE" ]] || return 1
+  git -C "$WORKTREE" checkout --detach "$rollback_target" >/dev/null 2>&1 || true
+  verify_worktree_at "$rollback_target"
+}
+
+cleanup_apply_evidence() {
+  local cleanup_failed=0
+  if [[ "$TRANSACTION_CREATED" == 1 ]]; then
+    if owned_by_this_apply "$TRANSACTION_DIR"; then
+      if rm -rf "$TRANSACTION_DIR"; then
+        TRANSACTION_CREATED=0
+      else
+        fail 'could not remove the owned partial transaction'
+        cleanup_failed=1
       fi
+    else
+      fail 'partial transaction ownership changed; refusing cleanup'
+      cleanup_failed=1
     fi
-    if [[ -d "$TRANSACTION_DIR" && ! -L "$TRANSACTION_DIR" &&
-      -f "$TRANSACTION_DIR/.pi-webui-transaction" &&
-      "$(cat "$TRANSACTION_DIR/.pi-webui-transaction" 2>/dev/null || true)" == pi-webui-task2-transaction-v1 ]]; then
-      rm -rf "$TRANSACTION_DIR"
+  fi
+  if [[ "$CANDIDATE_CREATED" == 1 ]]; then
+    if owned_by_this_apply "$CANDIDATE_RUNTIME"; then
+      if rm -rf "$CANDIDATE_RUNTIME"; then
+        CANDIDATE_CREATED=0
+      else
+        fail 'could not remove the owned partial candidate'
+        cleanup_failed=1
+      fi
+    else
+      fail 'partial candidate ownership changed; refusing cleanup'
+      cleanup_failed=1
     fi
-    if [[ -d "$CANDIDATE_RUNTIME" && ! -L "$CANDIDATE_RUNTIME" &&
-      -f "$CANDIDATE_RUNTIME/.pi-webui-candidate" &&
-      "$(cat "$CANDIDATE_RUNTIME/.pi-webui-candidate" 2>/dev/null || true)" == pi-webui-task2-candidate-v1 ]]; then
-      rm -rf "$CANDIDATE_RUNTIME"
+  fi
+  [[ "$cleanup_failed" == 0 ]]
+}
+
+rollback_failed_apply() {
+  local status=$? rollback_failed=0 lock_cleanup_failed=0
+  trap - EXIT
+  if [[ "$APPLY_COMPLETE" != 1 && "$TRANSACTION_READY" != 1 ]]; then
+    if [[ "$WORKTREE_UPDATE_STARTED" == 1 ]] && ! restore_worktree; then
+      rollback_failed=1
+      status=75
+      printf '%s\n' 'error: worktree rollback failed; candidate and transaction evidence retained' >&2
     fi
+    if [[ "$rollback_failed" != 1 ]] && ! cleanup_apply_evidence; then
+      status=77
+    fi
+  fi
+  if ! release_apply_lock; then
+    lock_cleanup_failed=1
+    [[ "$status" == 75 ]] || status=76
+  fi
+  if [[ "$lock_cleanup_failed" == 1 && "$status" == 76 ]]; then
+    printf '%s\n' 'error: apply lock cleanup failed; transaction evidence retained' >&2
   fi
   exit "$status"
 }
 
 apply_installation() {
-  APPLY_COMPLETE=0
   trap rollback_failed_apply EXIT
   prepare_private_directories
-  rm -rf "$TRANSACTION_DIR"
+  acquire_apply_lock
   build_candidate_runtime
-  update_worktree
+  run_test_after_npm_hook
+  revalidate_worktree_before_mutation
   write_transaction
+  update_worktree
+  TRANSACTION_READY=1
+  release_apply_lock
   APPLY_COMPLETE=1
   print_interface
   printf 'ready: Task 3 may validate and promote this transaction\n'
@@ -439,6 +630,7 @@ main() {
   validate_tracked_runtime
   preflight_destinations
   preflight_worktree
+  INITIAL_WORKTREE_PREVIOUS_HEAD=$WORKTREE_PREVIOUS_HEAD
   if [[ "$MODE" == check ]]; then
     check_plan
     return 0
