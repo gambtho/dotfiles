@@ -39,6 +39,11 @@ make_valid_platform() {
   printf 'ID=ubuntu\nVERSION_ID="24.04"\nVERSION_CODENAME=noble\n' >"$TEST_OS_RELEASE"
   export TEST_OS_RELEASE
   stub_command uname 'printf "%s\\n" "6.6.87.2-microsoft-standard-WSL2"'
+  cat >"$STUB_BIN/stat" <<'SCRIPT'
+#!/usr/bin/env bash
+exec /usr/bin/stat "$@"
+SCRIPT
+  chmod +x "$STUB_BIN/stat"
   PROC_ROOT="$TEST_ROOT/proc"
   mkdir -p "$PROC_ROOT/4200" "$PROC_ROOT/4201"
   printf '%b\n' 'Name:\tmise' 'PPid:\t1' >"$PROC_ROOT/4200/status"
@@ -191,13 +196,23 @@ make_valid_pi() {
   chmod +x "$PI_TEST_REAL"
   ln -s "../lib/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js" \
     "$PI_TEST_LAUNCHER"
-  export PI_TEST_PACKAGE PI_TEST_REAL PI_TEST_LAUNCHER
+  NODE_TEST_BIN="$HOME/.local/share/mise/installs/node/26.5.0/bin/node"
+  mkdir -p "$(dirname "$NODE_TEST_BIN")"
+  local real_node
+  real_node=$(node -p 'process.execPath')
+  printf '#!/usr/bin/env bash\nexec %q "$@"\n' "$real_node" >"$NODE_TEST_BIN"
+  chmod +x "$NODE_TEST_BIN"
+  export PI_TEST_PACKAGE PI_TEST_REAL PI_TEST_LAUNCHER NODE_TEST_BIN
   cat >"$STUB_BIN/mise" <<'SCRIPT'
 #!/usr/bin/env bash
 set -e
 printf 'mise %s\n' "$*" >>"$TEST_COMMAND_LOG"
 if [[ "$1 ${2:-}" == "which pi" ]]; then
   printf '%s\n' "$PI_TEST_LAUNCHER"
+  exit 0
+fi
+if [[ "$1 ${2:-}" == "which node" ]]; then
+  printf '%s\n' "$NODE_TEST_BIN"
   exit 0
 fi
 if [[ "$1 ${2:-}" == "exec --" ]]; then
@@ -217,6 +232,38 @@ printf "unexpected npm invocation before apply fixture: %s\\n" "$*" >&2
 exit 92'
 }
 
+patch_webui_helper_constants() {
+  local helper=$1
+  node - "$helper" "$STUB_BIN" "$TEST_ROOT" "$(id -u)" <<'NODE'
+const fs = require('node:fs');
+const [file, bin, root, uid] = process.argv.slice(2);
+let source = fs.readFileSync(file, 'utf8');
+const replacements = new Map([
+  ["OS_RELEASE_FILE='/etc/os-release'", `OS_RELEASE_FILE='${root}/os-release'`],
+  ["KEY_PATH='/usr/share/keyrings/tailscale-archive-keyring.gpg'", `KEY_PATH='${root}/system-root/usr/share/keyrings/tailscale-archive-keyring.gpg'`],
+  ["SOURCE_PATH='/etc/apt/sources.list.d/tailscale.list'", `SOURCE_PATH='${root}/system-root/etc/apt/sources.list.d/tailscale.list'`],
+  ["PROC_ROOT='/proc'", `PROC_ROOT='${root}/proc'`],
+  ["PROCESS_CHECK_HOOK=''", `PROCESS_CHECK_HOOK='${root}/process-check'`],
+  ["UNAME_BIN='/usr/bin/uname'", `UNAME_BIN='${bin}/uname'`],
+  ["SYSTEMCTL_BIN='/usr/bin/systemctl'", `SYSTEMCTL_BIN='${bin}/systemctl'`],
+  ["TAILSCALE_BIN='/usr/bin/tailscale'", `TAILSCALE_BIN='${bin}/tailscale'`],
+  ["CURL_BIN='/usr/bin/curl'", `CURL_BIN='${bin}/curl'`],
+  ["SS_BIN='/usr/bin/ss'", `SS_BIN='${bin}/ss'`],
+  ["IP_BIN='/usr/sbin/ip'", `IP_BIN='${bin}/ip'`],
+  ["SUDO_BIN='/usr/bin/sudo'", `SUDO_BIN='${bin}/sudo'`],
+  ["SHA256SUM_BIN='/usr/bin/sha256sum'", `SHA256SUM_BIN='${bin}/sha256sum'`],
+  ["STAT_BIN='/usr/bin/stat'", `STAT_BIN='${bin}/stat'`],
+  ["MISE_SYSTEM_BIN='/usr/bin/mise'", `MISE_SYSTEM_BIN='${bin}/mise'`],
+  ["MISE_SYSTEM_OWNER=0", `MISE_SYSTEM_OWNER=${uid}`],
+  ["REPOSITORY_FILE_OWNER=0", `REPOSITORY_FILE_OWNER=${uid}`],
+]);
+for (const [from, to] of replacements) {
+  if (source.includes(from)) source = source.replace(from, to);
+}
+fs.writeFileSync(file, source);
+NODE
+}
+
 make_installer_repo() {
   INSTALLER_REPO="$TEST_ROOT/source repo"
   mkdir -p "$INSTALLER_REPO/ai/pi/webui/runtime" "$INSTALLER_REPO/bin"
@@ -226,6 +273,12 @@ make_installer_repo() {
   fi
   if [[ -f "$REPO_ROOT/ai/pi/webui/rollback.sh" ]]; then
     cp "$REPO_ROOT/ai/pi/webui/rollback.sh" "$INSTALLER_REPO/ai/pi/webui/rollback.sh"
+  fi
+  if [[ -f "$INSTALLER_REPO/ai/pi/webui/tailscale.sh" ]]; then
+    patch_webui_helper_constants "$INSTALLER_REPO/ai/pi/webui/tailscale.sh"
+  fi
+  if [[ -f "$INSTALLER_REPO/ai/pi/webui/rollback.sh" ]]; then
+    patch_webui_helper_constants "$INSTALLER_REPO/ai/pi/webui/rollback.sh"
   fi
   if [[ -f "$REPO_ROOT/ai/pi/webui/pi-webui.service.in" ]]; then
     cp "$REPO_ROOT/ai/pi/webui/pi-webui.service.in" \
@@ -436,6 +489,24 @@ setup_task4_stubs() {
   if [[ -x "$SANDBOX_TOOL_BIN/node" ]]; then
     ln -sf "$SANDBOX_TOOL_BIN/node" "$STUB_BIN/node"
   fi
+  if [[ ! -x "$STUB_BIN/mise" ]]; then
+    NODE_TEST_BIN="$HOME/.local/share/mise/installs/node/26.5.0/bin/node"
+    mkdir -p "$(dirname "$NODE_TEST_BIN")"
+    local real_node
+    real_node=$(node -p 'process.execPath')
+    printf '#!/usr/bin/env bash\nexec %q "$@"\n' "$real_node" >"$NODE_TEST_BIN"
+    chmod +x "$NODE_TEST_BIN"
+    export NODE_TEST_BIN
+    cat >"$STUB_BIN/mise" <<'SCRIPT'
+#!/usr/bin/env bash
+if [[ "$1 ${2:-}" == 'which node' ]]; then
+  printf '%s\n' "$NODE_TEST_BIN"
+  exit 0
+fi
+exit 87
+SCRIPT
+    chmod +x "$STUB_BIN/mise"
+  fi
 
   cat >"$STUB_BIN/tailscale" <<'SCRIPT'
 #!/usr/bin/env bash
@@ -541,11 +612,7 @@ make_task4_managed_service() {
 }
 
 run_tailscale_helper() {
-  run env PI_WEBUI_TESTING=1 PI_WEBUI_TEST_OS_RELEASE="$TEST_OS_RELEASE" \
-    PI_WEBUI_TEST_TRUSTED_BIN_DIR="$STUB_BIN" \
-    PI_WEBUI_TEST_SYSTEM_ROOT="$TASK4_SYSTEM_ROOT" \
-    PI_WEBUI_TEST_PROC_ROOT="$PROC_ROOT" BATS_TEST_TMPDIR="$BATS_TEST_TMPDIR" \
-    HOME="$HOME" XDG_CONFIG_HOME="$XDG_CONFIG_HOME" PATH="$PATH" \
+  run env HOME="$HOME" XDG_CONFIG_HOME="$XDG_CONFIG_HOME" PATH="$PATH" \
     TEST_ROOT="$TEST_ROOT" TEST_COMMAND_LOG="$TEST_COMMAND_LOG" \
     TASK4_SERVE_JSON="$TASK4_SERVE_JSON" TASK4_SERVE_HUMAN="$TASK4_SERVE_HUMAN" \
     TASK4_EXACT_JSON="$TASK4_EXACT_JSON" TASK4_EMPTY_JSON="$TASK4_EMPTY_JSON" \
@@ -554,11 +621,7 @@ run_tailscale_helper() {
 }
 
 run_rollback_helper() {
-  run env PI_WEBUI_TESTING=1 PI_WEBUI_TEST_OS_RELEASE="$TEST_OS_RELEASE" \
-    PI_WEBUI_TEST_TRUSTED_BIN_DIR="$STUB_BIN" \
-    PI_WEBUI_TEST_PROC_ROOT="$PROC_ROOT" PI_WEBUI_TEST_PROCESS_CHECK="$PROCESS_CHECK" \
-    BATS_TEST_TMPDIR="$BATS_TEST_TMPDIR" HOME="$HOME" \
-    XDG_CONFIG_HOME="$XDG_CONFIG_HOME" PATH="$PATH" TEST_ROOT="$TEST_ROOT" \
+  run env HOME="$HOME" XDG_CONFIG_HOME="$XDG_CONFIG_HOME" PATH="$PATH" TEST_ROOT="$TEST_ROOT" \
     TEST_COMMAND_LOG="$TEST_COMMAND_LOG" TASK4_SERVE_JSON="$TASK4_SERVE_JSON" \
     TASK4_SERVE_HUMAN="$TASK4_SERVE_HUMAN" PI_TEST_LAUNCHER="${PI_TEST_LAUNCHER:-}" \
     PI_WEBUI_TEST_STATUS_JSON="${PI_WEBUI_TEST_STATUS_JSON:-}" \
@@ -611,6 +674,9 @@ run_rollback_helper() {
   grep -Fqx 'sudo apt-get update' "$TEST_COMMAND_LOG"
   grep -Fqx 'sudo apt-get install tailscale' "$TEST_COMMAND_LOG"
   grep -Fqx 'sudo systemctl enable --now tailscaled.service' "$TEST_COMMAND_LOG"
+  grep -Fqx 'sudo-raw /usr/bin/apt-get update' "$TEST_COMMAND_LOG"
+  grep -Fqx 'sudo-raw /usr/bin/apt-get install tailscale' "$TEST_COMMAND_LOG"
+  grep -Eq '^sudo-raw /usr/bin/install -m 0644 ' "$TEST_COMMAND_LOG"
   run ! grep -Eq 'curl .*[|].*(sh|bash)|wget .*[|].*(sh|bash)|noble\.tailscale-keyring\.list' "$TEST_COMMAND_LOG"
 }
 
@@ -1285,16 +1351,145 @@ SCRIPT
   [ ! -e "$HOME/.config/systemd/user/pi-webui.service" ]
 }
 
-@test "trusted command-directory seams are unavailable outside the guarded Bats contract" {
+@test "production helpers ignore the complete forged legacy executable seam tuple" {
+  local malicious="$TEST_ROOT/forged-old-seam"
+  mkdir -p "$malicious"
+  cat >"$malicious/dirname" <<'SCRIPT'
+#!/usr/bin/env bash
+printf 'forged executable ran\n' >"$TEST_ROOT/forged-executable-ran"
+exec /usr/bin/dirname "$@"
+SCRIPT
+  chmod +x "$malicious/dirname"
+  local release="$TEST_ROOT/forged-release"
+  printf 'ID=ubuntu\nVERSION_ID="24.04"\nVERSION_CODENAME=noble\n' >"$release"
+
+  run env PI_WEBUI_TESTING=1 BATS_TEST_TMPDIR="$BATS_TEST_TMPDIR" \
+    PI_WEBUI_TEST_TRUSTED_BIN_DIR="$malicious" PI_WEBUI_TEST_OS_RELEASE="$release" \
+    PI_WEBUI_TEST_SYSTEM_ROOT="$TEST_ROOT/forged-system" PI_WEBUI_TEST_PROC_ROOT="$TEST_ROOT/forged-proc" \
+    PI_WEBUI_TEST_PROCESS_CHECK="$malicious/process-check" HOME="$HOME" PATH="$malicious:$PATH" \
+    TEST_ROOT="$TEST_ROOT" /usr/bin/bash "$REPO_ROOT/ai/pi/webui/tailscale.sh" help
+
+  [ "$status" -eq 0 ]
+  [ ! -e "$TEST_ROOT/forged-executable-ran" ]
+}
+
+@test "mise resolution falls back only to the validated user path" {
   make_installer_repo
   make_valid_platform
   setup_task4_stubs
+  mkdir -p "$HOME/.local/bin"
+  mv "$STUB_BIN/mise" "$HOME/.local/bin/mise"
 
-  run env PI_WEBUI_TEST_TRUSTED_BIN_DIR=/usr/bin HOME="$HOME" PATH="$PATH" \
-    /usr/bin/bash "$INSTALLER_REPO/ai/pi/webui/tailscale.sh" help
+  run_tailscale_helper check
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'Tailscale authenticated'* ]]
+}
+
+@test "mise resolution rejects an unsafe user symlink and detects executable replacement" {
+  make_installer_repo
+  make_valid_platform
+  setup_task4_stubs
+  mkdir -p "$HOME/.local/bin" "$TEST_ROOT/outside-mise"
+  mv "$STUB_BIN/mise" "$TEST_ROOT/outside-mise/mise"
+  ln -s "$TEST_ROOT/outside-mise/mise" "$HOME/.local/bin/mise"
+
+  run_tailscale_helper check
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'no safe supported mise executable'* ]]
+
+  rm "$HOME/.local/bin/mise"
+  cp "$TEST_ROOT/outside-mise/mise" "$STUB_BIN/mise"
+  cat >"$STUB_BIN/mise" <<'SCRIPT'
+#!/usr/bin/env bash
+if [[ "$1 ${2:-}" == 'which node' ]]; then
+  mv "$0" "$0.before-swap"
+  cp "$0.before-swap" "$0"
+  chmod +x "$0"
+  printf '%s\n' "$NODE_TEST_BIN"
+  exit 0
+fi
+exit 87
+SCRIPT
+  chmod +x "$STUB_BIN/mise"
+
+  run_tailscale_helper check
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'mise executable identity changed after validation'* ]]
+}
+
+@test "tailscale and rollback enforce an rpc argument boundary" {
+  make_task4_managed_service
+  PI_WEBUI_TEST_STATUS_JSON=$(printf \
+    '{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"host":"127.0.0.1","port":31415,"open":false,"urls":[]},"tabs":[{"cwd":"%s","running":true,"command":"%s --mode rpc-suffix"}]}}' \
+    "$HOME/.local/share/pi-webui/worktrees/dotfiles" "$PI_TEST_LAUNCHER")
+  export PI_WEBUI_TEST_STATUS_JSON
+
+  run_tailscale_helper serve
+  [ "$status" -ne 0 ]
+  run ! grep -q '^sudo tailscale serve' "$TEST_COMMAND_LOG"
+
+  run_rollback_helper
+  [ "$status" -ne 0 ]
+  [ -f "$TEST_ROOT/service-active" ]
+  run ! grep -q '^systemctl --user disable' "$TEST_COMMAND_LOG"
+
+  PI_WEBUI_TEST_STATUS_JSON=$(printf \
+    '{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"host":"127.0.0.1","port":31415,"open":false,"urls":[]},"tabs":[{"cwd":"%s","running":true,"command":null}]}}' \
+    "$HOME/.local/share/pi-webui/worktrees/dotfiles")
+  export PI_WEBUI_TEST_STATUS_JSON
+  run_tailscale_helper serve
+  [ "$status" -ne 0 ]
+  run_rollback_helper
+  [ "$status" -ne 0 ]
+  [ -f "$TEST_ROOT/service-active" ]
+
+  PI_WEBUI_TEST_STATUS_JSON=$(printf \
+    '{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"host":"127.0.0.1","port":31415,"open":false,"urls":[]},"tabs":[{"cwd":"%s","running":true,"command":"%s --mode rpc --resume accepted"}]}}' \
+    "$HOME/.local/share/pi-webui/worktrees/dotfiles" "$PI_TEST_LAUNCHER")
+  export PI_WEBUI_TEST_STATUS_JSON
+  run_tailscale_helper serve
+  [ "$status" -eq 0 ]
+  run_tailscale_helper serve-off
+  [ "$status" -eq 0 ]
+  run_rollback_helper
+  [ "$status" -eq 0 ]
+}
+
+@test "installer rejects rpc-suffix tab commands during candidate verification" {
+  make_installer_repo
+  make_valid_platform
+  make_valid_pi
+  stub_successful_npm_ci
+  local worktree="$HOME/.local/share/pi-webui/worktrees/dotfiles"
+  PI_WEBUI_TEST_STATUS_JSON=$(printf \
+    '{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"host":"127.0.0.1","port":31415,"open":false,"urls":[]},"tabs":[{"cwd":"%s","running":true,"command":"%s --mode rpc-suffix"}]}}' \
+    "$worktree" "$PI_TEST_LAUNCHER")
+  export PI_WEBUI_TEST_STATUS_JSON
+
+  run_installer --apply
 
   [ "$status" -ne 0 ]
-  [[ "$output" == *'restricted to the test sandbox'* ]]
+  [[ "$output" == *'detailed status validation failed'* ]]
+  [ ! -e "$HOME/.local/share/pi-webui/runtimes/current" ]
+}
+
+@test "installer requires every detailed tab command to be a string" {
+  make_installer_repo
+  make_valid_platform
+  make_valid_pi
+  stub_successful_npm_ci
+  local worktree="$HOME/.local/share/pi-webui/worktrees/dotfiles"
+  PI_WEBUI_TEST_STATUS_JSON=$(printf \
+    '{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"host":"127.0.0.1","port":31415,"open":false,"urls":[]},"tabs":[{"cwd":"%s","running":true}]}}' \
+    "$worktree")
+  export PI_WEBUI_TEST_STATUS_JSON
+
+  run_installer --apply
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'detailed status validation failed'* ]]
+  [ ! -e "$HOME/.local/share/pi-webui/runtimes/current" ]
 }
 
 @test "tracked runtime accepts the exact authored package graph by default" {

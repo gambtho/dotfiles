@@ -1139,12 +1139,15 @@ const network = data.network;
 if (!network || network.host !== "127.0.0.1" || network.port !== 31415 || network.open !== false) process.exit(1);
 if (!Array.isArray(network.urls) || network.urls.length !== 0) process.exit(1);
 if (!Array.isArray(data.tabs) || data.tabs.length < 1) process.exit(1);
+const rpcCommand = `${launcher} --mode rpc`;
 for (const tab of data.tabs) {
   if (tab.cwd !== worktree || tab.running !== true) {
     console.error("Pi Web UI status tab does not match the expected cwd/running state");
     process.exit(1);
   }
-  if (typeof tab.command === "string" && !tab.command.startsWith(`${launcher} --mode rpc`)) {
+  if (typeof tab.command !== "string" ||
+      !(tab.command === rpcCommand ||
+        (tab.command.startsWith(rpcCommand) && /\s/.test(tab.command[rpcCommand.length])))) {
     console.error("Pi Web UI status tab does not match the expected Pi launcher");
     process.exit(1);
   }
