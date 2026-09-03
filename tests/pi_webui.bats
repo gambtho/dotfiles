@@ -140,6 +140,34 @@ printf "systemd-analyze %s\\n" "$*" >>"$TEST_COMMAND_LOG"
 printf "curl %s\\n" "$*" >>"$TEST_COMMAND_LOG"
 case "$*" in
   *api/health*)
+    worktree="$HOME/.local/share/pi-webui/worktrees/dotfiles"
+    if [[ -f "$TEST_ROOT/rollback-invalid-state" && -d "$worktree" &&
+      "$(/usr/bin/git -C "$worktree" rev-parse HEAD)" == "$SOURCE_HEAD" ]]; then
+      case "$(cat "$TEST_ROOT/rollback-invalid-state")" in
+        dirty)
+          printf "%s\n" dirty >"$worktree/dirty-during-rollback"
+          ;;
+        ignored)
+          mkdir -p "$worktree/.pi/plans"
+          chmod 0700 "$worktree/.pi" "$worktree/.pi/plans"
+          printf "%s\n" ignored >"$worktree/.pi/plans/ignored-during-rollback"
+          ;;
+        tracked-pi)
+          mkdir -p "$worktree/.pi"
+          printf "%s\n" tracked >"$worktree/.pi/tracked-during-rollback"
+          /usr/bin/git -C "$worktree" add -f .pi/tracked-during-rollback
+          /usr/bin/git -C "$worktree" -c user.name=test -c user.email=test@example.test \
+            commit -qm tracked-during-rollback
+          ;;
+        *) exit 96 ;;
+      esac
+      /usr/bin/git -C "$worktree" rev-parse HEAD >"$TEST_ROOT/rollback-invalid-head"
+      grep -Fc "systemctl --user start pi-webui.service" "$TEST_COMMAND_LOG" \
+        >"$TEST_ROOT/rollback-start-count" || true
+      rm -f "$TEST_ROOT/rollback-invalid-state"
+      printf "%s\n" '\''{"ok":false,"webuiVersion":"0.10.3","piVersion":"0.84.4"}'\''
+      exit 0
+    fi
     if [[ -f "$TEST_ROOT/health-fail" ]]; then
       if [[ -f "$TEST_ROOT/expect-trial-runtime-moved" ]]; then
         [[ ! -e "$HOME/.local/share/pi-webui-runtime" ]] || exit 95
@@ -359,6 +387,40 @@ run_installer() {
     PI_WEBUI_TEST_HEALTH_ATTEMPTS="${PI_WEBUI_TEST_HEALTH_ATTEMPTS:-}" \
     INSTALLER_REPO="$INSTALLER_REPO" ARCHIVE_TEST_BIN="$ARCHIVE_TEST_BIN" \
     /usr/bin/bash -p "$INSTALLER" "$@"
+}
+
+assert_rollback_preflight_rejects_worktree_state() {
+  local invalid_state=$1 expected_error=$2
+  make_installer_repo
+  make_valid_platform
+  make_valid_pi
+  stub_successful_npm_ci
+
+  run_installer --apply
+  [ "$status" -eq 0 ]
+
+  local worktree="$HOME/.local/share/pi-webui/worktrees/dotfiles"
+  local previous
+  previous=$(git -C "$worktree" rev-parse HEAD)
+  printf 'next source\n' >"$INSTALLER_REPO/next-source"
+  git -C "$INSTALLER_REPO" add next-source
+  git -C "$INSTALLER_REPO" commit -qm next-source
+  SOURCE_HEAD=$(git -C "$INSTALLER_REPO" rev-parse HEAD)
+  export SOURCE_HEAD
+  printf '%s\n' "$invalid_state" >"$TEST_ROOT/rollback-invalid-state"
+  export PI_WEBUI_TEST_HEALTH_ATTEMPTS=1
+
+  run_installer --apply
+
+  [ "$status" -eq 78 ]
+  [[ "$output" == *"$expected_error"* ]]
+  [[ "$output" == *'managed worktree state restoration preflight failed'* ]]
+  [[ "$output" == *'service rollback failed; candidate and transaction evidence retained'* ]]
+  [ "$(git -C "$worktree" rev-parse HEAD)" = "$(cat "$TEST_ROOT/rollback-invalid-head")" ]
+  [ "$(git -C "$worktree" rev-parse HEAD)" != "$previous" ]
+  [ ! -f "$TEST_ROOT/service-active" ]
+  [ "$(grep -Fc 'systemctl --user start pi-webui.service' "$TEST_COMMAND_LOG" || true)" = \
+    "$(cat "$TEST_ROOT/rollback-start-count")" ]
 }
 
 file_tree_hashes() {
@@ -3389,6 +3451,21 @@ SCRIPT
   [ -z "$(/usr/bin/git -C "$worktree" status --porcelain --untracked-files=all --ignored=matching)" ]
   [ ! -e "$HOME/.local/share/pi-webui/runtimes/candidate" ]
   [ ! -e "$HOME/.local/share/pi-webui/transactions/pending" ]
+}
+
+@test "installer rollback preflight propagates dirty worktree rejection" {
+  assert_rollback_preflight_rejects_worktree_state \
+    dirty 'durable worktree must be clean, including untracked and ignored files'
+}
+
+@test "installer rollback preflight propagates ignored Pi state rejection" {
+  assert_rollback_preflight_rejects_worktree_state \
+    ignored 'ignored files are not permitted in the managed worktree'
+}
+
+@test "installer rollback preflight propagates tracked Pi state rejection" {
+  assert_rollback_preflight_rejects_worktree_state \
+    tracked-pi 'current worktree commit tracks .pi'
 }
 
 @test "installer refuses an ignored file that a source update would start tracking" {

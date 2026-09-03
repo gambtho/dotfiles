@@ -600,13 +600,13 @@ preflight_worktree() {
   fi
   require_empty_git_output \
     'durable worktree must be clean, including untracked and ignored files' \
-    -C "$WORKTREE" status --porcelain=v1 -z --untracked-files=all
+    -C "$WORKTREE" status --porcelain=v1 -z --untracked-files=all || return 1
   require_empty_git_output \
     'ignored files are not permitted in the managed worktree' \
-    -C "$WORKTREE" ls-files --others -i --exclude-standard -z
+    -C "$WORKTREE" ls-files --others -i --exclude-standard -z || return 1
   require_empty_git_output \
     'current worktree commit tracks .pi' \
-    -C "$WORKTREE" ls-tree -r --name-only -z HEAD -- .pi
+    -C "$WORKTREE" ls-tree -r --name-only -z HEAD -- .pi || return 1
   validate_managed_plan_tree "$WORKTREE" 'durable worktree' || return 1
   WORKTREE_PREVIOUS_HEAD=$(git -C "$WORKTREE" rev-parse --verify HEAD)
 }
