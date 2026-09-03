@@ -83,19 +83,19 @@ detached linked worktree and advances it to the reviewed source commit. Do not
 attach a branch, edit files, or store project work there.
 
 Tracked and untracked non-ignored state must remain empty.
-The only ignored exception is `.pi/` with `.pi/plans/`: those are the only permitted directories,
-and only regular files may appear directly below `.pi/plans/`. Every accepted
-entry must be current-user-owned, must not be group or world writable, and must
-remain canonically inside the landing worktree. Symlinks, nested directories,
-devices, sockets, FIFOs, files with additional hard links, and all other ignored
-paths are rejected. The bounded plan allowance is at most 100 regular files,
-1 MiB per file, and 10 MiB total.
+The only accepted Pi state is the exact empty `.pi/plans/` tree; `.pi` may also be absent before Pi starts.
+Both directories must be current-user-owned mode `0700`, real rather
+than symlinked, canonically contained in the landing worktree, and exactly empty
+apart from the `plans` directory itself.
+Any plan file or other content blocks update, Serve, and rollback and is preserved.
+This includes direct files, newline-named files, nested directories, symlinks, and special files.
+Resolve plan content outside the landing worktree before retrying an operation.
 
-Before creating or advancing the landing worktree, the reviewed target commit
-must not track any `.pi` path. The installer checks this during preflight and
-again immediately before checkout. Plan files are preserved across checkout;
-the update fails closed before checkout if the tree or source collision check is
-unsafe.
+The current worktree commit and every reviewed update target must not track any `.pi` path.
+The installer checks the target during preflight and again
+immediately before checkout. All three helpers check the current worktree commit
+and use NUL-delimited Git output only as an empty/nonempty assertion, without
+parsing filenames.
 
 For real work, select an existing project linked worktree as the tab/workspace
 working directory. If one does not exist, create it outside the primary
@@ -288,9 +288,12 @@ landing worktree. It never deletes uploads or unrelated Pi state.
 The following destructive choices exactly match the helper interface. They are
 optional and remove only a validated owner-only runtime and/or a clean detached
 managed worktree; dirty, attached, foreign, symlinked, or transaction-active
-state is retained with an error. `--remove-worktree` refuses nonempty plan files
-so they can be reviewed and removed or archived explicitly, but it allows the
-exact empty `.pi/` and `.pi/plans/` directories:
+state is retained with an error.
+`--remove-worktree` refuses whenever `.pi` exists, including the accepted empty tree.
+Remove those empty directories manually before retrying if worktree deletion is intended.
+The helpers never automatically quarantine or delete `.pi`.
+If failed-apply rollback finds `.pi` in a newly created worktree, it retains the registered worktree
+and reports that manual cleanup is required:
 
 ```bash
 ./ai/pi/webui/rollback.sh --remove-runtime

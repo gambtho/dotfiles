@@ -18,10 +18,6 @@ SOURCE_HEAD=''
 WORKTREE_PREVIOUS_HEAD=ABSENT
 INITIAL_WORKTREE_PREVIOUS_HEAD=ABSENT
 WORKTREE_UPDATE_STARTED=0
-MANAGED_PLAN_FILE_COUNT=0
-MANAGED_PLAN_MAX_FILES=100
-MANAGED_PLAN_MAX_FILE_SIZE=1048576
-MANAGED_PLAN_MAX_TOTAL_SIZE=10485760
 PI_LAUNCHER=''
 PI_REAL_EXECUTABLE=''
 STATE_ROOT="$HOME/.local/share/pi-webui"
@@ -156,7 +152,7 @@ require_supported_platform() {
 
 require_commands() {
   local command_name
-  for command_name in curl find git mise sha256sum ss systemd-analyze; do
+  for command_name in curl find git mise mktemp sha256sum ss systemd-analyze; do
     command -v "$command_name" >/dev/null 2>&1 || {
       fail "$command_name is required"
       return 1
@@ -476,108 +472,90 @@ canonical_git_path() {
   fi
 }
 
+require_empty_git_output() {
+  local message=$1 temporary status=0
+  shift
+  temporary=$(mktemp "${TMPDIR:-/tmp}/pi-webui-git.XXXXXXXX") || {
+    fail 'cannot create temporary Git inspection file'
+    return 1
+  }
+  chmod 0600 "$temporary"
+  git "$@" >"$temporary" || status=$?
+  if [[ "$status" != 0 ]]; then
+    rm -f "$temporary"
+    fail 'cannot inspect managed worktree Git state'
+    return 1
+  fi
+  if [[ -s "$temporary" ]]; then
+    rm -f "$temporary"
+    fail "$message"
+    return 1
+  fi
+  rm -f "$temporary"
+}
+
+require_empty_find_output() {
+  local message=$1 temporary status=0
+  shift
+  temporary=$(mktemp "${TMPDIR:-/tmp}/pi-webui-find.XXXXXXXX") || {
+    fail 'cannot create temporary worktree inspection file'
+    return 1
+  }
+  chmod 0600 "$temporary"
+  find -P "$@" >"$temporary" || status=$?
+  if [[ "$status" != 0 ]]; then
+    rm -f "$temporary"
+    fail 'cannot enumerate managed Pi directories'
+    return 1
+  fi
+  if [[ -s "$temporary" ]]; then
+    rm -f "$temporary"
+    fail "$message"
+    return 1
+  fi
+  rm -f "$temporary"
+}
+
 validate_managed_plan_tree() {
   local worktree=$1 label=$2 pi_root="$1/.pi" plans_root="$1/.pi/plans"
-  local current_uid canonical_worktree canonical_pi canonical_plans entry
-  local entry_parent mode links size total_size=0
-  MANAGED_PLAN_FILE_COUNT=0
+  local current_uid canonical_worktree canonical_pi canonical_plans
   [[ -e "$pi_root" || -L "$pi_root" ]] || return 0
-  [[ -d "$pi_root" && ! -L "$pi_root" ]] || {
-    fail "$label managed Pi plan tree must use real directories"
+  [[ -d "$pi_root" && ! -L "$pi_root" && -d "$plans_root" && ! -L "$plans_root" ]] || {
+    fail "$label managed Pi state must be the exact empty .pi/plans directory tree"
     return 1
   }
   current_uid=$(id -u)
-  canonical_worktree=$(canonical_directory "$worktree") || return 1
-  canonical_pi=$(canonical_directory "$pi_root") || return 1
-  [[ "$canonical_pi" == "$canonical_worktree/.pi" ]] || {
-    fail "$label managed Pi plan tree escapes the worktree"
+  [[ "$(stat -c '%u' "$pi_root")" == "$current_uid" &&
+  "$(stat -c '%u' "$plans_root")" == "$current_uid" &&
+  "$(stat -c '%a' "$pi_root")" == 700 &&
+  "$(stat -c '%a' "$plans_root")" == 700 ]] || {
+    fail "$label managed Pi directories must be owner-only mode 0700"
     return 1
   }
-  if [[ -e "$plans_root" || -L "$plans_root" ]]; then
-    [[ -d "$plans_root" && ! -L "$plans_root" ]] || {
-      fail "$label managed Pi plan tree must use real directories"
-      return 1
-    }
-    canonical_plans=$(canonical_directory "$plans_root") || return 1
-    [[ "$canonical_plans" == "$canonical_pi/plans" ]] || {
-      fail "$label managed Pi plan tree escapes the worktree"
-      return 1
-    }
-  else
-    canonical_plans="$canonical_pi/plans"
-  fi
-  for entry in "$pi_root" "$plans_root"; do
-    [[ -e "$entry" ]] || continue
-    [[ "$(stat -c '%u' "$entry")" == "$current_uid" ]] || {
-      fail "$label managed Pi plan tree must be owned by the current user"
-      return 1
-    }
-    mode=$(stat -c '%a' "$entry")
-    (((8#$mode & 022) == 0)) || {
-      fail "$label managed Pi plan tree must not be group or world writable"
-      return 1
-    }
-  done
-  while IFS= read -r -d '' entry; do
-    if [[ "$entry" == "$plans_root" ]]; then
-      continue
-    fi
-    case "$entry" in
-      "$plans_root"/*) ;;
-      *)
-        fail "$label managed Pi plan tree contains an unsupported entry"
-        return 1
-        ;;
-    esac
-    [[ ! -L "$entry" && -f "$entry" ]] || {
-      fail "$label managed Pi plan tree contains an unsupported entry"
-      return 1
-    }
-    entry_parent=$(canonical_directory "$(dirname "$entry")") || return 1
-    [[ "$entry_parent" == "$canonical_plans" ]] || {
-      fail "$label managed Pi plan tree contains nested or escaping entries"
-      return 1
-    }
-    [[ "$(stat -c '%u' "$entry")" == "$current_uid" ]] || {
-      fail "$label managed Pi plan files must be owned by the current user"
-      return 1
-    }
-    mode=$(stat -c '%a' "$entry")
-    (((8#$mode & 022) == 0)) || {
-      fail "$label managed Pi plan files must not be group or world writable"
-      return 1
-    }
-    links=$(stat -c '%h' "$entry")
-    [[ "$links" == 1 ]] || {
-      fail "$label managed Pi plan files must not have additional hard links"
-      return 1
-    }
-    size=$(stat -c '%s' "$entry")
-    [[ "$size" =~ ^[0-9]+$ && "$size" -le "$MANAGED_PLAN_MAX_FILE_SIZE" ]] || {
-      fail "$label managed Pi plan file exceeds the 1 MiB limit"
-      return 1
-    }
-    MANAGED_PLAN_FILE_COUNT=$((MANAGED_PLAN_FILE_COUNT + 1))
-    total_size=$((total_size + size))
-    [[ "$MANAGED_PLAN_FILE_COUNT" -le "$MANAGED_PLAN_MAX_FILES" &&
-      "$total_size" -le "$MANAGED_PLAN_MAX_TOTAL_SIZE" ]] || {
-      fail "$label managed Pi plan tree exceeds 100 files or 10 MiB"
-      return 1
-    }
-  done < <(find -P "$pi_root" -mindepth 1 -print0)
+  canonical_worktree=$(canonical_directory "$worktree") || return 1
+  canonical_pi=$(canonical_directory "$pi_root") || return 1
+  canonical_plans=$(canonical_directory "$plans_root") || return 1
+  [[ "$canonical_pi" == "$canonical_worktree/.pi" &&
+    "$canonical_plans" == "$canonical_pi/plans" ]] || {
+    fail "$label managed Pi directories escape the worktree"
+    return 1
+  }
+  require_empty_find_output \
+    "$label managed Pi directory contains unsupported state" \
+    "$pi_root" -mindepth 1 -maxdepth 1 ! -path "$plans_root" -print -quit || return 1
+  require_empty_find_output \
+    "$label managed Pi plans directory must be empty" \
+    "$plans_root" -mindepth 1 -print -quit
 }
 
 require_source_without_managed_pi_collision() {
-  local collision
-  collision=$(git -C "$SOURCE_ROOT" ls-tree "$SOURCE_HEAD" -- .pi)
-  [[ -z "$collision" ]] || {
-    fail 'target source commit tracks .pi; refusing managed plan collision'
-    return 1
-  }
+  require_empty_git_output \
+    'target source commit tracks .pi; refusing managed plan collision' \
+    -C "$SOURCE_ROOT" ls-tree -r --name-only -z "$SOURCE_HEAD" -- .pi
 }
 
 preflight_worktree() {
-  local target_common_raw target_common target_git_raw target_git status ignored_status line
+  local target_common_raw target_common target_git_raw target_git
   [[ -e "$WORKTREE" || -L "$WORKTREE" ]] || {
     WORKTREE_PREVIOUS_HEAD=ABSENT
     return 0
@@ -620,23 +598,15 @@ preflight_worktree() {
     fail 'durable worktree must be detached'
     return 1
   fi
-  status=$(git -C "$WORKTREE" status --porcelain --untracked-files=all)
-  [[ -z "$status" ]] || {
-    fail 'durable worktree must be clean, including untracked and ignored files'
-    return 1
-  }
-  ignored_status=$(git -C "$WORKTREE" status --porcelain --untracked-files=all --ignored=matching)
-  if [[ -n "$ignored_status" ]]; then
-    while IFS= read -r line; do
-      case "$line" in
-        '!! .pi/' | '!! .pi/plans/' | '!! .pi/plans/'*) ;;
-        *)
-          fail 'durable worktree must be clean, including untracked and ignored files'
-          return 1
-          ;;
-      esac
-    done <<<"$ignored_status"
-  fi
+  require_empty_git_output \
+    'durable worktree must be clean, including untracked and ignored files' \
+    -C "$WORKTREE" status --porcelain=v1 -z --untracked-files=all
+  require_empty_git_output \
+    'ignored files are not permitted in the managed worktree' \
+    -C "$WORKTREE" ls-files --others -i --exclude-standard -z
+  require_empty_git_output \
+    'current worktree commit tracks .pi' \
+    -C "$WORKTREE" ls-tree -r --name-only -z HEAD -- .pi
   validate_managed_plan_tree "$WORKTREE" 'durable worktree' || return 1
   WORKTREE_PREVIOUS_HEAD=$(git -C "$WORKTREE" rev-parse --verify HEAD)
 }
@@ -1233,20 +1203,43 @@ verify_absent_worktree_rollback() {
   ! git -C "$SOURCE_ROOT" worktree list --porcelain | grep -Fqx "worktree $WORKTREE"
 }
 
+remove_new_worktree() {
+  [[ ! -e "$WORKTREE/.pi" && ! -L "$WORKTREE/.pi" ]] || {
+    fail 'new managed worktree contains .pi; retained for manual cleanup'
+    return 1
+  }
+  require_empty_git_output 'new managed worktree changed during rollback; retained for manual cleanup' \
+    -C "$WORKTREE" status --porcelain=v1 -z --untracked-files=all || return 1
+  require_empty_git_output 'new managed worktree gained ignored state during rollback; retained for manual cleanup' \
+    -C "$WORKTREE" ls-files --others -i --exclude-standard -z || return 1
+  git -C "$SOURCE_ROOT" worktree remove "$WORKTREE" || {
+    fail 'could not remove new managed worktree; retained for manual cleanup'
+    return 1
+  }
+  verify_absent_worktree_rollback || {
+    fail 'new managed worktree remains after Git removal'
+    return 1
+  }
+}
+
 restore_worktree() {
   local rollback_target=$WORKTREE_PREVIOUS_HEAD
-  preflight_worktree_path_components || return 1
+  preflight_worktree_path_components || {
+    fail 'managed worktree path restoration preflight failed'
+    return 1
+  }
   if [[ -e "$WORKTREE" || -L "$WORKTREE" ]]; then
-    preflight_worktree || return 1
+    preflight_worktree || {
+      fail 'managed worktree state restoration preflight failed'
+      return 1
+    }
     WORKTREE_PREVIOUS_HEAD=$rollback_target
   fi
   if [[ "$rollback_target" == ABSENT ]]; then
-    [[ "$MANAGED_PLAN_FILE_COUNT" == 0 ]] || {
-      fail 'managed Pi plan files appeared; refusing automatic worktree removal'
+    remove_new_worktree || {
+      fail 'new managed worktree rollback requires manual cleanup'
       return 1
     }
-    git -C "$SOURCE_ROOT" worktree remove "$WORKTREE" >/dev/null 2>&1 || true
-    verify_absent_worktree_rollback || return 1
     return 0
   fi
   [[ -d "$WORKTREE" && ! -L "$WORKTREE" ]] || return 1
@@ -1807,6 +1800,7 @@ rollback_service_reconciliation() {
     esac
   fi
   if [[ "$WORKTREE_UPDATE_STARTED" == 1 ]] && ! restore_worktree; then
+    fail 'managed worktree restoration failed'
     failed=1
   fi
   if ! verify_restored_prior_artifacts; then
