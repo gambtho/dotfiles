@@ -107,6 +107,7 @@ make_installer_repo() {
 
 run_installer() {
   run env PI_WEBUI_TESTING=1 PI_WEBUI_TEST_OS_RELEASE="$TEST_OS_RELEASE" \
+    PI_WEBUI_TEST_BEFORE_LOCK_HOOK="${TEST_BEFORE_LOCK_HOOK:-}" \
     PI_WEBUI_TEST_AFTER_NPM_HOOK="${TEST_AFTER_NPM_HOOK:-}" \
     BATS_TEST_TMPDIR="$BATS_TEST_TMPDIR" HOME="$HOME" PATH="$PATH" \
     TEST_COMMAND_LOG="$TEST_COMMAND_LOG" PI_TEST_LAUNCHER="$PI_TEST_LAUNCHER" \
@@ -1083,4 +1084,48 @@ SCRIPT
   [ ! -e "$HOME/hook-ran" ]
   [ ! -e "$HOME/.local/share/pi-webui/runtimes/candidate" ]
   [ ! -e "$HOME/.local/share/pi-webui/transactions/apply.lock" ]
+}
+
+@test "installer preserves a pending handoff that appears before lock acquisition" {
+  make_installer_repo
+  make_valid_platform
+  make_valid_pi
+  stub_successful_npm_ci
+  local state="$HOME/.local/share/pi-webui"
+  local candidate="$state/runtimes/candidate"
+  local transaction="$state/transactions/pending"
+  local worktree="$state/worktrees/dotfiles"
+  mkdir -p "$(dirname "$worktree")"
+  git -C "$INSTALLER_REPO" worktree add -q --detach "$worktree" HEAD
+  local head_before
+  head_before=$(git -C "$worktree" rev-parse HEAD)
+  TEST_BEFORE_LOCK_HOOK="$TEST_ROOT/before-lock-handoff"
+  cat >"$TEST_BEFORE_LOCK_HOOK" <<'SCRIPT'
+#!/usr/bin/env bash
+set -e
+candidate="$HOME/.local/share/pi-webui/runtimes/candidate"
+transaction="$HOME/.local/share/pi-webui/transactions/pending"
+mkdir -p "$candidate" "$transaction"
+printf '%s\n' pi-webui-task2-candidate-v1 >"$candidate/.pi-webui-candidate"
+printf 'preserve candidate handoff\n' >"$candidate/sentinel"
+printf '%s\n' pi-webui-task2-transaction-v1 >"$transaction/.pi-webui-transaction"
+printf 'preserve transaction handoff\n' >"$transaction/sentinel"
+find "$candidate" -type f -exec sha256sum {} + | sort >"$TEST_ROOT/candidate-before-lock"
+find "$transaction" -type f -exec sha256sum {} + | sort >"$TEST_ROOT/transaction-before-lock"
+SCRIPT
+  chmod +x "$TEST_BEFORE_LOCK_HOOK"
+  export TEST_BEFORE_LOCK_HOOK
+
+  run_installer --apply
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"pending transaction already exists; Task 3 must consume or discard it explicitly"* ]]
+  [ "$(cat "$TEST_ROOT/candidate-before-lock")" = "$(file_tree_hashes "$candidate")" ]
+  [ "$(cat "$TEST_ROOT/transaction-before-lock")" = "$(file_tree_hashes "$transaction")" ]
+  [ "$(cat "$candidate/sentinel")" = 'preserve candidate handoff' ]
+  [ "$(cat "$transaction/sentinel")" = 'preserve transaction handoff' ]
+  [ "$(git -C "$worktree" rev-parse HEAD)" = "$head_before" ]
+  [ -z "$(git -C "$worktree" status --porcelain --untracked-files=all --ignored=matching)" ]
+  [ ! -e "$state/transactions/apply.lock" ]
+  run ! grep -q '^npm-ci$' "$TEST_COMMAND_LOG"
 }

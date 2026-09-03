@@ -330,18 +330,22 @@ preflight_worktree_path_components() {
   require_current_user_directory "$STATE_ROOT/worktrees" 'Pi Web UI worktree parent'
 }
 
-preflight_destinations() {
-  preflight_worktree_path_components
-  require_current_user_directory "$RUNTIME_PARENT" 'Pi Web UI runtime parent'
-  require_current_user_directory "$STATE_ROOT/transactions" 'Pi Web UI transaction parent'
+preflight_handoff_state() {
   require_owned_managed_directory "$CANDIDATE_RUNTIME" 'stale candidate runtime' \
     .pi-webui-candidate pi-webui-task2-candidate-v1
   require_owned_managed_directory "$TRANSACTION_DIR" 'stale pending transaction' \
     .pi-webui-transaction pi-webui-task2-transaction-v1
-  if [[ "$MODE" == apply && -e "$TRANSACTION_DIR" ]]; then
+  if [[ "$MODE" == apply && (-e "$TRANSACTION_DIR" || -L "$TRANSACTION_DIR") ]]; then
     fail 'pending transaction already exists; Task 3 must consume or discard it explicitly'
     return 1
   fi
+}
+
+preflight_destinations() {
+  preflight_worktree_path_components
+  require_current_user_directory "$RUNTIME_PARENT" 'Pi Web UI runtime parent'
+  require_current_user_directory "$STATE_ROOT/transactions" 'Pi Web UI transaction parent'
+  preflight_handoff_state
   preflight_apply_lock
 }
 
@@ -411,9 +415,8 @@ release_apply_lock() {
 }
 
 remove_stale_candidate() {
+  preflight_handoff_state
   [[ -e "$CANDIDATE_RUNTIME" || -L "$CANDIDATE_RUNTIME" ]] || return 0
-  require_owned_managed_directory "$CANDIDATE_RUNTIME" 'stale candidate runtime' \
-    .pi-webui-candidate pi-webui-task2-candidate-v1
   rm -rf "$CANDIDATE_RUNTIME"
 }
 
@@ -439,11 +442,11 @@ build_candidate_runtime() {
   bash "$SOURCE_ROOT/bin/validate-pi-webui" --installed-runtime "$CANDIDATE_RUNTIME" >/dev/null
 }
 
-run_test_after_npm_hook() {
-  local hook=${PI_WEBUI_TEST_AFTER_NPM_HOOK:-}
+run_restricted_test_hook() {
+  local variable=$1 hook=$2 description=$3
   [[ -n "$hook" ]] || return 0
   if [[ "${PI_WEBUI_TESTING:-0}" != 1 || -z "${BATS_TEST_TMPDIR:-}" ]]; then
-    fail 'PI_WEBUI_TEST_AFTER_NPM_HOOK is restricted to the test sandbox'
+    fail "$variable is restricted to the test sandbox"
     return 1
   fi
   case "$HOME/" in
@@ -452,13 +455,23 @@ run_test_after_npm_hook() {
   esac
   case "$hook" in
     "$BATS_TEST_TMPDIR"/*) ;;
-    *) fail 'test after-npm hook must be below BATS_TEST_TMPDIR'; return 1 ;;
+    *) fail "test $description hook must be below BATS_TEST_TMPDIR"; return 1 ;;
   esac
   [[ -f "$hook" && ! -L "$hook" && -x "$hook" ]] || {
-    fail 'test after-npm hook must be an executable regular file'
+    fail "test $description hook must be an executable regular file"
     return 1
   }
   "$hook"
+}
+
+run_test_before_lock_hook() {
+  run_restricted_test_hook PI_WEBUI_TEST_BEFORE_LOCK_HOOK \
+    "${PI_WEBUI_TEST_BEFORE_LOCK_HOOK:-}" before-lock
+}
+
+run_test_after_npm_hook() {
+  run_restricted_test_hook PI_WEBUI_TEST_AFTER_NPM_HOOK \
+    "${PI_WEBUI_TEST_AFTER_NPM_HOOK:-}" after-npm
 }
 
 revalidate_worktree_before_mutation() {
@@ -602,7 +615,9 @@ rollback_failed_apply() {
 apply_installation() {
   trap rollback_failed_apply EXIT
   prepare_private_directories
+  run_test_before_lock_hook
   acquire_apply_lock
+  preflight_handoff_state
   build_candidate_runtime
   run_test_after_npm_hook
   revalidate_worktree_before_mutation
