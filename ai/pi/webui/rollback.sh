@@ -17,21 +17,13 @@ usage() {
   printf 'usage: %s [--remove-runtime] [--remove-worktree]\n' "$0"
 }
 
-set_paths() {
+preflight() {
+  require_supported_platform
   resolve_source
   resolve_mise
   resolve_pi
-  STATE_ROOT=${XDG_DATA_HOME:-$HOME/.local/share}/pi-webui
-  INSTALLED_RUNTIME=$STATE_ROOT/runtime/current
-  LANDING_WORKTREE=$STATE_ROOT/worktrees/dotfiles
-  RUNTIME_LAUNCHER=$INSTALLED_RUNTIME/node_modules/.bin/pi-webui
-  UNIT_PATH=${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/pi-webui.service
-  export STATE_ROOT INSTALLED_RUNTIME LANDING_WORKTREE RUNTIME_LAUNCHER UNIT_PATH
-}
-
-preflight() {
-  require_supported_platform
-  set_paths
+  set_managed_paths
+  require_tailscale_daemon
   [[ $(route_state) == empty ]] || fail 'remove the Tailscale Serve route before rollback'
 
   if systemctl --user is-active pi-webui.service >/dev/null 2>&1; then

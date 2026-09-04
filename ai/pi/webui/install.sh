@@ -234,6 +234,15 @@ const response = JSON.parse(process.argv[3]);
 NODE
 }
 
+set_managed_paths() {
+  STATE_ROOT=${XDG_DATA_HOME:-$HOME/.local/share}/pi-webui
+  INSTALLED_RUNTIME=$STATE_ROOT/runtime/current
+  LANDING_WORKTREE=$STATE_ROOT/worktrees/dotfiles
+  RUNTIME_LAUNCHER=$INSTALLED_RUNTIME/node_modules/.bin/pi-webui
+  UNIT_PATH=${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/pi-webui.service
+  export STATE_ROOT INSTALLED_RUNTIME LANDING_WORKTREE RUNTIME_LAUNCHER UNIT_PATH
+}
+
 path_exists() {
   [[ -e "$1" || -L "$1" ]]
 }
@@ -506,12 +515,7 @@ main() {
 
   "$SOURCE_ROOT/bin/validate-pi-webui" --tracked-only
 
-  STATE_ROOT=${XDG_DATA_HOME:-$HOME/.local/share}/pi-webui
-  INSTALLED_RUNTIME=$STATE_ROOT/runtime/current
-  LANDING_WORKTREE=$STATE_ROOT/worktrees/dotfiles
-  RUNTIME_LAUNCHER=$INSTALLED_RUNTIME/node_modules/.bin/pi-webui
-  UNIT_PATH=${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/pi-webui.service
-  export STATE_ROOT INSTALLED_RUNTIME LANDING_WORKTREE RUNTIME_LAUNCHER UNIT_PATH
+  set_managed_paths
 
   validate_landing_worktree "$LANDING_WORKTREE"
   if [[ -e "$INSTALLED_RUNTIME" || -L "$INSTALLED_RUNTIME" ]]; then

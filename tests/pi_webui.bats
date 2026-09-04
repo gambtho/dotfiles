@@ -275,6 +275,13 @@ run_installer_function() {
     "$WEBUI_FIXTURE/ai/pi/webui/install.sh" "$body"
 }
 
+@test "installer exposes the shared managed paths" {
+  make_webui_fixture
+  run_installer_function 'set_managed_paths; printf "%s\n" "$STATE_ROOT|$INSTALLED_RUNTIME|$LANDING_WORKTREE|$RUNTIME_LAUNCHER|$UNIT_PATH"'
+  [ "$status" -eq 0 ]
+  [ "$output" = "$STATE_ROOT|$INSTALLED_RUNTIME|$LANDING_WORKTREE|$INSTALLED_RUNTIME/node_modules/.bin/pi-webui|$UNIT_PATH" ]
+}
+
 write_route() {
   local mode=$1
   case "$mode" in
@@ -374,6 +381,7 @@ prepare_rollback() {
   stub_tailscale_system empty
   stub_command systemctl 'case "$*" in
     "--user show-environment") exit 0 ;;
+    "is-active tailscaled") [[ ${TAILSCALED_INACTIVE:-} != 1 ]] ;;
     "--user is-active pi-webui.service") [[ -f "$TEST_ROOT/service-active" ]] ;;
     "--user stop pi-webui.service") printf "%s\n" stop >>"$MUTATION_CALLS"; rm -f "$TEST_ROOT/service-active" "$TEST_ROOT/listener" ;;
     "--user disable pi-webui.service") printf "%s\n" disable >>"$MUTATION_CALLS"; rm -f "$TEST_ROOT/service-enabled" ;;
@@ -957,6 +965,16 @@ run_rollback() {
   [ "$(<"$MUTATION_CALLS")" = $'stop\ndisable\nreload' ]
   after=$(fingerprint_paths "$HOME/.pi" "$STATE_ROOT" "$TEST_ROOT/tailscale")
   [ "$before" = "$after" ]
+}
+
+@test "rollback requires the Tailscale daemon before route classification" {
+  prepare_rollback
+  export TAILSCALED_INACTIVE=1
+  rm "$TEST_ROOT/route.json"
+  run_rollback
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"tailscaled is not active"* ]]
+  [ ! -s "$MUTATION_CALLS" ]
 }
 
 @test "rollback refuses nonempty Serve or a foreign unit" {

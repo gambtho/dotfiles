@@ -13,7 +13,7 @@ readonly KEY_URL=https://pkgs.tailscale.com/stable/ubuntu/noble.noarmor.gpg
 readonly KEY_SHA=3e03dacf222698c60b8e2f990b809ca1b3e104de127767864284e6c228f1fb39
 readonly SOURCE_LINE='deb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg] https://pkgs.tailscale.com/stable/ubuntu noble main'
 
-set_managed_paths() {
+set_tailscale_paths() {
   local root=${PI_WEBUI_TAILSCALE_ROOT:-}
   if [[ -n "$root" ]]; then
     require_test_override "$root"
@@ -89,12 +89,7 @@ check_local_service() {
   resolve_mise
   resolve_pi
   "$SOURCE_ROOT/bin/validate-pi-webui" --tracked-only
-  STATE_ROOT=${XDG_DATA_HOME:-$HOME/.local/share}/pi-webui
-  INSTALLED_RUNTIME=$STATE_ROOT/runtime/current
-  LANDING_WORKTREE=$STATE_ROOT/worktrees/dotfiles
-  RUNTIME_LAUNCHER=$INSTALLED_RUNTIME/node_modules/.bin/pi-webui
-  UNIT_PATH=${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/pi-webui.service
-  export STATE_ROOT INSTALLED_RUNTIME LANDING_WORKTREE RUNTIME_LAUNCHER UNIT_PATH
+  set_managed_paths
   validate_landing_worktree "$LANDING_WORKTREE"
   if path_exists "$INSTALLED_RUNTIME"; then
     "$SOURCE_ROOT/bin/validate-pi-webui" --installed-runtime "$INSTALLED_RUNTIME"
@@ -141,7 +136,7 @@ check_all() {
 install_tailscale() {
   local temporary key source hash
   require_supported_platform
-  set_managed_paths
+  set_tailscale_paths
   if path_exists "$KEYRING"; then
     [[ -f "$KEYRING" && ! -L "$KEYRING" ]] || fail 'existing Tailscale keyring is not a regular file'
     hash=$(sha256sum "$KEYRING" | awk '{print $1}')
@@ -191,7 +186,7 @@ uninstall_tailscale() {
   require_supported_platform
   require_tailscale_daemon
   [[ $(route_state) == empty ]] || fail 'remove the active Tailscale route before uninstalling'
-  set_managed_paths
+  set_tailscale_paths
   if path_exists "$KEYRING"; then
     [[ -f "$KEYRING" && ! -L "$KEYRING" && "$(sha256sum "$KEYRING" | awk '{print $1}')" == "$KEY_SHA" ]] ||
       fail 'refusing to remove a foreign Tailscale keyring'
