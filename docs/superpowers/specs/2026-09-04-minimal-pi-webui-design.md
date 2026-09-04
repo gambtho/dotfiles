@@ -105,8 +105,8 @@ explicit fixture-only source override that is unavailable in ordinary use.
 
 `install.sh --apply` performs this sequence:
 
-1. Run the same preflight and refuse unresolved legacy candidate, transaction,
-   or apply-lock evidence without deleting it.
+1. Run apply preflight and refuse unresolved legacy candidate, transaction, or
+   apply-lock evidence without deleting it.
 2. Create a private sibling candidate runtime and run the exact npm command.
 3. Revalidate the unchanged lock and validate the installed candidate.
 4. Accept or create the landing worktree only when it belongs to the same Git
@@ -190,7 +190,7 @@ or retained evidence.
 
 ## Testing
 
-Use Bats and TDD for meaningful behavior. Approximately 20–25 tests cover:
+Use Bats and TDD for meaningful behavior. The 43 focused tests cover:
 
 1. exact tracked hashes, identities, and installed optional-dependency absence;
 2. unsupported-platform refusal before mutation;

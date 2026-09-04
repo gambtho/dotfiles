@@ -27,15 +27,15 @@ make ai
 ai/pi/webui/tailscale.sh install
 ai/pi/webui/tailscale.sh up
 make ai-webui-check
-# inspect the plan and obtain separate approval before applying
+# review reported state and obtain separate approval before applying
 make ai-webui
 ai/pi/webui/tailscale.sh serve
 make ai-webui-check
 ```
 
 `up` authenticates interactively and never accepts an auth key. Check mode is
-read-only and must precede every separately approved apply; if it reports an
-apply-time replacement, stop for approval rather than applying automatically.
+read-only and must precede every separately approved apply. Review its reported
+state and obtain approval rather than expecting an apply plan.
 
 From Windows, open exactly `http://127.0.0.1:31415`. A tailnet client opens the
 `https://...` URL printed by `tailscale serve status`.
@@ -75,10 +75,10 @@ mise exec -- npm install --package-lock-only --ignore-scripts --omit=optional \
 Review the complete lock diff and run focused and repository checks before merging.
 
 Before pulling changed runtime pins on an installed host, use the old checkout
-to remove Serve and run `ai/pi/webui/rollback.sh --remove-runtime`. Then pull,
-update Pi if needed, run `make ai-webui-check`, obtain approval, apply, restore Serve, and
-check again. Rollback must run before Pi or mise is upgraded or removed because
-the exact Pi identity is required to prove the managed unit.
+to remove Serve, run `ai/pi/webui/rollback.sh`, then run it again with
+`--remove-runtime`. Pull, update Pi if needed, check, obtain approval, apply,
+restore Serve, and check again. Rollback must run before Pi or mise is upgraded or removed
+because the exact Pi identity is required to prove the managed unit.
 
 ## Rollback and uninstall
 

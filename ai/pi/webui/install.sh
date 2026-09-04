@@ -126,7 +126,7 @@ NODE
 }
 
 validate_landing_worktree() {
-  local worktree=${1:-$LANDING_WORKTREE} common ignored entry owner existing
+  local worktree=${1:-$LANDING_WORKTREE} common ignored owner existing
   if [[ ! -e "$worktree" && ! -L "$worktree" ]]; then
     existing=$(dirname "$worktree")
     while [[ ! -e "$existing" ]]; do existing=$(dirname "$existing"); done
@@ -148,9 +148,7 @@ validate_landing_worktree() {
   [[ -z $(git -C "$worktree" status --porcelain --untracked-files=all) ]] ||
     fail 'landing worktree must be clean'
   ignored=$(git -C "$worktree" status --porcelain --ignored --untracked-files=all)
-  while IFS= read -r entry; do
-    [[ -z "$entry" || "$entry" == '!! .pi/' ]] || fail 'landing worktree contains ignored state'
-  done <<<"$ignored"
+  [[ -z "$ignored" || "$ignored" == '!! .pi/' ]] || fail 'landing worktree contains ignored state'
   if [[ -e "$worktree/.pi" ]]; then
     [[ -d "$worktree/.pi" && ! -L "$worktree/.pi" ]] || fail '.pi must be a real directory'
     [[ -d "$worktree/.pi/plans" && ! -L "$worktree/.pi/plans" ]] || fail '.pi may contain only plans/'
@@ -162,7 +160,7 @@ validate_landing_worktree() {
 
 safe_unit_path() {
   local path=$1 without_controls
-  [[ "$path" == /* && "$path" != *'%'* && "$path" != *'$'* ]] || {
+  [[ "$path" == /* && "$path" != *'%'* && "$path" != *'$'* && "$path" != *' '* && "$path" != *"'"* && "$path" != *'"'* && "$path" != *'\'* ]] || {
     fail 'unsafe path for systemd unit'
     return 1
   }
@@ -217,7 +215,7 @@ validate_active_health() {
 const launcher = process.argv[2];
 const response = JSON.parse(process.argv[3]);
 {
-  const data = response.data;
+  const data = response;
   const network = data?.network;
   if (response.ok !== true || data?.webuiVersion !== '0.10.3' || data?.piVersion !== '0.84.4' ||
       network?.open !== false || network?.host !== '127.0.0.1' || network?.port !== 31415 ||
@@ -236,7 +234,7 @@ NODE
 
 set_managed_paths() {
   STATE_ROOT=${XDG_DATA_HOME:-$HOME/.local/share}/pi-webui
-  INSTALLED_RUNTIME=$STATE_ROOT/runtime/current
+  INSTALLED_RUNTIME=$STATE_ROOT/runtimes/current
   LANDING_WORKTREE=$STATE_ROOT/worktrees/dotfiles
   RUNTIME_LAUNCHER=$INSTALLED_RUNTIME/node_modules/.bin/pi-webui
   UNIT_PATH=${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/pi-webui.service
@@ -295,7 +293,7 @@ reject_retained_apply_state() {
 }
 
 build_candidate() {
-  local runtime_parent=$STATE_ROOT/runtime source_runtime unit_directory
+  local runtime_parent=$STATE_ROOT/runtimes source_runtime unit_directory
   reject_retained_apply_state || return 1
   unit_directory=$(dirname "$UNIT_PATH")
   prepare_managed_directory "$STATE_ROOT" 'Pi Web UI state root' || return 1
@@ -365,13 +363,13 @@ publish_candidate() {
     mv "$INSTALLED_RUNTIME" "$PRIOR_RUNTIME_BACKUP" || return 1
     runtime_changed=1
   fi
+  worktree_changed=1
   if [[ "$PRIOR_COMMIT" == ABSENT ]]; then
     mkdir -p "$(dirname "$LANDING_WORKTREE")" || return 1
     git -C "$SOURCE_ROOT" worktree add --detach "$LANDING_WORKTREE" refs/remotes/origin/main || return 1
   else
     git -C "$LANDING_WORKTREE" checkout --detach refs/remotes/origin/main || return 1
   fi
-  worktree_changed=1
   mv "$CANDIDATE_RUNTIME" "$INSTALLED_RUNTIME" || return 1
   runtime_changed=1
   publish_unit || return 1
@@ -431,7 +429,8 @@ restore_prior_state() {
   fi
   if [[ "$worktree_changed" -eq 1 ]]; then
     if [[ "$PRIOR_COMMIT" == ABSENT ]]; then
-      git -C "$SOURCE_ROOT" worktree remove "$LANDING_WORKTREE" || failed=1
+      if path_exists "$LANDING_WORKTREE" && ! git -C "$SOURCE_ROOT" worktree remove --force "$LANDING_WORKTREE" && ! rm -rf -- "$LANDING_WORKTREE"; then failed=1; fi
+      git -C "$SOURCE_ROOT" worktree prune || failed=1
     else
       git -C "$LANDING_WORKTREE" checkout --detach "$PRIOR_COMMIT" || failed=1
     fi
@@ -450,11 +449,7 @@ restore_prior_state() {
     enablement_changed=0
   fi
   if [[ "$stopped" -eq 1 ]]; then
-    if [[ "$PRIOR_ACTIVE" -eq 1 ]]; then
-      systemctl --user start pi-webui.service || failed=1
-    else
-      systemctl --user stop pi-webui.service || failed=1
-    fi
+    systemctl --user start pi-webui.service || failed=1
   fi
   if [[ "$failed" -eq 0 ]]; then
     cleanup_apply_paths || failed=1

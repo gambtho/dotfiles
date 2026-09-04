@@ -36,7 +36,7 @@ ai-check: ## Dry-run: show what the Pi install would do
 ai-webui: ## Install/update the opt-in Pi Web UI
 	bash ai/pi/webui/install.sh --apply
 
-ai-webui-check: ## Read-only Pi Web UI configuration and health check
+ai-webui-check: ## Inspect Pi Web UI state without mutation
 	bash ai/pi/webui/install.sh --check
 
 pins: ## List managed dependency versions and refs

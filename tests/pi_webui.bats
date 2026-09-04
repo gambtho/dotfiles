@@ -6,7 +6,7 @@ setup() {
   setup_dotfiles_test
   WEBUI_FIXTURE="$TEST_ROOT/repo"
   STATE_ROOT="$HOME/.local/share/pi-webui"
-  INSTALLED_RUNTIME="$STATE_ROOT/runtime/current"
+  INSTALLED_RUNTIME="$STATE_ROOT/runtimes/current"
   LANDING_WORKTREE="$STATE_ROOT/worktrees/dotfiles"
   UNIT_PATH="$XDG_CONFIG_HOME/systemd/user/pi-webui.service"
   MUTATION_CALLS="$TEST_ROOT/mutation-calls"
@@ -211,9 +211,9 @@ assert_prior_apply_state() {
 
 stub_healthy_system() {
   if [[ -z ${HEALTH_JSON:-} ]]; then
-    HEALTH_JSON='{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"open":false,"host":"127.0.0.1","port":31415,"networkUrls":[]},"tabs":[{"cwd":"/tmp/another-project","running":true,"command":"'
+    HEALTH_JSON='{"ok":true,"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"open":false,"host":"127.0.0.1","port":31415,"networkUrls":[]},"tabs":[{"cwd":"/tmp/another-project","running":true,"command":"'
     HEALTH_JSON+="$PI_LAUNCHER --mode rpc --session x"
-    HEALTH_JSON+='"}]}}'
+    HEALTH_JSON+='"}]}'
     export HEALTH_JSON
   fi
   stub_command systemctl 'case "$*" in
@@ -279,7 +279,7 @@ run_installer_function() {
   make_webui_fixture
   run_installer_function 'set_managed_paths; printf "%s\n" "$STATE_ROOT|$INSTALLED_RUNTIME|$LANDING_WORKTREE|$RUNTIME_LAUNCHER|$UNIT_PATH"'
   [ "$status" -eq 0 ]
-  [ "$output" = "$STATE_ROOT|$INSTALLED_RUNTIME|$LANDING_WORKTREE|$INSTALLED_RUNTIME/node_modules/.bin/pi-webui|$UNIT_PATH" ]
+  [ "$output" = "$STATE_ROOT|$STATE_ROOT/runtimes/current|$LANDING_WORKTREE|$STATE_ROOT/runtimes/current/node_modules/.bin/pi-webui|$UNIT_PATH" ]
 }
 
 write_route() {
@@ -586,20 +586,20 @@ run_rollback() {
 @test "active health permits empty tabs and project cwd tabs but rejects wrong launchers or open networking" {
   make_webui_fixture
   make_external_pi
-  export HEALTH_JSON='{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"open":false,"host":"127.0.0.1","port":31415,"networkUrls":[]},"tabs":[]}}'
+  export HEALTH_JSON='{"ok":true,"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"open":false,"host":"127.0.0.1","port":31415,"networkUrls":[]},"tabs":[]}'
   stub_healthy_system
   run_installer_function 'validate_active_health "$PI_LAUNCHER"'
   [ "$status" -eq 0 ]
 
-  export HEALTH_JSON="{\"ok\":true,\"data\":{\"webuiVersion\":\"0.10.3\",\"piVersion\":\"0.84.4\",\"network\":{\"open\":false,\"host\":\"127.0.0.1\",\"port\":31415,\"networkUrls\":[]},\"tabs\":[{\"cwd\":\"/tmp/project\",\"running\":true,\"command\":\"$PI_LAUNCHER --mode rpc --session x\"}]}}"
+  export HEALTH_JSON="{\"ok\":true,\"webuiVersion\":\"0.10.3\",\"piVersion\":\"0.84.4\",\"network\":{\"open\":false,\"host\":\"127.0.0.1\",\"port\":31415,\"networkUrls\":[]},\"tabs\":[{\"cwd\":\"/tmp/project\",\"running\":true,\"command\":\"$PI_LAUNCHER --mode rpc --session x\"}]}"
   run_installer_function 'validate_active_health "$PI_LAUNCHER"'
   [ "$status" -eq 0 ]
 
-  export HEALTH_JSON="{\"ok\":true,\"data\":{\"webuiVersion\":\"0.10.3\",\"piVersion\":\"0.84.4\",\"network\":{\"open\":false,\"host\":\"127.0.0.1\",\"port\":31415,\"networkUrls\":[]},\"tabs\":[{\"cwd\":\"/tmp/project\",\"running\":true,\"command\":\"/wrong/pi --mode rpc\"}]}}"
+  export HEALTH_JSON="{\"ok\":true,\"webuiVersion\":\"0.10.3\",\"piVersion\":\"0.84.4\",\"network\":{\"open\":false,\"host\":\"127.0.0.1\",\"port\":31415,\"networkUrls\":[]},\"tabs\":[{\"cwd\":\"/tmp/project\",\"running\":true,\"command\":\"/wrong/pi --mode rpc\"}]}"
   run_installer_function 'validate_active_health "$PI_LAUNCHER"'
   [ "$status" -ne 0 ]
 
-  export HEALTH_JSON="{\"ok\":true,\"data\":{\"webuiVersion\":\"0.10.3\",\"piVersion\":\"0.84.4\",\"network\":{\"open\":true,\"host\":\"127.0.0.1\",\"port\":31415,\"networkUrls\":[]},\"tabs\":[]}}"
+  export HEALTH_JSON="{\"ok\":true,\"webuiVersion\":\"0.10.3\",\"piVersion\":\"0.84.4\",\"network\":{\"open\":true,\"host\":\"127.0.0.1\",\"port\":31415,\"networkUrls\":[]},\"tabs\":[]}"
   run_installer_function 'validate_active_health "$PI_LAUNCHER"'
   [ "$status" -ne 0 ]
 }
@@ -607,7 +607,7 @@ run_rollback() {
 @test "active health rejects non-loopback or multiple listeners" {
   make_webui_fixture
   make_external_pi
-  export HEALTH_JSON='{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"open":false,"host":"127.0.0.1","port":31415,"networkUrls":[]},"tabs":[]}}'
+  export HEALTH_JSON='{"ok":true,"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"open":false,"host":"127.0.0.1","port":31415,"networkUrls":[]},"tabs":[]}'
   stub_healthy_system
 
   stub_command ss 'printf "%s\\n" "LISTEN 0 128 0.0.0.0:31415 0.0.0.0:*"'
@@ -623,7 +623,7 @@ run_rollback() {
 
 @test "apply uses npm ci --ignore-scripts --omit=optional and preserves the lock" {
   prepare_apply_fixture npm-flags
-  export HEALTH_JSON='{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"open":false,"host":"127.0.0.1","port":31415,"networkUrls":[]},"tabs":[]}}'
+  export HEALTH_JSON='{"ok":true,"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"open":false,"host":"127.0.0.1","port":31415,"networkUrls":[]},"tabs":[]}'
   touch "$TEST_ROOT/service-active" "$TEST_ROOT/service-enabled"
   stub_apply_system
   before=$(sha256sum "$WEBUI_FIXTURE/ai/pi/webui/runtime/package-lock.json")
@@ -641,7 +641,7 @@ run_rollback() {
 
 @test "apply refuses a symlinked managed state directory before publication" {
   prepare_apply_fixture symlinked-state
-  export HEALTH_JSON='{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"open":false,"host":"127.0.0.1","port":31415,"networkUrls":[]},"tabs":[]}}'
+  export HEALTH_JSON='{"ok":true,"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"open":false,"host":"127.0.0.1","port":31415,"networkUrls":[]},"tabs":[]}'
   touch "$TEST_ROOT/service-active" "$TEST_ROOT/service-enabled"
   stub_apply_system
   mv "$STATE_ROOT" "$TEST_ROOT/state-target"
@@ -658,7 +658,7 @@ run_rollback() {
 
 @test "apply refuses a symlinked managed unit directory before publication" {
   prepare_apply_fixture symlinked-unit
-  export HEALTH_JSON='{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"open":false,"host":"127.0.0.1","port":31415,"networkUrls":[]},"tabs":[]}}'
+  export HEALTH_JSON='{"ok":true,"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"open":false,"host":"127.0.0.1","port":31415,"networkUrls":[]},"tabs":[]}'
   touch "$TEST_ROOT/service-active" "$TEST_ROOT/service-enabled"
   stub_apply_system
   mv "$(dirname "$UNIT_PATH")" "$TEST_ROOT/unit-target"
@@ -674,23 +674,19 @@ run_rollback() {
 }
 
 @test "apply rejects unsafe rendered paths before verification or publication" {
-  local unsafe label
+  local unsafe
   make_webui_fixture
   make_external_pi
   make_candidate_installer
-  export HEALTH_JSON='{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"open":false,"host":"127.0.0.1","port":31415,"networkUrls":[]},"tabs":[]}}'
+  export HEALTH_JSON='{"ok":true,"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"open":false,"host":"127.0.0.1","port":31415,"networkUrls":[]},"tabs":[]}'
   stub_apply_system
 
-  for label in percent dollar control; do
-    case "$label" in
-      percent) unsafe="$TEST_ROOT/data%unsafe" ;;
-      dollar) unsafe="$TEST_ROOT/data\$unsafe" ;;
-      control) unsafe="$TEST_ROOT/"$'data\nunsafe' ;;
-    esac
+  for unsafe in "$TEST_ROOT/data%unsafe" "$TEST_ROOT/data\$unsafe" "$TEST_ROOT/data unsafe" \
+    "$TEST_ROOT/data'unsafe" "$TEST_ROOT/data\"unsafe" "$TEST_ROOT/data\\unsafe" "$TEST_ROOT/"$'data\nunsafe'; do
     export XDG_DATA_HOME="$unsafe"
-    export XDG_CONFIG_HOME="$TEST_ROOT/config-$label"
+    export XDG_CONFIG_HOME="$TEST_ROOT/config"
     STATE_ROOT="$XDG_DATA_HOME/pi-webui"
-    INSTALLED_RUNTIME="$STATE_ROOT/runtime/current"
+    INSTALLED_RUNTIME="$STATE_ROOT/runtimes/current"
     LANDING_WORKTREE="$STATE_ROOT/worktrees/dotfiles"
     UNIT_PATH="$XDG_CONFIG_HOME/systemd/user/pi-webui.service"
     export STATE_ROOT INSTALLED_RUNTIME LANDING_WORKTREE UNIT_PATH
@@ -709,7 +705,7 @@ run_rollback() {
 
 @test "apply validates candidate before stopping the managed service" {
   prepare_apply_fixture candidate-validation
-  export HEALTH_JSON='{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"open":false,"host":"127.0.0.1","port":31415,"networkUrls":[]},"tabs":[]}}'
+  export HEALTH_JSON='{"ok":true,"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"open":false,"host":"127.0.0.1","port":31415,"networkUrls":[]},"tabs":[]}'
   export FAIL_POINT=candidate-verify
   touch "$TEST_ROOT/service-active" "$TEST_ROOT/service-enabled"
   stub_apply_system
@@ -724,7 +720,7 @@ run_rollback() {
 
 @test "apply creates or advances only a clean detached landing worktree" {
   prepare_apply_fixture landing
-  export HEALTH_JSON='{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"open":false,"host":"127.0.0.1","port":31415,"networkUrls":[]},"tabs":[]}}'
+  export HEALTH_JSON='{"ok":true,"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"open":false,"host":"127.0.0.1","port":31415,"networkUrls":[]},"tabs":[]}'
   stub_apply_system
   rm -rf "$LANDING_WORKTREE"
   git -C "$WEBUI_FIXTURE" worktree prune
@@ -745,7 +741,7 @@ run_rollback() {
 
 @test "apply restores after runtime publication failure" {
   prepare_apply_fixture runtime-failure
-  export HEALTH_JSON='{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"open":false,"host":"127.0.0.1","port":31415,"networkUrls":[]},"tabs":[]}}'
+  export HEALTH_JSON='{"ok":true,"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"open":false,"host":"127.0.0.1","port":31415,"networkUrls":[]},"tabs":[]}'
   export FAIL_POINT=runtime-publication
   touch "$TEST_ROOT/service-active" "$TEST_ROOT/service-enabled"
   stub_apply_system
@@ -765,7 +761,7 @@ run_rollback() {
 
 @test "apply restores after unit or daemon-reload failure" {
   prepare_apply_fixture daemon-failure
-  export HEALTH_JSON='{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"open":false,"host":"127.0.0.1","port":31415,"networkUrls":[]},"tabs":[]}}'
+  export HEALTH_JSON='{"ok":true,"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"open":false,"host":"127.0.0.1","port":31415,"networkUrls":[]},"tabs":[]}'
   export FAIL_POINT=daemon-reload
   touch "$TEST_ROOT/service-active" "$TEST_ROOT/service-enabled"
   stub_apply_system
@@ -777,14 +773,15 @@ run_rollback() {
   assert_prior_apply_state daemon-failure 1 1
 }
 
-@test "apply restores an absent prior installation after health failure" {
+@test "apply restores an absent prior installation after partial worktree creation" {
   prepare_apply_fixture absent-prior
-  export HEALTH_JSON='{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"open":false,"host":"127.0.0.1","port":31415,"networkUrls":[]},"tabs":[]}}'
-  export FAIL_POINT=health STRICT_UNLOADED=1
+  export HEALTH_JSON='{"ok":true,"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"open":false,"host":"127.0.0.1","port":31415,"networkUrls":[]},"tabs":[]}'
+  export STRICT_UNLOADED=1
   rm -rf "$INSTALLED_RUNTIME"
   rm -f "$UNIT_PATH"
   git -C "$WEBUI_FIXTURE" worktree remove --force "$LANDING_WORKTREE"
   stub_apply_system
+  stub_command git 'if [[ "$*" == *" worktree add --detach "* ]]; then /usr/bin/git "$@"; exit 1; fi; exec /usr/bin/git "$@"'
 
   run_installer --apply
 
@@ -795,14 +792,14 @@ run_rollback() {
   [ ! -e "$LANDING_WORKTREE" ]
   [ ! -e "$TEST_ROOT/service-active" ]
   [ ! -e "$TEST_ROOT/service-enabled" ]
-  [ "$(grep -c 'systemctl --user stop pi-webui.service' "$CALLS")" -eq 1 ]
+  [ "$(grep -c 'systemctl --user stop pi-webui.service' "$CALLS")" -eq 0 ]
   [ -z "$(find "$STATE_ROOT" -maxdepth 1 -name '.apply.*' -print -quit)" ]
-  [ -z "$(find "$STATE_ROOT/runtime" -maxdepth 1 -name '.candidate.*' -print -quit)" ]
+  [ -z "$(find "$STATE_ROOT/runtimes" -maxdepth 1 -name '.candidate.*' -print -quit)" ]
 }
 
 @test "apply restores prior commit enablement and activity after health failure" {
   prepare_apply_fixture health-failure
-  export HEALTH_JSON='{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"open":false,"host":"127.0.0.1","port":31415,"networkUrls":[]},"tabs":[]}}'
+  export HEALTH_JSON='{"ok":true,"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"open":false,"host":"127.0.0.1","port":31415,"networkUrls":[]},"tabs":[]}'
   export FAIL_POINT=health
   stub_apply_system
 
@@ -856,8 +853,11 @@ run_rollback() {
   [ ! -s "$CALLS" ]
 }
 
-@test "tailscale serve-off removes only the exact owned route" {
-  prepare_tailscale_check foreign
+@test "tailscale serve-off is idempotent and removes only the exact owned route" {
+  prepare_tailscale_check empty
+  run_tailscale serve-off
+  [ "$status" -eq 0 ]
+  write_route foreign
   run_tailscale serve-off
   [ "$status" -ne 0 ]
   ! grep -F 'sudo tailscale serve' "$CALLS"
@@ -877,8 +877,8 @@ run_rollback() {
   prepare_tailscale_check empty
   run_tailscale check
   [ "$status" -eq 0 ]
-  grep -F 'http://172.20.1.4:31415/' "$CALLS"
-  grep -F 'http://192.168.1.7:31415/' "$CALLS"
+  grep -F -- '--max-time 5 http://172.20.1.4:31415/' "$CALLS"
+  grep -F -- '--max-time 5 http://192.168.1.7:31415/' "$CALLS"
   ! grep -F 'http://100.64.0.1:31415/' "$CALLS"
 
   stub_command curl 'case " $* " in

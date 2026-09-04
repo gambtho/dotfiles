@@ -116,7 +116,7 @@ check_lan() {
   while read -r interface address; do
     [[ -n "$address" && "$interface" != tailscale0 ]] || continue
     ((count += 1))
-    if curl --silent --show-error --connect-timeout 1 "http://$address:31415/" >/dev/null 2>&1; then
+    if curl --silent --show-error --connect-timeout 1 --max-time 5 "http://$address:31415/" >/dev/null 2>&1; then
       fail "Pi Web UI is reachable on LAN address $address"
       return 1
     fi
@@ -175,9 +175,12 @@ serve() {
 }
 
 serve_off() {
+  local state
   require_supported_platform
   require_tailscale_daemon
-  [[ $(route_state) == exact ]] || fail 'refusing to remove a foreign or empty route'
+  state=$(route_state)
+  [[ "$state" != empty ]] || return 0
+  [[ "$state" == exact ]] || fail 'refusing to remove a foreign route'
   sudo tailscale serve --https=443 off
   [[ $(route_state) == empty ]] || fail 'Tailscale route remains after removal'
 }
