@@ -290,12 +290,22 @@ write_route() {
       printf '{}\n' >"$TEST_ROOT/route.json"
       printf 'No serve config\n' >"$TEST_ROOT/route.txt"
       ;;
-    exact)
+    legacy-exact)
       printf '%s\n' '{"TCP":{"443":{"HTTPS":true}},"Web":{"wsl.test.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:31415"}}}},"AllowFunnel":{"wsl.test.ts.net:443":false}}' >"$TEST_ROOT/route.json"
       printf 'https://wsl.test.ts.net (tailnet only)\n|-- / proxy http://127.0.0.1:31415\n' >"$TEST_ROOT/route.txt"
       ;;
+    raw)
+      printf '%s\n' \
+        '{"TCP":{"443":{"TCPForward":"127.0.0.1:8443"}}}' \
+        >"$TEST_ROOT/route.json"
+      printf '%s\n' \
+        'tcp://wsl.test.ts.net:443 (tailnet only)' \
+        '|-- tcp://100.64.0.1:443' \
+        '|--> tcp://127.0.0.1:8443' \
+        >"$TEST_ROOT/route.txt"
+      ;;
     funnel)
-      write_route exact
+      write_route legacy-exact
       printf '%s\n' '{"TCP":{"443":{"HTTPS":true}},"Web":{"wsl.test.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:31415"}}}},"AllowFunnel":{"wsl.test.ts.net:443":true}}' >"$TEST_ROOT/route.json"
       ;;
     foreign)
@@ -303,7 +313,7 @@ write_route() {
       printf 'https://other.test.ts.net (tailnet only)\n|-- / proxy http://127.0.0.1:31415\n' >"$TEST_ROOT/route.txt"
       ;;
     multiple)
-      write_route exact
+      write_route legacy-exact
       printf '%s\n' '{"TCP":{"443":{"HTTPS":true}},"Web":{"wsl.test.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:31415"},"/other":{"Proxy":"http://127.0.0.1:31415"}}}},"AllowFunnel":{"wsl.test.ts.net:443":false}}' >"$TEST_ROOT/route.json"
       ;;
   esac
@@ -313,13 +323,20 @@ write_route() {
 stub_tailscale_system() {
   stub_healthy_system
   write_route "${1:-empty}"
-  printf '%s\n' '{"BackendState":"Running","Self":{"Online":true,"DNSName":"wsl.test.ts.net."}}' >"$TEST_ROOT/tailscale-status.json"
+  printf '%s\n' '{"BackendState":"Running","Version":"1.102.3","Self":{"Online":true,"DNSName":"wsl.test.ts.net.","TailscaleIPs":["100.64.0.1"]}}' >"$TEST_ROOT/tailscale-status.json"
   stub_command systemctl 'case "$*" in
     "is-active tailscaled"|"--user show-environment"|"--user is-active pi-webui.service") exit 0 ;;
     *) printf "systemctl %s\\n" "$*" >>"$MUTATION_CALLS"; exit 99 ;;
   esac'
   stub_command tailscale 'case "$*" in
-    "status --json") cat "$TEST_ROOT/tailscale-status.json" ;;
+    "status --json")
+      content=$(cat "$TEST_ROOT/tailscale-status.json")
+      if [[ -n "${TAILSCALE_DAEMON_VERSION:-}" ]]; then
+        content=${content/1.102.3/$TAILSCALE_DAEMON_VERSION}
+      fi
+      printf "%s\\n" "$content"
+      ;;
+    "version --json") printf "{\"short\":\"%s\"}\n" "${TAILSCALE_CLIENT_VERSION:-1.102.3}" ;;
     "serve status --json") cat "$TEST_ROOT/route.json" ;;
     "funnel status --json") cat "$TEST_ROOT/funnel.json" ;;
     "serve status") cat "$TEST_ROOT/route.txt" ;;
@@ -348,6 +365,16 @@ stub_tailscale_system() {
           cp "$TEST_ROOT/route.json" "$TEST_ROOT/funnel.json"
           printf "No serve config\\n" >"$TEST_ROOT/route.txt"
         fi ;;
+      "tailscale serve --bg --tcp=443 tcp://127.0.0.1:8443")
+        printf "%s\\n" "{\"TCP\":{\"443\":{\"TCPForward\":\"127.0.0.1:8443\"}}}" >"$TEST_ROOT/route.json"
+        cp "$TEST_ROOT/route.json" "$TEST_ROOT/funnel.json"
+        printf "tcp://wsl.test.ts.net:443 (tailnet only)\\n|-- tcp://100.64.0.1:443\\n|--> tcp://127.0.0.1:8443\\n" >"$TEST_ROOT/route.txt" ;;
+      "tailscale serve --tcp=443 off")
+        if [[ ${SERVE_OFF_STICKS:-} != 1 ]]; then
+          printf "{}\\n" >"$TEST_ROOT/route.json"
+          cp "$TEST_ROOT/route.json" "$TEST_ROOT/funnel.json"
+          printf "No serve config\\n" >"$TEST_ROOT/route.txt"
+        fi ;;
       *"tailscale.list") printf "source %s\\n" "$(cat "${@: -2:1}")" >>"$CALLS" ;;
     esac'
   stub_command apt-get 'printf "apt-get %s\\n" "$*" >>"$CALLS"'
@@ -371,6 +398,12 @@ prepare_tailscale_check() {
 
 run_tailscale() {
   run "$WEBUI_FIXTURE/ai/pi/webui/tailscale.sh" "$@"
+}
+
+run_tailscale_function() {
+  local body=$1
+  run bash -c 'source "$1"; shift; eval "$1"' bash \
+    "$WEBUI_FIXTURE/ai/pi/webui/tailscale.sh" "$body"
 }
 
 prepare_rollback() {
@@ -808,17 +841,72 @@ run_rollback() {
   assert_prior_apply_state health-failure 0 0
 }
 
-@test "tailscale check accepts empty or exact tailnet-only route" {
+@test "route classifier distinguishes empty legacy and exact raw TCP" {
+  prepare_tailscale_check empty
+  run_tailscale_function 'route_state'
+  [ "$status" -eq 0 ]
+  [ "$output" = empty ]
+
+  write_route legacy-exact
+  run_tailscale_function 'route_state'
+  [ "$status" -eq 0 ]
+  [ "$output" = legacy-exact ]
+
+  write_route raw
+  run_tailscale_function 'route_state'
+  [ "$status" -eq 0 ]
+  [ "$output" = raw-exact ]
+}
+
+@test "raw TCP classifier rejects near-miss route shapes" {
+  prepare_tailscale_check empty
+  local shape
+  for shape in \
+    '{"TCP":{"443":{"HTTPS":true}}}' \
+    '{"TCP":{"443":{"HTTP":true}}}' \
+    '{"TCP":{"443":{"TerminateTLS":true}}}' \
+    '{"TCP":{"443":{"TCPForward":"127.0.0.1:9999"}}}' \
+    '{"TCP":{"443":{"TCPForward":"127.0.0.1:8443"},"8443":{"TCPForward":"127.0.0.1:8443"}}}' \
+    '{"TCP":{"443":{"TCPForward":"127.0.0.1:8443"}},"Web":{"wsl.test.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:31415"}}}}}' \
+    '{"TCP":{"443":{"TCPForward":"127.0.0.1:8443"}},"AllowFunnel":{"wsl.test.ts.net:443":true}}' \
+    '{"TCP":{"443":{"TCPForward":"127.0.0.1:8443"}},"Unknown":{"anything":true}}' \
+  ; do
+    printf '%s\n' "$shape" >"$TEST_ROOT/route.json"
+    cp "$TEST_ROOT/route.json" "$TEST_ROOT/funnel.json"
+    run_tailscale_function 'route_state'
+    [ "$status" -ne 0 ]
+  done
+}
+
+@test "route operations reject mismatched Tailscale client or daemon versions" {
+  prepare_tailscale_check raw
+  export TAILSCALE_CLIENT_VERSION=1.103.0
+  run_tailscale check
+  [ "$status" -ne 0 ]
+  [ ! -s "$MUTATION_CALLS" ]
+
+  export TAILSCALE_CLIENT_VERSION=1.102.3
+  export TAILSCALE_DAEMON_VERSION=1.103.0-tforeign
+  run_tailscale check
+  [ "$status" -ne 0 ]
+  [ ! -s "$MUTATION_CALLS" ]
+}
+
+@test "tailscale check accepts empty or raw exact tailnet-only route" {
   prepare_tailscale_check empty
   run_tailscale check
   [ "$status" -eq 0 ]
-  write_route exact
+  write_route raw
   run_tailscale check
   [ "$status" -eq 0 ]
-  printf '  https://wsl.test.ts.net   (tailnet only)  \n  |--   /   proxy   http://127.0.0.1:31415  \n' >"$TEST_ROOT/route.txt"
+  printf '  tcp://wsl.test.ts.net:443   (tailnet only)  \n  |--   tcp://100.64.0.1:443  \n  |-->   tcp://127.0.0.1:8443  \n' >"$TEST_ROOT/route.txt"
   run_tailscale check
   [ "$status" -eq 0 ]
-  printf 'https://wsl.test.ts.net\n|-- / proxy http://127.0.0.1:31415\n' >"$TEST_ROOT/route.txt"
+  printf 'tcp://wsl.test.ts.net:443\n|-- tcp://100.64.0.1:443\n|--> tcp://127.0.0.1:8443\n' >"$TEST_ROOT/route.txt"
+  run_tailscale check
+  [ "$status" -ne 0 ]
+
+  write_route legacy-exact
   run_tailscale check
   [ "$status" -ne 0 ]
 }
@@ -832,17 +920,17 @@ run_rollback() {
     [ "$status" -ne 0 ]
     [ ! -s "$MUTATION_CALLS" ]
   done
-  write_route exact
+  write_route legacy-exact
   printf '{}\n' >"$TEST_ROOT/funnel.json"
   run_tailscale check
   [ "$status" -ne 0 ]
 }
 
-@test "tailscale serve publishes only HTTPS 443 to the loopback backend" {
+@test "tailscale serve publishes only raw TCP 443 to the loopback backend" {
   prepare_tailscale_check empty
   run_tailscale serve
   [ "$status" -eq 0 ]
-  grep -Fx 'sudo tailscale serve --bg --https=443 http://127.0.0.1:31415' "$CALLS"
+  grep -Fx 'sudo tailscale serve --bg --tcp=443 tcp://127.0.0.1:8443' "$CALLS"
 
   rm -rf "$INSTALLED_RUNTIME"
   : >"$CALLS"
@@ -851,7 +939,7 @@ run_rollback() {
   [ ! -s "$CALLS" ]
 }
 
-@test "tailscale serve-off is idempotent and removes only the exact owned route" {
+@test "tailscale serve-off is idempotent and removes only the raw owned route" {
   prepare_tailscale_check empty
   run_tailscale serve-off
   [ "$status" -eq 0 ]
@@ -859,16 +947,16 @@ run_rollback() {
   run_tailscale serve-off
   [ "$status" -ne 0 ]
   ! grep -F 'sudo tailscale serve' "$CALLS"
-  write_route exact
+  write_route raw
   export SERVE_OFF_STICKS=1
   run_tailscale serve-off
   [ "$status" -ne 0 ]
   [[ "$output" == *"route remains after removal"* ]]
   unset SERVE_OFF_STICKS
-  printf '%s\n' '{"BackendState":"Running","Self":{"Online":false,"DNSName":"wsl.test.ts.net."}}' >"$TEST_ROOT/tailscale-status.json"
+  printf '%s\n' '{"BackendState":"Running","Version":"1.102.3","Self":{"Online":false,"DNSName":"wsl.test.ts.net.","TailscaleIPs":["100.64.0.1"]}}' >"$TEST_ROOT/tailscale-status.json"
   run_tailscale serve-off
   [ "$status" -eq 0 ]
-  grep -Fx 'sudo tailscale serve --https=443 off' "$CALLS"
+  grep -Fx 'sudo tailscale serve --tcp=443 off' "$CALLS"
 }
 
 @test "LAN detection excludes tailscale0 without assuming eth0" {
@@ -977,7 +1065,7 @@ run_rollback() {
 
 @test "rollback refuses nonempty Serve or a foreign unit" {
   prepare_rollback
-  write_route exact
+  write_route legacy-exact
   run_rollback
   [ "$status" -ne 0 ]
   [ ! -s "$MUTATION_CALLS" ]
@@ -1032,7 +1120,7 @@ run_rollback() {
 
 @test "tailscale uninstall preserves identity and refuses an active route" {
   make_webui_fixture
-  stub_tailscale_system exact
+  stub_tailscale_system legacy-exact
   export PI_WEBUI_TAILSCALE_ROOT="$TEST_ROOT/system-root"
   mkdir -p "$PI_WEBUI_TAILSCALE_ROOT/usr/share/keyrings" "$PI_WEBUI_TAILSCALE_ROOT/etc/apt/sources.list.d" "$PI_WEBUI_TAILSCALE_ROOT/var/lib/tailscale"
   printf key-bytes >"$PI_WEBUI_TAILSCALE_ROOT/usr/share/keyrings/tailscale-archive-keyring.gpg"

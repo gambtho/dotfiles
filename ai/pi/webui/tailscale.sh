@@ -8,7 +8,10 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
 # shellcheck source=ai/pi/webui/install.sh
 source "$SCRIPT_DIR/install.sh"
 
-readonly BACKEND=http://127.0.0.1:31415
+readonly LEGACY_BACKEND=http://127.0.0.1:31415
+readonly RAW_BACKEND=127.0.0.1:8443
+readonly RAW_TARGET=tcp://127.0.0.1:8443
+readonly SUPPORTED_TAILSCALE_VERSION=1.102.3
 readonly KEY_URL=https://pkgs.tailscale.com/stable/ubuntu/noble.noarmor.gpg
 readonly KEY_SHA=3e03dacf222698c60b8e2f990b809ca1b3e104de127767864284e6c228f1fb39
 readonly SOURCE_LINE='deb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg] https://pkgs.tailscale.com/stable/ubuntu noble main'
@@ -36,14 +39,27 @@ if (value.BackendState !== 'Running' || value.Self?.Online !== true) process.exi
 NODE
 }
 
+require_tailscale_version() {
+  local client status
+  client=$(tailscale version --json) || fail 'cannot read Tailscale client version'
+  status=$(tailscale status --json) || fail 'cannot read Tailscale daemon version'
+  node - "$client" "$status" "$SUPPORTED_TAILSCALE_VERSION" <<'NODE' || fail 'unsupported Tailscale client or daemon version'
+const [clientText, statusText, supported] = process.argv.slice(2);
+const client = JSON.parse(clientText);
+const status = JSON.parse(statusText);
+if (client.short !== supported || typeof status.Version !== 'string' ||
+    !(status.Version === supported || status.Version.startsWith(`${supported}-`))) process.exit(1);
+NODE
+}
+
 route_state() {
   local serve funnel human status
   serve=$(tailscale serve status --json) || fail 'cannot read Tailscale Serve state'
   funnel=$(tailscale funnel status --json) || fail 'cannot read Tailscale Funnel state'
   human=$(tailscale serve status) || fail 'cannot read human Tailscale Serve status'
   status=$(tailscale status --json) || fail 'cannot read Tailscale status'
-  node - "$serve" "$funnel" "$human" "$BACKEND" "$status" <<'NODE' || fail 'Tailscale route is foreign, additional, public, or ambiguous'
-const [serveText, funnelText, human, backend, statusText] = process.argv.slice(2);
+  node - "$serve" "$funnel" "$human" "$LEGACY_BACKEND" "$RAW_BACKEND" "$status" <<'NODE' || fail 'Tailscale route is foreign, additional, public, or ambiguous'
+const [serveText, funnelText, human, legacyBackend, rawBackend, statusText] = process.argv.slice(2);
 const canonical = value => {
   if (Array.isArray(value)) return value.map(canonical);
   if (value && typeof value === 'object') return Object.fromEntries(
@@ -58,32 +74,55 @@ const empty = value => {
 };
 const serve = JSON.parse(serveText);
 const funnel = JSON.parse(funnelText);
-const dns = JSON.parse(statusText).Self?.DNSName;
+const status = JSON.parse(statusText);
+const dns = status.Self?.DNSName;
+const ip = Array.isArray(status.Self?.TailscaleIPs) ? status.Self.TailscaleIPs[0] : undefined;
 if (typeof dns !== 'string' || !dns.replace(/\.$/, '')) process.exit(1);
 if (JSON.stringify(canonical(serve)) !== JSON.stringify(canonical(funnel))) process.exit(1);
 if (empty(serve)) { console.log('empty'); process.exit(0); }
 if (!serve || Array.isArray(serve) || typeof serve !== 'object') process.exit(1);
 if (Object.keys(serve).some(key => !['TCP', 'Web', 'AllowFunnel'].includes(key) && !empty(serve[key]))) process.exit(1);
+const host = dns.replace(/\.$/, '');
 const tcpKeys = Object.keys(serve.TCP || {});
+const isRaw = tcpKeys.length === 1 && tcpKeys[0] === '443' &&
+  serve.TCP['443']?.TCPForward === rawBackend &&
+  Object.entries(serve.TCP['443']).every(([key, value]) => key === 'TCPForward' || empty(value)) &&
+  empty(serve.Web) && empty(serve.AllowFunnel);
+if (isRaw) {
+  if (typeof ip !== 'string' || !ip) process.exit(1);
+  const lines = human.split(/\r?\n/).map(line => line.trim().replace(/\s+/g, ' ')).filter(Boolean);
+  if (lines.length !== 3 || lines[0] !== `tcp://${host}:443 (tailnet only)` ||
+      lines[1] !== `|-- tcp://${ip}:443` || lines[2] !== `|--> tcp://${rawBackend}`) process.exit(1);
+  console.log('raw-exact');
+  process.exit(0);
+}
 const webKeys = Object.keys(serve.Web || {});
 if (tcpKeys.length !== 1 || tcpKeys[0] !== '443' || webKeys.length !== 1) process.exit(1);
 const tcp = serve.TCP['443'];
 if (!tcp || tcp.HTTPS !== true || Object.entries(tcp).some(([key, value]) => key !== 'HTTPS' && !empty(value))) process.exit(1);
 const hostKey = webKeys[0];
-if (hostKey !== `${dns.replace(/\.$/, '')}:443`) process.exit(1);
+if (hostKey !== `${host}:443`) process.exit(1);
 const web = serve.Web[hostKey];
 if (!web || Object.keys(web).some(key => key !== 'Handlers' && !empty(web[key]))) process.exit(1);
 const handlers = web.Handlers;
 if (!handlers || Object.keys(handlers).length !== 1 || !handlers['/'] ||
-    handlers['/'].Proxy !== backend || Object.entries(handlers['/']).some(([key, value]) => key !== 'Proxy' && !empty(value))) process.exit(1);
+    handlers['/'].Proxy !== legacyBackend || Object.entries(handlers['/']).some(([key, value]) => key !== 'Proxy' && !empty(value))) process.exit(1);
 const allow = serve.AllowFunnel;
 if (allow && (Object.keys(allow).length !== 1 || allow[hostKey] !== false)) process.exit(1);
-const host = hostKey.slice(0, -4);
 const lines = human.split(/\r?\n/).map(line => line.trim().replace(/\s+/g, ' ')).filter(Boolean);
 if (lines.length !== 2 || lines[0] !== `https://${host} (tailnet only)` ||
-    lines[1] !== `|-- / proxy ${backend}`) process.exit(1);
-console.log('exact');
+    lines[1] !== `|-- / proxy ${legacyBackend}`) process.exit(1);
+console.log('legacy-exact');
 NODE
+}
+
+require_route_state() {
+  local actual allowed
+  actual=$(route_state)
+  for allowed in "$@"; do
+    [[ "$actual" == "$allowed" ]] && return 0
+  done
+  fail "unexpected Tailscale route state: $actual"
 }
 
 check_local_service() {
@@ -131,7 +170,8 @@ check_all() {
   require_supported_platform
   check_local_service
   require_tailscale
-  route_state >/dev/null
+  require_tailscale_version
+  require_route_state empty raw-exact
   check_lan
   printf 'Tailscale state is valid\n'
 }
@@ -166,26 +206,47 @@ install_tailscale() {
   trap - EXIT
 }
 
+serve_raw() {
+  require_tailscale_version
+  require_route_state empty raw-exact
+  sudo tailscale serve --bg --tcp=443 "$RAW_TARGET"
+  [[ $(route_state) == raw-exact ]] || fail 'raw TCP Serve publication did not produce the exact route'
+}
+
+serve_raw_off() {
+  require_tailscale_version
+  [[ $(route_state) == empty ]] && return 0
+  require_route_state raw-exact
+  sudo tailscale serve --tcp=443 off
+  [[ $(route_state) == empty ]] || fail 'raw TCP Serve route remains after removal'
+}
+
+serve_legacy() {
+  require_tailscale_version
+  require_route_state empty legacy-exact
+  sudo tailscale serve --bg --https=443 "$LEGACY_BACKEND"
+  [[ $(route_state) == legacy-exact ]] || fail 'legacy HTTPS Serve publication did not produce the exact route'
+}
+
+serve_legacy_off() {
+  require_tailscale_version
+  [[ $(route_state) == empty ]] && return 0
+  require_route_state legacy-exact
+  sudo tailscale serve --https=443 off
+  [[ $(route_state) == empty ]] || fail 'legacy HTTPS Serve route remains after removal'
+}
+
 serve() {
-  local state
   require_supported_platform
   check_local_service 1
   require_tailscale
-  state=$(route_state)
-  [[ "$state" == empty || "$state" == exact ]] || fail 'Tailscale route is not owned'
-  sudo tailscale serve --bg --https=443 "$BACKEND"
-  [[ $(route_state) == exact ]] || fail 'Tailscale Serve publication did not produce the exact route'
+  serve_raw
 }
 
 serve_off() {
-  local state
   require_supported_platform
   require_tailscale_daemon
-  state=$(route_state)
-  [[ "$state" != empty ]] || return 0
-  [[ "$state" == exact ]] || fail 'refusing to remove a foreign route'
-  sudo tailscale serve --https=443 off
-  [[ $(route_state) == empty ]] || fail 'Tailscale route remains after removal'
+  serve_raw_off
 }
 
 uninstall_tailscale() {
