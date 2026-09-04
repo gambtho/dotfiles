@@ -1,4 +1,4 @@
-.PHONY: install bootstrap update relink ai ai-check pins pins-check pins-update check syntax lint test python-test validate
+.PHONY: install bootstrap update relink ai ai-check ai-webui ai-webui-check pins pins-check pins-update check syntax lint test python-test validate
 
 # ── Main targets ──────────────────────────────────────────────────────────────
 
@@ -32,6 +32,12 @@ ai-check: ## Dry-run: show what the Pi install would do
 		bash "$$installer" --check || failed="$$failed $$installer"; \
 	done; \
 	if [ -n "$$failed" ]; then echo "make ai-check: failed:$$failed" >&2; exit 1; fi
+
+ai-webui: ## Install/update the opt-in Pi Web UI
+	bash ai/pi/webui/install.sh --apply
+
+ai-webui-check: ## Inspect Pi Web UI state without mutation
+	bash ai/pi/webui/install.sh --check
 
 pins: ## List managed dependency versions and refs
 	bash bin/versions list

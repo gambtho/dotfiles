@@ -4,6 +4,7 @@ setup_dotfiles_test() {
   export TEST_ROOT="$BATS_TEST_TMPDIR/test-root"
   export HOME="$TEST_ROOT/home"
   export XDG_CONFIG_HOME="$HOME/.config"
+  export XDG_DATA_HOME="$HOME/.local/share"
   export XDG_STATE_HOME="$HOME/.local/state"
   export STUB_BIN="$TEST_ROOT/bin"
   mkdir -p "$HOME" "$STUB_BIN"

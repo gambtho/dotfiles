@@ -1,0 +1,173 @@
+#!/usr/bin/env bash
+# Validate the byte-pinned Pi Web UI runtime and, optionally, an npm installation.
+
+set -euo pipefail
+
+ROOT=$(cd "$(dirname "$0")/.." && pwd -P)
+runtime_root="$ROOT/ai/pi/webui/runtime"
+mode=tracked
+usage="usage: $0 [--tracked-only [RUNTIME_ROOT] | --installed-runtime RUNTIME_ROOT]"
+
+case "${1:-}" in
+  '') ;;
+  --tracked-only)
+    shift
+    if [[ $# -gt 0 ]]; then
+      runtime_root=$1
+      shift
+    fi
+    ;;
+  --installed-runtime)
+    [[ $# -ge 2 ]] || {
+      printf '%s\n' "$usage" >&2
+      exit 2
+    }
+    mode=installed
+    runtime_root=$2
+    shift 2
+    ;;
+  *)
+    printf '%s\n' "$usage" >&2
+    exit 2
+    ;;
+esac
+[[ $# -eq 0 ]] || {
+  printf '%s\n' "$usage" >&2
+  exit 2
+}
+
+if command -v node >/dev/null 2>&1; then
+  node_command=(node)
+elif command -v mise >/dev/null 2>&1; then
+  node_command=(mise exec -- node)
+else
+  printf 'error: Node.js is required to validate the Pi Web UI runtime\n' >&2
+  exit 1
+fi
+
+"${node_command[@]}" - "$runtime_root" "$mode" <<'NODE'
+const crypto = require('node:crypto');
+const fs = require('node:fs');
+const path = require('node:path');
+
+const [runtimeArgument, mode] = process.argv.slice(2);
+const webuiName = '@firstpick/pi-package-webui';
+const webuiVersion = '0.10.3';
+const piName = '@earendil-works/pi-coding-agent';
+const piVersion = '0.84.4';
+const manifestHash = '073ba87cad124eb709eb8cafdd77c44c10b5d12bf5841acea140a50ac5177763';
+const lockHash = '39593de061e22a36668a0a0d1449e339b84e644d6c65e6b1618af9d177fc71d0';
+const webuiIntegrity = 'sha512-46Hmgv/ccINvexRof3w7JzVoutrBcQ06OC2RiLh/aU1MAZvv7Uss6M0CgHkjb8fzzDaspNgihAbu+U0R0TGafQ==';
+const nestedPrefix = 'node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/';
+const earendilIntegrities = {
+  'pi-agent-core': 'sha512-HyUnjaOXj6oN/6SNcr8A1J/ElRQA50FtIE0XUTSKAQVqmdlb9qdojOyUQwF/jULE5+yOEtGuVgi/N1RnBiNG+g==',
+  'pi-ai': 'sha512-AClAZxf5+c4RRu44NJPS6wyQy+Nmq+Mzyyrdvm4ZVMNuixelO02RZX4G4Aq1F145Yzp43wnM5S+hLlSI7ypfVw==',
+  'pi-client': 'sha512-q398WY/3ZQHTizk7IKxApzqFV0xt4yM9LkSkwyqeLK5Bj5RwRjOWxESt26z4LgNp4O+8hqhqFPf/8fj4H5rE4A==',
+  'pi-protocol': 'sha512-acyE9ozxkMiWiz/xyWpU0O9vwnYv0hyG889Vniv6Sg9c9zfsX+8MePnDNphBacY2Fvm1rxdsGmiVDSZl9yuDFA==',
+  'pi-telemetry': 'sha512-8e2CuxM+ht+hedQXTZmi5JVl6/xDK9RpSDL2+MbITevKYQhMZ/z6lJOTFgox3HQyGxO8mOZEtYGVeQNaD4OzqA==',
+  'pi-tui': 'sha512-nPUnwDkLtupPXnZQYrCwPFcuTydCDqTY6ZbFqhsL4S4kVq0AT418kPa/6uXwtaCD+MjBNBltb7ScTYX65yeE1w==',
+};
+
+function fail(message) { throw new Error(message); }
+function hash(raw) { return crypto.createHash('sha256').update(raw).digest('hex'); }
+function read(file, label) {
+  try { return fs.readFileSync(file, 'utf8'); }
+  catch (error) { fail(`${label} is unavailable: ${error.message}`); }
+}
+function parse(raw, label) {
+  try { return JSON.parse(raw); }
+  catch (error) { fail(`${label} is not valid JSON: ${error.message}`); }
+}
+function requireExecutable(file, label) {
+  try {
+    const metadata = fs.statSync(file);
+    if (!metadata.isFile()) fail(`${label} must be a file`);
+    fs.accessSync(file, fs.constants.X_OK);
+  } catch (error) {
+    fail(`${label} must be executable: ${error.message}`);
+  }
+}
+function rejectNodePty(directory) {
+  for (const entry of fs.readdirSync(directory, {withFileTypes: true})) {
+    if (!entry.isDirectory()) continue;
+    const child = path.join(directory, entry.name);
+    if (entry.name === 'node-pty' && path.basename(directory) === 'node_modules') {
+      fail(`node-pty must not be installed: ${child}`);
+    }
+    rejectNodePty(child);
+  }
+}
+
+try {
+  const runtime = path.resolve(runtimeArgument);
+  if (mode === 'installed') {
+    const metadata = fs.lstatSync(runtime);
+    if (metadata.isSymbolicLink()) fail('installed runtime root must not be a symbolic link');
+    if (!metadata.isDirectory()) fail('installed runtime root must be a directory');
+  }
+
+  const manifestRaw = read(path.join(runtime, 'package.json'), 'runtime manifest');
+  const lockRaw = read(path.join(runtime, 'package-lock.json'), 'runtime lock');
+  const actualManifestHash = hash(manifestRaw);
+  const actualLockHash = hash(lockRaw);
+  if (actualManifestHash !== manifestHash) {
+    fail(`manifest SHA-256 must be ${manifestHash}; got ${actualManifestHash}`);
+  }
+  if (actualLockHash !== lockHash) {
+    fail(`lock SHA-256 must be ${lockHash}; got ${actualLockHash}`);
+  }
+
+  const manifest = parse(manifestRaw, 'runtime manifest');
+  const lock = parse(lockRaw, 'runtime lock');
+  const dependencyNames = Object.keys(manifest.dependencies || {});
+  if (manifest.name !== 'pi-webui-runtime' || manifest.version !== '0.0.0' ||
+      dependencyNames.length !== 1 || manifest.dependencies[webuiName] !== webuiVersion) {
+    fail(`manifest identity must be pi-webui-runtime@0.0.0 with only ${webuiName}@${webuiVersion}`);
+  }
+  const root = lock.packages?.[''];
+  if (lock.lockfileVersion !== 3 || Object.keys(root?.dependencies || {}).length !== 1 ||
+      root.dependencies[webuiName] !== webuiVersion) {
+    fail('lockfile must be version 3 with the exact root dependency');
+  }
+  const registryEntries = Object.entries(lock.packages).filter(([name]) => name !== '');
+  if (registryEntries.length !== 350 || registryEntries.some(([, value]) =>
+    typeof value.resolved !== 'string' || !value.resolved.startsWith('https://registry.npmjs.org/'))) {
+    fail('lockfile must contain exactly 350 registry entries');
+  }
+  const webui = lock.packages[`node_modules/${webuiName}`];
+  if (webui?.version !== webuiVersion || webui.integrity !== webuiIntegrity) {
+    fail('unexpected Firstp1ck package identity or integrity');
+  }
+  for (const [name, integrity] of Object.entries(earendilIntegrities)) {
+    const entry = lock.packages[`${nestedPrefix}${name}`];
+    if (entry?.version !== piVersion || entry.integrity !== integrity) {
+      fail(`unexpected nested Earendil package: ${name}`);
+    }
+  }
+
+  if (mode === 'installed') {
+    const installedWebui = parse(read(path.join(runtime, 'node_modules', webuiName, 'package.json'),
+      'installed Firstp1ck manifest'), 'installed Firstp1ck manifest');
+    if (installedWebui.name !== webuiName || installedWebui.version !== webuiVersion ||
+        installedWebui.bin?.['pi-webui'] !== './bin/pi-webui-launcher.mjs') {
+      fail(`installed Firstp1ck identity must be ${webuiName}@${webuiVersion}`);
+    }
+    const installedPi = parse(read(path.join(runtime, 'node_modules', piName, 'package.json'),
+      'installed Pi manifest'), 'installed Pi manifest');
+    if (installedPi.name !== piName || installedPi.version !== piVersion ||
+        installedPi.bin?.pi !== 'dist/bundle/cli.js') {
+      fail(`installed Pi identity must be ${piName}@${piVersion}`);
+    }
+    requireExecutable(path.join(runtime, 'node_modules/.bin/pi-webui'), 'installed pi-webui launcher');
+    requireExecutable(path.join(runtime, 'node_modules', webuiName, 'bin/pi-webui-launcher.mjs'),
+      'installed Firstp1ck executable');
+    requireExecutable(path.join(runtime, 'node_modules', piName, 'dist/bundle/cli.js'),
+      'installed Pi executable');
+    rejectNodePty(path.join(runtime, 'node_modules'));
+  }
+  console.log('validated 350 registry packages');
+} catch (error) {
+  console.error(`error: ${error.message}`);
+  process.exit(1);
+}
+NODE
