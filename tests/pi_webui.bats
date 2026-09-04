@@ -10,7 +10,9 @@ setup() {
   LANDING_WORKTREE="$STATE_ROOT/worktrees/dotfiles"
   UNIT_PATH="$XDG_CONFIG_HOME/systemd/user/pi-webui.service"
   MUTATION_CALLS="$TEST_ROOT/mutation-calls"
-  export WEBUI_FIXTURE STATE_ROOT INSTALLED_RUNTIME LANDING_WORKTREE UNIT_PATH MUTATION_CALLS
+  CALLS="$TEST_ROOT/calls"
+  export WEBUI_FIXTURE STATE_ROOT INSTALLED_RUNTIME LANDING_WORKTREE UNIT_PATH MUTATION_CALLS CALLS
+  : >"$CALLS"
   export PI_WEBUI_TESTING=1
   export PI_WEBUI_TEST_OS_RELEASE="$TEST_ROOT/os-release"
   export PI_WEBUI_TEST_UNAME_RELEASE='6.6.0-microsoft-standard-WSL2'
@@ -81,6 +83,118 @@ make_external_pi() {
 make_landing_worktree() {
   mkdir -p "$(dirname "$LANDING_WORKTREE")"
   git -C "$WEBUI_FIXTURE" worktree add -q --detach "$LANDING_WORKTREE" HEAD
+}
+
+make_candidate_installer() {
+  cat >"$TEST_ROOT/install-candidate" <<'EOF'
+#!/usr/bin/env bash
+set -e
+runtime=$1
+mkdir -p \
+  "$runtime/node_modules/.bin" \
+  "$runtime/node_modules/@firstpick/pi-package-webui/bin" \
+  "$runtime/node_modules/@earendil-works/pi-coding-agent/dist/bundle"
+printf '%s\n' \
+  '{"name":"@firstpick/pi-package-webui","version":"0.10.3","bin":{"pi-webui":"./bin/pi-webui-launcher.mjs"}}' \
+  >"$runtime/node_modules/@firstpick/pi-package-webui/package.json"
+printf '#!/usr/bin/env node\n' \
+  >"$runtime/node_modules/@firstpick/pi-package-webui/bin/pi-webui-launcher.mjs"
+chmod +x "$runtime/node_modules/@firstpick/pi-package-webui/bin/pi-webui-launcher.mjs"
+ln -s ../@firstpick/pi-package-webui/bin/pi-webui-launcher.mjs \
+  "$runtime/node_modules/.bin/pi-webui"
+printf '%s\n' \
+  '{"name":"@earendil-works/pi-coding-agent","version":"0.84.4","bin":{"pi":"dist/bundle/cli.js"}}' \
+  >"$runtime/node_modules/@earendil-works/pi-coding-agent/package.json"
+printf '#!/usr/bin/env node\n' \
+  >"$runtime/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js"
+chmod +x "$runtime/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js"
+EOF
+  chmod +x "$TEST_ROOT/install-candidate"
+}
+
+prepare_apply_fixture() {
+  local identity=$1
+  make_webui_fixture
+  make_external_pi
+  make_candidate_installer
+  printf '%s\n' "$identity" >"$WEBUI_FIXTURE/prior-release"
+  git -C "$WEBUI_FIXTURE" add prior-release
+  git -C "$WEBUI_FIXTURE" commit -qm "prior $identity"
+  make_landing_worktree
+  PRIOR_COMMIT=$(git -C "$LANDING_WORKTREE" rev-parse HEAD)
+  export PRIOR_COMMIT
+  printf '%s\n' "$identity" >"$WEBUI_FIXTURE/release"
+  git -C "$WEBUI_FIXTURE" add release
+  git -C "$WEBUI_FIXTURE" commit -qm "release $identity"
+  git -C "$WEBUI_FIXTURE" update-ref refs/remotes/origin/main HEAD
+  make_installed_runtime
+  printf '%s\n' "$identity" >"$INSTALLED_RUNTIME/prior-$identity"
+  write_expected_unit
+  cp "$UNIT_PATH" "$TEST_ROOT/prior-unit"
+}
+
+stub_apply_system() {
+  stub_command mise 'if [[ "$1 $2" == "which pi" ]]; then
+    printf "%s\\n" "$PI_LAUNCHER"
+  elif [[ "$1 $2 $3 $4 $5 $7 $8" == "exec -- npm ci --prefix --ignore-scripts --omit=optional" ]]; then
+    printf "npm %s\\n" "$*" >>"$CALLS"
+    bash "$TEST_ROOT/install-candidate" "$6"
+  else
+    exit 97
+  fi'
+  MISE_LAUNCHER="$STUB_BIN/mise"
+  export MISE_LAUNCHER
+  stub_command systemd-analyze 'printf "systemd-analyze %s\\n" "$*" >>"$CALLS"
+    [[ ${FAIL_POINT:-} != candidate-verify ]]'
+  stub_command systemctl 'printf "systemctl %s\\n" "$*" >>"$CALLS"
+    case "$*" in
+      "--user show-environment") exit 0 ;;
+      "--user is-active pi-webui.service") [[ -f "$TEST_ROOT/service-active" ]] ;;
+      "--user is-enabled pi-webui.service") [[ -f "$TEST_ROOT/service-enabled" ]] ;;
+      "--user stop pi-webui.service")
+        rm -f "$TEST_ROOT/service-active" "$TEST_ROOT/candidate-running" ;;
+      "--user start pi-webui.service")
+        touch "$TEST_ROOT/service-active"
+        if compgen -G "$INSTALLED_RUNTIME/prior-*" >/dev/null; then
+          rm -f "$TEST_ROOT/candidate-running"
+        else
+          touch "$TEST_ROOT/candidate-running"
+        fi ;;
+      "--user enable pi-webui.service") touch "$TEST_ROOT/service-enabled" ;;
+      "--user disable pi-webui.service") rm -f "$TEST_ROOT/service-enabled" ;;
+      "--user daemon-reload")
+        if [[ ${FAIL_POINT:-} == daemon-reload && ! -e "$TEST_ROOT/failed-once" ]]; then
+          touch "$TEST_ROOT/failed-once"
+          exit 1
+        fi ;;
+      *) exit 96 ;;
+    esac'
+  stub_command ss 'if [[ -f "$TEST_ROOT/service-active" ]]; then
+    printf "%s\\n" "LISTEN 0 128 127.0.0.1:31415 0.0.0.0:*"
+  fi'
+  stub_command curl 'if [[ ${FAIL_POINT:-} == health ]] &&
+      ! compgen -G "$INSTALLED_RUNTIME/prior-*" >/dev/null; then
+    exit 22
+  fi
+  printf "%s\\n" "$HEALTH_JSON"'
+}
+
+assert_prior_apply_state() {
+  local identity=$1 expected_active=$2 expected_enabled=$3
+  [ "$(git -C "$LANDING_WORKTREE" rev-parse HEAD)" = "$PRIOR_COMMIT" ]
+  [ -f "$INSTALLED_RUNTIME/prior-$identity" ]
+  cmp "$UNIT_PATH" "$TEST_ROOT/prior-unit"
+  if [ "$expected_active" -eq 1 ]; then
+    [ -f "$TEST_ROOT/service-active" ]
+  else
+    [ ! -e "$TEST_ROOT/service-active" ]
+  fi
+  if [ "$expected_enabled" -eq 1 ]; then
+    [ -f "$TEST_ROOT/service-enabled" ]
+  else
+    [ ! -e "$TEST_ROOT/service-enabled" ]
+  fi
+  [ ! -e "$TEST_ROOT/candidate-running" ]
 }
 
 stub_healthy_system() {
@@ -195,12 +309,6 @@ run_installer_function() {
   run_installer --check
   [ "$status" -eq 0 ]
   [[ "$output" == *"Tailscale stage is unavailable"* ]]
-  after=$(fingerprint_paths "$HOME" "$WEBUI_FIXTURE" "$MUTATION_CALLS")
-  [ "$before" = "$after" ]
-
-  run_installer --apply
-  [ "$status" -ne 0 ]
-  [[ "$output" == *"apply reconciliation is not yet available"* ]]
   after=$(fingerprint_paths "$HOME" "$WEBUI_FIXTURE" "$MUTATION_CALLS")
   [ "$before" = "$after" ]
 
@@ -354,4 +462,105 @@ run_installer_function() {
   run_installer_function 'validate_active_health "$PI_LAUNCHER"'
   [ "$status" -ne 0 ]
   [[ "$output" == *"expected exactly one Pi Web UI listener"* ]]
+}
+
+@test "apply uses npm ci --ignore-scripts --omit=optional and preserves the lock" {
+  prepare_apply_fixture npm-flags
+  export HEALTH_JSON='{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"open":false,"host":"127.0.0.1","port":31415,"networkUrls":[]},"tabs":[]}}'
+  touch "$TEST_ROOT/service-active" "$TEST_ROOT/service-enabled"
+  stub_apply_system
+  before=$(sha256sum "$WEBUI_FIXTURE/ai/pi/webui/runtime/package-lock.json")
+
+  run_installer --apply
+
+  [ "$status" -eq 0 ]
+  grep -F "npm exec -- npm ci --prefix " "$CALLS"
+  grep -F -- "--ignore-scripts --omit=optional" "$CALLS"
+  after=$(sha256sum "$WEBUI_FIXTURE/ai/pi/webui/runtime/package-lock.json")
+  [ "$before" = "$after" ]
+  [ -x "$INSTALLED_RUNTIME/node_modules/.bin/pi-webui" ]
+  [ ! -e "$INSTALLED_RUNTIME/node_modules/node-pty" ]
+}
+
+@test "apply validates candidate before stopping the managed service" {
+  prepare_apply_fixture candidate-validation
+  export HEALTH_JSON='{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"open":false,"host":"127.0.0.1","port":31415,"networkUrls":[]},"tabs":[]}}'
+  export FAIL_POINT=candidate-verify
+  touch "$TEST_ROOT/service-active" "$TEST_ROOT/service-enabled"
+  stub_apply_system
+
+  run_installer --apply
+
+  [ "$status" -ne 0 ]
+  grep -F "systemd-analyze --user verify " "$CALLS"
+  ! grep -F "systemctl --user stop pi-webui.service" "$CALLS"
+  assert_prior_apply_state candidate-validation 1 1
+}
+
+@test "apply creates or advances only a clean detached landing worktree" {
+  prepare_apply_fixture landing
+  export HEALTH_JSON='{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"open":false,"host":"127.0.0.1","port":31415,"networkUrls":[]},"tabs":[]}}'
+  stub_apply_system
+  rm -rf "$LANDING_WORKTREE"
+  git -C "$WEBUI_FIXTURE" worktree prune
+
+  run_installer --apply
+
+  [ "$status" -eq 0 ]
+  ! git -C "$LANDING_WORKTREE" symbolic-ref -q HEAD
+  [ "$(git -C "$LANDING_WORKTREE" rev-parse HEAD)" = "$(git -C "$WEBUI_FIXTURE" rev-parse refs/remotes/origin/main)" ]
+
+  printf dirty >"$LANDING_WORKTREE/dirty"
+  : >"$CALLS"
+  run_installer --apply
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"landing worktree must be clean"* ]]
+  ! grep -F "systemctl --user stop pi-webui.service" "$CALLS"
+}
+
+@test "apply restores after runtime publication failure" {
+  prepare_apply_fixture runtime-failure
+  export HEALTH_JSON='{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"open":false,"host":"127.0.0.1","port":31415,"networkUrls":[]},"tabs":[]}}'
+  export FAIL_POINT=runtime-publication
+  touch "$TEST_ROOT/service-active" "$TEST_ROOT/service-enabled"
+  stub_apply_system
+  stub_command mv 'printf "mv %s\\n" "$*" >>"$CALLS"
+    if [[ ${FAIL_POINT:-} == runtime-publication && $2 == "$INSTALLED_RUNTIME" && $1 != *prior-runtime ]]; then
+      exit 1
+    fi
+    exec /usr/bin/mv "$@"'
+
+  run_installer --apply
+
+  [ "$status" -ne 0 ]
+  grep -F "systemctl --user stop pi-webui.service" "$CALLS"
+  grep -F "mv " "$CALLS"
+  assert_prior_apply_state runtime-failure 1 1
+}
+
+@test "apply restores after unit or daemon-reload failure" {
+  prepare_apply_fixture daemon-failure
+  export HEALTH_JSON='{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"open":false,"host":"127.0.0.1","port":31415,"networkUrls":[]},"tabs":[]}}'
+  export FAIL_POINT=daemon-reload
+  touch "$TEST_ROOT/service-active" "$TEST_ROOT/service-enabled"
+  stub_apply_system
+
+  run_installer --apply
+
+  [ "$status" -ne 0 ]
+  [ "$(grep -c 'systemctl --user daemon-reload' "$CALLS")" -eq 2 ]
+  assert_prior_apply_state daemon-failure 1 1
+}
+
+@test "apply restores prior commit enablement and activity after health failure" {
+  prepare_apply_fixture health-failure
+  export HEALTH_JSON='{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"open":false,"host":"127.0.0.1","port":31415,"networkUrls":[]},"tabs":[]}}'
+  export FAIL_POINT=health
+  stub_apply_system
+
+  run_installer --apply
+
+  [ "$status" -ne 0 ]
+  grep -F "systemctl --user start pi-webui.service" "$CALLS"
+  assert_prior_apply_state health-failure 0 0
 }

@@ -230,6 +230,241 @@ const response = JSON.parse(process.argv[3]);
 NODE
 }
 
+path_exists() {
+  [[ -e "$1" || -L "$1" ]]
+}
+
+require_managed_directory() {
+  local directory=$1 label=$2
+  [[ -d "$directory" && ! -L "$directory" ]] || fail "$label must be a real directory"
+  [[ $(stat -c %u "$directory") == "$(id -u)" ]] ||
+    fail "$label must be owned by the current user"
+}
+
+cleanup_apply_paths() {
+  local failed=0
+  if [[ -n ${UNIT_TEMPORARY:-} ]] && path_exists "$UNIT_TEMPORARY"; then
+    rm -f -- "$UNIT_TEMPORARY" || failed=1
+  fi
+  if [[ -n ${CANDIDATE_RUNTIME:-} ]] && path_exists "$CANDIDATE_RUNTIME"; then
+    rm -rf -- "$CANDIDATE_RUNTIME" || failed=1
+  fi
+  if [[ -n ${STAGING_DIR:-} ]] && path_exists "$STAGING_DIR"; then
+    rm -rf -- "$STAGING_DIR" || failed=1
+  fi
+  [[ "$failed" -eq 0 ]]
+}
+
+reject_retained_apply_state() {
+  local path
+  for path in \
+    "$STATE_ROOT/runtimes/candidate" \
+    "$STATE_ROOT/transactions/pending" \
+    "$STATE_ROOT/transactions/apply.lock"; do
+    if path_exists "$path"; then
+      fail "preserving existing apply evidence; resolve it manually: $path"
+      return 1
+    fi
+  done
+}
+
+build_candidate() {
+  local runtime_parent=$STATE_ROOT/runtime source_runtime
+  reject_retained_apply_state || return 1
+  mkdir -p "$runtime_parent" || return 1
+  require_managed_directory "$STATE_ROOT" 'Pi Web UI state root' || return 1
+  require_managed_directory "$runtime_parent" 'Pi Web UI runtime parent' || return 1
+
+  CANDIDATE_RUNTIME=$(mktemp -d "$runtime_parent/.candidate.XXXXXX") || return 1
+  chmod 0700 "$CANDIDATE_RUNTIME" || return 1
+  STAGING_DIR=$(mktemp -d "$STATE_ROOT/.apply.XXXXXX") || return 1
+  chmod 0700 "$STAGING_DIR" || return 1
+  CANDIDATE_UNIT=$STAGING_DIR/pi-webui.service
+  PRIOR_RUNTIME_BACKUP=$STAGING_DIR/prior-runtime
+  PRIOR_UNIT_BACKUP=$STAGING_DIR/prior-unit
+  source_runtime=$SOURCE_ROOT/ai/pi/webui/runtime
+
+  cp "$source_runtime/package.json" "$source_runtime/package-lock.json" "$CANDIDATE_RUNTIME/" || return 1
+  "$MISE_LAUNCHER" exec -- npm ci --prefix "$CANDIDATE_RUNTIME" --ignore-scripts --omit=optional ||
+    return 1
+  "$SOURCE_ROOT/bin/validate-pi-webui" --tracked-only "$CANDIDATE_RUNTIME" || return 1
+  "$SOURCE_ROOT/bin/validate-pi-webui" --installed-runtime "$CANDIDATE_RUNTIME" || return 1
+  render_unit "$RUNTIME_LAUNCHER" "$LANDING_WORKTREE" "$PI_LAUNCHER" >"$CANDIDATE_UNIT" ||
+    return 1
+  chmod 0600 "$CANDIDATE_UNIT" || return 1
+  systemd-analyze --user verify "$CANDIDATE_UNIT" ||
+    fail 'candidate service unit failed systemd verification'
+}
+
+capture_prior_state() {
+  PRIOR_RUNTIME_PRESENT=0
+  PRIOR_UNIT_PRESENT=0
+  PRIOR_COMMIT=ABSENT
+  PRIOR_ENABLED=0
+  PRIOR_ACTIVE=0
+  if path_exists "$INSTALLED_RUNTIME"; then PRIOR_RUNTIME_PRESENT=1; fi
+  if path_exists "$UNIT_PATH"; then
+    PRIOR_UNIT_PRESENT=1
+    cp "$UNIT_PATH" "$PRIOR_UNIT_BACKUP" || return 1
+  fi
+  if path_exists "$LANDING_WORKTREE"; then
+    PRIOR_COMMIT=$(git -C "$LANDING_WORKTREE" rev-parse HEAD) || return 1
+  fi
+  if systemctl --user is-enabled pi-webui.service >/dev/null 2>&1; then PRIOR_ENABLED=1; fi
+  if systemctl --user is-active pi-webui.service >/dev/null 2>&1; then PRIOR_ACTIVE=1; fi
+}
+
+publish_unit() {
+  local unit_directory temporary
+  unit_directory=$(dirname "$UNIT_PATH")
+  mkdir -p "$unit_directory" || return 1
+  require_managed_directory "$unit_directory" 'systemd user unit directory' || return 1
+  temporary=$(mktemp "$UNIT_PATH.candidate.XXXXXX") || return 1
+  UNIT_TEMPORARY=$temporary
+  cp "$CANDIDATE_UNIT" "$temporary" || return 1
+  chmod 0600 "$temporary" || return 1
+  mv "$temporary" "$UNIT_PATH" || return 1
+  UNIT_TEMPORARY=
+  unit_changed=1
+}
+
+publish_candidate() {
+  if [[ "$PRIOR_ACTIVE" -eq 1 ]]; then
+    systemctl --user stop pi-webui.service || return 1
+  fi
+  stopped=1
+
+  if [[ "$PRIOR_RUNTIME_PRESENT" -eq 1 ]]; then
+    mv "$INSTALLED_RUNTIME" "$PRIOR_RUNTIME_BACKUP" || return 1
+    runtime_changed=1
+  fi
+  if [[ "$PRIOR_COMMIT" == ABSENT ]]; then
+    mkdir -p "$(dirname "$LANDING_WORKTREE")" || return 1
+    git -C "$SOURCE_ROOT" worktree add --detach "$LANDING_WORKTREE" refs/remotes/origin/main || return 1
+  else
+    git -C "$LANDING_WORKTREE" checkout --detach refs/remotes/origin/main || return 1
+  fi
+  worktree_changed=1
+  mv "$CANDIDATE_RUNTIME" "$INSTALLED_RUNTIME" || return 1
+  runtime_changed=1
+  publish_unit || return 1
+  systemctl --user daemon-reload || return 1
+  daemon_reloaded=1
+
+  if [[ "$PRIOR_UNIT_PRESENT" -eq 0 || "$PRIOR_ENABLED" -eq 1 ]]; then
+    systemctl --user enable pi-webui.service || return 1
+  else
+    systemctl --user disable pi-webui.service || return 1
+  fi
+  enablement_changed=1
+  systemctl --user start pi-webui.service || return 1
+  candidate_started=1
+  validate_active_health "$PI_LAUNCHER" || return 1
+  if [[ "$PRIOR_UNIT_PRESENT" -eq 1 && "$PRIOR_ACTIVE" -eq 0 ]]; then
+    systemctl --user stop pi-webui.service || return 1
+    candidate_started=0
+  fi
+}
+
+restore_prior_state() {
+  local failed=0 reload_needed=0 temporary
+  set +e
+  if [[ "$candidate_started" -eq 1 ]]; then
+    systemctl --user stop pi-webui.service || failed=1
+    candidate_started=0
+  fi
+  if [[ "$unit_changed" -eq 1 ]]; then
+    reload_needed=1
+    if [[ "$PRIOR_UNIT_PRESENT" -eq 1 ]]; then
+      temporary=$(mktemp "$UNIT_PATH.restore.XXXXXX")
+      if [[ -z "$temporary" ]] || ! cp "$PRIOR_UNIT_BACKUP" "$temporary" ||
+        ! chmod 0600 "$temporary" || ! mv "$temporary" "$UNIT_PATH"; then
+        failed=1
+      fi
+    else
+      rm -f -- "$UNIT_PATH" || failed=1
+    fi
+    unit_changed=0
+  fi
+  if [[ "$runtime_changed" -eq 1 ]]; then
+    if path_exists "$INSTALLED_RUNTIME"; then
+      mv "$INSTALLED_RUNTIME" "$CANDIDATE_RUNTIME" || failed=1
+    fi
+    if [[ "$PRIOR_RUNTIME_PRESENT" -eq 1 ]]; then
+      mv "$PRIOR_RUNTIME_BACKUP" "$INSTALLED_RUNTIME" || failed=1
+    fi
+    runtime_changed=0
+  fi
+  if [[ "$worktree_changed" -eq 1 ]]; then
+    if [[ "$PRIOR_COMMIT" == ABSENT ]]; then
+      git -C "$SOURCE_ROOT" worktree remove "$LANDING_WORKTREE" || failed=1
+    else
+      git -C "$LANDING_WORKTREE" checkout --detach "$PRIOR_COMMIT" || failed=1
+    fi
+    worktree_changed=0
+  fi
+  if [[ "$daemon_reloaded" -eq 1 || "$reload_needed" -eq 1 ]]; then
+    systemctl --user daemon-reload || failed=1
+    daemon_reloaded=0
+  fi
+  if [[ "$enablement_changed" -eq 1 ]]; then
+    if [[ "$PRIOR_ENABLED" -eq 1 ]]; then
+      systemctl --user enable pi-webui.service || failed=1
+    else
+      systemctl --user disable pi-webui.service || failed=1
+    fi
+    enablement_changed=0
+  fi
+  if [[ "$stopped" -eq 1 ]]; then
+    if [[ "$PRIOR_ACTIVE" -eq 1 ]]; then
+      systemctl --user start pi-webui.service || failed=1
+    else
+      systemctl --user stop pi-webui.service || failed=1
+    fi
+  fi
+  if [[ "$failed" -eq 0 ]]; then
+    cleanup_apply_paths || failed=1
+  fi
+  set -e
+  if [[ "$failed" -ne 0 ]]; then
+    fail "restoration failed; preserving staging path: $STAGING_DIR"
+    return 1
+  fi
+}
+
+apply_reconciliation() {
+  local status
+  stopped=0
+  worktree_changed=0
+  runtime_changed=0
+  unit_changed=0
+  daemon_reloaded=0
+  enablement_changed=0
+  candidate_started=0
+  UNIT_TEMPORARY=
+
+  if ! build_candidate; then
+    cleanup_apply_paths || true
+    return 1
+  fi
+  if ! capture_prior_state; then
+    cleanup_apply_paths || true
+    return 1
+  fi
+  if publish_candidate; then
+    cleanup_apply_paths
+    return
+  else
+    status=$?
+  fi
+  if [[ "$stopped" -eq 1 ]]; then
+    restore_prior_state || return 1
+  else
+    cleanup_apply_paths || true
+  fi
+  return "$status"
+}
+
 main() {
   local mode=${1:-}
   [[ $# -eq 1 && ("$mode" == --check || "$mode" == --apply) ]] || {
@@ -267,7 +502,7 @@ main() {
   fi
   printf 'Tailscale stage is unavailable until Task 4\n'
   if [[ "$mode" == --apply ]]; then
-    fail 'apply reconciliation is not yet available'
+    apply_reconciliation
   fi
 }
 
