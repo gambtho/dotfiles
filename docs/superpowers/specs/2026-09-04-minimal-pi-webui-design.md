@@ -94,8 +94,14 @@ dependencies.
 
 `install.sh --check` performs no mutation. It validates platform, systemd, the
 tracked lock, external Pi `0.84.4`, source repository identity, landing
-worktree state when present, installed runtime when present, rendered unit when
-present, health when active, and Tailscale state through the checker.
+worktree state when present, installed runtime when present, unit configuration
+when present, active health when the service is running, and Tailscale state
+through the checker. Check mode may run from a linked review worktree.
+
+Production `--apply` runs only from the canonical primary checkout when its
+`HEAD` exactly matches `origin/main`. This prevents an unmerged implementation
+branch from changing the persistent landing revision. Tests may opt into an
+explicit fixture-only source override that is unavailable in ordinary use.
 
 `install.sh --apply` performs this sequence:
 
@@ -106,25 +112,43 @@ present, health when active, and Tailscale state through the checker.
 4. Accept or create the landing worktree only when it belongs to the same Git
    common repository, is detached, and is clean. Permit only an absent `.pi`
    tree or an exactly empty `.pi/plans/` tree; reject other ignored state.
-5. Record the previous detached commit and advance the landing worktree to the
-   invoking checkout's `HEAD`.
-6. Render and validate the candidate unit using stable live paths.
-7. After every candidate check passes, record prior service enablement/activity,
-   stop the known managed service, and replace the runtime and unit.
-8. Reload systemd, enable and start the service, then verify health.
-9. If publication or health fails, restore the immediately prior runtime, unit,
-   landing commit, enablement, and activity. Report any failed restoration and
-   retain affected state for manual inspection.
+5. Render and validate the candidate unit using stable live paths.
+6. Record the previous detached commit, runtime and unit locations, and service
+   enablement/activity in shell state and a private temporary staging directory.
+7. After every candidate check passes, stop the known managed service, advance
+   the landing worktree to canonical `origin/main`, and publish the candidate
+   runtime and unit in that order.
+8. Reload systemd, restore the intended enablement, start the service, and verify
+   active health.
+9. After successful health verification, discard the temporary rollback copies.
 
-The reconciler keeps only one immediate previous runtime needed for rollback.
-It does not create persistent transaction metadata or manage historical trial
-evidence. Existing backups, evaluation records, and recognized old marker files
-remain untouched.
+The post-stop portion is a bounded recovery state machine. Before service stop,
+a failure removes only the candidate and leaves live state unchanged. After
+service stop, every failure path first stops any candidate service, then restores
+in reverse publication order: prior unit, prior runtime, prior landing commit,
+systemd daemon state, enablement, and finally activity. Each step is conditional
+on whether its corresponding publication checkpoint completed. Restoration is
+attempted for failures after runtime publication, worktree checkout, unit
+publication, daemon reload, enablement changes, startup, and health validation.
+A failed restoration is reported with the retained private staging path for
+manual inspection. Process death or machine failure at every instruction
+boundary remains outside the simplified threat model; there is no persistent
+transaction journal.
 
-Health requires Web UI `0.10.3`, Pi `0.84.4`, loopback host and port,
-`network.open=false`, and an exactly empty `network.networkUrls`. It validates
-the managed initial cwd and Pi launcher from the unit or initial managed tab,
-but does not reject user-created tabs in other projects.
+The reconciler retains only the temporary prior runtime and unit needed during
+an apply. It does not rotate or manage historical trial evidence. Existing
+backups, evaluation records, old runtime generations, and recognized marker
+files remain untouched.
+
+Configuration validation proves that the rendered unit has the exact loopback
+arguments, durable initial cwd, and external Pi launcher. Active-health
+validation separately requires an active managed unit, a loopback-only listener,
+Web UI `0.10.3`, Pi `0.84.4`, `network.open=false`, and an exactly empty
+`network.networkUrls`. Every running managed tab must report the exact Pi
+launcher, but its cwd may be any user-selected project or worktree. Under the
+accepted same-user trust model, service state, exact unit configuration, the
+loopback listener, and Firstp1ck health identity are sufficient; process-ancestry
+or inode-level listener proofs are deliberately excluded.
 
 ## Tailscale boundary
 
@@ -172,14 +196,17 @@ Use Bats and TDD for meaningful behavior. Approximately 20–25 tests cover:
 2. unsupported-platform refusal before mutation;
 3. exact npm flags and lock preservation;
 4. candidate validation before stopping an existing service;
-5. landing-worktree creation and primary, attached, foreign, or dirty refusal;
-6. unit loopback, durable cwd, exact Pi launcher, and clean shutdown settings;
-7. health versions and network fields while permitting other project tabs;
-8. simple restoration after failed health verification;
-9. empty/exact/foreign/Funnel Tailscale route classification;
-10. interface-agnostic LAN detection excluding `tailscale0`;
-11. default rollback preservation and explicit cleanup guards; and
-12. Make target isolation from ordinary `make ai`.
+5. canonical `origin/main` apply refusal from an implementation worktree;
+6. landing-worktree creation and primary, attached, foreign, or dirty refusal;
+7. unit loopback, durable cwd, exact Pi launcher, and clean shutdown settings;
+8. separate active health for versions, network fields, and exact tab launchers
+   while permitting other project cwd values;
+9. restoration after representative runtime, unit, systemd-reload, and health
+   publication-boundary failures;
+10. empty/exact/foreign/Funnel Tailscale route classification;
+11. interface-agnostic LAN detection excluding `tailscale0`;
+12. default rollback preservation and explicit cleanup guards; and
+13. Make target isolation from ordinary `make ai`.
 
 Verification includes the focused Bats suite, syntax, shellcheck, shfmt,
 `bash bin/validate-ai --verbose`, and full `make check`. After source review,
