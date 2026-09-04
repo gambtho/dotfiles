@@ -29,9 +29,10 @@ make_webui_fixture() {
   cp "$REPO_ROOT/bin/validate-pi-webui" "$WEBUI_FIXTURE/bin/validate-pi-webui"
   cp "$REPO_ROOT/ai/pi/webui/install.sh" "$WEBUI_FIXTURE/ai/pi/webui/install.sh"
   cp "$REPO_ROOT/ai/pi/webui/tailscale.sh" "$WEBUI_FIXTURE/ai/pi/webui/tailscale.sh"
+  cp "$REPO_ROOT/ai/pi/webui/rollback.sh" "$WEBUI_FIXTURE/ai/pi/webui/rollback.sh"
   cp "$REPO_ROOT/ai/pi/webui/pi-webui.service.in" \
     "$WEBUI_FIXTURE/ai/pi/webui/pi-webui.service.in"
-  chmod +x "$WEBUI_FIXTURE/bin/validate-pi-webui" "$WEBUI_FIXTURE/ai/pi/webui/"{install,tailscale}.sh
+  chmod +x "$WEBUI_FIXTURE/bin/validate-pi-webui" "$WEBUI_FIXTURE/ai/pi/webui/"{install,tailscale,rollback}.sh
   printf 'ID=ubuntu\nVERSION_ID="24.04"\nVERSION_CODENAME=noble\n' >"$PI_WEBUI_TEST_OS_RELEASE"
   printf '.pi/\n' >"$WEBUI_FIXTURE/.gitignore"
   git -C "$WEBUI_FIXTURE" init -q -b main
@@ -362,6 +363,28 @@ prepare_tailscale_check() {
 
 run_tailscale() {
   run "$WEBUI_FIXTURE/ai/pi/webui/tailscale.sh" "$@"
+}
+
+prepare_rollback() {
+  make_webui_fixture
+  make_external_pi
+  make_landing_worktree
+  make_installed_runtime
+  write_expected_unit
+  stub_tailscale_system empty
+  stub_command systemctl 'case "$*" in
+    "--user show-environment") exit 0 ;;
+    "--user is-active pi-webui.service") [[ -f "$TEST_ROOT/service-active" ]] ;;
+    "--user stop pi-webui.service") printf "%s\n" stop >>"$MUTATION_CALLS"; rm -f "$TEST_ROOT/service-active" "$TEST_ROOT/listener" ;;
+    "--user disable pi-webui.service") printf "%s\n" disable >>"$MUTATION_CALLS"; rm -f "$TEST_ROOT/service-enabled" ;;
+    "--user daemon-reload") printf "%s\n" reload >>"$MUTATION_CALLS" ;;
+    *) exit 97 ;;
+  esac'
+  stub_command ss '[[ ! -f "$TEST_ROOT/listener" ]]'
+}
+
+run_rollback() {
+  run "$WEBUI_FIXTURE/ai/pi/webui/rollback.sh" "$@"
 }
 
 @test "validator accepts only the exact tracked runtime" {
@@ -914,6 +937,81 @@ run_tailscale() {
   run_tailscale up tskey-secret
   [ "$status" -eq 2 ]
   [ "$(grep -c '^sudo tailscale up$' "$CALLS")" -eq 1 ]
+}
+
+@test "rollback removes only the managed service and preserves user state" {
+  prepare_rollback
+  touch "$TEST_ROOT/service-active" "$TEST_ROOT/service-enabled" "$TEST_ROOT/listener"
+  mkdir -p "$HOME/.pi/agent/sessions" "$STATE_ROOT/"{backups,evaluation} "$LANDING_WORKTREE/.pi" "$TEST_ROOT/tailscale/var/lib/tailscale"
+  printf settings >"$HOME/.pi/agent/settings.json"
+  printf transcript >"$HOME/.pi/agent/sessions/transcript.jsonl"
+  printf supervisor >"$HOME/.pi/agent/supervisor.json"
+  printf backup >"$STATE_ROOT/backups/old"
+  printf evidence >"$STATE_ROOT/evaluation/result"
+  printf history >"$LANDING_WORKTREE/.pi/history"
+  printf identity >"$TEST_ROOT/tailscale/var/lib/tailscale/tailscaled.state"
+  before=$(fingerprint_paths "$HOME/.pi" "$STATE_ROOT" "$TEST_ROOT/tailscale")
+  run_rollback
+  [ "$status" -eq 0 ]
+  [ ! -e "$UNIT_PATH" ]
+  [ "$(<"$MUTATION_CALLS")" = $'stop\ndisable\nreload' ]
+  after=$(fingerprint_paths "$HOME/.pi" "$STATE_ROOT" "$TEST_ROOT/tailscale")
+  [ "$before" = "$after" ]
+}
+
+@test "rollback refuses nonempty Serve or a foreign unit" {
+  prepare_rollback
+  write_route exact
+  run_rollback
+  [ "$status" -ne 0 ]
+  [ ! -s "$MUTATION_CALLS" ]
+  write_route empty
+  printf foreign >"$UNIT_PATH"
+  run_rollback
+  [ "$status" -ne 0 ]
+  [ ! -s "$MUTATION_CALLS" ]
+  [ "$(<"$UNIT_PATH")" = foreign ]
+}
+
+@test "rollback remove-runtime requires an inactive exact runtime" {
+  prepare_rollback
+  touch "$TEST_ROOT/service-active" "$TEST_ROOT/listener"
+  run_rollback --remove-runtime
+  [ "$status" -ne 0 ]
+  [ -d "$INSTALLED_RUNTIME" ]
+  [ ! -s "$MUTATION_CALLS" ]
+  rm "$TEST_ROOT/service-active" "$TEST_ROOT/listener"
+  printf foreign >>"$INSTALLED_RUNTIME/package-lock.json"
+  run_rollback --remove-runtime
+  [ "$status" -ne 0 ]
+  [ ! -s "$MUTATION_CALLS" ]
+  cp "$WEBUI_FIXTURE/ai/pi/webui/runtime/package-lock.json" "$INSTALLED_RUNTIME/package-lock.json"
+  run_rollback --remove-runtime
+  [ "$status" -eq 0 ]
+  [ ! -e "$INSTALLED_RUNTIME" ]
+}
+
+@test "rollback remove-worktree requires a clean detached managed worktree without .pi" {
+  prepare_rollback
+  mkdir -p "$LANDING_WORKTREE/.pi"
+  run_rollback --remove-worktree
+  [ "$status" -ne 0 ]
+  [ -d "$LANDING_WORKTREE" ]
+  [ ! -s "$MUTATION_CALLS" ]
+  rmdir "$LANDING_WORKTREE/.pi"
+  run_rollback --remove-worktree
+  [ "$status" -eq 0 ]
+  [ ! -e "$LANDING_WORKTREE" ]
+}
+
+@test "rollback is idempotent when the managed service is absent" {
+  prepare_rollback
+  rm "$UNIT_PATH"
+  run_rollback
+  [ "$status" -eq 0 ]
+  run_rollback
+  [ "$status" -eq 0 ]
+  [ ! -s "$MUTATION_CALLS" ]
 }
 
 @test "tailscale uninstall preserves identity and refuses an active route" {
