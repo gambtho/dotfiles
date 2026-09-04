@@ -1,0 +1,8 @@
+{
+  "name": "pi-webui-runtime",
+  "version": "0.0.0",
+  "private": true,
+  "dependencies": {
+    "@firstpick/pi-package-webui": "0.10.3"
+  }
+}
