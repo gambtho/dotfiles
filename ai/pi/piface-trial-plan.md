@@ -1,6 +1,8 @@
 # Piface Machine-Local Trial Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **SUPERSEDED — DO NOT EXECUTE.** Piface failed the permission-dialog acceptance gate and was replaced by the supported Firstp1ck setup in `ai/pi/webui/README.md`. This document is retained only as historical evaluation evidence.
+
+> **Historical instructions:** The unchecked tasks and commands below describe the retired trial and are not an active operator workflow.
 
 **Goal:** Install and evaluate a pinned Piface 0.0.4 service inside WSL, exposed only through tailnet-only Tailscale Serve and used only with an existing disposable linked worktree.
 

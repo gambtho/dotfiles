@@ -927,6 +927,23 @@ SCRIPT
   grep -q '192.0.2.20:31415' "$TEST_COMMAND_LOG"
 }
 
+@test "tailscale serve discovers the WSL LAN address without assuming eth0" {
+  make_task4_managed_service
+  cat >"$STUB_BIN/ip" <<'SCRIPT'
+#!/usr/bin/env bash
+printf 'ip %s\n' "$*" >>"$TEST_COMMAND_LOG"
+[[ " $* " != *' dev eth0 '* ]] || exit 42
+printf '%s\n' '7: mirrored0    inet 192.0.2.20/24 scope global mirrored0'
+SCRIPT
+  chmod +x "$STUB_BIN/ip"
+
+  run_tailscale_helper serve
+
+  [ "$status" -eq 0 ]
+  grep -Fqx 'ip -4 -o addr show scope global' "$TEST_COMMAND_LOG"
+  grep -Fqx 'sudo tailscale serve --bg --https=443 http://127.0.0.1:31415' "$TEST_COMMAND_LOG"
+}
+
 @test "tailscale service preflight accepts only the exact empty managed Pi tree" {
   make_task4_managed_service
   local worktree="$HOME/.local/share/pi-webui/worktrees/dotfiles"
@@ -3850,6 +3867,15 @@ SCRIPT
   [[ "$output" != *'ai/pi/webui/'* ]]
   run grep -F 'ai/pi/webui' "$REPO_ROOT/bin/install"
   [ "$status" -eq 1 ]
+}
+
+@test "rejected Piface trial plan is explicitly non-operative" {
+  local plan="$REPO_ROOT/ai/pi/piface-trial-plan.md"
+
+  run grep -F 'SUPERSEDED — DO NOT EXECUTE' "$plan"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'ai/pi/webui/README.md'* ]]
 }
 
 @test "Pi Web UI runbook documents exact setup order trust boundaries and accepted limits" {

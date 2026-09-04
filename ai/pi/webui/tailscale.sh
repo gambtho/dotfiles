@@ -761,7 +761,8 @@ for(let depth=0; depth<256 && pid>0 && !seen.has(pid); depth++) {
 if(!owned) process.exit(1);
 NODE
   # shellcheck disable=SC2016 # awk field references are not shell expansions.
-  lan_ip=$("$IP_BIN" -4 -o addr show dev eth0 scope global | "$AWK_BIN" 'NR == 1 { sub(/\/.*/, "", $4); print $4 }')
+  lan_ip=$("$IP_BIN" -4 -o addr show scope global |
+    "$AWK_BIN" '$2 != "tailscale0" { sub(/\/.*/, "", $4); print $4; exit }') || lan_ip=''
   [[ -n "$lan_ip" ]] || {
     fail 'cannot determine WSL LAN address'
     return 1
