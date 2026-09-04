@@ -152,6 +152,7 @@ stub_apply_system() {
       "--user is-active pi-webui.service") [[ -f "$TEST_ROOT/service-active" ]] ;;
       "--user is-enabled pi-webui.service") [[ -f "$TEST_ROOT/service-enabled" ]] ;;
       "--user stop pi-webui.service")
+        if [[ ${STRICT_UNLOADED:-} == 1 && ! -f "$TEST_ROOT/unit-loaded" ]]; then exit 1; fi
         rm -f "$TEST_ROOT/service-active" "$TEST_ROOT/candidate-running" ;;
       "--user start pi-webui.service")
         touch "$TEST_ROOT/service-active"
@@ -161,11 +162,20 @@ stub_apply_system() {
           touch "$TEST_ROOT/candidate-running"
         fi ;;
       "--user enable pi-webui.service") touch "$TEST_ROOT/service-enabled" ;;
-      "--user disable pi-webui.service") rm -f "$TEST_ROOT/service-enabled" ;;
+      "--user disable pi-webui.service")
+        if [[ ${STRICT_UNLOADED:-} == 1 && ! -f "$TEST_ROOT/unit-loaded" ]]; then exit 1; fi
+        rm -f "$TEST_ROOT/service-enabled" ;;
       "--user daemon-reload")
         if [[ ${FAIL_POINT:-} == daemon-reload && ! -e "$TEST_ROOT/failed-once" ]]; then
           touch "$TEST_ROOT/failed-once"
           exit 1
+        fi
+        if [[ ${STRICT_UNLOADED:-} == 1 ]]; then
+          if [[ -f "$UNIT_PATH" ]]; then
+            touch "$TEST_ROOT/unit-loaded"
+          else
+            rm -f "$TEST_ROOT/unit-loaded"
+          fi
         fi ;;
       *) exit 96 ;;
     esac'
@@ -482,6 +492,74 @@ run_installer_function() {
   [ ! -e "$INSTALLED_RUNTIME/node_modules/node-pty" ]
 }
 
+@test "apply refuses a symlinked managed state directory before publication" {
+  prepare_apply_fixture symlinked-state
+  export HEALTH_JSON='{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"open":false,"host":"127.0.0.1","port":31415,"networkUrls":[]},"tabs":[]}}'
+  touch "$TEST_ROOT/service-active" "$TEST_ROOT/service-enabled"
+  stub_apply_system
+  mv "$STATE_ROOT" "$TEST_ROOT/state-target"
+  ln -s "$TEST_ROOT/state-target" "$STATE_ROOT"
+
+  run_installer --apply
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"state root must be a real directory"* ]]
+  ! grep -F "systemd-analyze --user verify " "$CALLS"
+  ! grep -F "systemctl --user stop pi-webui.service" "$CALLS"
+  assert_prior_apply_state symlinked-state 1 1
+}
+
+@test "apply refuses a symlinked managed unit directory before publication" {
+  prepare_apply_fixture symlinked-unit
+  export HEALTH_JSON='{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"open":false,"host":"127.0.0.1","port":31415,"networkUrls":[]},"tabs":[]}}'
+  touch "$TEST_ROOT/service-active" "$TEST_ROOT/service-enabled"
+  stub_apply_system
+  mv "$(dirname "$UNIT_PATH")" "$TEST_ROOT/unit-target"
+  ln -s "$TEST_ROOT/unit-target" "$(dirname "$UNIT_PATH")"
+
+  run_installer --apply
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"unit directory must be a real directory"* ]]
+  ! grep -F "systemd-analyze --user verify " "$CALLS"
+  ! grep -F "systemctl --user stop pi-webui.service" "$CALLS"
+  assert_prior_apply_state symlinked-unit 1 1
+}
+
+@test "apply rejects unsafe rendered paths before verification or publication" {
+  local unsafe label
+  make_webui_fixture
+  make_external_pi
+  make_candidate_installer
+  export HEALTH_JSON='{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"open":false,"host":"127.0.0.1","port":31415,"networkUrls":[]},"tabs":[]}}'
+  stub_apply_system
+
+  for label in percent dollar control; do
+    case "$label" in
+      percent) unsafe="$TEST_ROOT/data%unsafe" ;;
+      dollar) unsafe="$TEST_ROOT/data\$unsafe" ;;
+      control) unsafe="$TEST_ROOT/"$'data\nunsafe' ;;
+    esac
+    export XDG_DATA_HOME="$unsafe"
+    export XDG_CONFIG_HOME="$TEST_ROOT/config-$label"
+    STATE_ROOT="$XDG_DATA_HOME/pi-webui"
+    INSTALLED_RUNTIME="$STATE_ROOT/runtime/current"
+    LANDING_WORKTREE="$STATE_ROOT/worktrees/dotfiles"
+    UNIT_PATH="$XDG_CONFIG_HOME/systemd/user/pi-webui.service"
+    export STATE_ROOT INSTALLED_RUNTIME LANDING_WORKTREE UNIT_PATH
+    : >"$CALLS"
+
+    run_installer --apply
+
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"unsafe path for systemd unit"* ]]
+    ! grep -F "systemd-analyze --user verify " "$CALLS"
+    ! grep -F "systemctl --user stop pi-webui.service" "$CALLS"
+    [ ! -e "$INSTALLED_RUNTIME" ]
+    [ ! -e "$UNIT_PATH" ]
+  done
+}
+
 @test "apply validates candidate before stopping the managed service" {
   prepare_apply_fixture candidate-validation
   export HEALTH_JSON='{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"open":false,"host":"127.0.0.1","port":31415,"networkUrls":[]},"tabs":[]}}'
@@ -550,6 +628,29 @@ run_installer_function() {
   [ "$status" -ne 0 ]
   [ "$(grep -c 'systemctl --user daemon-reload' "$CALLS")" -eq 2 ]
   assert_prior_apply_state daemon-failure 1 1
+}
+
+@test "apply restores an absent prior installation after health failure" {
+  prepare_apply_fixture absent-prior
+  export HEALTH_JSON='{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"open":false,"host":"127.0.0.1","port":31415,"networkUrls":[]},"tabs":[]}}'
+  export FAIL_POINT=health STRICT_UNLOADED=1
+  rm -rf "$INSTALLED_RUNTIME"
+  rm -f "$UNIT_PATH"
+  git -C "$WEBUI_FIXTURE" worktree remove --force "$LANDING_WORKTREE"
+  stub_apply_system
+
+  run_installer --apply
+
+  [ "$status" -ne 0 ]
+  [[ "$output" != *"restoration failed"* ]]
+  [ ! -e "$INSTALLED_RUNTIME" ]
+  [ ! -e "$UNIT_PATH" ]
+  [ ! -e "$LANDING_WORKTREE" ]
+  [ ! -e "$TEST_ROOT/service-active" ]
+  [ ! -e "$TEST_ROOT/service-enabled" ]
+  [ "$(grep -c 'systemctl --user stop pi-webui.service' "$CALLS")" -eq 1 ]
+  [ -z "$(find "$STATE_ROOT" -maxdepth 1 -name '.apply.*' -print -quit)" ]
+  [ -z "$(find "$STATE_ROOT/runtime" -maxdepth 1 -name '.candidate.*' -print -quit)" ]
 }
 
 @test "apply restores prior commit enablement and activity after health failure" {

@@ -161,12 +161,16 @@ validate_landing_worktree() {
 }
 
 safe_unit_path() {
-  local path=$1
-  [[ "$path" == /* && "$path" != *'%'* && "$path" != *'$'* ]] ||
+  local path=$1 without_controls
+  [[ "$path" == /* && "$path" != *'%'* && "$path" != *'$'* ]] || {
     fail 'unsafe path for systemd unit'
-  if printf '%s' "$path" | LC_ALL=C grep -q '[[:cntrl:]]'; then
+    return 1
+  }
+  without_controls=$(printf '%s' "$path" | LC_ALL=C tr -d '[:cntrl:]') || return 1
+  [[ "$without_controls" == "$path" ]] || {
     fail 'unsafe path for systemd unit'
-  fi
+    return 1
+  }
 }
 
 render_unit() {
@@ -175,10 +179,10 @@ render_unit() {
   local pi_launcher=${3:-$PI_LAUNCHER}
   local mise_launcher=${4:-$MISE_LAUNCHER}
   local rendered template
-  safe_unit_path "$runtime_launcher"
-  safe_unit_path "$worktree"
-  safe_unit_path "$pi_launcher"
-  safe_unit_path "$mise_launcher"
+  safe_unit_path "$runtime_launcher" || return 1
+  safe_unit_path "$worktree" || return 1
+  safe_unit_path "$pi_launcher" || return 1
+  safe_unit_path "$mise_launcher" || return 1
   template="$SOURCE_ROOT/ai/pi/webui/pi-webui.service.in"
   [[ -f "$template" && ! -L "$template" ]] || fail 'service template is unavailable'
   rendered=$(<"$template")
@@ -236,9 +240,22 @@ path_exists() {
 
 require_managed_directory() {
   local directory=$1 label=$2
-  [[ -d "$directory" && ! -L "$directory" ]] || fail "$label must be a real directory"
-  [[ $(stat -c %u "$directory") == "$(id -u)" ]] ||
+  [[ -d "$directory" && ! -L "$directory" ]] || {
+    fail "$label must be a real directory"
+    return 1
+  }
+  [[ $(stat -c %u "$directory") == "$(id -u)" ]] || {
     fail "$label must be owned by the current user"
+    return 1
+  }
+}
+
+prepare_managed_directory() {
+  local directory=$1 label=$2
+  if ! path_exists "$directory"; then
+    mkdir -p "$directory" || return 1
+  fi
+  require_managed_directory "$directory" "$label" || return 1
 }
 
 cleanup_apply_paths() {
@@ -269,11 +286,12 @@ reject_retained_apply_state() {
 }
 
 build_candidate() {
-  local runtime_parent=$STATE_ROOT/runtime source_runtime
+  local runtime_parent=$STATE_ROOT/runtime source_runtime unit_directory
   reject_retained_apply_state || return 1
-  mkdir -p "$runtime_parent" || return 1
-  require_managed_directory "$STATE_ROOT" 'Pi Web UI state root' || return 1
-  require_managed_directory "$runtime_parent" 'Pi Web UI runtime parent' || return 1
+  unit_directory=$(dirname "$UNIT_PATH")
+  prepare_managed_directory "$STATE_ROOT" 'Pi Web UI state root' || return 1
+  prepare_managed_directory "$runtime_parent" 'Pi Web UI runtime parent' || return 1
+  prepare_managed_directory "$unit_directory" 'systemd user unit directory' || return 1
 
   CANDIDATE_RUNTIME=$(mktemp -d "$runtime_parent/.candidate.XXXXXX") || return 1
   chmod 0700 "$CANDIDATE_RUNTIME" || return 1
@@ -331,8 +349,8 @@ publish_unit() {
 publish_candidate() {
   if [[ "$PRIOR_ACTIVE" -eq 1 ]]; then
     systemctl --user stop pi-webui.service || return 1
+    stopped=1
   fi
-  stopped=1
 
   if [[ "$PRIOR_RUNTIME_PRESENT" -eq 1 ]]; then
     mv "$INSTALLED_RUNTIME" "$PRIOR_RUNTIME_BACKUP" || return 1
@@ -372,6 +390,13 @@ restore_prior_state() {
   if [[ "$candidate_started" -eq 1 ]]; then
     systemctl --user stop pi-webui.service || failed=1
     candidate_started=0
+  fi
+  if [[ "$enablement_changed" -eq 1 && "$PRIOR_UNIT_PRESENT" -eq 0 ]]; then
+    if systemctl --user disable pi-webui.service; then
+      enablement_changed=0
+    else
+      failed=1
+    fi
   fi
   if [[ "$unit_changed" -eq 1 ]]; then
     reload_needed=1
@@ -457,7 +482,9 @@ apply_reconciliation() {
   else
     status=$?
   fi
-  if [[ "$stopped" -eq 1 ]]; then
+  if [[ "$stopped" -eq 1 || "$worktree_changed" -eq 1 || "$runtime_changed" -eq 1 ||
+    "$unit_changed" -eq 1 || "$daemon_reloaded" -eq 1 || "$enablement_changed" -eq 1 ||
+    "$candidate_started" -eq 1 ]]; then
     restore_prior_state || return 1
   else
     cleanup_apply_paths || true
