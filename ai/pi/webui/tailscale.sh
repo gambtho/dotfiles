@@ -54,6 +54,7 @@ NODE
 
 route_state() {
   local serve funnel human status
+  require_tailscale_version || return 1
   serve=$(tailscale serve status --json) || fail 'cannot read Tailscale Serve state'
   funnel=$(tailscale funnel status --json) || fail 'cannot read Tailscale Funnel state'
   human=$(tailscale serve status) || fail 'cannot read human Tailscale Serve status'
@@ -170,7 +171,6 @@ check_all() {
   require_supported_platform
   check_local_service
   require_tailscale
-  require_tailscale_version
   require_route_state empty raw-exact
   check_lan
   printf 'Tailscale state is valid\n'
@@ -207,14 +207,12 @@ install_tailscale() {
 }
 
 serve_raw() {
-  require_tailscale_version
   require_route_state empty raw-exact
   sudo tailscale serve --bg --tcp=443 "$RAW_TARGET"
   [[ $(route_state) == raw-exact ]] || fail 'raw TCP Serve publication did not produce the exact route'
 }
 
 serve_raw_off() {
-  require_tailscale_version
   [[ $(route_state) == empty ]] && return 0
   require_route_state raw-exact
   sudo tailscale serve --tcp=443 off
@@ -222,14 +220,12 @@ serve_raw_off() {
 }
 
 serve_legacy() {
-  require_tailscale_version
   require_route_state empty legacy-exact
   sudo tailscale serve --bg --https=443 "$LEGACY_BACKEND"
   [[ $(route_state) == legacy-exact ]] || fail 'legacy HTTPS Serve publication did not produce the exact route'
 }
 
 serve_legacy_off() {
-  require_tailscale_version
   [[ $(route_state) == empty ]] && return 0
   require_route_state legacy-exact
   sudo tailscale serve --https=443 off

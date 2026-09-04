@@ -885,11 +885,26 @@ run_rollback() {
   [ "$status" -ne 0 ]
   [ ! -s "$MUTATION_CALLS" ]
 
+  run_tailscale_function 'route_state'
+  [ "$status" -ne 0 ]
+
+  run_tailscale uninstall
+  [ "$status" -ne 0 ]
+  ! grep -F 'apt-get remove' "$CALLS"
+
   export TAILSCALE_CLIENT_VERSION=1.102.3
   export TAILSCALE_DAEMON_VERSION=1.103.0-tforeign
   run_tailscale check
   [ "$status" -ne 0 ]
   [ ! -s "$MUTATION_CALLS" ]
+
+  run_tailscale_function 'route_state'
+  [ "$status" -ne 0 ]
+
+  : >"$CALLS"
+  run_tailscale uninstall
+  [ "$status" -ne 0 ]
+  ! grep -F 'apt-get remove' "$CALLS"
 }
 
 @test "tailscale check accepts empty or raw exact tailnet-only route" {
@@ -1129,7 +1144,7 @@ run_rollback() {
   [ "$status" -ne 0 ]
   ! grep -F 'apt-get remove' "$CALLS"
   write_route empty
-  printf '%s\n' '{"BackendState":"Running","Self":{"Online":false,"DNSName":"wsl.test.ts.net."}}' >"$TEST_ROOT/tailscale-status.json"
+  printf '%s\n' '{"BackendState":"Running","Version":"1.102.3","Self":{"Online":false,"DNSName":"wsl.test.ts.net."}}' >"$TEST_ROOT/tailscale-status.json"
   run_tailscale uninstall
   [ "$status" -eq 0 ]
   grep -F 'sudo apt-get remove --yes tailscale' "$CALLS"
