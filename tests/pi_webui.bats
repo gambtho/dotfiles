@@ -235,7 +235,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
-ExecStart=$MISE_LAUNCHER exec -- $INSTALLED_RUNTIME/node_modules/.bin/pi-webui --host 127.0.0.1 --port 31415 --cwd $LANDING_WORKTREE --pi $PI_LAUNCHER --no-remote-auth --name pi-webui
+ExecStart=$MISE_LAUNCHER exec -- "$INSTALLED_RUNTIME/node_modules/.bin/pi-webui" --host 127.0.0.1 --port 31415 --cwd "$LANDING_WORKTREE" --pi "$PI_LAUNCHER" --no-remote-auth --name pi-webui
 ExecStop=/usr/bin/curl --fail --silent --show-error -X POST http://127.0.0.1:31415/api/shutdown
 Restart=on-failure
 RestartSec=5
@@ -565,7 +565,7 @@ run_rollback() {
   make_external_pi
   run_installer_function 'resolve_source; resolve_mise; render_unit "$INSTALLED_RUNTIME/node_modules/.bin/pi-webui" "$LANDING_WORKTREE" "$PI_LAUNCHER"'
   [ "$status" -eq 0 ]
-  [[ "$output" == *"ExecStart=$MISE_LAUNCHER exec -- $INSTALLED_RUNTIME/node_modules/.bin/pi-webui --host 127.0.0.1 --port 31415 --cwd $LANDING_WORKTREE --pi $PI_LAUNCHER"* ]]
+  [[ "$output" == *"ExecStart=$MISE_LAUNCHER exec -- \"$INSTALLED_RUNTIME/node_modules/.bin/pi-webui\" --host 127.0.0.1 --port 31415 --cwd \"$LANDING_WORKTREE\" --pi \"$PI_LAUNCHER\""* ]]
   [[ "$output" == *"POST http://127.0.0.1:31415/api/shutdown"* ]]
   [[ "$output" == *"WantedBy=default.target"* ]]
   [[ "$output" != *"0.0.0.0"* ]]

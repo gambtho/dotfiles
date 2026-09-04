@@ -184,9 +184,9 @@ render_unit() {
   template="$SOURCE_ROOT/ai/pi/webui/pi-webui.service.in"
   [[ -f "$template" && ! -L "$template" ]] || fail 'service template is unavailable'
   rendered=$(<"$template")
-  rendered=${rendered//@RUNTIME_LAUNCHER@/$runtime_launcher}
-  rendered=${rendered//@WORKTREE@/$worktree}
-  rendered=${rendered//@PI_LAUNCHER@/$pi_launcher}
+  rendered=${rendered//@RUNTIME_LAUNCHER@/\"$runtime_launcher\"}
+  rendered=${rendered//@WORKTREE@/\"$worktree\"}
+  rendered=${rendered//@PI_LAUNCHER@/\"$pi_launcher\"}
   rendered=${rendered//@MISE_LAUNCHER@/$mise_launcher}
   [[ "$rendered" != *'@RUNTIME_LAUNCHER@'* && "$rendered" != *'@WORKTREE@'* &&
     "$rendered" != *'@PI_LAUNCHER@'* && "$rendered" != *'@MISE_LAUNCHER@'* ]] ||
