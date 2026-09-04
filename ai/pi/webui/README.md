@@ -44,6 +44,7 @@ From Windows, open exactly `http://127.0.0.1:31415`. A tailnet client opens the
 
 ```bash
 systemctl --user status pi-webui.service
+journalctl --user -u pi-webui.service -e
 systemctl --user restart pi-webui.service
 systemctl --user stop pi-webui.service
 systemctl --user start pi-webui.service

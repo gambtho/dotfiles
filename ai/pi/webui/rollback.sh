@@ -63,9 +63,24 @@ main() {
   local argument
   for argument in "$@"; do
     case "$argument" in
-      --remove-runtime) [[ "$remove_runtime" -eq 0 ]] || { usage >&2; return 2; }; remove_runtime=1 ;;
-      --remove-worktree) [[ "$remove_worktree" -eq 0 ]] || { usage >&2; return 2; }; remove_worktree=1 ;;
-      *) usage >&2; return 2 ;;
+      --remove-runtime)
+        [[ "$remove_runtime" -eq 0 ]] || {
+          usage >&2
+          return 2
+        }
+        remove_runtime=1
+        ;;
+      --remove-worktree)
+        [[ "$remove_worktree" -eq 0 ]] || {
+          usage >&2
+          return 2
+        }
+        remove_worktree=1
+        ;;
+      *)
+        usage >&2
+        return 2
+        ;;
     esac
   done
 

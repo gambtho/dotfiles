@@ -1082,7 +1082,7 @@ run_rollback() {
     'full authority of the WSL account' 'loopback-only' 'initial landing worktree' \
     'other project tabs' 'permission modal' 'Restart' 'Update the pins' 'preserves' \
     'serve-off` → rollback → Tailscale uninstall' 'before Pi or mise is upgraded or removed' \
-    '--remove-runtime' '--remove-worktree'; do
+    '--remove-runtime' '--remove-worktree' 'journalctl --user -u pi-webui.service -e'; do
     grep -Fq -- "$text" "$runbook"
   done
 }
