@@ -527,8 +527,9 @@ main() {
   if systemctl --user is-active pi-webui.service >/dev/null 2>&1; then
     validate_active_health "$PI_LAUNCHER"
   fi
-  printf 'Tailscale stage is unavailable until Task 4\n'
-  if [[ "$mode" == --apply ]]; then
+  if [[ "$mode" == --check ]]; then
+    "$SOURCE_ROOT/ai/pi/webui/tailscale.sh" check
+  else
     apply_reconciliation
   fi
 }

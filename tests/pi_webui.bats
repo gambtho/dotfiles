@@ -28,9 +28,10 @@ make_webui_fixture() {
     "$WEBUI_FIXTURE/ai/pi/webui/runtime/package-lock.json"
   cp "$REPO_ROOT/bin/validate-pi-webui" "$WEBUI_FIXTURE/bin/validate-pi-webui"
   cp "$REPO_ROOT/ai/pi/webui/install.sh" "$WEBUI_FIXTURE/ai/pi/webui/install.sh"
+  cp "$REPO_ROOT/ai/pi/webui/tailscale.sh" "$WEBUI_FIXTURE/ai/pi/webui/tailscale.sh"
   cp "$REPO_ROOT/ai/pi/webui/pi-webui.service.in" \
     "$WEBUI_FIXTURE/ai/pi/webui/pi-webui.service.in"
-  chmod +x "$WEBUI_FIXTURE/bin/validate-pi-webui" "$WEBUI_FIXTURE/ai/pi/webui/install.sh"
+  chmod +x "$WEBUI_FIXTURE/bin/validate-pi-webui" "$WEBUI_FIXTURE/ai/pi/webui/"{install,tailscale}.sh
   printf 'ID=ubuntu\nVERSION_ID="24.04"\nVERSION_CODENAME=noble\n' >"$PI_WEBUI_TEST_OS_RELEASE"
   printf '.pi/\n' >"$WEBUI_FIXTURE/.gitignore"
   git -C "$WEBUI_FIXTURE" init -q -b main
@@ -273,6 +274,88 @@ run_installer_function() {
     "$WEBUI_FIXTURE/ai/pi/webui/install.sh" "$body"
 }
 
+write_route() {
+  local mode=$1
+  case "$mode" in
+    empty)
+      printf '{}\n' >"$TEST_ROOT/route.json"
+      printf 'No serve config\n' >"$TEST_ROOT/route.txt"
+      ;;
+    exact)
+      printf '%s\n' '{"TCP":{"443":{"HTTPS":true}},"Web":{"wsl.test.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:31415"}}}},"AllowFunnel":{"wsl.test.ts.net:443":false}}' >"$TEST_ROOT/route.json"
+      printf 'https://wsl.test.ts.net (tailnet only)\n|-- / proxy http://127.0.0.1:31415\n' >"$TEST_ROOT/route.txt"
+      ;;
+    funnel)
+      write_route exact
+      printf '%s\n' '{"TCP":{"443":{"HTTPS":true}},"Web":{"wsl.test.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:31415"}}}},"AllowFunnel":{"wsl.test.ts.net:443":true}}' >"$TEST_ROOT/route.json"
+      ;;
+    foreign)
+      write_route exact
+      printf '%s\n' '{"TCP":{"443":{"HTTPS":true}},"Web":{"wsl.test.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:9999"}}}},"AllowFunnel":{"wsl.test.ts.net:443":false}}' >"$TEST_ROOT/route.json"
+      ;;
+    multiple)
+      write_route exact
+      printf '%s\n' '{"TCP":{"443":{"HTTPS":true}},"Web":{"wsl.test.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:31415"},"/other":{"Proxy":"http://127.0.0.1:31415"}}}},"AllowFunnel":{"wsl.test.ts.net:443":false}}' >"$TEST_ROOT/route.json"
+      ;;
+  esac
+  cp "$TEST_ROOT/route.json" "$TEST_ROOT/funnel.json"
+}
+
+stub_tailscale_system() {
+  stub_healthy_system
+  write_route "${1:-empty}"
+  printf '%s\n' '{"BackendState":"Running","Self":{"Online":true}}' >"$TEST_ROOT/tailscale-status.json"
+  stub_command systemctl 'case "$*" in
+    "is-active tailscaled"|"--user show-environment"|"--user is-active pi-webui.service") exit 0 ;;
+    *) printf "systemctl %s\\n" "$*" >>"$MUTATION_CALLS"; exit 99 ;;
+  esac'
+  stub_command tailscale 'case "$*" in
+    "status --json") cat "$TEST_ROOT/tailscale-status.json" ;;
+    "serve status --json") cat "$TEST_ROOT/route.json" ;;
+    "funnel status --json") cat "$TEST_ROOT/funnel.json" ;;
+    "serve status") cat "$TEST_ROOT/route.txt" ;;
+    *) exit 98 ;;
+  esac'
+  stub_command ip 'printf "%s\\n" \
+    "2: eth1    inet 172.20.1.4/20 brd 172.20.15.255 scope global eth1" \
+    "3: wlan0   inet 192.168.1.7/24 brd 192.168.1.255 scope global wlan0" \
+    "4: tailscale0 inet 100.64.0.1/32 scope global tailscale0"'
+  stub_command curl 'printf "curl %s\\n" "$*" >>"$CALLS"
+    case " $* " in
+      *" http://127.0.0.1:31415/api/health "*) printf "%s\\n" "$HEALTH_JSON" ;;
+      *" -o "*) printf key-bytes >"${@: -1}" ;;
+      *) exit 7 ;;
+    esac'
+  stub_command sudo 'printf "sudo %s\\n" "$*" >>"$CALLS"
+    case "$*" in
+      "tailscale serve --bg --https=443 http://127.0.0.1:31415")
+        printf "%s\\n" "{\"TCP\":{\"443\":{\"HTTPS\":true}},\"Web\":{\"wsl.test.ts.net:443\":{\"Handlers\":{\"/\":{\"Proxy\":\"http://127.0.0.1:31415\"}}}},\"AllowFunnel\":{\"wsl.test.ts.net:443\":false}}" >"$TEST_ROOT/route.json"
+        cp "$TEST_ROOT/route.json" "$TEST_ROOT/funnel.json"
+        printf "https://wsl.test.ts.net (tailnet only)\\n|-- / proxy http://127.0.0.1:31415\\n" >"$TEST_ROOT/route.txt" ;;
+      "tailscale serve --https=443 off")
+        printf "{}\\n" >"$TEST_ROOT/route.json"
+        cp "$TEST_ROOT/route.json" "$TEST_ROOT/funnel.json"
+        printf "No serve config\\n" >"$TEST_ROOT/route.txt" ;;
+      *"tailscale.list") printf "source %s\\n" "$(cat "${@: -2:1}")" >>"$CALLS" ;;
+    esac'
+  stub_command apt-get 'printf "apt-get %s\\n" "$*" >>"$CALLS"'
+  stub_command sha256sum 'printf "sha256sum %s\\n" "$*" >>"$CALLS"
+    printf "3e03dacf222698c60b8e2f990b809ca1b3e104de127767864284e6c228f1fb39  %s\\n" "$1"'
+}
+
+prepare_tailscale_check() {
+  make_webui_fixture
+  make_external_pi
+  make_landing_worktree
+  make_installed_runtime
+  write_expected_unit
+  stub_tailscale_system "${1:-empty}"
+}
+
+run_tailscale() {
+  run "$WEBUI_FIXTURE/ai/pi/webui/tailscale.sh" "$@"
+}
+
 @test "validator accepts only the exact tracked runtime" {
   make_webui_fixture
   run_webui_validator --tracked-only
@@ -314,11 +397,11 @@ run_installer_function() {
   mkdir -p "$LANDING_WORKTREE/.pi/plans"
   make_installed_runtime
   write_expected_unit
-  stub_healthy_system
+  stub_tailscale_system empty
   before=$(fingerprint_paths "$HOME" "$WEBUI_FIXTURE" "$MUTATION_CALLS")
   run_installer --check
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Tailscale stage is unavailable"* ]]
+  [[ "$output" == *"Tailscale state is valid"* ]]
   after=$(fingerprint_paths "$HOME" "$WEBUI_FIXTURE" "$MUTATION_CALLS")
   [ "$before" = "$after" ]
 
@@ -664,4 +747,116 @@ run_installer_function() {
   [ "$status" -ne 0 ]
   grep -F "systemctl --user start pi-webui.service" "$CALLS"
   assert_prior_apply_state health-failure 0 0
+}
+
+@test "tailscale check accepts empty or exact tailnet-only route" {
+  prepare_tailscale_check empty
+  run_tailscale check
+  [ "$status" -eq 0 ]
+  write_route exact
+  run_tailscale check
+  [ "$status" -eq 0 ]
+  printf 'https://wsl.test.ts.net\n|-- / proxy http://127.0.0.1:31415\n' >"$TEST_ROOT/route.txt"
+  run_tailscale check
+  [ "$status" -ne 0 ]
+}
+
+@test "Tailscale helper refuses Funnel foreign and multiple routes" {
+  prepare_tailscale_check empty
+  local mode
+  for mode in funnel foreign multiple; do
+    write_route "$mode"
+    run_tailscale check
+    [ "$status" -ne 0 ]
+    [ ! -s "$MUTATION_CALLS" ]
+  done
+  write_route exact
+  printf '{}\n' >"$TEST_ROOT/funnel.json"
+  run_tailscale check
+  [ "$status" -ne 0 ]
+}
+
+@test "tailscale serve publishes only HTTPS 443 to the loopback backend" {
+  prepare_tailscale_check empty
+  run_tailscale serve
+  [ "$status" -eq 0 ]
+  grep -Fx 'sudo tailscale serve --bg --https=443 http://127.0.0.1:31415' "$CALLS"
+}
+
+@test "tailscale serve-off removes only the exact owned route" {
+  prepare_tailscale_check foreign
+  run_tailscale serve-off
+  [ "$status" -ne 0 ]
+  ! grep -F 'sudo tailscale serve' "$CALLS"
+  write_route exact
+  run_tailscale serve-off
+  [ "$status" -eq 0 ]
+  grep -Fx 'sudo tailscale serve --https=443 off' "$CALLS"
+}
+
+@test "LAN detection excludes tailscale0 without assuming eth0" {
+  prepare_tailscale_check empty
+  run_tailscale check
+  [ "$status" -eq 0 ]
+  grep -F 'http://172.20.1.4:31415/' "$CALLS"
+  grep -F 'http://192.168.1.7:31415/' "$CALLS"
+  ! grep -F 'http://100.64.0.1:31415/' "$CALLS"
+
+  stub_command curl 'case " $* " in
+    *" http://127.0.0.1:31415/api/health "*) printf "%s\\n" "$HEALTH_JSON" ;;
+    *" --fail "*) exit 22 ;;
+    *) exit 0 ;;
+  esac'
+  run_tailscale check
+  [ "$status" -ne 0 ]
+}
+
+@test "tailscale install verifies the Noble key before sudo publication" {
+  make_webui_fixture
+  stub_tailscale_system empty
+  export PI_WEBUI_TAILSCALE_ROOT="$TEST_ROOT/system-root"
+  mkdir -p "$PI_WEBUI_TAILSCALE_ROOT"
+  run_tailscale install
+  [ "$status" -eq 0 ]
+  grep -F 'https://pkgs.tailscale.com/stable/ubuntu/noble.noarmor.gpg' "$CALLS"
+  sha_line=$(grep -n '^sha256sum ' "$CALLS" | cut -d: -f1)
+  sudo_line=$(grep -n '^sudo install ' "$CALLS" | cut -d: -f1 | head -n 1)
+  [ "$sha_line" -lt "$sudo_line" ]
+  grep -F 'source deb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg] https://pkgs.tailscale.com/stable/ubuntu noble main' "$CALLS"
+
+  mkdir -p "$PI_WEBUI_TAILSCALE_ROOT/usr/share/keyrings"
+  ln -s "$TEST_ROOT/missing-key" "$PI_WEBUI_TAILSCALE_ROOT/usr/share/keyrings/tailscale-archive-keyring.gpg"
+  : >"$CALLS"
+  run_tailscale install
+  [ "$status" -ne 0 ]
+  [ ! -s "$CALLS" ]
+}
+
+@test "tailscale up is interactive and accepts no auth key" {
+  make_webui_fixture
+  stub_tailscale_system empty
+  run_tailscale up
+  [ "$status" -eq 0 ]
+  grep -Fx 'sudo tailscale up' "$CALLS"
+  run_tailscale up tskey-secret
+  [ "$status" -eq 2 ]
+  [ "$(grep -c '^sudo tailscale up$' "$CALLS")" -eq 1 ]
+}
+
+@test "tailscale uninstall preserves identity and refuses an active route" {
+  make_webui_fixture
+  stub_tailscale_system exact
+  export PI_WEBUI_TAILSCALE_ROOT="$TEST_ROOT/system-root"
+  mkdir -p "$PI_WEBUI_TAILSCALE_ROOT/usr/share/keyrings" "$PI_WEBUI_TAILSCALE_ROOT/etc/apt/sources.list.d" "$PI_WEBUI_TAILSCALE_ROOT/var/lib/tailscale"
+  printf key-bytes >"$PI_WEBUI_TAILSCALE_ROOT/usr/share/keyrings/tailscale-archive-keyring.gpg"
+  printf '%s\n' 'deb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg] https://pkgs.tailscale.com/stable/ubuntu noble main' >"$PI_WEBUI_TAILSCALE_ROOT/etc/apt/sources.list.d/tailscale.list"
+  run_tailscale uninstall
+  [ "$status" -ne 0 ]
+  ! grep -F 'apt-get remove' "$CALLS"
+  write_route empty
+  printf '%s\n' '{"BackendState":"Running","Self":{"Online":false}}' >"$TEST_ROOT/tailscale-status.json"
+  run_tailscale uninstall
+  [ "$status" -eq 0 ]
+  grep -F 'sudo apt-get remove --yes tailscale' "$CALLS"
+  [[ "$(<"$CALLS")" != *purge* && "$(<"$CALLS")" != *logout* && "$(<"$CALLS")" != *var/lib/tailscale* ]]
 }
