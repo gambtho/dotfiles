@@ -141,6 +141,8 @@ The installer explicitly bootstraps any missing or mismatched version-pinned npm
 
 The migration converts the old whole-extension link to a real directory, preserves unrelated extension entries, and publishes only the two authored links. It removes only exact managed Amp settings links and only the `.permissions` key from valid Amp state. The exact legacy Brave `brave-search` directory is moved intact below `disabled-skills`; sibling skills, mismatches, and collisions are preserved.
 
+The opt-in [Pi Web UI](pi/webui/README.md) has a separate installer and operations runbook.
+
 ## Unattended operation
 
 Before `overnight-improve`:

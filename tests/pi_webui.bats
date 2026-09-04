@@ -1049,3 +1049,45 @@ run_rollback() {
   grep -F 'sudo apt-get remove --yes tailscale' "$CALLS"
   [[ "$(<"$CALLS")" != *purge* && "$(<"$CALLS")" != *logout* && "$(<"$CALLS")" != *var/lib/tailscale* ]]
 }
+
+@test "public Web UI targets call only explicit Web UI helpers" {
+  fixture="$TEST_ROOT/public-make"
+  mkdir -p "$fixture/ai/pi/webui"
+  cp "$REPO_ROOT/Makefile" "$fixture/Makefile"
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >>"$CALLS"\n' >"$fixture/ai/pi/webui/install.sh"
+  run make -s -C "$fixture" ai-webui
+  [ "$status" -eq 0 ]
+  [ "$(<"$CALLS")" = --apply ]
+  : >"$CALLS"
+  run make -s -C "$fixture" ai-webui-check
+  [ "$status" -eq 0 ]
+  [ "$(<"$CALLS")" = --check ]
+}
+
+@test "ordinary make ai and ai-check remain unchanged" {
+  fixture="$TEST_ROOT/ordinary-make"
+  mkdir -p "$fixture/ai/pi"
+  cp "$REPO_ROOT/Makefile" "$fixture/Makefile"
+  printf '#!/usr/bin/env bash\nprintf "ordinary:%%s\\n" "$*" >>"$CALLS"\n' >"$fixture/ai/pi/install.sh"
+  run make -s -C "$fixture" ai
+  [ "$status" -eq 0 ]
+  run make -s -C "$fixture" ai-check
+  [ "$status" -eq 0 ]
+  [ "$(<"$CALLS")" = $'ordinary:\nordinary:--check' ]
+}
+
+@test "runbook documents setup trust boundary accepted limitations and rollback" {
+  runbook="$REPO_ROOT/ai/pi/webui/README.md"
+  for text in 'make ai-webui-check' 'make ai-webui' 'http://127.0.0.1:31415' \
+    'full authority of the WSL account' 'loopback-only' 'initial landing worktree' \
+    'other project tabs' 'permission modal' 'Restart' 'Update the pins' 'preserves' \
+    'serve-off` → rollback → Tailscale uninstall' 'before Pi or mise is upgraded or removed' \
+    '--remove-runtime' '--remove-worktree'; do
+    grep -Fq -- "$text" "$runbook"
+  done
+}
+
+@test "public READMEs link to the Web UI runbook" {
+  grep -Fq '[Pi Web UI](ai/pi/webui/README.md)' "$REPO_ROOT/README.md"
+  grep -Fq '[Pi Web UI](pi/webui/README.md)' "$REPO_ROOT/ai/README.md"
+}
