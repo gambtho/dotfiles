@@ -76,7 +76,7 @@ if (!handlers || Object.keys(handlers).length !== 1 || !handlers['/'] ||
 const allow = serve.AllowFunnel;
 if (allow && (Object.keys(allow).length !== 1 || allow[hostKey] !== false)) process.exit(1);
 const host = hostKey.slice(0, -4);
-const lines = human.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+const lines = human.split(/\r?\n/).map(line => line.trim().replace(/\s+/g, ' ')).filter(Boolean);
 if (lines.length !== 2 || lines[0] !== `https://${host} (tailnet only)` ||
     lines[1] !== `|-- / proxy ${backend}`) process.exit(1);
 console.log('exact');
@@ -84,6 +84,7 @@ NODE
 }
 
 check_local_service() {
+  local strict=${1:-0}
   resolve_source
   resolve_mise
   resolve_pi
@@ -95,20 +96,37 @@ check_local_service() {
   UNIT_PATH=${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/pi-webui.service
   export STATE_ROOT INSTALLED_RUNTIME LANDING_WORKTREE RUNTIME_LAUNCHER UNIT_PATH
   validate_landing_worktree "$LANDING_WORKTREE"
-  "$SOURCE_ROOT/bin/validate-pi-webui" --installed-runtime "$INSTALLED_RUNTIME"
-  validate_unit "$UNIT_PATH"
-  validate_active_health "$PI_LAUNCHER"
+  if path_exists "$INSTALLED_RUNTIME"; then
+    "$SOURCE_ROOT/bin/validate-pi-webui" --installed-runtime "$INSTALLED_RUNTIME"
+  else
+    [[ "$strict" -eq 0 ]] || fail 'installed runtime is unavailable'
+  fi
+  if path_exists "$UNIT_PATH"; then
+    validate_unit "$UNIT_PATH"
+  else
+    [[ "$strict" -eq 0 ]] || fail 'installed service unit is unavailable'
+  fi
+  if systemctl --user is-active pi-webui.service >/dev/null 2>&1; then
+    validate_active_health "$PI_LAUNCHER"
+  else
+    [[ "$strict" -eq 0 ]] || fail 'Pi Web UI service is not active'
+  fi
 }
 
 check_lan() {
-  local interface address
+  local addresses interface address count=0
+  addresses=$(ip -o -4 addr show scope global |
+    awk '{ interface=$2; for (i=3; i<=NF; i++) if ($i == "inet") { split($(i+1), a, "/"); print interface, a[1] } }') ||
+    fail 'cannot inspect global IPv4 addresses'
   while read -r interface address; do
     [[ -n "$address" && "$interface" != tailscale0 ]] || continue
+    ((count += 1))
     if curl --silent --show-error --connect-timeout 1 "http://$address:31415/" >/dev/null 2>&1; then
       fail "Pi Web UI is reachable on LAN address $address"
       return 1
     fi
-  done < <(ip -o -4 addr show scope global | awk '{ interface=$2; for (i=3; i<=NF; i++) if ($i == "inet") { split($(i+1), a, "/"); print interface, a[1] } }')
+  done <<<"$addresses"
+  [[ "$count" -gt 0 ]] || fail 'no non-Tailscale global IPv4 address is available'
 }
 
 check_all() {
@@ -153,7 +171,7 @@ install_tailscale() {
 serve() {
   local state
   require_supported_platform
-  check_local_service
+  check_local_service 1
   require_tailscale
   state=$(route_state)
   [[ "$state" == empty || "$state" == exact ]] || fail 'Tailscale route is not owned'
@@ -163,7 +181,7 @@ serve() {
 
 serve_off() {
   require_supported_platform
-  require_tailscale
+  require_tailscale_daemon
   [[ $(route_state) == exact ]] || fail 'refusing to remove a foreign or empty route'
   sudo tailscale serve --https=443 off
   [[ $(route_state) == empty ]] || fail 'Tailscale route remains after removal'

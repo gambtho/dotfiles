@@ -253,11 +253,11 @@ fingerprint_paths() {
   for path in "$@"; do
     if [[ -e "$path" ]]; then
       find "$path" -printf '%P %y %m %s\n' | LC_ALL=C sort
-      find "$path" -type f -exec sha256sum {} + | LC_ALL=C sort
+      find "$path" -type f -exec /usr/bin/sha256sum {} + | LC_ALL=C sort
     else
       printf 'absent %s\n' "$path"
     fi
-  done | sha256sum | cut -d' ' -f1
+  done | /usr/bin/sha256sum | cut -d' ' -f1
 }
 
 run_webui_validator() {
@@ -323,7 +323,8 @@ stub_tailscale_system() {
   stub_command curl 'printf "curl %s\\n" "$*" >>"$CALLS"
     case " $* " in
       *" http://127.0.0.1:31415/api/health "*) printf "%s\\n" "$HEALTH_JSON" ;;
-      *" -o "*) printf key-bytes >"${@: -1}" ;;
+      *" -o "*)
+        if [[ ${BAD_KEY_DOWNLOAD:-} == 1 ]]; then printf bad-key; else printf key-bytes; fi >"${@: -1}" ;;
       *) exit 7 ;;
     esac'
   stub_command sudo 'printf "sudo %s\\n" "$*" >>"$CALLS"
@@ -333,14 +334,21 @@ stub_tailscale_system() {
         cp "$TEST_ROOT/route.json" "$TEST_ROOT/funnel.json"
         printf "https://wsl.test.ts.net (tailnet only)\\n|-- / proxy http://127.0.0.1:31415\\n" >"$TEST_ROOT/route.txt" ;;
       "tailscale serve --https=443 off")
-        printf "{}\\n" >"$TEST_ROOT/route.json"
-        cp "$TEST_ROOT/route.json" "$TEST_ROOT/funnel.json"
-        printf "No serve config\\n" >"$TEST_ROOT/route.txt" ;;
+        if [[ ${SERVE_OFF_STICKS:-} != 1 ]]; then
+          printf "{}\\n" >"$TEST_ROOT/route.json"
+          cp "$TEST_ROOT/route.json" "$TEST_ROOT/funnel.json"
+          printf "No serve config\\n" >"$TEST_ROOT/route.txt"
+        fi ;;
       *"tailscale.list") printf "source %s\\n" "$(cat "${@: -2:1}")" >>"$CALLS" ;;
     esac'
   stub_command apt-get 'printf "apt-get %s\\n" "$*" >>"$CALLS"'
   stub_command sha256sum 'printf "sha256sum %s\\n" "$*" >>"$CALLS"
-    printf "3e03dacf222698c60b8e2f990b809ca1b3e104de127767864284e6c228f1fb39  %s\\n" "$1"'
+    actual=$(/usr/bin/sha256sum "$1" | cut -d" " -f1)
+    good=$(printf key-bytes | /usr/bin/sha256sum | cut -d" " -f1)
+    if [[ $actual == "$good" ]]; then
+      actual=3e03dacf222698c60b8e2f990b809ca1b3e104de127767864284e6c228f1fb39
+    fi
+    printf "%s  %s\\n" "$actual" "$1"'
 }
 
 prepare_tailscale_check() {
@@ -388,6 +396,31 @@ run_tailscale() {
   [[ "$output" == *"Ubuntu 24.04 Noble under WSL"* ]]
   after=$(fingerprint_paths "$HOME" "$WEBUI_FIXTURE" "$MUTATION_CALLS")
   [ "$before" = "$after" ]
+}
+
+@test "mutation fingerprints remain content-sensitive with command stubs" {
+  make_webui_fixture
+  stub_tailscale_system empty
+  before=$(fingerprint_paths "$WEBUI_FIXTURE")
+  printf changed >>"$WEBUI_FIXTURE/ai/pi/webui/runtime/package.json"
+  after=$(fingerprint_paths "$WEBUI_FIXTURE")
+  [ "$before" != "$after" ]
+}
+
+@test "installer check preserves pre-install informational state" {
+  make_webui_fixture
+  make_external_pi
+  stub_tailscale_system empty
+  stub_command systemctl 'case "$*" in
+    "--user show-environment") exit 0 ;;
+    *) exit 3 ;;
+  esac'
+  run_installer --check
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"installed runtime is absent"* ]]
+  [[ "$output" == *"installed service unit is absent"* ]]
+  [[ "$output" == *"tailscaled is not active"* ]]
+  [[ "$output" != *"installed runtime is unavailable"* ]]
 }
 
 @test "installer check is mutation-free and accepts the healthy managed layout" {
@@ -756,6 +789,9 @@ run_tailscale() {
   write_route exact
   run_tailscale check
   [ "$status" -eq 0 ]
+  printf '  https://wsl.test.ts.net   (tailnet only)  \n  |--   /   proxy   http://127.0.0.1:31415  \n' >"$TEST_ROOT/route.txt"
+  run_tailscale check
+  [ "$status" -eq 0 ]
   printf 'https://wsl.test.ts.net\n|-- / proxy http://127.0.0.1:31415\n' >"$TEST_ROOT/route.txt"
   run_tailscale check
   [ "$status" -ne 0 ]
@@ -781,6 +817,12 @@ run_tailscale() {
   run_tailscale serve
   [ "$status" -eq 0 ]
   grep -Fx 'sudo tailscale serve --bg --https=443 http://127.0.0.1:31415' "$CALLS"
+
+  rm -rf "$INSTALLED_RUNTIME"
+  : >"$CALLS"
+  run_tailscale serve
+  [ "$status" -ne 0 ]
+  [ ! -s "$CALLS" ]
 }
 
 @test "tailscale serve-off removes only the exact owned route" {
@@ -789,6 +831,12 @@ run_tailscale() {
   [ "$status" -ne 0 ]
   ! grep -F 'sudo tailscale serve' "$CALLS"
   write_route exact
+  export SERVE_OFF_STICKS=1
+  run_tailscale serve-off
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"route remains after removal"* ]]
+  unset SERVE_OFF_STICKS
+  printf '%s\n' '{"BackendState":"Running","Self":{"Online":false}}' >"$TEST_ROOT/tailscale-status.json"
   run_tailscale serve-off
   [ "$status" -eq 0 ]
   grep -Fx 'sudo tailscale serve --https=443 off' "$CALLS"
@@ -809,6 +857,16 @@ run_tailscale() {
   esac'
   run_tailscale check
   [ "$status" -ne 0 ]
+
+  stub_command ip 'exit 4'
+  run_tailscale check
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"cannot inspect global IPv4 addresses"* ]]
+
+  stub_command ip 'printf "%s\\n" "4: tailscale0 inet 100.64.0.1/32 scope global tailscale0"'
+  run_tailscale check
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"no non-Tailscale global IPv4 address"* ]]
 }
 
 @test "tailscale install verifies the Noble key before sudo publication" {
@@ -830,6 +888,21 @@ run_tailscale() {
   run_tailscale install
   [ "$status" -ne 0 ]
   [ ! -s "$CALLS" ]
+
+  rm "$PI_WEBUI_TAILSCALE_ROOT/usr/share/keyrings/tailscale-archive-keyring.gpg"
+  printf foreign-key >"$PI_WEBUI_TAILSCALE_ROOT/usr/share/keyrings/tailscale-archive-keyring.gpg"
+  : >"$CALLS"
+  run_tailscale install
+  [ "$status" -ne 0 ]
+  ! grep -E '^(curl|sudo) ' "$CALLS"
+
+  rm "$PI_WEBUI_TAILSCALE_ROOT/usr/share/keyrings/tailscale-archive-keyring.gpg"
+  export BAD_KEY_DOWNLOAD=1
+  : >"$CALLS"
+  run_tailscale install
+  [ "$status" -ne 0 ]
+  grep -F 'downloaded Tailscale key has the wrong SHA-256' <<<"$output"
+  ! grep -E '^sudo ' "$CALLS"
 }
 
 @test "tailscale up is interactive and accepts no auth key" {
