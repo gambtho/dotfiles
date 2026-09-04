@@ -119,6 +119,7 @@ prepare_apply_fixture() {
   make_webui_fixture
   make_external_pi
   make_candidate_installer
+  export HEALTH_JSON='{"ok":true,"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"open":false,"host":"127.0.0.1","port":31415,"networkUrls":[]},"tabs":[]}'
   printf '%s\n' "$identity" >"$WEBUI_FIXTURE/prior-release"
   git -C "$WEBUI_FIXTURE" add prior-release
   git -C "$WEBUI_FIXTURE" commit -qm "prior $identity"
@@ -298,8 +299,8 @@ write_route() {
       printf '%s\n' '{"TCP":{"443":{"HTTPS":true}},"Web":{"wsl.test.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:31415"}}}},"AllowFunnel":{"wsl.test.ts.net:443":true}}' >"$TEST_ROOT/route.json"
       ;;
     foreign)
-      write_route exact
-      printf '%s\n' '{"TCP":{"443":{"HTTPS":true}},"Web":{"wsl.test.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:9999"}}}},"AllowFunnel":{"wsl.test.ts.net:443":false}}' >"$TEST_ROOT/route.json"
+      printf '%s\n' '{"TCP":{"443":{"HTTPS":true}},"Web":{"other.test.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:31415"}}}},"AllowFunnel":{"other.test.ts.net:443":false}}' >"$TEST_ROOT/route.json"
+      printf 'https://other.test.ts.net (tailnet only)\n|-- / proxy http://127.0.0.1:31415\n' >"$TEST_ROOT/route.txt"
       ;;
     multiple)
       write_route exact
@@ -312,7 +313,7 @@ write_route() {
 stub_tailscale_system() {
   stub_healthy_system
   write_route "${1:-empty}"
-  printf '%s\n' '{"BackendState":"Running","Self":{"Online":true}}' >"$TEST_ROOT/tailscale-status.json"
+  printf '%s\n' '{"BackendState":"Running","Self":{"Online":true,"DNSName":"wsl.test.ts.net."}}' >"$TEST_ROOT/tailscale-status.json"
   stub_command systemctl 'case "$*" in
     "is-active tailscaled"|"--user show-environment"|"--user is-active pi-webui.service") exit 0 ;;
     *) printf "systemctl %s\\n" "$*" >>"$MUTATION_CALLS"; exit 99 ;;
@@ -623,7 +624,6 @@ run_rollback() {
 
 @test "apply uses npm ci --ignore-scripts --omit=optional and preserves the lock" {
   prepare_apply_fixture npm-flags
-  export HEALTH_JSON='{"ok":true,"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"open":false,"host":"127.0.0.1","port":31415,"networkUrls":[]},"tabs":[]}'
   touch "$TEST_ROOT/service-active" "$TEST_ROOT/service-enabled"
   stub_apply_system
   before=$(sha256sum "$WEBUI_FIXTURE/ai/pi/webui/runtime/package-lock.json")
@@ -641,7 +641,6 @@ run_rollback() {
 
 @test "apply refuses a symlinked managed state directory before publication" {
   prepare_apply_fixture symlinked-state
-  export HEALTH_JSON='{"ok":true,"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"open":false,"host":"127.0.0.1","port":31415,"networkUrls":[]},"tabs":[]}'
   touch "$TEST_ROOT/service-active" "$TEST_ROOT/service-enabled"
   stub_apply_system
   mv "$STATE_ROOT" "$TEST_ROOT/state-target"
@@ -658,7 +657,6 @@ run_rollback() {
 
 @test "apply refuses a symlinked managed unit directory before publication" {
   prepare_apply_fixture symlinked-unit
-  export HEALTH_JSON='{"ok":true,"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"open":false,"host":"127.0.0.1","port":31415,"networkUrls":[]},"tabs":[]}'
   touch "$TEST_ROOT/service-active" "$TEST_ROOT/service-enabled"
   stub_apply_system
   mv "$(dirname "$UNIT_PATH")" "$TEST_ROOT/unit-target"
@@ -703,24 +701,28 @@ run_rollback() {
   done
 }
 
-@test "apply validates candidate before stopping the managed service" {
+@test "apply rejects retained transients and validates candidates before service stop" {
   prepare_apply_fixture candidate-validation
-  export HEALTH_JSON='{"ok":true,"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"open":false,"host":"127.0.0.1","port":31415,"networkUrls":[]},"tabs":[]}'
-  export FAIL_POINT=candidate-verify
   touch "$TEST_ROOT/service-active" "$TEST_ROOT/service-enabled"
   stub_apply_system
-
+  for retained in "$STATE_ROOT/runtimes/.candidate.retained" "$STATE_ROOT/.apply.retained"; do
+    mkdir -p "$retained"
+    run_installer --apply
+    [[ "$status" -ne 0 && -d "$retained" ]]
+    [[ -z $(grep -E '^(npm|systemd-analyze|systemctl --user stop)' "$CALLS") ]]
+    assert_prior_apply_state candidate-validation 1 1
+    rm -rf "$retained"
+  done
+  export FAIL_POINT=candidate-verify
   run_installer --apply
-
   [ "$status" -ne 0 ]
   grep -F "systemd-analyze --user verify " "$CALLS"
-  ! grep -F "systemctl --user stop pi-webui.service" "$CALLS"
+  [ "$(grep -c 'systemctl --user stop pi-webui.service' "$CALLS")" -eq 0 ]
   assert_prior_apply_state candidate-validation 1 1
 }
 
 @test "apply creates or advances only a clean detached landing worktree" {
   prepare_apply_fixture landing
-  export HEALTH_JSON='{"ok":true,"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"open":false,"host":"127.0.0.1","port":31415,"networkUrls":[]},"tabs":[]}'
   stub_apply_system
   rm -rf "$LANDING_WORKTREE"
   git -C "$WEBUI_FIXTURE" worktree prune
@@ -741,7 +743,6 @@ run_rollback() {
 
 @test "apply restores after runtime publication failure" {
   prepare_apply_fixture runtime-failure
-  export HEALTH_JSON='{"ok":true,"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"open":false,"host":"127.0.0.1","port":31415,"networkUrls":[]},"tabs":[]}'
   export FAIL_POINT=runtime-publication
   touch "$TEST_ROOT/service-active" "$TEST_ROOT/service-enabled"
   stub_apply_system
@@ -761,7 +762,6 @@ run_rollback() {
 
 @test "apply restores after unit or daemon-reload failure" {
   prepare_apply_fixture daemon-failure
-  export HEALTH_JSON='{"ok":true,"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"open":false,"host":"127.0.0.1","port":31415,"networkUrls":[]},"tabs":[]}'
   export FAIL_POINT=daemon-reload
   touch "$TEST_ROOT/service-active" "$TEST_ROOT/service-enabled"
   stub_apply_system
@@ -775,7 +775,6 @@ run_rollback() {
 
 @test "apply restores an absent prior installation after partial worktree creation" {
   prepare_apply_fixture absent-prior
-  export HEALTH_JSON='{"ok":true,"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"open":false,"host":"127.0.0.1","port":31415,"networkUrls":[]},"tabs":[]}'
   export STRICT_UNLOADED=1
   rm -rf "$INSTALLED_RUNTIME"
   rm -f "$UNIT_PATH"
@@ -799,7 +798,6 @@ run_rollback() {
 
 @test "apply restores prior commit enablement and activity after health failure" {
   prepare_apply_fixture health-failure
-  export HEALTH_JSON='{"ok":true,"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"open":false,"host":"127.0.0.1","port":31415,"networkUrls":[]},"tabs":[]}'
   export FAIL_POINT=health
   stub_apply_system
 
@@ -867,7 +865,7 @@ run_rollback() {
   [ "$status" -ne 0 ]
   [[ "$output" == *"route remains after removal"* ]]
   unset SERVE_OFF_STICKS
-  printf '%s\n' '{"BackendState":"Running","Self":{"Online":false}}' >"$TEST_ROOT/tailscale-status.json"
+  printf '%s\n' '{"BackendState":"Running","Self":{"Online":false,"DNSName":"wsl.test.ts.net."}}' >"$TEST_ROOT/tailscale-status.json"
   run_tailscale serve-off
   [ "$status" -eq 0 ]
   grep -Fx 'sudo tailscale serve --https=443 off' "$CALLS"
@@ -1043,7 +1041,7 @@ run_rollback() {
   [ "$status" -ne 0 ]
   ! grep -F 'apt-get remove' "$CALLS"
   write_route empty
-  printf '%s\n' '{"BackendState":"Running","Self":{"Online":false}}' >"$TEST_ROOT/tailscale-status.json"
+  printf '%s\n' '{"BackendState":"Running","Self":{"Online":false,"DNSName":"wsl.test.ts.net."}}' >"$TEST_ROOT/tailscale-status.json"
   run_tailscale uninstall
   [ "$status" -eq 0 ]
   grep -F 'sudo apt-get remove --yes tailscale' "$CALLS"

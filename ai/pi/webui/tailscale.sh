@@ -37,12 +37,13 @@ NODE
 }
 
 route_state() {
-  local serve funnel human
+  local serve funnel human status
   serve=$(tailscale serve status --json) || fail 'cannot read Tailscale Serve state'
   funnel=$(tailscale funnel status --json) || fail 'cannot read Tailscale Funnel state'
   human=$(tailscale serve status) || fail 'cannot read human Tailscale Serve status'
-  node - "$serve" "$funnel" "$human" "$BACKEND" <<'NODE' || fail 'Tailscale route is foreign, additional, public, or ambiguous'
-const [serveText, funnelText, human, backend] = process.argv.slice(2);
+  status=$(tailscale status --json) || fail 'cannot read Tailscale status'
+  node - "$serve" "$funnel" "$human" "$BACKEND" "$status" <<'NODE' || fail 'Tailscale route is foreign, additional, public, or ambiguous'
+const [serveText, funnelText, human, backend, statusText] = process.argv.slice(2);
 const canonical = value => {
   if (Array.isArray(value)) return value.map(canonical);
   if (value && typeof value === 'object') return Object.fromEntries(
@@ -57,6 +58,8 @@ const empty = value => {
 };
 const serve = JSON.parse(serveText);
 const funnel = JSON.parse(funnelText);
+const dns = JSON.parse(statusText).Self?.DNSName;
+if (typeof dns !== 'string' || !dns.replace(/\.$/, '')) process.exit(1);
 if (JSON.stringify(canonical(serve)) !== JSON.stringify(canonical(funnel))) process.exit(1);
 if (empty(serve)) { console.log('empty'); process.exit(0); }
 if (!serve || Array.isArray(serve) || typeof serve !== 'object') process.exit(1);
@@ -67,7 +70,7 @@ if (tcpKeys.length !== 1 || tcpKeys[0] !== '443' || webKeys.length !== 1) proces
 const tcp = serve.TCP['443'];
 if (!tcp || tcp.HTTPS !== true || Object.entries(tcp).some(([key, value]) => key !== 'HTTPS' && !empty(value))) process.exit(1);
 const hostKey = webKeys[0];
-if (!hostKey.endsWith(':443')) process.exit(1);
+if (hostKey !== `${dns.replace(/\.$/, '')}:443`) process.exit(1);
 const web = serve.Web[hostKey];
 if (!web || Object.keys(web).some(key => key !== 'Handlers' && !empty(web[key]))) process.exit(1);
 const handlers = web.Handlers;

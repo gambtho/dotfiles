@@ -284,7 +284,9 @@ reject_retained_apply_state() {
   for path in \
     "$STATE_ROOT/runtimes/candidate" \
     "$STATE_ROOT/transactions/pending" \
-    "$STATE_ROOT/transactions/apply.lock"; do
+    "$STATE_ROOT/transactions/apply.lock" \
+    "$STATE_ROOT/runtimes"/.candidate.* \
+    "$STATE_ROOT"/.apply.*; do
     if path_exists "$path"; then
       fail "preserving existing apply evidence; resolve it manually: $path"
       return 1
