@@ -69,12 +69,19 @@ resolve_source() {
   SOURCE_GIT_COMMON_DIR=$(canonical_existing "$(git -C "$SOURCE_ROOT" rev-parse --path-format=absolute --git-common-dir)")
   PRIMARY_CHECKOUT=$(git -C "$SOURCE_ROOT" worktree list --porcelain | awk 'NR == 1 { print substr($0, 10); exit }')
   PRIMARY_CHECKOUT=$(canonical_existing "$PRIMARY_CHECKOUT")
-  export SOURCE_ROOT SOURCE_GIT_DIR SOURCE_GIT_COMMON_DIR PRIMARY_CHECKOUT
+  if [[ -n ${PI_WEBUI_TEST_SOURCE_ROOT:-} ]]; then
+    CANONICAL_CHECKOUT=$PRIMARY_CHECKOUT
+  else
+    CANONICAL_CHECKOUT=$(canonical_existing "$HOME/.dotfiles") ||
+      fail 'cannot resolve the canonical primary checkout'
+  fi
+  export SOURCE_ROOT SOURCE_GIT_DIR SOURCE_GIT_COMMON_DIR PRIMARY_CHECKOUT CANONICAL_CHECKOUT
 }
 
 validate_apply_source() {
   local head upstream
-  [[ "$SOURCE_GIT_DIR" == "$SOURCE_GIT_COMMON_DIR" && "$SOURCE_ROOT" == "$PRIMARY_CHECKOUT" ]] ||
+  [[ "$SOURCE_GIT_DIR" == "$SOURCE_GIT_COMMON_DIR" && "$SOURCE_ROOT" == "$PRIMARY_CHECKOUT" &&
+    "$PRIMARY_CHECKOUT" == "$CANONICAL_CHECKOUT" ]] ||
     fail 'apply requires the canonical primary checkout'
   [[ -z $(git -C "$SOURCE_ROOT" status --porcelain --untracked-files=all) ]] ||
     fail 'apply requires a clean source checkout'
@@ -84,8 +91,15 @@ validate_apply_source() {
   [[ "$head" == "$upstream" ]] || fail 'apply requires HEAD to equal origin/main'
 }
 
+resolve_mise() {
+  MISE_LAUNCHER=$(command -v mise 2>/dev/null) || fail 'mise launcher is unavailable'
+  [[ "$MISE_LAUNCHER" == /* && -x "$MISE_LAUNCHER" ]] || fail 'mise launcher is invalid'
+  MISE_LAUNCHER=$(canonical_existing "$MISE_LAUNCHER") || fail 'cannot resolve mise launcher'
+  export MISE_LAUNCHER
+}
+
 resolve_pi() {
-  PI_LAUNCHER=$(mise which pi 2>/dev/null) || fail 'Pi must be available through mise'
+  PI_LAUNCHER=$("$MISE_LAUNCHER" which pi 2>/dev/null) || fail 'Pi must be available through mise'
   [[ -x "$PI_LAUNCHER" && "$PI_LAUNCHER" == /* ]] || fail 'mise returned an invalid Pi launcher'
   PI_LAUNCHER=$(canonical_existing "$PI_LAUNCHER")
   node - "$PI_LAUNCHER" <<'NODE' || fail 'Pi launcher is not @earendil-works/pi-coding-agent@0.84.4'
@@ -159,18 +173,22 @@ render_unit() {
   local runtime_launcher=${1:-$RUNTIME_LAUNCHER}
   local worktree=${2:-$LANDING_WORKTREE}
   local pi_launcher=${3:-$PI_LAUNCHER}
+  local mise_launcher=${4:-$MISE_LAUNCHER}
   local rendered template
   safe_unit_path "$runtime_launcher"
   safe_unit_path "$worktree"
   safe_unit_path "$pi_launcher"
+  safe_unit_path "$mise_launcher"
   template="$SOURCE_ROOT/ai/pi/webui/pi-webui.service.in"
   [[ -f "$template" && ! -L "$template" ]] || fail 'service template is unavailable'
   rendered=$(<"$template")
   rendered=${rendered//@RUNTIME_LAUNCHER@/$runtime_launcher}
   rendered=${rendered//@WORKTREE@/$worktree}
   rendered=${rendered//@PI_LAUNCHER@/$pi_launcher}
+  rendered=${rendered//@MISE_LAUNCHER@/$mise_launcher}
   [[ "$rendered" != *'@RUNTIME_LAUNCHER@'* && "$rendered" != *'@WORKTREE@'* &&
-    "$rendered" != *'@PI_LAUNCHER@'* ]] || fail 'service template substitution failed'
+    "$rendered" != *'@PI_LAUNCHER@'* && "$rendered" != *'@MISE_LAUNCHER@'* ]] ||
+    fail 'service template substitution failed'
   printf '%s\n' "$rendered"
 }
 
@@ -200,7 +218,7 @@ const response = JSON.parse(process.argv[3]);
   if (response.ok !== true || data?.webuiVersion !== '0.10.3' || data?.piVersion !== '0.84.4' ||
       network?.open !== false || network?.host !== '127.0.0.1' || network?.port !== 31415 ||
       !Array.isArray(network?.networkUrls) || network.networkUrls.length !== 0 ||
-      !Array.isArray(data?.tabs) || data.tabs.length === 0) process.exit(1);
+      !Array.isArray(data?.tabs)) process.exit(1);
   const prefix = `${launcher} --mode rpc`;
   for (const tab of data.tabs) {
     if (tab.running === true && !(tab.command === prefix ||
@@ -221,6 +239,7 @@ main() {
   require_supported_platform
   resolve_source
   [[ "$mode" != --apply ]] || validate_apply_source
+  resolve_mise
   resolve_pi
 
   "$SOURCE_ROOT/bin/validate-pi-webui" --tracked-only

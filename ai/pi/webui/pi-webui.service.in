@@ -6,7 +6,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
-ExecStart=/usr/bin/mise exec -- @RUNTIME_LAUNCHER@ --host 127.0.0.1 --port 31415 --cwd @WORKTREE@ --pi @PI_LAUNCHER@ --no-remote-auth --name pi-webui
+ExecStart=@MISE_LAUNCHER@ exec -- @RUNTIME_LAUNCHER@ --host 127.0.0.1 --port 31415 --cwd @WORKTREE@ --pi @PI_LAUNCHER@ --no-remote-auth --name pi-webui
 ExecStop=/usr/bin/curl --fail --silent --show-error -X POST http://127.0.0.1:31415/api/shutdown
 Restart=on-failure
 RestartSec=5

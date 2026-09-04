@@ -74,6 +74,8 @@ make_external_pi() {
   printf '#!/usr/bin/env node\n' >"$PI_LAUNCHER"
   chmod +x "$PI_LAUNCHER"
   stub_command mise 'if [[ "$1 $2" == "which pi" ]]; then printf "%s\\n" "$PI_LAUNCHER"; else exec "${@:4}"; fi'
+  MISE_LAUNCHER="$STUB_BIN/mise"
+  export MISE_LAUNCHER
 }
 
 make_landing_worktree() {
@@ -107,7 +109,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
-ExecStart=/usr/bin/mise exec -- $INSTALLED_RUNTIME/node_modules/.bin/pi-webui --host 127.0.0.1 --port 31415 --cwd $LANDING_WORKTREE --pi $PI_LAUNCHER --no-remote-auth --name pi-webui
+ExecStart=$MISE_LAUNCHER exec -- $INSTALLED_RUNTIME/node_modules/.bin/pi-webui --host 127.0.0.1 --port 31415 --cwd $LANDING_WORKTREE --pi $PI_LAUNCHER --no-remote-auth --name pi-webui
 ExecStop=/usr/bin/curl --fail --silent --show-error -X POST http://127.0.0.1:31415/api/shutdown
 Restart=on-failure
 RestartSec=5
@@ -230,6 +232,34 @@ run_installer_function() {
   [ ! -s "$MUTATION_CALLS" ]
 }
 
+@test "installer ordinary mode rejects a noncanonical primary checkout" {
+  make_webui_fixture
+  run_installer_function 'unset PI_WEBUI_TESTING PI_WEBUI_TEST_SOURCE_ROOT; resolve_source; validate_apply_source'
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"canonical primary checkout"* ]]
+}
+
+@test "installer rejects a foreign or wrong-version Pi package launcher" {
+  make_webui_fixture
+  make_external_pi
+  run_installer_function 'resolve_pi'
+  [ "$status" -eq 0 ]
+
+  printf '%s\n' \
+    '{"name":"foreign-pi","version":"0.84.4","bin":{"pi":"dist/bundle/cli.js"}}' \
+    >"$PI_PACKAGE/package.json"
+  run_installer_function 'resolve_pi'
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Pi launcher is not @earendil-works/pi-coding-agent@0.84.4"* ]]
+
+  printf '%s\n' \
+    '{"name":"@earendil-works/pi-coding-agent","version":"0.84.3","bin":{"pi":"dist/bundle/cli.js"}}' \
+    >"$PI_PACKAGE/package.json"
+  run_installer_function 'resolve_pi'
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Pi launcher is not @earendil-works/pi-coding-agent@0.84.4"* ]]
+}
+
 @test "landing worktree accepts clean detached state and empty .pi/plans" {
   make_webui_fixture
   make_landing_worktree
@@ -268,9 +298,9 @@ run_installer_function() {
 @test "service template binds loopback and uses exact runtime worktree and Pi launchers" {
   make_webui_fixture
   make_external_pi
-  run_installer_function 'resolve_source; render_unit "$INSTALLED_RUNTIME/node_modules/.bin/pi-webui" "$LANDING_WORKTREE" "$PI_LAUNCHER"'
+  run_installer_function 'resolve_source; resolve_mise; render_unit "$INSTALLED_RUNTIME/node_modules/.bin/pi-webui" "$LANDING_WORKTREE" "$PI_LAUNCHER"'
   [ "$status" -eq 0 ]
-  [[ "$output" == *"$INSTALLED_RUNTIME/node_modules/.bin/pi-webui --host 127.0.0.1 --port 31415 --cwd $LANDING_WORKTREE --pi $PI_LAUNCHER"* ]]
+  [[ "$output" == *"ExecStart=$MISE_LAUNCHER exec -- $INSTALLED_RUNTIME/node_modules/.bin/pi-webui --host 127.0.0.1 --port 31415 --cwd $LANDING_WORKTREE --pi $PI_LAUNCHER"* ]]
   [[ "$output" == *"POST http://127.0.0.1:31415/api/shutdown"* ]]
   [[ "$output" == *"WantedBy=default.target"* ]]
   [[ "$output" != *"0.0.0.0"* ]]
@@ -279,15 +309,24 @@ run_installer_function() {
   [[ "$output" != *"permission-system"* ]]
   [ "$(printf '%s\n' "$output" | wc -l)" -eq 19 ]
 
+  run_installer_function 'resolve_source; MISE_LAUNCHER=/usr/bin/mise; render_unit "$INSTALLED_RUNTIME/node_modules/.bin/pi-webui" "$LANDING_WORKTREE" "$PI_LAUNCHER"'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"ExecStart=/usr/bin/mise exec --"* ]]
+
   bad_path="$TEST_ROOT/bad%path"
-  run_installer_function 'resolve_source; render_unit "$bad_path" "$LANDING_WORKTREE" "$PI_LAUNCHER"'
+  run_installer_function 'resolve_source; resolve_mise; render_unit "$bad_path" "$LANDING_WORKTREE" "$PI_LAUNCHER"'
   [ "$status" -ne 0 ]
 }
 
-@test "active health permits project cwd tabs but rejects wrong launchers or open networking" {
+@test "active health permits empty tabs and project cwd tabs but rejects wrong launchers or open networking" {
   make_webui_fixture
   make_external_pi
+  export HEALTH_JSON='{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"open":false,"host":"127.0.0.1","port":31415,"networkUrls":[]},"tabs":[]}}'
   stub_healthy_system
+  run_installer_function 'validate_active_health "$PI_LAUNCHER"'
+  [ "$status" -eq 0 ]
+
+  export HEALTH_JSON="{\"ok\":true,\"data\":{\"webuiVersion\":\"0.10.3\",\"piVersion\":\"0.84.4\",\"network\":{\"open\":false,\"host\":\"127.0.0.1\",\"port\":31415,\"networkUrls\":[]},\"tabs\":[{\"cwd\":\"/tmp/project\",\"running\":true,\"command\":\"$PI_LAUNCHER --mode rpc --session x\"}]}}"
   run_installer_function 'validate_active_health "$PI_LAUNCHER"'
   [ "$status" -eq 0 ]
 
@@ -295,7 +334,24 @@ run_installer_function() {
   run_installer_function 'validate_active_health "$PI_LAUNCHER"'
   [ "$status" -ne 0 ]
 
-  export HEALTH_JSON="{\"ok\":true,\"data\":{\"webuiVersion\":\"0.10.3\",\"piVersion\":\"0.84.4\",\"network\":{\"open\":true,\"host\":\"127.0.0.1\",\"port\":31415,\"networkUrls\":[]},\"tabs\":[{\"cwd\":\"/tmp/project\",\"running\":true,\"command\":\"$PI_LAUNCHER --mode rpc\"}]}}"
+  export HEALTH_JSON="{\"ok\":true,\"data\":{\"webuiVersion\":\"0.10.3\",\"piVersion\":\"0.84.4\",\"network\":{\"open\":true,\"host\":\"127.0.0.1\",\"port\":31415,\"networkUrls\":[]},\"tabs\":[]}}"
   run_installer_function 'validate_active_health "$PI_LAUNCHER"'
   [ "$status" -ne 0 ]
+}
+
+@test "active health rejects non-loopback or multiple listeners" {
+  make_webui_fixture
+  make_external_pi
+  export HEALTH_JSON='{"ok":true,"data":{"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"open":false,"host":"127.0.0.1","port":31415,"networkUrls":[]},"tabs":[]}}'
+  stub_healthy_system
+
+  stub_command ss 'printf "%s\\n" "LISTEN 0 128 0.0.0.0:31415 0.0.0.0:*"'
+  run_installer_function 'validate_active_health "$PI_LAUNCHER"'
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"listener is not loopback-only"* ]]
+
+  stub_command ss 'printf "%s\\n" "LISTEN 0 128 127.0.0.1:31415 0.0.0.0:*" "LISTEN 0 128 [::1]:31415 [::]:*"'
+  run_installer_function 'validate_active_health "$PI_LAUNCHER"'
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"expected exactly one Pi Web UI listener"* ]]
 }
