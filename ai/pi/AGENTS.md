@@ -54,6 +54,7 @@ Each `subagent` call launches exactly one agent and supplies a self-contained `p
 - Follow established repository patterns and avoid speculative abstractions.
 - Add or update tests for meaningful behavior changes.
 - Preserve useful error context and avoid unnecessary dependencies.
+- Prefer `NAME=value command` over `env NAME=value command`; the permission parser can inspect assignment prefixes directly, while `env` is an opaque indirection wrapper that requires approval.
 - Comment intent and tradeoffs rather than restating code.
 - Never use `--no-verify` unless the user explicitly requests it. If a hook fails for unrelated reasons, stop and ask rather than fixing unrelated code.
 

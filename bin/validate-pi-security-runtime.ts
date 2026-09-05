@@ -62,7 +62,7 @@ function checkBash(
 
 function checkPath(
   manager: PermissionManagerLike,
-  surface: "path_read" | "path_write" | "external_directory_read",
+  surface: "path_read" | "path_write" | "external_directory_read" | "external_directory_write",
   value: string,
   expected: PermissionState,
 ): void {
@@ -218,7 +218,7 @@ try {
   expectState(
     "lsp_fix tool",
     manager.check({ kind: "tool", surface: "lsp_fix", input: { path: "README.md" } }).state,
-    "ask",
+    "allow",
   );
   expectState(
     "unknown tool",
@@ -250,12 +250,13 @@ try {
   checkBash(manager, "/usr/bin/git commit -am message", "ask");
   checkBash(manager, "git fetch", "allow");
   checkBash(manager, "git fetch origin", "allow");
-  checkBash(manager, "git fetch upstream", "ask");
-  checkBash(manager, "git fetch origin main", "ask");
+  checkBash(manager, "git fetch upstream", "allow");
+  checkBash(manager, "git fetch origin main", "allow");
+  checkBash(manager, "git fetch origin --prune", "allow");
   checkBash(manager, "git pull origin main", "ask");
   checkBash(manager, "git pull --rebase origin main", "ask");
   checkBash(manager, "git pull --ff-only", "allow");
-  checkBash(manager, "git pull --ff-only origin main", "ask");
+  checkBash(manager, "git pull --ff-only origin main", "allow");
   checkBash(manager, "git pull --ff-only --no-ff origin main", "ask");
   checkBash(manager, "git pull --ff-only --ff origin main", "ask");
   checkBash(manager, "git pull --ff-only --re''base origin main", "ask");
@@ -263,7 +264,10 @@ try {
   await checkBashGate("cd docs/private && git pull --ff-only", "allow");
   checkBash(manager, "git -C . fetch origin", "ask");
   checkBash(manager, "git -C . pull --ff-only origin main", "ask");
-  checkBash(manager, "git push origin main", "ask");
+  checkBash(manager, "git push origin main", "allow");
+  checkBash(manager, "git push origin --delete old-branch", "ask");
+  checkBash(manager, "git push origin :old-branch", "ask");
+  checkBash(manager, "git push --all origin", "ask");
   checkBash(manager, "git clone https://example.com/repo.git", "ask");
   checkBash(manager, "git --git-dir=.git push origin main", "ask");
   checkBash(manager, "git -C . fetch origin status", "ask");
@@ -308,12 +312,22 @@ try {
   checkBash(manager, "git commit --amend --no-edit", "ask");
   checkBash(manager, "git -C . commit --amend --no-edit", "ask");
   checkBash(manager, "git restore README.md", "ask");
-  checkBash(manager, "gh pr create --title example", "ask");
+  checkBash(manager, "gh pr create --title example", "allow");
+  checkBash(manager, "gh pr edit 42 --add-label ready", "allow");
+  checkBash(manager, "gh issue create --title example", "allow");
+  checkBash(manager, "gh issue edit 42 --add-label ready", "allow");
+  checkBash(manager, "gh issue edit 42 --state closed", "ask");
+  checkBash(manager, "gh pr merge 42", "ask");
+  checkBash(manager, "gh issue close 42", "ask");
   checkBash(manager, "/usr/bin/gh pr create --title example", "ask");
   checkBash(manager, "curl https://example.com", "ask");
   checkBash(manager, "/usr/bin/curl https://example.com", "ask");
-  checkBash(manager, "rm -f /tmp/example", "ask");
-  checkBash(manager, "rm -rf /tmp/example", "ask");
+  checkBash(manager, "curl -fsS http://127.0.0.1:9222/json/version", "allow");
+  checkBash(manager, "curl --max-time 2 http://localhost:8765/health", "allow");
+  checkBash(manager, "curl https://example.com http://127.0.0.1:9222", "ask");
+  checkBash(manager, "curl http://127.0.0.1:9222 http://example.com", "ask");
+  checkBash(manager, "rm -f /tmp/example", "allow");
+  checkBash(manager, "rm -rf /tmp/example", "allow");
   checkBash(manager, "/bin/rm -rf .", "ask");
   checkBash(manager, "nc example.com 443", "ask");
   checkBash(manager, '/bin/cat "$SECRET_PATH"', "ask");
@@ -386,23 +400,31 @@ try {
     checkPath(manager, "path_read", path, "deny");
     checkPath(manager, "path_write", path, "deny");
   }
+  const trustedSkillPath = join(homedir(), ".agents", "skills", "impeccable", "SKILL.md");
+  checkPath(manager, "external_directory_read", trustedSkillPath, "allow");
+  checkPath(manager, "external_directory_write", trustedSkillPath, "allow");
+  const wingmanWorktreePath = "/mnt/c/dev/flygd-wingman-worktrees/example/README.md";
+  checkPath(manager, "external_directory_read", wingmanWorktreePath, "allow");
+  checkPath(manager, "external_directory_write", wingmanWorktreePath, "allow");
   checkPath(manager, "external_directory_read", "/opt/pi-security-test/file", "ask");
+  checkPath(manager, "external_directory_write", "/opt/pi-security-test/file", "ask");
 
   for (const agentName of ["rush", "deep", "review"] as const) {
     expectState(`${agentName} write tool`, manager.getToolPermission("write", agentName), "deny");
     checkBash(manager, "git status", "allow", agentName);
     checkBash(manager, "git branch --show-current", "allow", agentName);
     checkBash(manager, "git worktree list --porcelain", "allow", agentName);
-    checkBash(manager, "git branch feature/example", "ask", agentName);
-    checkBash(manager, "git worktree add /tmp/example -b feature/example", "ask", agentName);
-    checkBash(manager, "git add README.md", "ask", agentName);
-    checkBash(manager, "git commit -am message", "ask", agentName);
-    checkBash(manager, "git fetch origin", "ask", agentName);
-    checkBash(manager, "git pull --ff-only", "ask", agentName);
+    checkBash(manager, "git branch feature/example", "deny", agentName);
+    checkBash(manager, "git worktree add /tmp/example -b feature/example", "deny", agentName);
+    checkBash(manager, "git add README.md", "deny", agentName);
+    checkBash(manager, "git commit -am message", "deny", agentName);
+    checkBash(manager, "git fetch origin", "deny", agentName);
+    checkBash(manager, "git pull --ff-only", "deny", agentName);
+    checkBash(manager, "git push origin main", "deny", agentName);
     checkBash(manager, "git reset --hard HEAD", "deny", agentName);
-    checkBash(manager, "unknown-reader --version", "ask", agentName);
-    checkBash(manager, "gh pr view 1", "ask", agentName);
-    checkBash(manager, "make check", "ask", agentName);
+    checkBash(manager, "unknown-reader --version", "allow", agentName);
+    checkBash(manager, "gh pr view 1", "allow", agentName);
+    checkBash(manager, "make check", "allow", agentName);
     checkBash(manager, "gh repo delete owner/repo", "deny", agentName);
     checkBash(manager, "gh api repos/o/r --method DELETE", "deny", agentName);
   }

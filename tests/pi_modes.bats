@@ -76,7 +76,7 @@ agent_frontmatter() {
   [ "$status" -eq 0 ]
 }
 
-@test "Pi read-only agents preserve hard denies and an ask fallback" {
+@test "Pi read-only agents inspect and verify silently but deny mutation" {
   local agent actual
   for agent in rush deep review; do
     actual=$(agent_frontmatter "$agent")
@@ -84,10 +84,40 @@ agent_frontmatter() {
       .permission.path_write == "deny"
       and .permission.write == "deny"
       and .permission.edit == "deny"
-      and .permission.bash["*"] == "ask"
-      and .permission.bash["git fetch *"] == "ask"
-      and .permission.bash["git pull --ff-only"] == "ask"
-      and (.permission.bash | has("gh *") | not)
+      and .permission.bash["*"] == "allow"
+      and (.permission.bash as $bash
+        | all([
+            "git branch *",
+            "git worktree *",
+            "git add *",
+            "git commit *",
+            "git fetch*",
+            "git pull*",
+            "git push*",
+            "git switch *",
+            "git merge *",
+            "git rebase *",
+            "git cherry-pick *",
+            "git revert *",
+            "git stash *",
+            "git tag *",
+            "git reset *",
+            "git rm *",
+            "git mv *",
+            "git format-patch *",
+            "git apply *",
+            "git am *",
+            "git bundle *",
+            "git notes *",
+            "git bisect *",
+            "git sparse-checkout *",
+            "gh pr create*",
+            "gh pr edit*",
+            "gh pr merge*",
+            "gh issue create*",
+            "gh issue edit*",
+            "gh issue close*"
+          ][]; . as $pattern | $bash[$pattern] == "deny"))
       and (.permission.bash as $bash
         | all([
             "gh auth status*",
@@ -98,8 +128,18 @@ agent_frontmatter() {
             "gh issue list*",
             "gh issue view*",
             "gh run list*",
-            "gh run view*"
-          ][]; . as $pattern | $bash[$pattern] == "ask"))
+            "gh run view*",
+            "bats *",
+            "make *",
+            "npm *",
+            "pnpm *",
+            "cargo *",
+            "go *",
+            "pytest*",
+            "python -m pytest*",
+            "ruff *",
+            "rubocop*"
+          ][]; . as $pattern | $bash[$pattern] == "allow"))
       and .permission.bash["gh repo delete*"] == "deny"
       and .permission.bash["gh api * --method DELETE*"] == "deny"
       and .permission.bash["*$*"] == "deny"

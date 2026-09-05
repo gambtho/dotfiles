@@ -43,16 +43,17 @@ Interactive browser automation remains opt-in rather than a default dependency.
 
 Each `subagent` invocation supplies one self-contained `prompt`, a 3–5 word `description`, and a `subagent_type`. Parallel work uses sibling calls with `run_in_background: true`; record each returned ID and poll with `get_subagent_result({ agent_id, wait: false })`. An explicit `model` is reserved for a user request or deliberate cross-family review.
 
-`rush`, `deep`, and `review` omit write/edit tools and add restrictive permission frontmatter. `smart` otherwise inherits the balanced global policy. Every named child hard-denies Bash commands containing unresolved `$` expansion so a curated reader cannot hide a sensitive operand from path extraction. Children cannot recursively dispatch more children.
+`rush`, `deep`, and `review` omit write/edit tools, allow routine inspection and verification silently, and hard-deny repository or remote mutation instead of forwarding approval prompts that a headless child cannot answer. `smart` otherwise inherits the balanced global policy. Every named child hard-denies Bash commands containing unresolved `$` expansion so a curated reader cannot hide a sensitive operand from path extraction. Children cannot recursively dispatch more children.
 
 ## Permission and containment model
 
 `ai/pi/config/permission-system.json` is a relaxed-but-guarded baseline:
 
-- routine tools, unmatched parent Bash commands, and common local Git subcommands are allowed;
-- unknown tools and Git subcommands, remote Git operations other than default/`origin` fetch and argument-free `git pull --ff-only`, selected destructive Git operations, GitHub mutations, remote shell/network commands, recursive deletion, external paths, and `lsp_fix` ask;
+- routine tools, unmatched parent Bash commands, local Git subcommands, normal fetch/push, explicitly fast-forward-only pulls, PR/issue creation and editing, `lsp_fix`, loopback HTTP probes, and literal `/tmp` cleanup are allowed;
+- unknown tools and Git subcommands, non-fast-forward pulls, selected destructive Git operations, PR merges and issue closure, remote shell/network commands, recursive deletion outside `/tmp`, and arbitrary external paths ask;
 - policy denies recognized credential and browser-profile path access, catastrophic deletion, force operations, subprocess-capable search flags, and privilege escalation; worktree guard separately denies direct model-facing write, edit, and mutating LSP operations in primary checkouts;
-- common reader/output commands containing unresolved `$` expansion and direct environment-dump commands ask, while named children hard-deny all unresolved shell-variable indirection;
+- common reader/output commands containing unresolved `$` expansion and direct environment-dump commands ask, while named children hard-deny all unresolved shell-variable indirection; use `NAME=value command` rather than the opaque `env NAME=value command` wrapper so ordinary scoped commands remain inspectable and silent;
+- trusted global skill/package directories and established Dotfiles/FlyGD Wingman worktree roots bypass the external-directory prompt, while unrelated external locations remain gated;
 - `/permission-system` can enable temporary YOLO, which converts asks to allows but preserves explicit denies.
 
 ### Important containment boundaries
