@@ -18,13 +18,20 @@ usage() {
 }
 
 preflight() {
+  local route
   require_supported_platform
   resolve_source
   resolve_mise
   resolve_pi
   set_managed_paths
   require_tailscale_daemon
-  [[ $(route_state) == empty ]] || fail 'remove the Tailscale Serve route before rollback'
+  route=$(route_state) || return 1
+  # Raw ingress means the custom domain is still published in front of this
+  # service, so the custom-domain rollback has to run first; anything else
+  # nonempty is an ordinary "remove the route first" refusal.
+  [[ "$route" != raw-exact ]] ||
+    fail "run $SCRIPT_DIR/custom-domain.sh rollback before Web UI rollback: raw custom-domain ingress is published"
+  [[ "$route" == empty ]] || fail 'remove the Tailscale Serve route before rollback'
 
   if systemctl --user is-active pi-webui.service >/dev/null 2>&1; then
     service_active=1

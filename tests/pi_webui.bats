@@ -779,6 +779,164 @@ assert_no_caddy_publication() {
   ! compgen -G "$STATE_ROOT/.caddy-setup.*" >/dev/null
 }
 
+# Full fixture for the interactive migration transaction and for custom-domain
+# rollback. Extends the read-only check fixture with a stateful Tailscale route
+# stub that transitions only for the four exact Serve commands, records every
+# real transition in order, and can inject a failure at each transactional
+# boundary. Nothing privileged, routed, decrypted, or networked really runs.
+#
+# The transition fixtures are generated from write_route(), so the route shapes
+# stay single-sourced with the rest of the suite.
+prepare_custom_domain_migration() {
+  local mode=${1:-legacy-exact} state
+  prepare_custom_domain_check "$mode"
+
+  ROUTE_ORDER="$TEST_ROOT/route-order"
+  CADDY_CREDENTIAL="$CADDY_ROOT/etc/credstore.encrypted/godaddy-api-token"
+  CADDY_STATE_DIR="$CADDY_ROOT/var/lib/pi-webui-caddy"
+  TAILSCALE_STATE_DIR="$TEST_ROOT/tailscale/var/lib/tailscale"
+  export ROUTE_ORDER CADDY_CREDENTIAL CADDY_STATE_DIR TAILSCALE_STATE_DIR
+  : >"$ROUTE_ORDER"
+
+  # Preserved-state fingerprint sources: Caddy certificates and ACME state, the
+  # encrypted GoDaddy credential, Pi state, managed Web UI state, and the
+  # Tailscale node identity.
+  mkdir -p "$(dirname "$CADDY_CREDENTIAL")" "$CADDY_STATE_DIR" "$TAILSCALE_STATE_DIR" \
+    "$HOME/.pi/agent/sessions"
+  printf 'encrypted-credential-blob\n' >"$CADDY_CREDENTIAL"
+  chmod 0600 "$CADDY_CREDENTIAL"
+  printf 'acme account state\n' >"$CADDY_STATE_DIR/acme.json"
+  printf 'certificate\n' >"$CADDY_STATE_DIR/pi.dpao.la.crt"
+  printf 'identity\n' >"$TAILSCALE_STATE_DIR/tailscaled.state"
+  printf 'settings\n' >"$HOME/.pi/agent/settings.json"
+  printf 'transcript\n' >"$HOME/.pi/agent/sessions/transcript.jsonl"
+
+  for state in empty legacy-exact raw foreign; do
+    write_route "$state"
+    cp "$TEST_ROOT/route.json" "$TEST_ROOT/fixture-$state.json"
+    cp "$TEST_ROOT/route.txt" "$TEST_ROOT/fixture-$state.txt"
+  done
+  write_route "$mode"
+
+  touch "$TEST_ROOT/caddy-active"
+  stub_command systemctl 'printf "systemctl %s\n" "$*" >>"$CALLS"
+    case "$*" in
+      "--user show-environment"|"is-active tailscaled") exit 0 ;;
+      "--user is-active pi-webui.service") [[ ${FIRSTPICK_INACTIVE:-0} != 1 ]] ;;
+      "is-active pi-webui-caddy.service")
+        [[ ${CADDY_SERVICE_INACTIVE:-0} != 1 && -f "$TEST_ROOT/caddy-active" ]] ;;
+      "stop pi-webui-caddy.service")
+        printf "systemctl %s\n" "$*" >>"$MUTATION_CALLS"
+        rm -f "$TEST_ROOT/caddy-active" ;;
+      "disable pi-webui-caddy.service"|"daemon-reload")
+        printf "systemctl %s\n" "$*" >>"$MUTATION_CALLS" ;;
+      *) printf "systemctl %s\n" "$*" >>"$MUTATION_CALLS"; exit 99 ;;
+    esac'
+
+  stub_command curl 'printf "curl %s\n" "$*" >>"$CALLS"
+    raw=0
+    if grep -q TCPForward "$TEST_ROOT/route.json" 2>/dev/null; then raw=1; fi
+    case " $* " in
+      *" http://127.0.0.1:31415/api/health "*) printf "%s\n" "$HEALTH_JSON" ;;
+      *" https://pi.dpao.la:8443/api/health "*)
+        if [[ ${CADDY_HEALTH_FAIL:-0} == 1 ]]; then exit 22; fi
+        if [[ ${CADDY_HEALTH_FAIL_AFTER_RAW:-0} == 1 && $raw == 1 ]]; then exit 22; fi
+        printf "%s\n" "${CADDY_HEALTH_JSON:-$HEALTH_JSON}" ;;
+      *" https://pi.dpao.la/api/health "*)
+        if [[ ${TAILNET_HEALTH_FAIL:-0} == 1 ]]; then exit 22; fi
+        printf "%s\n" "${CADDY_HEALTH_JSON:-$HEALTH_JSON}" ;;
+      *" https://wsl.test.ts.net/api/health "*)
+        if [[ ${LEGACY_HEALTH_FAIL:-0} == 1 ]]; then exit 22; fi
+        printf "%s\n" "$HEALTH_JSON" ;;
+      *"https://172.20.1.4:8443/"*|*"https://192.168.1.7:8443/"*)
+        if [[ ${LAN_8443_REACHABLE:-0} == 1 ]]; then exit 0; else exit 7; fi ;;
+      *"http://172.20.1.4:31415/"*|*"http://192.168.1.7:31415/"*)
+        if [[ ${LAN_31415_REACHABLE:-0} == 1 ]]; then exit 0; else exit 7; fi ;;
+      *) exit 7 ;;
+    esac'
+
+  stub_command openssl 'case "$1" in
+    s_client)
+      raw=0
+      if grep -q TCPForward "$TEST_ROOT/route.json" 2>/dev/null; then raw=1; fi
+      if [[ ${TLS_TRUST_FAIL:-0} == 1 ]]; then exit 1; fi
+      if [[ ${TLS_TRUST_FAIL_AFTER_RAW:-0} == 1 && $raw == 1 ]]; then exit 1; fi
+      printf -- "-----BEGIN CERTIFICATE-----\nMOCK\n-----END CERTIFICATE-----\n" ;;
+    x509)
+      if [[ ${TLS_INVALID:-0} == 1 ]]; then exit 1; fi
+      exit 0 ;;
+    *) exit 1 ;;
+  esac'
+
+  # sudo runs nothing privileged: it records the exact command, transitions the
+  # route fixture only for the four exact Serve commands, and performs artifact
+  # removal and service calls with the unprivileged real tools under $TEST_ROOT.
+  stub_command sudo 'printf "sudo %s\n" "$*" >>"$CALLS"
+    set_route() {
+      cp "$TEST_ROOT/fixture-$1.json" "$TEST_ROOT/route.json"
+      cp "$TEST_ROOT/fixture-$1.json" "$TEST_ROOT/funnel.json"
+      cp "$TEST_ROOT/fixture-$1.txt" "$TEST_ROOT/route.txt"
+      printf "%s\n" "$2" >>"$ROUTE_ORDER"
+    }
+    case "$*" in
+      "tailscale serve --https=443 off")
+        [[ ${FAIL_POINT:-} != legacy-off ]] || exit 1
+        set_route empty legacy-off ;;
+      "tailscale serve --bg --tcp=443 tcp://127.0.0.1:8443")
+        [[ ${FAIL_POINT:-} != raw-publish ]] || exit 1
+        if [[ ${RAW_PUBLISH_FOREIGN:-0} == 1 ]]; then
+          set_route foreign raw-on
+        elif [[ ${RAW_PUBLISH_STICKS:-0} == 1 ]]; then
+          :
+        else
+          set_route raw raw-on
+        fi ;;
+      "tailscale serve --tcp=443 off")
+        [[ ${FAIL_POINT:-} != raw-off ]] || exit 1
+        set_route empty raw-off ;;
+      "tailscale serve --bg --https=443 http://127.0.0.1:31415")
+        [[ ${FAIL_POINT:-} != legacy-restore ]] || exit 1
+        set_route legacy-exact legacy-on ;;
+      systemctl*) shift; exec systemctl "$@" ;;
+      rm*) shift; exec /usr/bin/rm "$@" ;;
+      *) printf "sudo %s\n" "$*" >>"$MUTATION_CALLS"; exit 98 ;;
+    esac'
+}
+
+# The ordered list of route transitions the Tailscale stub actually performed.
+route_call_order() {
+  cat "$ROUTE_ORDER"
+}
+
+# Classifies the live route fixture by exact content, so a test never has to
+# track which transition it expected.
+current_route_fixture() {
+  local state
+  for state in empty legacy-exact raw foreign; do
+    if cmp -s "$TEST_ROOT/route.json" "$TEST_ROOT/fixture-$state.json" &&
+      cmp -s "$TEST_ROOT/route.txt" "$TEST_ROOT/fixture-$state.txt"; then
+      [[ "$state" != raw ]] || state=raw-exact
+      printf '%s\n' "$state"
+      return 0
+    fi
+  done
+  printf 'unknown\n'
+}
+
+reset_migration_state() {
+  write_route "${1:-legacy-exact}"
+  : >"$ROUTE_ORDER"
+  : >"$CALLS"
+  : >"$MUTATION_CALLS"
+}
+
+assert_no_route_mutation() {
+  [ ! -s "$ROUTE_ORDER" ]
+  ! grep -q 'tailscale serve' "$CALLS"
+  [ ! -s "$MUTATION_CALLS" ]
+  [ "$(current_route_fixture)" = "${1:-legacy-exact}" ]
+}
+
 prepare_rollback() {
   make_webui_fixture
   make_external_pi
@@ -1878,7 +2036,7 @@ run_rollback() {
   [ ! -s "$MUTATION_CALLS" ]
 }
 
-@test "custom-domain CLI accepts check and setup and reports migrate and rollback as not implemented" {
+@test "custom-domain CLI accepts check setup migrate and rollback verbs" {
   make_webui_fixture
   run_custom_domain
   [ "$status" -eq 2 ]
@@ -1887,13 +2045,8 @@ run_rollback() {
   run_custom_domain bogus
   [ "$status" -eq 2 ]
 
-  run_custom_domain migrate
-  [ "$status" -ne 0 ]
-  [[ "$output" == *'not implemented'* ]]
-
-  run_custom_domain rollback
-  [ "$status" -ne 0 ]
-  [[ "$output" == *'not implemented'* ]]
+  run_custom_domain check setup
+  [ "$status" -eq 2 ]
 }
 
 @test "setup validates Firstp1ck route DNS and credential before publication" {
@@ -2201,4 +2354,373 @@ run_rollback() {
   compgen -G "$STATE_ROOT/.caddy-setup.*" >/dev/null
   [ -f "$CADDY_CREDENTIAL" ]
   [ -f "$CADDY_STATE_DIR/acme.json" ]
+}
+
+@test "migration removes exact legacy route publishes raw and verifies before confirmation" {
+  prepare_custom_domain_migration legacy-exact
+  export MIGRATION_CONFIRM=yes TAILNET_CLIENT_CONFIRM=yes
+  run_custom_domain migrate
+  [ "$status" -eq 0 ]
+  grep -Fx 'sudo tailscale serve --https=443 off' "$CALLS"
+  grep -Fx 'sudo tailscale serve --bg --tcp=443 tcp://127.0.0.1:8443' "$CALLS"
+  [ "$(route_call_order)" = $'legacy-off\nraw-on' ]
+  [ "$(current_route_fixture)" = raw-exact ]
+
+  # The literal plan is displayed, without any credential material.
+  for line in 'DNS: pi.dpao.la A 100.64.0.1' \
+    'Credential: LoadCredentialEncrypted=godaddy-api-token' \
+    'Old: HTTPS 443 -> http://127.0.0.1:31415' \
+    'New: TCP 443 -> tcp://127.0.0.1:8443' \
+    'Rollback: remove TCP 443, then restore HTTPS 443 -> http://127.0.0.1:31415' \
+    'Interruption: normally several seconds; browser WebSockets disconnect'; do
+    grep -Fxq -- "$line" <<<"$output"
+  done
+  [[ "$output" == *"Unit: $CADDY_ROOT/etc/systemd/system/pi-webui-caddy.service"* ]]
+  [[ "$output" != *encrypted-credential-blob* ]]
+
+  # The actual Serve JSON is captured for schema confirmation, and the tailnet
+  # address itself is verified before success is reported.
+  [[ "$output" == *'"TCPForward":"127.0.0.1:8443"'* ]]
+  grep -F -- '--resolve pi.dpao.la:443:100.64.0.1' "$CALLS"
+  [[ "$output" == *'https://wsl.test.ts.net'*'no longer valid'* ]]
+  [ ! -s "$MUTATION_CALLS" ]
+  # Migration never reads, decrypts, or reports the GoDaddy credential.
+  [ ! -s "$CREDENTIAL_CALLS" ]
+}
+
+@test "migration refuses operator rejection and EOF without mutation" {
+  prepare_custom_domain_migration legacy-exact
+  export TAILNET_CLIENT_CONFIRM=yes
+
+  export MIGRATION_CONFIRM=no
+  run_custom_domain migrate
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'was not approved'* ]]
+  [[ "$output" == *'DNS: pi.dpao.la A 100.64.0.1'* ]]
+  assert_no_route_mutation
+
+  reset_migration_state
+  export MIGRATION_CONFIRM=eof
+  run_custom_domain migrate
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'was not approved'* ]]
+  assert_no_route_mutation
+
+  reset_migration_state
+  export MIGRATION_CONFIRM=maybe
+  run_custom_domain migrate
+  [ "$status" -ne 0 ]
+  assert_no_route_mutation
+}
+
+@test "migration refuses every preflight failure without route mutation" {
+  prepare_custom_domain_migration legacy-exact
+  export MIGRATION_CONFIRM=yes TAILNET_CLIENT_CONFIRM=yes
+
+  reset_migration_state raw
+  run_custom_domain migrate
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'unexpected Tailscale route state'* ]]
+  assert_no_route_mutation raw-exact
+
+  reset_migration_state
+  write_dns A 100.64.0.9
+  run_custom_domain migrate
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'stale Tailscale IPv4'* ]]
+  assert_no_route_mutation
+  write_dns A 100.64.0.1
+
+  reset_migration_state
+  export CADDY_SERVICE_INACTIVE=1
+  run_custom_domain migrate
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'Caddy service is not active'* ]]
+  assert_no_route_mutation
+  unset CADDY_SERVICE_INACTIVE
+
+  reset_migration_state
+  printf '%s\n' 'UNCONN 0 0 0.0.0.0:8443 0.0.0.0:*' >"$TEST_ROOT/caddy-listeners-udp"
+  run_custom_domain migrate
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'UDP listener on port 8443'* ]]
+  assert_no_route_mutation
+  : >"$TEST_ROOT/caddy-listeners-udp"
+
+  reset_migration_state
+  export TLS_TRUST_FAIL=1
+  run_custom_domain migrate
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'is not trusted'* ]]
+  assert_no_route_mutation
+  unset TLS_TRUST_FAIL
+
+  reset_migration_state
+  export CADDY_HEALTH_FAIL=1
+  run_custom_domain migrate
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'health endpoint failed'* ]]
+  assert_no_route_mutation
+  unset CADDY_HEALTH_FAIL
+
+  reset_migration_state
+  export TAILSCALE_CLIENT_VERSION=1.100.0
+  run_custom_domain migrate
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'unsupported Tailscale client or daemon version'* ]]
+  assert_no_route_mutation
+  unset TAILSCALE_CLIENT_VERSION
+
+  reset_migration_state
+  mv "$INSTALLED_RUNTIME" "$TEST_ROOT/runtime-away"
+  run_custom_domain migrate
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'installed runtime is unavailable'* ]]
+  assert_no_route_mutation
+  mv "$TEST_ROOT/runtime-away" "$INSTALLED_RUNTIME"
+}
+
+@test "migration restores legacy route after a failed legacy removal or raw publication" {
+  prepare_custom_domain_migration legacy-exact
+  export MIGRATION_CONFIRM=yes TAILNET_CLIENT_CONFIRM=yes
+
+  # The legacy removal itself fails: nothing was lost, so restoration reports
+  # the already-published legacy route rather than mutating it again.
+  reset_migration_state
+  export FAIL_POINT=legacy-off
+  run_custom_domain migrate
+  [ "$status" -ne 0 ]
+  [ ! -s "$ROUTE_ORDER" ]
+  [ "$(current_route_fixture)" = legacy-exact ]
+  [ "$(grep -c '^sudo tailscale serve' "$CALLS")" -eq 1 ]
+
+  # The raw publication command fails after the legacy route is already gone.
+  reset_migration_state
+  export FAIL_POINT=raw-publish
+  run_custom_domain migrate
+  [ "$status" -ne 0 ]
+  [ "$(route_call_order)" = $'legacy-off\nlegacy-on' ]
+  [ "$(current_route_fixture)" = legacy-exact ]
+  grep -Fx 'sudo tailscale serve --bg --https=443 http://127.0.0.1:31415' "$CALLS"
+  unset FAIL_POINT
+
+  # The raw publication reports success but the observed status does not match.
+  reset_migration_state
+  export RAW_PUBLISH_STICKS=1
+  run_custom_domain migrate
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'did not produce the exact route'* ]]
+  [ "$(route_call_order)" = $'legacy-off\nlegacy-on' ]
+  [ "$(current_route_fixture)" = legacy-exact ]
+  unset RAW_PUBLISH_STICKS
+}
+
+@test "migration restores legacy route after post-publication verification failures" {
+  prepare_custom_domain_migration legacy-exact
+  export MIGRATION_CONFIRM=yes
+
+  local scenario
+  for scenario in TAILNET_HEALTH_FAIL TLS_TRUST_FAIL_AFTER_RAW CADDY_HEALTH_FAIL_AFTER_RAW; do
+    reset_migration_state
+    export TAILNET_CLIENT_CONFIRM=yes
+    export "$scenario=1"
+    run_custom_domain migrate
+    [ "$status" -ne 0 ]
+    [ "$(route_call_order)" = $'legacy-off\nraw-on\nraw-off\nlegacy-on' ]
+    [ "$(current_route_fixture)" = legacy-exact ]
+    grep -Fx 'sudo tailscale serve --tcp=443 off' "$CALLS"
+    grep -Fx 'sudo tailscale serve --bg --https=443 http://127.0.0.1:31415' "$CALLS"
+    [[ "$output" == *'legacy route restored'* ]]
+    unset "$scenario"
+  done
+
+  # The trusted-tailnet-client confirmation is only reached after automated
+  # verification, and rejecting or ending it restores the legacy route.
+  local answer
+  for answer in no eof; do
+    reset_migration_state
+    export TAILNET_CLIENT_CONFIRM="$answer"
+    run_custom_domain migrate
+    [ "$status" -ne 0 ]
+    grep -F -- '--resolve pi.dpao.la:443:100.64.0.1' "$CALLS"
+    [ "$(route_call_order)" = $'legacy-off\nraw-on\nraw-off\nlegacy-on' ]
+    [ "$(current_route_fixture)" = legacy-exact ]
+    [[ "$output" == *'operator rejection'* ]]
+  done
+}
+
+@test "migration restores legacy route after INT and TERM signals" {
+  prepare_custom_domain_migration legacy-exact
+  export MIGRATION_CONFIRM=yes TAILNET_CLIENT_CONFIRM=block
+
+  local signal expected
+  for signal in INT TERM; do
+    [ "$signal" = INT ] && expected=130 || expected=143
+    reset_migration_state
+    rm -f "$STATE_ROOT/.migration-confirm-block"
+    # Job control gives the background migration its own process group and the
+    # default SIGINT disposition. Without it Bash marks asynchronous commands
+    # SIG_IGN for INT, which no interactive operator ever sees.
+    set -m
+    "$WEBUI_FIXTURE/ai/pi/webui/custom-domain.sh" migrate >"$TEST_ROOT/migrate-$signal.out" 2>&1 &
+    local pid=$!
+    set +m
+    local attempt
+    for ((attempt = 0; attempt < 200; attempt++)); do
+      [ -e "$STATE_ROOT/.migration-confirm-block" ] && break
+      sleep 0.1
+    done
+    [ -e "$STATE_ROOT/.migration-confirm-block" ]
+    kill -"$signal" "$pid"
+    status=0
+    wait "$pid" || status=$?
+    [ "$status" -eq "$expected" ]
+    [ "$(route_call_order)" = $'legacy-off\nraw-on\nraw-off\nlegacy-on' ]
+    [ "$(current_route_fixture)" = legacy-exact ]
+    grep -Fq "signal $signal" "$TEST_ROOT/migrate-$signal.out"
+    grep -Fq 'legacy route restored' "$TEST_ROOT/migrate-$signal.out"
+  done
+}
+
+@test "migration reports a foreign post-mutation route and never overwrites it" {
+  prepare_custom_domain_migration legacy-exact
+  export MIGRATION_CONFIRM=yes TAILNET_CLIENT_CONFIRM=yes RAW_PUBLISH_FOREIGN=1
+  run_custom_domain migrate
+  [ "$status" -ne 0 ]
+  [ "$(route_call_order)" = $'legacy-off\nraw-on' ]
+  [ "$(current_route_fixture)" = foreign ]
+  [ "$(grep -c '^sudo tailscale serve' "$CALLS")" -eq 2 ]
+  [[ "$output" == *'refusing automatic restoration'* ]]
+  [[ "$output" == *'RESTORATION FAILED'* ]]
+  [[ "$output" == *'sudo tailscale serve --bg --https=443 http://127.0.0.1:31415'* ]]
+  [[ "$output" == *'other.test.ts.net'* ]]
+}
+
+@test "legacy route restoration mutates only the exact owned route" {
+  prepare_custom_domain_migration empty
+
+  run_tailscale_function 'serve_legacy'
+  [ "$status" -eq 0 ]
+  grep -Fx 'sudo tailscale serve --bg --https=443 http://127.0.0.1:31415' "$CALLS"
+  [ "$(current_route_fixture)" = legacy-exact ]
+
+  : >"$CALLS"
+  run_tailscale_function 'serve_legacy_off'
+  [ "$status" -eq 0 ]
+  grep -Fx 'sudo tailscale serve --https=443 off' "$CALLS"
+  [ "$(current_route_fixture)" = empty ]
+
+  # Idempotent from empty: no command runs at all.
+  : >"$CALLS"
+  run_tailscale_function 'serve_legacy_off'
+  [ "$status" -eq 0 ]
+  [ ! -s "$CALLS" ]
+
+  # A foreign route is never removed or overwritten, including from a
+  # condition context where errexit is suppressed inside the helper.
+  write_route foreign
+  : >"$CALLS"
+  run_tailscale_function 'serve_legacy'
+  [ "$status" -ne 0 ]
+  ! grep -q 'tailscale serve' "$CALLS"
+  run_tailscale_function 'if serve_legacy; then printf "published\n"; fi'
+  [[ "$output" != *published* ]]
+  ! grep -q 'tailscale serve' "$CALLS"
+  run_tailscale_function 'if serve_legacy_off; then printf "removed\n"; fi'
+  [[ "$output" != *removed* ]]
+  ! grep -q 'tailscale serve' "$CALLS"
+  [ "$(current_route_fixture)" = foreign ]
+}
+
+@test "custom-domain rollback restores legacy ingress and removes only managed Caddy artifacts" {
+  prepare_custom_domain_migration raw
+  run_custom_domain rollback
+  [ "$status" -eq 0 ]
+  [ "$(route_call_order)" = $'raw-off\nlegacy-on' ]
+  [ "$(current_route_fixture)" = legacy-exact ]
+
+  while IFS= read -r path; do
+    [ ! -e "$path" ]
+  done < <(managed_caddy_paths)
+  [ "$(<"$MUTATION_CALLS")" = $'systemctl stop pi-webui-caddy.service\nsystemctl disable pi-webui-caddy.service\nsystemctl daemon-reload' ]
+
+  # The legacy route is restored and proven before the Caddy service stops.
+  restore=$(grep -n '^sudo tailscale serve --bg --https=443 ' "$CALLS" | cut -d: -f1 | head -1)
+  probe=$(grep -n 'https://wsl.test.ts.net/api/health' "$CALLS" | cut -d: -f1 | head -1)
+  stop=$(grep -n '^sudo systemctl stop pi-webui-caddy.service$' "$CALLS" | cut -d: -f1 | head -1)
+  [ "$restore" -lt "$probe" ]
+  [ "$probe" -lt "$stop" ]
+}
+
+@test "custom-domain rollback preserves certificates credential Pi state and Tailscale identity" {
+  prepare_custom_domain_migration raw
+  before=$(fingerprint_paths "$CADDY_STATE_DIR" "$CADDY_CREDENTIAL" "$HOME/.pi" \
+    "$STATE_ROOT" "$TAILSCALE_STATE_DIR")
+  run_custom_domain rollback
+  [ "$status" -eq 0 ]
+  [ "$(fingerprint_paths "$CADDY_STATE_DIR" "$CADDY_CREDENTIAL" "$HOME/.pi" \
+    "$STATE_ROOT" "$TAILSCALE_STATE_DIR")" = "$before" ]
+  [[ "$output" == *'preserved'* ]]
+}
+
+@test "custom-domain rollback refuses foreign artifacts and unexpected routes before mutation" {
+  prepare_custom_domain_migration raw
+  before=$(fingerprint_paths "$CADDY_ROOT")
+
+  printf '\nforeign\n' >>"$CADDY_ROOT/etc/pi-webui-caddy/Caddyfile"
+  run_custom_domain rollback
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'refusing to remove a foreign managed Caddyfile'* ]]
+  assert_no_route_mutation raw-exact
+  cp "$WEBUI_FIXTURE/ai/pi/webui/Caddyfile.in" "$CADDY_ROOT/etc/pi-webui-caddy/Caddyfile"
+
+  reset_migration_state raw
+  printf '\nforeign\n' >>"$CADDY_ROOT/usr/local/lib/pi-webui/caddy-entrypoint"
+  run_custom_domain rollback
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'refusing to remove a foreign managed Caddy entrypoint'* ]]
+  assert_no_route_mutation raw-exact
+  cp "$WEBUI_FIXTURE/ai/pi/webui/caddy-entrypoint.sh" \
+    "$CADDY_ROOT/usr/local/lib/pi-webui/caddy-entrypoint"
+
+  reset_migration_state raw
+  printf '\nforeign\n' >>"$CADDY_ROOT/etc/systemd/system/pi-webui-caddy.service"
+  run_custom_domain rollback
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'refusing to remove a foreign managed Caddy unit'* ]]
+  assert_no_route_mutation raw-exact
+  make_caddy_fixture
+
+  reset_migration_state raw
+  export CADDY_VERSION_OUTPUT='v2.10.0 h1:other'
+  run_custom_domain rollback
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'refusing to remove a foreign Caddy binary'* ]]
+  assert_no_route_mutation raw-exact
+  export CADDY_VERSION_OUTPUT='v2.11.4 h1:test'
+
+  reset_migration_state raw
+  export CADDY_FOREIGN_OWNER=1
+  run_custom_domain rollback
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'must be owned by root'* ]]
+  assert_no_route_mutation raw-exact
+  unset CADDY_FOREIGN_OWNER
+
+  reset_migration_state empty
+  run_custom_domain rollback
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'unexpected Tailscale route state'* ]]
+  assert_no_route_mutation empty
+
+  [ "$(fingerprint_paths "$CADDY_ROOT")" = "$before" ]
+}
+
+@test "Web UI rollback points to custom-domain rollback while raw ingress is published" {
+  prepare_rollback
+  write_route raw
+  run_rollback
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'custom-domain.sh rollback'* ]]
+  [ ! -s "$MUTATION_CALLS" ]
 }

@@ -117,9 +117,12 @@ console.log('legacy-exact');
 NODE
 }
 
+# Every helper below is explicit about failure instead of relying on errexit:
+# Bash suppresses errexit inside a function invoked from a condition, and
+# restoration paths call these helpers exactly that way.
 require_route_state() {
   local actual allowed
-  actual=$(route_state)
+  actual=$(route_state) || return 1
   for allowed in "$@"; do
     [[ "$actual" == "$allowed" ]] && return 0
   done
@@ -207,28 +210,28 @@ install_tailscale() {
 }
 
 serve_raw() {
-  require_route_state empty raw-exact
-  sudo tailscale serve --bg --tcp=443 "$RAW_TARGET"
+  require_route_state empty raw-exact || return 1
+  sudo tailscale serve --bg --tcp=443 "$RAW_TARGET" || return 1
   [[ $(route_state) == raw-exact ]] || fail 'raw TCP Serve publication did not produce the exact route'
 }
 
 serve_raw_off() {
   [[ $(route_state) == empty ]] && return 0
-  require_route_state raw-exact
-  sudo tailscale serve --tcp=443 off
+  require_route_state raw-exact || return 1
+  sudo tailscale serve --tcp=443 off || return 1
   [[ $(route_state) == empty ]] || fail 'raw TCP Serve route remains after removal'
 }
 
 serve_legacy() {
-  require_route_state empty legacy-exact
-  sudo tailscale serve --bg --https=443 "$LEGACY_BACKEND"
+  require_route_state empty legacy-exact || return 1
+  sudo tailscale serve --bg --https=443 "$LEGACY_BACKEND" || return 1
   [[ $(route_state) == legacy-exact ]] || fail 'legacy HTTPS Serve publication did not produce the exact route'
 }
 
 serve_legacy_off() {
   [[ $(route_state) == empty ]] && return 0
-  require_route_state legacy-exact
-  sudo tailscale serve --https=443 off
+  require_route_state legacy-exact || return 1
+  sudo tailscale serve --https=443 off || return 1
   [[ $(route_state) == empty ]] || fail 'legacy HTTPS Serve route remains after removal'
 }
 

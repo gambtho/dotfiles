@@ -6,10 +6,12 @@
 # the exact tracked Caddyfile/unit renderers, and a source-only integrity
 # check), the full read-only `check` CLI verb (strict Firstp1ck preflight,
 # DNS, installed Caddy, listener, and TLS/health validation, plus route
-# classification), and the candidate-first `setup` verb (credential
+# classification), the candidate-first `setup` verb (credential
 # validation, pinned private Caddy build, bounded publication, and automatic
-# restoration). `migrate` and `rollback` are accepted by the CLI but report
-# themselves as not implemented until their own TDD tasks land.
+# restoration), the transactional `migrate` verb (plan display, immediate
+# approval, exact route replacement, tailnet verification, and automatic
+# legacy restoration), and the conservative `rollback` verb (legacy ingress
+# restoration plus removal of only the exact managed Caddy artifacts).
 
 set -euo pipefail
 
@@ -305,22 +307,22 @@ validate_caddy_listener() {
   check_caddy_lan
 }
 
-# Requires a currently trusted, unexpired, correctly named certificate and a
-# proxied /api/health response matching the exact Firstp1ck health contract,
-# without bypassing normal CA verification.
-validate_caddy_tls_health() {
-  local certificate health
-  certificate=$(openssl s_client -connect 127.0.0.1:8443 -servername "$CUSTOM_HOSTNAME" \
+# Requires a currently trusted, unexpired, correctly named certificate at
+# $address:$port and a proxied /api/health response matching the exact
+# Firstp1ck health contract, without bypassing normal CA verification.
+validate_caddy_certificate_and_health() {
+  local address=$1 port=$2 url=$3 certificate health
+  certificate=$(openssl s_client -connect "$address:$port" -servername "$CUSTOM_HOSTNAME" \
     -verify_return_error </dev/null 2>&1) ||
-    fail "certificate for $CUSTOM_HOSTNAME is not trusted"
+    fail "certificate for $CUSTOM_HOSTNAME is not trusted at $address:$port"
   printf '%s\n' "$certificate" |
     openssl x509 -checkhost "$CUSTOM_HOSTNAME" -checkend "$CERT_MIN_VALIDITY_SECONDS" -noout ||
     fail "certificate for $CUSTOM_HOSTNAME is invalid, expired, or hostname-mismatched"
 
   health=$(curl --fail --silent --show-error \
-    --resolve "$CUSTOM_HOSTNAME:8443:127.0.0.1" \
-    "https://$CUSTOM_HOSTNAME:8443/api/health") ||
-    fail 'Caddy-proxied Pi Web UI health endpoint failed'
+    --resolve "$CUSTOM_HOSTNAME:$port:$address" \
+    "$url") ||
+    fail "Caddy-proxied Pi Web UI health endpoint failed at $url"
   node - "$PI_LAUNCHER" "$health" <<'NODE' || fail 'Caddy-proxied Pi Web UI health identity is invalid'
 const launcher = process.argv[2];
 const response = JSON.parse(process.argv[3]);
@@ -338,6 +340,21 @@ for (const tab of data.tabs) {
   }
 }
 NODE
+}
+
+# Verifies the loopback listener Caddy actually serves.
+validate_caddy_tls_health() {
+  validate_caddy_certificate_and_health 127.0.0.1 8443 "https://$CUSTOM_HOSTNAME:8443/api/health"
+}
+
+# Verifies the published ingress the way a tailnet client reaches it: through
+# the node's Tailscale IPv4 on port 443, which only answers once the raw TCP
+# Serve route forwards to Caddy. Proving the tailnet path is the point of the
+# migration, so this cannot be replaced by the loopback check.
+validate_caddy_tls_health_through_tailnet() {
+  local ipv4
+  ipv4=$(current_tailscale_ipv4) || return 1
+  validate_caddy_certificate_and_health "$ipv4" 443 "https://$CUSTOM_HOSTNAME/api/health"
 }
 
 # Read-only custom-domain check. Runs the strict Firstp1ck preflight,
@@ -732,6 +749,306 @@ setup_domain() {
     "$CADDY_SERVICE"
 }
 
+# ---------------------------------------------------------------------------
+# Migration transaction
+# ---------------------------------------------------------------------------
+
+# Bats-only marker that lets a signal test wait until the blocking
+# confirmation is genuinely reached instead of racing a fixed sleep.
+readonly MIGRATION_BLOCK_MARKER=.migration-confirm-block
+# Bounded blocking wait (60s) in short steps so a queued INT or TERM trap runs
+# promptly instead of waiting out one long sleep.
+readonly MIGRATION_BLOCK_ATTEMPTS=600
+# The systemd StateDirectory= the managed unit owns; rollback preserves it.
+readonly CADDY_STATE_DIRECTORY=/var/lib/pi-webui-caddy
+
+migration_restore_armed=0
+MIGRATION_PID=
+
+# Emits the node's MagicDNS name without the trailing dot: the legacy
+# `.ts.net` URL that migration retires and restoration proves again.
+tailscale_dns_name() {
+  local status
+  status=$(tailscale status --json) || fail 'cannot read Tailscale status'
+  node - "$status" <<'NODE' || fail 'cannot read the node MagicDNS name'
+const status = JSON.parse(process.argv[2]);
+const dns = typeof status?.Self?.DNSName === 'string' ? status.Self.DNSName.replace(/\.$/, '') : '';
+if (!dns) process.exit(1);
+console.log(dns);
+NODE
+}
+
+# Prints the exact literal plan an operator approves: the DNS record, the
+# credential mechanism, the managed unit and config paths, both routes, every
+# command this transaction may run, and the expected interruption. No
+# credential material is read or printed.
+show_migration_plan() {
+  local ipv4
+  ipv4=$(current_tailscale_ipv4) || return 1
+  printf '%s\n' \
+    "Migration plan for $CUSTOM_HOSTNAME" \
+    "DNS: $CUSTOM_HOSTNAME A $ipv4" \
+    "Credential: LoadCredentialEncrypted=$CREDENTIAL_NAME" \
+    "Unit: $CADDY_UNIT" \
+    "Config: $CADDY_CONFIG" \
+    "Old: HTTPS 443 -> $LEGACY_BACKEND" \
+    "New: TCP 443 -> $RAW_TARGET" \
+    "Remove old: sudo tailscale serve --https=443 off" \
+    "Publish new: sudo tailscale serve --bg --tcp=443 $RAW_TARGET" \
+    "Rollback: remove TCP 443, then restore HTTPS 443 -> $LEGACY_BACKEND" \
+    "Rollback commands: sudo tailscale serve --tcp=443 off; sudo tailscale serve --bg --https=443 $LEGACY_BACKEND" \
+    "Interruption: normally several seconds; browser WebSockets disconnect"
+}
+
+# Blocks until a signal arrives, so a test can prove INT and TERM restoration
+# at the exact point where a real operator would be reading their screen.
+wait_for_confirmation_signal() {
+  local attempt
+  : >"$STATE_ROOT/$MIGRATION_BLOCK_MARKER" || return 1
+  for ((attempt = 0; attempt < MIGRATION_BLOCK_ATTEMPTS; attempt++)); do
+    sleep 0.1
+  done
+  return 1
+}
+
+# Reads one answer from the operator's terminal and accepts only an exact
+# `yes`; EOF or anything else rejects. The answer is never taken from the
+# ambient environment in production: an override is honored only under the
+# usual Bats-only guard, so a stray variable on a real host fails closed.
+confirm_migration_step() {
+  local prompt=$1 variable=$2 answer=''
+  if [[ -n ${!variable+set} ]]; then
+    require_test_override "$STATE_ROOT" || return 1
+    case "${!variable}" in
+      eof) return 1 ;;
+      block) wait_for_confirmation_signal || return 1 ;;
+      *) answer=${!variable} ;;
+    esac
+  else
+    printf '%s' "$prompt" >/dev/tty || return 1
+    IFS= read -r answer </dev/tty || return 1
+  fi
+  [[ "$answer" == yes ]] || return 1
+}
+
+# Reports the live Serve JSON and human status so the exact published schema
+# is confirmed from the running daemon rather than assumed from the release.
+# Serve state contains routes only; no credential can appear here.
+report_serve_schema() {
+  local serve human
+  serve=$(tailscale serve status --json) || fail 'cannot read Tailscale Serve state'
+  human=$(tailscale serve status) || fail 'cannot read human Tailscale Serve status'
+  printf 'Observed Serve JSON: %s\n' "$serve"
+  printf 'Observed Serve status:\n%s\n' "$human"
+}
+
+# Prints the exact commands an operator needs when automatic restoration
+# refuses to act, together with the state actually observed.
+report_manual_recovery() {
+  local human
+  human=$(tailscale serve status 2>&1) || human='unavailable'
+  printf 'observed Tailscale Serve status:\n%s\n' "$human" >&2
+  printf 'manual recovery, after confirming the observed route is not wanted:\n' >&2
+  printf '  sudo tailscale serve --tcp=443 off\n' >&2
+  printf '  sudo tailscale serve --bg --https=443 %s\n' "$LEGACY_BACKEND" >&2
+}
+
+# Restores the exact legacy HTTPS route. It acts only from `empty` or
+# `raw-exact`, treats an already-published `legacy-exact` as nothing to do,
+# and refuses to overwrite any other state. Every step is status-checked
+# explicitly because this runs from a trap and from condition contexts, where
+# Bash suppresses errexit inside the called function.
+restore_legacy_route() {
+  local state legacy_host
+  state=$(route_state) || {
+    printf 'error: cannot classify the Tailscale route; refusing automatic restoration\n' >&2
+    report_manual_recovery
+    return 1
+  }
+  case "$state" in
+    raw-exact) serve_raw_off || return 1 ;;
+    empty) ;;
+    legacy-exact)
+      printf 'the legacy route is already published; no restoration was needed\n' >&2
+      return 0
+      ;;
+    *)
+      printf 'error: unexpected Tailscale route state %s; refusing to overwrite it\n' "$state" >&2
+      report_manual_recovery
+      return 1
+      ;;
+  esac
+  require_route_state empty || return 1
+  serve_legacy || return 1
+  require_route_state legacy-exact || return 1
+  legacy_host=$(tailscale_dns_name) || return 1
+  curl --fail --silent --show-error "https://$legacy_host/api/health" >/dev/null || {
+    printf 'error: the restored legacy route did not answer https://%s/api/health\n' "$legacy_host" >&2
+    return 1
+  }
+}
+
+# Runs from the ERR, INT, and TERM traps. It preserves the status that
+# initiated recovery, restores the legacy route where that is safe, and
+# reports a restoration failure separately from the original error so neither
+# masks the other.
+#
+# ERR traps are inherited by command substitutions once errtrace is set, so
+# recovery acts only in the shell that armed it; a subshell just propagates
+# its own failure.
+migration_recover() {
+  local status=$1 reason=${2:-}
+  [[ "$BASHPID" == "$MIGRATION_PID" ]] || return "$status"
+  [[ "$migration_restore_armed" -eq 1 ]] || return "$status"
+  migration_restore_armed=0
+  trap - ERR INT TERM
+  set +E
+  [[ "$status" -ne 0 ]] || status=1
+  [[ -z "$reason" ]] || printf 'error: migration aborted: %s\n' "$reason" >&2
+  printf 'error: migration failed with status %s; restoring the legacy route\n' "$status" >&2
+  if restore_legacy_route; then
+    printf 'legacy route restored: HTTPS 443 -> %s\n' "$LEGACY_BACKEND" >&2
+  else
+    printf 'error: RESTORATION FAILED; the tailnet route needs manual recovery\n' >&2
+  fi
+  exit "$status"
+}
+
+# Interactive, transactional migration from the legacy HTTPS Serve route to
+# raw TCP forwarding in front of the managed Caddy service.
+#
+# Every external boundary is proven again before any trap is installed or any
+# route command runs, so a preflight failure cannot mutate the route. The
+# apply-source check setup performs is deliberately not repeated: migration
+# publishes no source artifact, and a recovery-adjacent operation must not be
+# blocked by an unrelated checkout state.
+migrate_domain() {
+  local legacy_host
+
+  require_supported_platform
+  strict_firstpick_preflight
+  require_tailscale
+  require_tailscale_version
+  validate_public_dns
+  validate_caddy_source
+  set_caddy_paths
+  require_route_state legacy-exact
+  validate_installed_caddy
+  validate_caddy_listener
+  validate_caddy_tls_health
+  legacy_host=$(tailscale_dns_name)
+
+  show_migration_plan
+  confirm_migration_step 'Type yes to migrate now: ' MIGRATION_CONFIRM ||
+    fail 'migration was not approved; nothing was changed'
+
+  # errtrace makes the ERR trap fire for failures inside called functions,
+  # which is where every route command lives.
+  MIGRATION_PID=$BASHPID
+  migration_restore_armed=1
+  set -E
+  trap 'migration_recover $?' ERR
+  trap 'migration_recover 130 "signal INT"' INT
+  trap 'migration_recover 143 "signal TERM"' TERM
+
+  serve_legacy_off
+  require_route_state empty
+  serve_raw
+  require_route_state raw-exact
+  report_serve_schema
+  validate_caddy_tls_health_through_tailnet
+  validate_caddy_tls_health
+  # validate_caddy_listener re-runs check_lan for 31415 and check_caddy_lan
+  # for 8443, so both LAN boundaries are rechecked here.
+  validate_caddy_listener
+
+  if ! confirm_migration_step \
+    "Confirm https://$CUSTOM_HOSTNAME works from a separate trusted tailnet client (yes): " \
+    TAILNET_CLIENT_CONFIRM; then
+    migration_recover 1 'operator rejection'
+  fi
+
+  migration_restore_armed=0
+  trap - ERR INT TERM
+  set +E
+  printf 'custom domain migrated: https://%s is now canonical\n' "$CUSTOM_HOSTNAME"
+  printf 'the previous https://%s Web UI URL is no longer valid: raw TCP forwarding presents the %s certificate and site\n' \
+    "$legacy_host" "$CUSTOM_HOSTNAME"
+}
+
+# ---------------------------------------------------------------------------
+# Custom-domain rollback
+# ---------------------------------------------------------------------------
+
+# Requires every managed Caddy artifact to be an exact, root-owned, managed
+# artifact before anything is removed. The three static files are compared
+# byte-for-byte with their tracked renderers; the built binary is identified
+# by its pinned version and its exact GoDaddy module provenance. Unlike
+# validate_installed_caddy(), an inactive service is acceptable: rollback must
+# still work when Caddy is already stopped.
+require_removable_caddy_artifacts() {
+  local version modules
+  require_managed_caddy_artifact "$CADDY_BINARY" 'managed Caddy binary'
+  [[ -x "$CADDY_BINARY" ]] || fail 'managed Caddy binary is not executable'
+  require_managed_caddy_artifact "$CADDY_ENTRYPOINT" 'managed Caddy entrypoint'
+  require_managed_caddy_artifact "$CADDY_CONFIG" 'managed Caddyfile'
+  require_managed_caddy_artifact "$CADDY_UNIT" 'managed Caddy unit'
+
+  cmp -s "$SCRIPT_DIR/caddy-entrypoint.sh" "$CADDY_ENTRYPOINT" ||
+    fail 'refusing to remove a foreign managed Caddy entrypoint'
+  cmp -s <(render_caddyfile) "$CADDY_CONFIG" ||
+    fail 'refusing to remove a foreign managed Caddyfile'
+  cmp -s <(render_caddy_unit "$CADDY_ENTRYPOINT") "$CADDY_UNIT" ||
+    fail 'refusing to remove a foreign managed Caddy unit'
+
+  version=$("$CADDY_BINARY" version) || fail 'cannot read managed Caddy version'
+  [[ "$version" == "$SUPPORTED_CADDY_VERSION"* ]] ||
+    fail "refusing to remove a foreign Caddy binary: not $SUPPORTED_CADDY_VERSION"
+  modules=$("$CADDY_BINARY" list-modules --packages) || fail 'cannot read managed Caddy modules'
+  validate_godaddy_module_line "$modules"
+}
+
+# Conservative custom-domain rollback: restore legacy ingress, then remove
+# only the exact managed Caddy service artifacts.
+#
+# Certificates, ACME state, the encrypted credential, Pi state, the managed
+# Web UI runtime and worktree, and the Tailscale node identity are all
+# preserved; deleting any of them would require its own explicit flag and is
+# deliberately not offered here. The strict Firstp1ck preflight is not
+# repeated: restoration itself proves the legacy URL answers, which is the
+# behavior that matters, and rollback must stay available when other managed
+# state has drifted.
+rollback_domain() {
+  local route
+  require_supported_platform
+  resolve_source
+  set_managed_paths
+  require_tailscale_daemon
+  require_tailscale
+  validate_caddy_source
+  set_caddy_paths
+  require_removable_caddy_artifacts
+
+  route=$(route_state) || return 1
+  case "$route" in
+    raw-exact)
+      restore_legacy_route ||
+        fail 'custom-domain rollback could not restore the legacy route; the Caddy service was left untouched'
+      ;;
+    legacy-exact) ;;
+    *) fail "unexpected Tailscale route state for custom-domain rollback: $route" ;;
+  esac
+
+  sudo systemctl stop "$CADDY_SERVICE"
+  sudo systemctl disable "$CADDY_SERVICE"
+  sudo rm -f -- "$CADDY_UNIT" "$CADDY_CONFIG" "$CADDY_ENTRYPOINT" "$CADDY_BINARY"
+  sudo systemctl daemon-reload
+  printf 'custom domain rolled back: legacy HTTPS 443 -> %s is published and %s is removed\n' \
+    "$LEGACY_BACKEND" "$CADDY_SERVICE"
+  printf 'preserved: %s, %s, Pi state, Web UI state, and the Tailscale node identity\n' \
+    "$CADDY_CREDENTIAL" "$CADDY_STATE_DIRECTORY"
+}
+
 usage() {
   printf 'usage: %s check|setup|migrate|rollback\n' "$0"
 }
@@ -744,7 +1061,8 @@ main() {
   case "$1" in
     check) check_domain ;;
     setup) setup_domain ;;
-    migrate | rollback) fail "$1 is not implemented yet" ;;
+    migrate) migrate_domain ;;
+    rollback) rollback_domain ;;
     *)
       usage >&2
       return 2
