@@ -10,14 +10,18 @@ setup() {
   LANDING_WORKTREE="$STATE_ROOT/worktrees/dotfiles"
   UNIT_PATH="$XDG_CONFIG_HOME/systemd/user/pi-webui.service"
   MUTATION_CALLS="$TEST_ROOT/mutation-calls"
+  CREDENTIAL_CALLS="$TEST_ROOT/credential-calls"
   CALLS="$TEST_ROOT/calls"
-  export WEBUI_FIXTURE STATE_ROOT INSTALLED_RUNTIME LANDING_WORKTREE UNIT_PATH MUTATION_CALLS CALLS
+  CADDY_ROOT="$TEST_ROOT/caddy-root"
+  export WEBUI_FIXTURE STATE_ROOT INSTALLED_RUNTIME LANDING_WORKTREE UNIT_PATH MUTATION_CALLS CREDENTIAL_CALLS CALLS CADDY_ROOT
+  export PI_WEBUI_CADDY_ROOT="$CADDY_ROOT"
   : >"$CALLS"
   export PI_WEBUI_TESTING=1
   export PI_WEBUI_TEST_OS_RELEASE="$TEST_ROOT/os-release"
   export PI_WEBUI_TEST_UNAME_RELEASE='6.6.0-microsoft-standard-WSL2'
   export PI_WEBUI_TEST_SOURCE_ROOT="$WEBUI_FIXTURE"
   : >"$MUTATION_CALLS"
+  : >"$CREDENTIAL_CALLS"
 }
 
 make_webui_fixture() {
@@ -416,6 +420,151 @@ run_custom_domain_function() {
   local body=$1
   run bash -c 'source "$1"; shift; eval "$1"' bash \
     "$WEBUI_FIXTURE/ai/pi/webui/custom-domain.sh" "$body"
+}
+
+run_custom_domain() {
+  run "$WEBUI_FIXTURE/ai/pi/webui/custom-domain.sh" "$@"
+}
+
+# Writes exactly one DNS record type for every dig view (client resolver and
+# every authoritative server alike, since the stub ignores @server and
+# always answers from the same fixture files). Clears the other two types so
+# each call represents one exact record shape.
+write_dns() {
+  local type=$1
+  shift
+  : >"$TEST_ROOT/dns-a"
+  : >"$TEST_ROOT/dns-aaaa"
+  : >"$TEST_ROOT/dns-cname"
+  local file value
+  case "$type" in
+    A) file="$TEST_ROOT/dns-a" ;;
+    AAAA) file="$TEST_ROOT/dns-aaaa" ;;
+    CNAME) file="$TEST_ROOT/dns-cname" ;;
+  esac
+  for value in "$@"; do
+    printf '%s\n' "$value" >>"$file"
+  done
+}
+
+write_ns() {
+  : >"$TEST_ROOT/dns-ns"
+  local server
+  for server in "$@"; do
+    printf '%s\n' "$server" >>"$TEST_ROOT/dns-ns"
+  done
+}
+
+# Writes a fixture private Caddy binary, entrypoint, Caddyfile, and unit
+# under $CADDY_ROOT, matching what set_caddy_paths() computes from
+# $PI_WEBUI_CADDY_ROOT. The Caddyfile is byte-identical to the tracked
+# template; the unit is rendered with the real fixture entrypoint path so
+# validate_installed_caddy()'s byte-for-byte comparison succeeds.
+make_caddy_fixture() {
+  mkdir -p "$CADDY_ROOT/usr/local/lib/pi-webui" "$CADDY_ROOT/etc/pi-webui-caddy" \
+    "$CADDY_ROOT/etc/systemd/system"
+  cp "$WEBUI_FIXTURE/ai/pi/webui/Caddyfile.in" "$CADDY_ROOT/etc/pi-webui-caddy/Caddyfile"
+  cat >"$CADDY_ROOT/usr/local/lib/pi-webui/caddy" <<'EOF'
+#!/usr/bin/env bash
+case "$1" in
+  version) printf '%s\n' "${CADDY_VERSION_OUTPUT:-v2.11.4 h1:test}" ;;
+  list-modules) printf '%s\n' "${CADDY_MODULES:-dns.providers.godaddy}" ;;
+  *) exit 1 ;;
+esac
+EOF
+  chmod +x "$CADDY_ROOT/usr/local/lib/pi-webui/caddy"
+  printf '#!/usr/bin/env bash\n' >"$CADDY_ROOT/usr/local/lib/pi-webui/caddy-entrypoint"
+  chmod +x "$CADDY_ROOT/usr/local/lib/pi-webui/caddy-entrypoint"
+  bash -c 'source "$1"; set_caddy_paths; render_caddy_unit "$CADDY_ENTRYPOINT"' bash \
+    "$WEBUI_FIXTURE/ai/pi/webui/custom-domain.sh" \
+    >"$CADDY_ROOT/etc/systemd/system/pi-webui-caddy.service"
+}
+
+# Full fixture for read-only custom-domain checks: the healthy managed
+# Firstp1ck/Tailscale/Caddy/DNS state at the given route, with every
+# external boundary (systemctl, ss, curl, dig, openssl, stat, and the
+# private Caddy binary) stubbed so nothing live is ever touched.
+prepare_custom_domain_check() {
+  local mode=${1:-empty}
+  make_webui_fixture
+  make_external_pi
+  make_landing_worktree
+  make_installed_runtime
+  write_expected_unit
+  stub_tailscale_system "$mode"
+  mkdir -p "$CADDY_ROOT"
+  make_caddy_fixture
+  write_ns ns1.example.test.
+  write_dns A 100.64.0.1
+
+  printf '%s\n' 'LISTEN 0 4096 127.0.0.1:8443 0.0.0.0:*' >"$TEST_ROOT/caddy-listeners"
+  : >"$TEST_ROOT/caddy-listeners-udp"
+  export CADDY_MODULES='dns.providers.godaddy'
+  export CADDY_VERSION_OUTPUT='v2.11.4 h1:test'
+  export CADDY_HEALTH_JSON="$HEALTH_JSON"
+
+  stub_command systemctl 'case "$*" in
+    "--user show-environment"|"--user is-active pi-webui.service"|"is-active tailscaled") exit 0 ;;
+    "is-active pi-webui-caddy.service") [[ ${CADDY_SERVICE_INACTIVE:-0} != 1 ]] ;;
+    *) printf "systemctl %s\n" "$*" >>"$MUTATION_CALLS"; exit 99 ;;
+  esac'
+
+  stub_command ss 'case "$1" in
+    -ltnH)
+      if [[ "$2" == "sport = :31415" ]]; then
+        printf "%s\n" "LISTEN 0 128 127.0.0.1:31415 0.0.0.0:*"
+      else
+        printf "%s\n" "LISTEN 0 128 127.0.0.1:31415 0.0.0.0:*"
+        cat "$TEST_ROOT/caddy-listeners" 2>/dev/null
+      fi
+      ;;
+    -lunH) cat "$TEST_ROOT/caddy-listeners-udp" 2>/dev/null ;;
+    *) exit 1 ;;
+  esac'
+
+  stub_command dig 'shift
+    case "$1" in
+      NS) cat "$TEST_ROOT/dns-ns" 2>/dev/null ;;
+      A) cat "$TEST_ROOT/dns-a" 2>/dev/null ;;
+      AAAA) cat "$TEST_ROOT/dns-aaaa" 2>/dev/null ;;
+      CNAME) cat "$TEST_ROOT/dns-cname" 2>/dev/null ;;
+      *) exit 1 ;;
+    esac'
+
+  stub_command stat 'if [[ "$1 $2" == "-c %u" ]]; then
+    case "$3" in
+      "$PI_WEBUI_CADDY_ROOT/usr/local/lib/pi-webui/caddy"|"$PI_WEBUI_CADDY_ROOT/usr/local/lib/pi-webui/caddy-entrypoint"|"$PI_WEBUI_CADDY_ROOT/etc/pi-webui-caddy/Caddyfile"|"$PI_WEBUI_CADDY_ROOT/etc/systemd/system/pi-webui-caddy.service")
+        if [[ ${CADDY_FOREIGN_OWNER:-0} == 1 ]]; then printf "1000\n"; else printf "0\n"; fi ;;
+      *) exec /usr/bin/stat "$@" ;;
+    esac
+  else
+    exec /usr/bin/stat "$@"
+  fi'
+
+  stub_command openssl 'case "$1" in
+    s_client)
+      if [[ ${TLS_TRUST_FAIL:-0} == 1 ]]; then exit 1; fi
+      printf -- "-----BEGIN CERTIFICATE-----\nMOCK\n-----END CERTIFICATE-----\n" ;;
+    x509)
+      if [[ ${TLS_INVALID:-0} == 1 ]]; then exit 1; fi
+      exit 0 ;;
+    *) exit 1 ;;
+  esac'
+
+  stub_command curl 'printf "curl %s\n" "$*" >>"$CALLS"
+    case " $* " in
+      *" http://127.0.0.1:31415/api/health "*) printf "%s\n" "$HEALTH_JSON" ;;
+      *" https://pi.dpao.la:8443/api/health "*)
+        if [[ ${CADDY_HEALTH_FAIL:-0} == 1 ]]; then exit 22; fi
+        printf "%s\n" "${CADDY_HEALTH_JSON:-$HEALTH_JSON}" ;;
+      *" -o "*)
+        if [[ ${BAD_KEY_DOWNLOAD:-} == 1 ]]; then printf bad-key; else printf key-bytes; fi >"${@: -1}" ;;
+      *"https://172.20.1.4:8443/"*|*"https://192.168.1.7:8443/"*)
+        if [[ ${LAN_8443_REACHABLE:-0} == 1 ]]; then exit 0; else exit 7; fi ;;
+      *"http://172.20.1.4:31415/"*|*"http://192.168.1.7:31415/"*)
+        if [[ ${LAN_31415_REACHABLE:-0} == 1 ]]; then exit 0; else exit 7; fi ;;
+      *) exit 7 ;;
+    esac'
 }
 
 prepare_rollback() {
@@ -1255,4 +1404,245 @@ run_rollback() {
   run_custom_domain_function 'validate_caddy_source'
   [ "$status" -ne 0 ]
   [[ "$output" == *'Caddy unit template SHA-256'* ]]
+}
+
+@test "custom-domain preflight requires active exact Firstp1ck before credential access" {
+  prepare_custom_domain_check legacy-exact
+  rm -rf "$INSTALLED_RUNTIME"
+  run_custom_domain check
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'installed runtime is unavailable'* ]]
+  [ ! -s "$CREDENTIAL_CALLS" ]
+  [ ! -s "$MUTATION_CALLS" ]
+}
+
+@test "current Tailscale IPv4 requires exactly one online 100.64.0.0/10 address" {
+  prepare_custom_domain_check empty
+  run_custom_domain_function 'current_tailscale_ipv4'
+  [ "$status" -eq 0 ]
+  [ "$output" = 100.64.0.1 ]
+}
+
+@test "DNS must be one A equal to current Tailscale IPv4 with no aliases" {
+  prepare_custom_domain_check legacy-exact
+  write_dns A 100.64.0.1
+  run_custom_domain_function 'validate_public_dns'
+  [ "$status" -eq 0 ]
+
+  write_dns A 100.64.0.2
+  run_custom_domain_function 'validate_public_dns'
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'stale Tailscale IPv4'* ]]
+
+  write_dns CNAME personal-desktop.tail74aee.ts.net.
+  run_custom_domain_function 'validate_public_dns'
+  [ "$status" -ne 0 ]
+}
+
+@test "DNS validation rejects missing multiple AAAA absent-NS offline and non-Tailscale addresses" {
+  prepare_custom_domain_check legacy-exact
+
+  write_dns A
+  run_custom_domain_function 'validate_public_dns'
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'expected exactly one A answer'* ]]
+
+  write_dns A 100.64.0.1 100.64.0.2
+  run_custom_domain_function 'validate_public_dns'
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'expected exactly one A answer'* ]]
+
+  write_dns AAAA 2001:db8::1
+  run_custom_domain_function 'validate_public_dns'
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'unexpected AAAA answer'* ]]
+
+  write_dns A 100.64.0.1
+  : >"$TEST_ROOT/dns-ns"
+  run_custom_domain_function 'validate_public_dns'
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'no authoritative name server'* ]]
+  write_ns ns1.example.test.
+
+  printf '%s\n' '{"BackendState":"Running","Version":"1.102.3","Self":{"Online":false,"DNSName":"wsl.test.ts.net.","TailscaleIPs":["100.64.0.1"]}}' >"$TEST_ROOT/tailscale-status.json"
+  run_custom_domain_function 'validate_public_dns'
+  [ "$status" -ne 0 ]
+
+  printf '%s\n' '{"BackendState":"Running","Version":"1.102.3","Self":{"Online":true,"DNSName":"wsl.test.ts.net.","TailscaleIPs":["100.64.0.1","100.64.0.2"]}}' >"$TEST_ROOT/tailscale-status.json"
+  run_custom_domain_function 'validate_public_dns'
+  [ "$status" -ne 0 ]
+
+  printf '%s\n' '{"BackendState":"Running","Version":"1.102.3","Self":{"Online":true,"DNSName":"wsl.test.ts.net.","TailscaleIPs":["10.0.0.5"]}}' >"$TEST_ROOT/tailscale-status.json"
+  run_custom_domain_function 'validate_public_dns'
+  [ "$status" -ne 0 ]
+}
+
+@test "installed Caddy validation requires the exact managed Caddy version and GoDaddy module" {
+  prepare_custom_domain_check legacy-exact
+  run_custom_domain_function 'validate_installed_caddy'
+  [ "$status" -eq 0 ]
+
+  export CADDY_VERSION_OUTPUT='v2.10.0 h1:test'
+  run_custom_domain_function 'validate_installed_caddy'
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'is not v2.11.4'* ]]
+  export CADDY_VERSION_OUTPUT='v2.11.4 h1:test'
+
+  export CADDY_MODULES='dns.providers.cloudflare'
+  run_custom_domain_function 'validate_installed_caddy'
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'missing the dns.providers.godaddy module'* ]]
+}
+
+@test "installed Caddy validation requires byte-identical root-owned managed artifacts" {
+  prepare_custom_domain_check legacy-exact
+  run_custom_domain_function 'validate_installed_caddy'
+  [ "$status" -eq 0 ]
+
+  printf '\nforeign\n' >>"$CADDY_ROOT/etc/pi-webui-caddy/Caddyfile"
+  run_custom_domain_function 'validate_installed_caddy'
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'installed Caddyfile differs'* ]]
+  cp "$WEBUI_FIXTURE/ai/pi/webui/Caddyfile.in" "$CADDY_ROOT/etc/pi-webui-caddy/Caddyfile"
+
+  printf '\nforeign\n' >>"$CADDY_ROOT/etc/systemd/system/pi-webui-caddy.service"
+  run_custom_domain_function 'validate_installed_caddy'
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'installed Caddy unit differs'* ]]
+  make_caddy_fixture
+
+  export CADDY_FOREIGN_OWNER=1
+  run_custom_domain_function 'validate_installed_caddy'
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'must be owned by root'* ]]
+  unset CADDY_FOREIGN_OWNER
+
+  rm "$CADDY_ROOT/usr/local/lib/pi-webui/caddy"
+  run_custom_domain_function 'validate_installed_caddy'
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'managed Caddy binary is unavailable'* ]]
+}
+
+@test "installed Caddy validation requires the managed system service to be active" {
+  prepare_custom_domain_check legacy-exact
+  export CADDY_SERVICE_INACTIVE=1
+  run_custom_domain_function 'validate_installed_caddy'
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'Caddy service is not active'* ]]
+}
+
+@test "Caddy listener validation rejects wildcard IPv6 LAN UDP and port 80" {
+  prepare_custom_domain_check legacy-exact
+  run_custom_domain_function 'validate_caddy_listener'
+  [ "$status" -eq 0 ]
+
+  local shape
+  for shape in \
+    'LISTEN 0 4096 0.0.0.0:8443 0.0.0.0:*' \
+    'LISTEN 0 4096 [::]:8443 [::]:*' \
+    'LISTEN 0 4096 172.20.1.4:8443 0.0.0.0:*' \
+    'LISTEN 0 4096 0.0.0.0:80 0.0.0.0:*' \
+    $'LISTEN 0 4096 127.0.0.1:8443 0.0.0.0:*\nLISTEN 0 4096 172.20.1.4:8443 0.0.0.0:*' \
+  ; do
+    printf '%s\n' "$shape" >"$TEST_ROOT/caddy-listeners"
+    run_custom_domain_function 'validate_caddy_listener'
+    [ "$status" -ne 0 ]
+  done
+  printf '%s\n' 'LISTEN 0 4096 127.0.0.1:8443 0.0.0.0:*' >"$TEST_ROOT/caddy-listeners"
+
+  printf '%s\n' 'UNCONN 0 0 0.0.0.0:8443 0.0.0.0:*' >"$TEST_ROOT/caddy-listeners-udp"
+  run_custom_domain_function 'validate_caddy_listener'
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'UDP listener on port 8443'* ]]
+  : >"$TEST_ROOT/caddy-listeners-udp"
+
+  export LAN_8443_REACHABLE=1
+  run_custom_domain_function 'validate_caddy_listener'
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'Caddy is reachable on LAN address'* ]]
+  unset LAN_8443_REACHABLE
+
+  export LAN_31415_REACHABLE=1
+  run_custom_domain_function 'validate_caddy_listener'
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'Pi Web UI is reachable on LAN address'* ]]
+  unset LAN_31415_REACHABLE
+}
+
+@test "Caddy TLS health validation rejects untrusted invalid or unhealthy backend certificates" {
+  prepare_custom_domain_check legacy-exact
+  run_custom_domain_function 'validate_caddy_tls_health'
+  [ "$status" -eq 0 ]
+
+  export TLS_TRUST_FAIL=1
+  run_custom_domain_function 'validate_caddy_tls_health'
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'is not trusted'* ]]
+  unset TLS_TRUST_FAIL
+
+  export TLS_INVALID=1
+  run_custom_domain_function 'validate_caddy_tls_health'
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'invalid, expired, or hostname-mismatched'* ]]
+  unset TLS_INVALID
+
+  export CADDY_HEALTH_FAIL=1
+  run_custom_domain_function 'validate_caddy_tls_health'
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'health endpoint failed'* ]]
+  unset CADDY_HEALTH_FAIL
+
+  export CADDY_HEALTH_JSON='{"ok":false}'
+  run_custom_domain_function 'validate_caddy_tls_health'
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'health identity is invalid'* ]]
+}
+
+@test "check_domain classifies ready-to-migrate raw-exact and pre-install states and refuses foreign routes" {
+  prepare_custom_domain_check legacy-exact
+  run_custom_domain check
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'ready-to-migrate'* ]]
+  [ ! -s "$MUTATION_CALLS" ]
+
+  write_route raw
+  run_custom_domain check
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'raw-exact'* ]]
+  [ ! -s "$MUTATION_CALLS" ]
+
+  write_route empty
+  rm -rf "$CADDY_ROOT/usr/local/lib/pi-webui" "$CADDY_ROOT/etc/pi-webui-caddy" \
+    "$CADDY_ROOT/etc/systemd/system"
+  run_custom_domain check
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'not yet installed'* ]]
+  [ ! -s "$MUTATION_CALLS" ]
+
+  write_route foreign
+  run_custom_domain check
+  [ "$status" -ne 0 ]
+  [ ! -s "$MUTATION_CALLS" ]
+}
+
+@test "custom-domain CLI accepts only check and reports other verbs as not implemented" {
+  make_webui_fixture
+  run_custom_domain
+  [ "$status" -eq 2 ]
+  [[ "$output" == *'usage: '*'check|setup|migrate|rollback'* ]]
+
+  run_custom_domain bogus
+  [ "$status" -eq 2 ]
+
+  run_custom_domain setup
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'not implemented'* ]]
+
+  run_custom_domain migrate
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'not implemented'* ]]
+
+  run_custom_domain rollback
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'not implemented'* ]]
 }
