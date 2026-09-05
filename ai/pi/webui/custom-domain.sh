@@ -25,6 +25,7 @@ readonly CADDY_PREFIX=/usr/local/lib/pi-webui
 readonly CADDY_CREDENTIAL=/etc/credstore.encrypted/godaddy-api-token
 readonly SUPPORTED_CADDY_VERSION=v$CADDY_VERSION
 readonly EXPECTED_GODADDY_MODULE=dns.providers.godaddy
+readonly EXPECTED_GODADDY_PACKAGE=github.com/caddy-dns/godaddy
 readonly DNS_ZONE=dpao.la
 readonly CERT_MIN_VALIDITY_SECONDS=604800
 # Real managed Caddy artifact paths. Not readonly: set_caddy_paths() (below,
@@ -232,8 +233,27 @@ validate_installed_caddy() {
     fail "managed Caddy is not $SUPPORTED_CADDY_VERSION"
 
   modules=$("$CADDY_BINARY" list-modules --packages) || fail 'cannot read managed Caddy modules'
-  [[ "$modules" == *"$EXPECTED_GODADDY_MODULE"* ]] ||
-    fail "managed Caddy is missing the $EXPECTED_GODADDY_MODULE module"
+  validate_godaddy_module_line "$modules"
+}
+
+# Requires exactly one caddy list-modules --packages line for
+# $EXPECTED_GODADDY_MODULE, and requires that exact line to map the module
+# to $EXPECTED_GODADDY_PACKAGE (an optional "@version" suffix is tolerated;
+# version provenance is Task 4's concern, not this read-only check). A
+# foreign package mentioning the module name as a substring, or the module
+# paired with a different package, is rejected -- a bare substring match on
+# the module name alone is not sufficient.
+validate_godaddy_module_line() {
+  local modules=$1 line count module_pattern package_pattern
+  module_pattern=${EXPECTED_GODADDY_MODULE//./\\.}
+  package_pattern=${EXPECTED_GODADDY_PACKAGE//./\\.}
+  line=$(printf '%s\n' "$modules" | grep -E "^[[:space:]]*${module_pattern}[[:space:]]" || true)
+  count=$(printf '%s\n' "$line" | grep -c . || true)
+  [[ "$count" -eq 1 ]] ||
+    fail "managed Caddy must list exactly one $EXPECTED_GODADDY_MODULE module; found $count"
+  line=$(printf '%s\n' "$line" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')
+  [[ "$line" =~ ^${module_pattern}[[:space:]]+\(${package_pattern}(@[^()[:space:]]+)?\)$ ]] ||
+    fail "managed Caddy $EXPECTED_GODADDY_MODULE must map to package $EXPECTED_GODADDY_PACKAGE; got: $line"
 }
 
 # Mirrors tailscale.sh's check_lan() for the Caddy listener: no non-Tailscale
@@ -333,7 +353,7 @@ check_domain() {
   set_caddy_paths
   route=$(route_state) || return 1
 
-  if [[ "$route" == empty ]] && ! path_exists "$CADDY_BINARY" &&
+  if [[ "$route" == empty ]] && ! path_exists "$CADDY_BINARY" && ! path_exists "$CADDY_ENTRYPOINT" &&
     ! path_exists "$CADDY_CONFIG" && ! path_exists "$CADDY_UNIT"; then
     printf 'custom domain is not yet installed\n'
     return 0

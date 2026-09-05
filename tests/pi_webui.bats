@@ -468,7 +468,7 @@ make_caddy_fixture() {
 #!/usr/bin/env bash
 case "$1" in
   version) printf '%s\n' "${CADDY_VERSION_OUTPUT:-v2.11.4 h1:test}" ;;
-  list-modules) printf '%s\n' "${CADDY_MODULES:-dns.providers.godaddy}" ;;
+  list-modules) printf '%s\n' "${CADDY_MODULES:-  dns.providers.godaddy (github.com/caddy-dns/godaddy@v1.2.0)}" ;;
   *) exit 1 ;;
 esac
 EOF
@@ -499,7 +499,7 @@ prepare_custom_domain_check() {
 
   printf '%s\n' 'LISTEN 0 4096 127.0.0.1:8443 0.0.0.0:*' >"$TEST_ROOT/caddy-listeners"
   : >"$TEST_ROOT/caddy-listeners-udp"
-  export CADDY_MODULES='dns.providers.godaddy'
+  export CADDY_MODULES='  dns.providers.godaddy (github.com/caddy-dns/godaddy@v1.2.0)'
   export CADDY_VERSION_OUTPUT='v2.11.4 h1:test'
   export CADDY_HEALTH_JSON="$HEALTH_JSON"
 
@@ -1491,7 +1491,21 @@ run_rollback() {
   export CADDY_MODULES='dns.providers.cloudflare'
   run_custom_domain_function 'validate_installed_caddy'
   [ "$status" -ne 0 ]
-  [[ "$output" == *'missing the dns.providers.godaddy module'* ]]
+  [[ "$output" == *'must list exactly one dns.providers.godaddy module; found 0'* ]]
+
+  export CADDY_MODULES='  dns.providers.godaddy (github.com/foreign/godaddy)'
+  run_custom_domain_function 'validate_installed_caddy'
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'must map to package github.com/caddy-dns/godaddy'* ]]
+  [[ "$output" == *'github.com/foreign/godaddy'* ]]
+
+  # A foreign module whose name merely contains the expected module name as a
+  # substring (the exact shape a bare substring check would have accepted)
+  # must also be rejected.
+  export CADDY_MODULES='  dns.providers.godaddyfoo (github.com/attacker/evil)'
+  run_custom_domain_function 'validate_installed_caddy'
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'must list exactly one dns.providers.godaddy module; found 0'* ]]
 }
 
 @test "installed Caddy validation requires byte-identical root-owned managed artifacts" {
@@ -1622,6 +1636,18 @@ run_rollback() {
   write_route foreign
   run_custom_domain check
   [ "$status" -ne 0 ]
+  [ ! -s "$MUTATION_CALLS" ]
+}
+
+@test "check_domain treats a leftover managed Caddy entrypoint as a partial install, not pre-install" {
+  prepare_custom_domain_check empty
+  rm -rf "$CADDY_ROOT/usr/local/lib/pi-webui/caddy" "$CADDY_ROOT/etc/pi-webui-caddy" \
+    "$CADDY_ROOT/etc/systemd/system"
+  [ -e "$CADDY_ROOT/usr/local/lib/pi-webui/caddy-entrypoint" ]
+  run_custom_domain check
+  [ "$status" -ne 0 ]
+  [[ "$output" != *'not yet installed'* ]]
+  [[ "$output" == *'managed Caddy binary is unavailable'* ]]
   [ ! -s "$MUTATION_CALLS" ]
 }
 
