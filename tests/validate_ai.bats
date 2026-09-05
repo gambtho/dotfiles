@@ -129,6 +129,7 @@ write_pi_prompts() {
   [[ "$output" == *"settings.json: valid JSON"* ]]
   [[ "$output" == *"keybindings.json: valid JSON"* ]]
   [[ "$output" == *"config/modes.json: valid JSON"* ]]
+  [[ "$output" == *"config/models.json: valid JSON"* ]]
   [[ "$output" == *"config/permission-system.json: valid JSON"* ]]
   [[ "$output" != *"config/sandbox.json"* ]]
   [[ "$output" == *"config/subagents.json: valid JSON"* ]]

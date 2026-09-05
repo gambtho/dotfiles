@@ -369,6 +369,10 @@ make ai-check    # dry-run without changing the machine
 
 The full installer also runs Pi setup during Phase 9. Authentication remains machine-local: start `pi`, run `/login`, and choose **GitHub Copilot**. Use `/model` to select any Copilot model enabled for the subscription and Ctrl+S to save the highlighted model as the default.
 
+#### Temporary GPT-6 Astra workaround
+
+Pi 0.85.1 incorrectly routes `github-copilot/gpt-6-astra` through the Chat Completions endpoint, which Copilot rejects with `unsupported_api_for_model`. The tracked `ai/pi/config/models.json` overrides only that model to use the Responses API and includes Copilot's required IDE headers. Run `make ai`, reopen `/model`, and reselect Astra to load the override. If `~/.pi/agent/models.json` already contains local changes, the installer preserves it; merge the tracked Astra entry manually or use the documented baseline-reset command. Once upstream Pi ships corrected Copilot transport metadata, remove the baseline and installer reconciliation, then delete the copied runtime file (or remove only its Astra entry if it contains other overrides); the hard-coded IDE header versions are intentionally temporary.
+
 The installer links the authored extension directory, and `ai/pi/settings.json` loads the local `my` package. The guard blocks Pi's direct file-write tools in primary checkouts; use a linked worktree, or place an intentional exception in `~/.pi/worktree-guard-allow`.
 
 The personal package provides `/fix-pr`, `/polish`, `/polish-pr`, `/review-prs`, and `/second-opinion`, plus the `improve`, `overnight-improve`, `polish-core`, `blindspot-pass`, `implementation-plan`, and `change-explainer` skills. See `AGENTS.md` and `ai/marketplace/plugins/my/README.md` for details.

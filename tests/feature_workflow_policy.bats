@@ -107,7 +107,7 @@ setup() {
     run grep -F "$package" "$readme"
     [ "$status" -eq 0 ]
   done
-  run grep -F 'five mutable runtime files' "$readme"
+  run grep -F 'six mutable runtime files' "$readme"
   [ "$status" -eq 0 ]
   run grep -F 'merges only `.packages`' "$readme"
   [ "$status" -eq 0 ]

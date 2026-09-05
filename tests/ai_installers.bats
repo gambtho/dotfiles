@@ -51,6 +51,7 @@ seed_mutable_pi_drift() {
   mkdir -p "$agent_dir/extensions/pi-permission-system" "$(dirname "$web_config")"
   printf '{"theme":"custom","unknown":true,"packages":["old"]}\n' >"$agent_dir/settings.json"
   printf '{"custom":"modes"}\n' >"$agent_dir/modes.json"
+  printf '{"custom":"models"}\n' >"$agent_dir/models.json"
   printf '{"yoloMode":false,"permission":{"bash":{"*":"ask"}},"custom":"permission"}\n' \
     >"$agent_dir/extensions/pi-permission-system/config.json"
   printf '{"custom":"sandbox"}\n' >"$agent_dir/sandbox.json"
@@ -138,6 +139,7 @@ SCRIPT
   [[ "$output" == *"$agent_dir/AGENTS.md"* ]]
   [[ "$output" == *"$agent_dir/keybindings.json"* ]]
   [[ "$output" == *"$agent_dir/modes.json"* ]]
+  [[ "$output" == *"$agent_dir/models.json"* ]]
   [[ "$output" == *"$agent_dir/agents/rush.md"* ]]
   [[ "$output" == *"$agent_dir/agents/smart.md"* ]]
   [[ "$output" == *"$agent_dir/agents/deep.md"* ]]
@@ -195,11 +197,13 @@ JSON
     "$REPO_ROOT/ai/pi/extensions/worktree-guard.ts"
 
   cmp "$REPO_ROOT/ai/pi/config/modes.json" "$HOME/.pi/agent/modes.json"
+  cmp "$REPO_ROOT/ai/pi/config/models.json" "$HOME/.pi/agent/models.json"
   [ ! -e "$HOME/.pi/agent/sandbox.json" ]
   cmp "$REPO_ROOT/ai/pi/config/subagents.json" "$HOME/.pi/agent/subagents.json"
   cmp "$REPO_ROOT/ai/pi/config/web-search.json" "$XDG_CONFIG_HOME/pi/web-search.json"
   [ "$(stat -c '%a' "$HOME/.pi/agent/settings.json")" = 644 ]
   [ "$(stat -c '%a' "$HOME/.pi/agent/modes.json")" = 644 ]
+  [ "$(stat -c '%a' "$HOME/.pi/agent/models.json")" = 644 ]
   [ "$(stat -c '%a' "$HOME/.pi/agent/extensions/pi-permission-system/config.json")" = 644 ]
   [ "$(stat -c '%a' "$HOME/.pi/agent/subagents.json")" = 600 ]
   [ "$(stat -c '%a' "$XDG_CONFIG_HOME/pi/web-search.json")" = 600 ]
@@ -442,6 +446,20 @@ EOF
   [ "$status" -eq 0 ]
 }
 
+@test "Pi Astra workaround routes GitHub Copilot through the Responses API" {
+  run jq -e '
+    .providers["github-copilot"].models
+    | length == 1
+      and .[0].id == "gpt-6-astra"
+      and .[0].api == "openai-responses"
+      and .[0].headers["User-Agent"] == "GitHubCopilotChat/0.35.0"
+      and .[0].headers["Editor-Version"] == "vscode/1.107.0"
+      and .[0].headers["Editor-Plugin-Version"] == "copilot-chat/0.35.0"
+      and .[0].headers["Copilot-Integration-Id"] == "vscode-chat"
+  ' "$REPO_ROOT/ai/pi/config/models.json"
+  [ "$status" -eq 0 ]
+}
+
 @test "Pi loads the complete Superpowers package" {
   run jq -e '
     [.packages[] | objects | select(.source | startswith("git:github.com/obra/superpowers@"))]
@@ -470,6 +488,7 @@ EOF
     "$HOME/.pi/agent/settings.json" "$REPO_ROOT/ai/pi/settings.json"
   [ "$status" -eq 0 ]
   [ "$(jq -r .custom "$HOME/.pi/agent/modes.json")" = modes ]
+  [ "$(jq -r .custom "$HOME/.pi/agent/models.json")" = models ]
   [ "$(jq -r .custom "$HOME/.pi/agent/extensions/pi-permission-system/config.json")" = permission ]
   [ "$(jq -r .custom "$HOME/.pi/agent/sandbox.json")" = sandbox ]
   [ "$(jq -r .custom "$HOME/.pi/agent/subagents.json")" = subagents ]
@@ -495,6 +514,7 @@ EOF
   [ "$status" -eq 0 ]
   [ -f "$HOME/.pi/agent/settings.json.backup" ]
   [ -f "$HOME/.pi/agent/modes.json.backup" ]
+  [ -f "$HOME/.pi/agent/models.json.backup" ]
   [ -f "$HOME/.pi/agent/extensions/pi-permission-system/config.json.backup" ]
   [ ! -e "$HOME/.pi/agent/sandbox.json.backup" ]
   [ "$(jq -r .custom "$HOME/.pi/agent/sandbox.json")" = sandbox ]
@@ -502,14 +522,15 @@ EOF
   [ -f "$XDG_CONFIG_HOME/pi/web-search.json.backup" ]
   cmp "$REPO_ROOT/ai/pi/settings.json" "$HOME/.pi/agent/settings.json"
   cmp "$REPO_ROOT/ai/pi/config/modes.json" "$HOME/.pi/agent/modes.json"
+  cmp "$REPO_ROOT/ai/pi/config/models.json" "$HOME/.pi/agent/models.json"
   cmp "$REPO_ROOT/ai/pi/config/subagents.json" "$HOME/.pi/agent/subagents.json"
   cmp "$REPO_ROOT/ai/pi/config/web-search.json" "$XDG_CONFIG_HOME/pi/web-search.json"
-  [ "$(find "$HOME" -name '*.backup*' | wc -l)" -eq 5 ]
+  [ "$(find "$HOME" -name '*.backup*' | wc -l)" -eq 6 ]
 
   run env HOME="$HOME" PATH="$PATH" PI_VERSION="$PI_VERSION" \
     PI_AI_RESET_MUTABLE_CONFIG=1 bash "$REPO_ROOT/ai/pi/install.sh"
   [ "$status" -eq 0 ]
-  [ "$(find "$HOME" -name '*.backup*' | wc -l)" -eq 5 ]
+  [ "$(find "$HOME" -name '*.backup*' | wc -l)" -eq 6 ]
 }
 
 @test "Pi installer converts recognized legacy links without discarding readable state" {
