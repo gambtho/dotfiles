@@ -33,9 +33,19 @@ readonly EXPECTED_GODADDY_PACKAGE=github.com/caddy-dns/godaddy
 readonly DNS_ZONE=dpao.la
 readonly CERT_MIN_VALIDITY_SECONDS=604800
 # Bounded post-publication wait for the listener, DNS-01 issuance, trusted
-# certificate, and proxy health: at most five minutes.
-readonly CADDY_READY_ATTEMPTS_DEFAULT=60
+# certificate, and proxy health. Worst case is attempts * probe timeout +
+# (attempts - 1) * interval = 20 * 10 + 19 * 5 = 295 seconds, so the
+# documented "at most five minutes" holds even when every probe stalls to its
+# own bound instead of failing fast.
+readonly CADDY_READY_ATTEMPTS_DEFAULT=20
 readonly CADDY_READY_INTERVAL_DEFAULT=5
+readonly CADDY_READY_PROBE_TIMEOUT=10
+# Explicit bounds for every other network and TLS probe, so a black-holed
+# packet path fails within a known deadline instead of hanging a mutation
+# window open.
+readonly PROBE_CONNECT_TIMEOUT=5
+readonly PROBE_MAX_TIME=30
+readonly TLS_HANDSHAKE_TIMEOUT=15
 # Real managed Caddy artifact paths. Not readonly: set_caddy_paths() (below,
 # mirroring tailscale.sh's set_tailscale_paths()) reassigns them under an
 # optional test root so tests never touch real system paths.
@@ -78,6 +88,7 @@ readonly -a CADDY_MANAGED_SOURCE_FILES=(
 # that updates this pin, not a silent pass.
 readonly CADDYFILE_SHA256=a0c851372d974aa647e1e37de93fc374a11b1fc7ed361f8a74a6423d4c17c1b4
 readonly CADDY_UNIT_TEMPLATE_SHA256=1736be815881c48685b584f3906a1d3aa80811de118b601365c16097c4176eaf
+export CADDY_READY_PROBE_TIMEOUT PROBE_CONNECT_TIMEOUT PROBE_MAX_TIME TLS_HANDSHAKE_TIMEOUT
 
 render_caddyfile() { cat "$SCRIPT_DIR/Caddyfile.in"; }
 
@@ -87,7 +98,10 @@ render_caddy_unit() {
   safe_unit_path "$entrypoint" || return 1
   rendered=$(<"$SCRIPT_DIR/pi-webui-caddy.service.in")
   rendered=${rendered//@CADDY_ENTRYPOINT@/$entrypoint}
-  [[ "$rendered" != *'@CADDY_ENTRYPOINT@'* ]] || fail 'Caddy unit substitution failed'
+  [[ "$rendered" != *'@CADDY_ENTRYPOINT@'* ]] || {
+    fail 'Caddy unit substitution failed'
+    return 1
+  }
   printf '%s\n' "$rendered"
 }
 
@@ -132,9 +146,15 @@ strict_firstpick_preflight() {
   resolve_pi
   "$SOURCE_ROOT/bin/validate-pi-webui" --tracked-only
   set_managed_paths
-  path_exists "$INSTALLED_RUNTIME" || fail 'installed runtime is unavailable'
+  path_exists "$INSTALLED_RUNTIME" || {
+    fail 'installed runtime is unavailable'
+    return 1
+  }
   "$SOURCE_ROOT/bin/validate-pi-webui" --installed-runtime "$INSTALLED_RUNTIME"
-  path_exists "$UNIT_PATH" || fail 'installed service unit is unavailable'
+  path_exists "$UNIT_PATH" || {
+    fail 'installed service unit is unavailable'
+    return 1
+  }
   validate_landing_worktree "$LANDING_WORKTREE"
   validate_unit "$UNIT_PATH"
   validate_active_health "$PI_LAUNCHER"
@@ -145,7 +165,10 @@ strict_firstpick_preflight() {
 # outside the CGNAT range GoDaddy DNS is expected to publish.
 current_tailscale_ipv4() {
   local status
-  status=$(tailscale status --json) || fail 'cannot read Tailscale status'
+  status=$(tailscale status --json) || {
+    fail 'cannot read Tailscale status'
+    return 1
+  }
   node - "$status" <<'NODE' || fail 'no exact online Tailscale IPv4 in 100.64.0.0/10'
 const status = JSON.parse(process.argv[2]);
 if (status?.Self?.Online !== true) process.exit(1);
@@ -170,21 +193,48 @@ normalize_dns_answer() {
 validate_dns_view() {
   local server=$1 expected=$2 a aaaa cname count
   if [[ -n "$server" ]]; then
-    a=$(dig +short A "$CUSTOM_HOSTNAME" "@$server") || fail "cannot query A for $CUSTOM_HOSTNAME at $server"
-    aaaa=$(dig +short AAAA "$CUSTOM_HOSTNAME" "@$server") || fail "cannot query AAAA for $CUSTOM_HOSTNAME at $server"
-    cname=$(dig +short CNAME "$CUSTOM_HOSTNAME" "@$server") || fail "cannot query CNAME for $CUSTOM_HOSTNAME at $server"
+    a=$(dig +short A "$CUSTOM_HOSTNAME" "@$server") || {
+      fail "cannot query A for $CUSTOM_HOSTNAME at $server"
+      return 1
+    }
+    aaaa=$(dig +short AAAA "$CUSTOM_HOSTNAME" "@$server") || {
+      fail "cannot query AAAA for $CUSTOM_HOSTNAME at $server"
+      return 1
+    }
+    cname=$(dig +short CNAME "$CUSTOM_HOSTNAME" "@$server") || {
+      fail "cannot query CNAME for $CUSTOM_HOSTNAME at $server"
+      return 1
+    }
   else
-    a=$(dig +short A "$CUSTOM_HOSTNAME") || fail "cannot query A for $CUSTOM_HOSTNAME"
-    aaaa=$(dig +short AAAA "$CUSTOM_HOSTNAME") || fail "cannot query AAAA for $CUSTOM_HOSTNAME"
-    cname=$(dig +short CNAME "$CUSTOM_HOSTNAME") || fail "cannot query CNAME for $CUSTOM_HOSTNAME"
+    a=$(dig +short A "$CUSTOM_HOSTNAME") || {
+      fail "cannot query A for $CUSTOM_HOSTNAME"
+      return 1
+    }
+    aaaa=$(dig +short AAAA "$CUSTOM_HOSTNAME") || {
+      fail "cannot query AAAA for $CUSTOM_HOSTNAME"
+      return 1
+    }
+    cname=$(dig +short CNAME "$CUSTOM_HOSTNAME") || {
+      fail "cannot query CNAME for $CUSTOM_HOSTNAME"
+      return 1
+    }
   fi
   a=$(printf '%s\n' "$a" | normalize_dns_answer)
   aaaa=$(printf '%s\n' "$aaaa" | normalize_dns_answer)
   cname=$(printf '%s\n' "$cname" | normalize_dns_answer)
-  [[ -z "$aaaa" ]] || fail "unexpected AAAA answer for $CUSTOM_HOSTNAME"
-  [[ -z "$cname" ]] || fail "unexpected CNAME answer for $CUSTOM_HOSTNAME: $cname"
+  [[ -z "$aaaa" ]] || {
+    fail "unexpected AAAA answer for $CUSTOM_HOSTNAME"
+    return 1
+  }
+  [[ -z "$cname" ]] || {
+    fail "unexpected CNAME answer for $CUSTOM_HOSTNAME: $cname"
+    return 1
+  }
   count=$(printf '%s\n' "$a" | grep -c . || true)
-  [[ "$count" -eq 1 ]] || fail "expected exactly one A answer for $CUSTOM_HOSTNAME; got $count"
+  [[ "$count" -eq 1 ]] || {
+    fail "expected exactly one A answer for $CUSTOM_HOSTNAME; got $count"
+    return 1
+  }
   [[ "$a" == "$expected" ]] || fail "stale Tailscale IPv4 for $CUSTOM_HOSTNAME: got $a, expected $expected"
 }
 
@@ -195,9 +245,15 @@ validate_dns_view() {
 validate_public_dns() {
   local ipv4 authoritative server
   ipv4=$(current_tailscale_ipv4) || return 1
-  authoritative=$(dig +short NS "$DNS_ZONE") || fail "cannot read authoritative name servers for $DNS_ZONE"
+  authoritative=$(dig +short NS "$DNS_ZONE") || {
+    fail "cannot read authoritative name servers for $DNS_ZONE"
+    return 1
+  }
   authoritative=$(printf '%s\n' "$authoritative" | normalize_dns_answer)
-  [[ -n "$authoritative" ]] || fail "$DNS_ZONE has no authoritative name server"
+  [[ -n "$authoritative" ]] || {
+    fail "$DNS_ZONE has no authoritative name server"
+    return 1
+  }
 
   validate_dns_view '' "$ipv4" || return 1
   while IFS= read -r server; do
@@ -209,9 +265,46 @@ validate_public_dns() {
 # Requires $path to be a real, non-symlink, root-owned regular file.
 require_managed_caddy_artifact() {
   local path=$1 label=$2 owner
-  [[ -f "$path" && ! -L "$path" ]] || fail "$label is unavailable"
-  owner=$(stat -c %u "$path") || fail "cannot inspect $label ownership"
+  [[ -f "$path" && ! -L "$path" ]] || {
+    fail "$label is unavailable"
+    return 1
+  }
+  owner=$(stat -c %u "$path") || {
+    fail "cannot inspect $label ownership"
+    return 1
+  }
   [[ "$owner" == 0 ]] || fail "$label must be owned by root"
+}
+
+# Requires the Caddy binary at $CADDY_BINARY to be the exact pinned private
+# build: executable, reporting $SUPPORTED_CADDY_VERSION, and carrying exactly
+# the pinned GoDaddy module at exactly the pinned module version. This is the
+# only identity available for a compiled artifact, so it gates reconciling
+# over, validating, and removing an existing binary alike.
+validate_caddy_binary_identity() {
+  local version modules
+  [[ -x "$CADDY_BINARY" ]] || {
+    fail 'managed Caddy binary is not executable'
+    return 1
+  }
+  version=$("$CADDY_BINARY" version) || {
+    fail 'cannot read managed Caddy version'
+    return 1
+  }
+  [[ "$version" == "$SUPPORTED_CADDY_VERSION"* ]] || {
+    fail "managed Caddy is not $SUPPORTED_CADDY_VERSION"
+    return 1
+  }
+  modules=$("$CADDY_BINARY" list-modules --packages) || {
+    fail 'cannot read managed Caddy modules'
+    return 1
+  }
+  validate_godaddy_module_line "$modules" || return 1
+  modules=$("$CADDY_BINARY" list-modules --versions --packages) || {
+    fail 'cannot read managed Caddy module versions'
+    return 1
+  }
+  validate_godaddy_module_version_line "$modules"
 }
 
 # Requires the installed Caddy binary, entrypoint, Caddyfile, and unit to be
@@ -219,29 +312,35 @@ require_managed_caddy_artifact() {
 # the installed Caddy version to be $SUPPORTED_CADDY_VERSION, the GoDaddy DNS
 # module to be present, and the dedicated system service to be active.
 validate_installed_caddy() {
-  local version modules
   set_caddy_paths
-  require_managed_caddy_artifact "$CADDY_BINARY" 'managed Caddy binary'
-  [[ -x "$CADDY_BINARY" ]] || fail 'managed Caddy binary is not executable'
-  require_managed_caddy_artifact "$CADDY_ENTRYPOINT" 'managed Caddy entrypoint'
-  [[ -x "$CADDY_ENTRYPOINT" ]] || fail 'managed Caddy entrypoint is not executable'
-  require_managed_caddy_artifact "$CADDY_CONFIG" 'managed Caddyfile'
-  require_managed_caddy_artifact "$CADDY_UNIT" 'managed Caddy unit'
+  require_managed_caddy_artifact "$CADDY_BINARY" 'managed Caddy binary' || return 1
+  [[ -x "$CADDY_BINARY" ]] || {
+    fail 'managed Caddy binary is not executable'
+    return 1
+  }
+  require_managed_caddy_artifact "$CADDY_ENTRYPOINT" 'managed Caddy entrypoint' || return 1
+  [[ -x "$CADDY_ENTRYPOINT" ]] || {
+    fail 'managed Caddy entrypoint is not executable'
+    return 1
+  }
+  require_managed_caddy_artifact "$CADDY_CONFIG" 'managed Caddyfile' || return 1
+  require_managed_caddy_artifact "$CADDY_UNIT" 'managed Caddy unit' || return 1
 
-  cmp -s <(render_caddyfile) "$CADDY_CONFIG" ||
+  cmp -s <(render_caddyfile) "$CADDY_CONFIG" || {
     fail 'installed Caddyfile differs from the managed configuration'
-  cmp -s <(render_caddy_unit "$CADDY_ENTRYPOINT") "$CADDY_UNIT" ||
+    return 1
+  }
+  cmp -s <(render_caddy_unit "$CADDY_ENTRYPOINT") "$CADDY_UNIT" || {
     fail 'installed Caddy unit differs from the managed configuration'
+    return 1
+  }
 
-  systemctl is-active "$CADDY_SERVICE" >/dev/null ||
+  systemctl is-active "$CADDY_SERVICE" >/dev/null || {
     fail 'Caddy service is not active'
+    return 1
+  }
 
-  version=$("$CADDY_BINARY" version) || fail 'cannot read managed Caddy version'
-  [[ "$version" == "$SUPPORTED_CADDY_VERSION"* ]] ||
-    fail "managed Caddy is not $SUPPORTED_CADDY_VERSION"
-
-  modules=$("$CADDY_BINARY" list-modules --packages) || fail 'cannot read managed Caddy modules'
-  validate_godaddy_module_line "$modules"
+  validate_caddy_binary_identity
 }
 
 # Requires exactly one caddy list-modules --packages line for
@@ -257,11 +356,33 @@ validate_godaddy_module_line() {
   module_pattern=${EXPECTED_GODADDY_MODULE//./\\.}
   line=$(printf '%s\n' "$modules" | grep -E "^[[:space:]]*${module_pattern}([[:space:]]|$)" || true)
   count=$(printf '%s\n' "$line" | grep -c . || true)
-  [[ "$count" -eq 1 ]] ||
+  [[ "$count" -eq 1 ]] || {
     fail "managed Caddy must list exactly one $EXPECTED_GODADDY_MODULE module; found $count"
+    return 1
+  }
   line=$(printf '%s\n' "$line" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')
   [[ "$line" == "$EXPECTED_GODADDY_MODULE $EXPECTED_GODADDY_PACKAGE" ]] ||
     fail "managed Caddy must map module $EXPECTED_GODADDY_MODULE to exactly $EXPECTED_GODADDY_PACKAGE; got: $line"
+}
+
+# The same exact-line contract for `list-modules --versions --packages`, which
+# Caddy v2.11.4 renders as "<module id> <go module version> <go module path>"
+# (cmd/commandfuncs.go printModuleInfo prints the version before the package
+# and appends the same " => <path>" and " [<error>]" annotations). Pinning the
+# module version is what distinguishes the approved private build from a
+# same-named module built against a different provider release.
+validate_godaddy_module_version_line() {
+  local modules=$1 line count module_pattern
+  module_pattern=${EXPECTED_GODADDY_MODULE//./\\.}
+  line=$(printf '%s\n' "$modules" | grep -E "^[[:space:]]*${module_pattern}([[:space:]]|$)" || true)
+  count=$(printf '%s\n' "$line" | grep -c . || true)
+  [[ "$count" -eq 1 ]] || {
+    fail "managed Caddy must list exactly one $EXPECTED_GODADDY_MODULE module; found $count"
+    return 1
+  }
+  line=$(printf '%s\n' "$line" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')
+  [[ "$line" == "$EXPECTED_GODADDY_MODULE v$GODADDY_MODULE_VERSION $EXPECTED_GODADDY_PACKAGE" ]] ||
+    fail "managed Caddy must provide $EXPECTED_GODADDY_MODULE at exactly v$GODADDY_MODULE_VERSION from $EXPECTED_GODADDY_PACKAGE; got: $line"
 }
 
 # Mirrors tailscale.sh's check_lan() for the Caddy listener: no non-Tailscale
@@ -269,8 +390,10 @@ validate_godaddy_module_line() {
 check_caddy_lan() {
   local addresses interface address count=0
   addresses=$(ip -o -4 addr show scope global |
-    awk '{ interface=$2; for (i=3; i<=NF; i++) if ($i == "inet") { split($(i+1), a, "/"); print interface, a[1] } }') ||
+    awk '{ interface=$2; for (i=3; i<=NF; i++) if ($i == "inet") { split($(i+1), a, "/"); print interface, a[1] } }') || {
     fail 'cannot inspect global IPv4 addresses'
+    return 1
+  }
   while read -r interface address; do
     [[ -n "$address" && "$interface" != tailscale0 ]] || continue
     ((count += 1))
@@ -285,25 +408,54 @@ check_caddy_lan() {
 # Requires exactly one TCP listener on port 8443, bound to exactly
 # 127.0.0.1:8443; rejects a port-80 or UDP-8443 listener; and retains the
 # existing 31415 LAN check alongside a matching 8443 LAN probe.
+#
+# Each match is captured and then tested for emptiness rather than piped into
+# `grep -q`: `grep -q` exits on its first match, which SIGPIPEs the producer
+# and, under `set -o pipefail`, turns a real forbidden-listener match into a
+# failed pipeline that an `if` would read as "no match".
 validate_caddy_listener() {
-  local tcp udp addresses count
-  tcp=$(ss -ltnH) || fail 'cannot inspect Caddy TCP listeners'
-  udp=$(ss -lunH) || fail 'cannot inspect Caddy UDP listeners'
+  local tcp udp addresses matches count
+  tcp=$(ss -ltnH) || {
+    fail 'cannot inspect Caddy TCP listeners'
+    return 1
+  }
+  udp=$(ss -lunH) || {
+    fail 'cannot inspect Caddy UDP listeners'
+    return 1
+  }
 
-  if printf '%s\n' "$tcp" | awk 'NF { print $4 }' | grep -qE ':80$'; then
+  matches=$(printf '%s\n' "$tcp" | awk 'NF && $4 ~ /:80$/ { print $4 }') || {
+    fail 'cannot inspect Caddy TCP listeners'
+    return 1
+  }
+  [[ -z "$matches" ]] || {
     fail 'unexpected Caddy listener on port 80'
-  fi
-  if printf '%s\n' "$udp" | awk 'NF { print $4 }' | grep -qE ':8443$'; then
+    return 1
+  }
+  matches=$(printf '%s\n' "$udp" | awk 'NF && $4 ~ /:8443$/ { print $4 }') || {
+    fail 'cannot inspect Caddy UDP listeners'
+    return 1
+  }
+  [[ -z "$matches" ]] || {
     fail 'unexpected Caddy UDP listener on port 8443'
-  fi
+    return 1
+  }
 
-  addresses=$(printf '%s\n' "$tcp" | awk 'NF { print $4 }' | grep -E ':8443$' || true)
-  count=$(printf '%s\n' "$addresses" | grep -c . || true)
-  [[ "$count" -eq 1 ]] || fail 'expected exactly one Caddy listener on port 8443'
-  [[ "$addresses" == '127.0.0.1:8443' ]] ||
+  addresses=$(printf '%s\n' "$tcp" | awk 'NF && $4 ~ /:8443$/ { print $4 }') || {
+    fail 'cannot inspect Caddy TCP listeners'
+    return 1
+  }
+  count=$(printf '%s\n' "$addresses" | awk 'NF { count++ } END { print count+0 }')
+  [[ "$count" -eq 1 ]] || {
+    fail 'expected exactly one Caddy listener on port 8443'
+    return 1
+  }
+  [[ "$addresses" == '127.0.0.1:8443' ]] || {
     fail 'Caddy listener is not loopback-only at 127.0.0.1:8443'
+    return 1
+  }
 
-  check_lan
+  check_lan || return 1
   check_caddy_lan
 }
 
@@ -312,17 +464,25 @@ validate_caddy_listener() {
 # Firstp1ck health contract, without bypassing normal CA verification.
 validate_caddy_certificate_and_health() {
   local address=$1 port=$2 url=$3 certificate health
-  certificate=$(openssl s_client -connect "$address:$port" -servername "$CUSTOM_HOSTNAME" \
-    -verify_return_error </dev/null 2>&1) ||
+  certificate=$(timeout "$TLS_HANDSHAKE_TIMEOUT" \
+    openssl s_client -connect "$address:$port" -servername "$CUSTOM_HOSTNAME" \
+    -verify_return_error </dev/null 2>&1) || {
     fail "certificate for $CUSTOM_HOSTNAME is not trusted at $address:$port"
+    return 1
+  }
   printf '%s\n' "$certificate" |
-    openssl x509 -checkhost "$CUSTOM_HOSTNAME" -checkend "$CERT_MIN_VALIDITY_SECONDS" -noout ||
+    openssl x509 -checkhost "$CUSTOM_HOSTNAME" -checkend "$CERT_MIN_VALIDITY_SECONDS" -noout || {
     fail "certificate for $CUSTOM_HOSTNAME is invalid, expired, or hostname-mismatched"
+    return 1
+  }
 
   health=$(curl --fail --silent --show-error \
+    --connect-timeout "$PROBE_CONNECT_TIMEOUT" --max-time "$PROBE_MAX_TIME" \
     --resolve "$CUSTOM_HOSTNAME:$port:$address" \
-    "$url") ||
+    "$url") || {
     fail "Caddy-proxied Pi Web UI health endpoint failed at $url"
+    return 1
+  }
   node - "$PI_LAUNCHER" "$health" <<'NODE' || fail 'Caddy-proxied Pi Web UI health identity is invalid'
 const launcher = process.argv[2];
 const response = JSON.parse(process.argv[3]);
@@ -421,15 +581,26 @@ caddy_artifact_contract() {
 # never enabled here.
 validate_godaddy_credential() {
   local owner mode
-  [[ -f "$CADDY_CREDENTIAL" && ! -L "$CADDY_CREDENTIAL" ]] ||
+  [[ -f "$CADDY_CREDENTIAL" && ! -L "$CADDY_CREDENTIAL" ]] || {
     fail "encrypted GoDaddy credential is unavailable: $CADDY_CREDENTIAL"
-  owner=$(stat -c %u "$CADDY_CREDENTIAL") ||
+    return 1
+  }
+  owner=$(stat -c %u "$CADDY_CREDENTIAL") || {
     fail 'cannot inspect the encrypted GoDaddy credential'
-  [[ "$owner" == 0 ]] || fail 'encrypted GoDaddy credential must be owned by root'
-  mode=$(stat -c %a "$CADDY_CREDENTIAL") ||
+    return 1
+  }
+  [[ "$owner" == 0 ]] || {
+    fail 'encrypted GoDaddy credential must be owned by root'
+    return 1
+  }
+  mode=$(stat -c %a "$CADDY_CREDENTIAL") || {
     fail 'cannot inspect encrypted GoDaddy credential permissions'
-  [[ $((8#$mode & 8#077)) -eq 0 ]] ||
+    return 1
+  }
+  [[ $((8#$mode & 8#077)) -eq 0 ]] || {
     fail 'encrypted GoDaddy credential must not be group- or world-accessible'
+    return 1
+  }
 
   set -o pipefail
   sudo systemd-creds decrypt \
@@ -468,23 +639,33 @@ process.stdin.on("end", () => {
 
 # Refuses to reconcile over an existing managed path that is not an exact
 # managed artifact. An absent artifact is a normal first install; a present
-# one must be a root-owned regular file, and each present static artifact
-# must be byte-identical to its tracked source.
+# one must be a root-owned regular file, each present static artifact must be
+# byte-identical to its tracked source, and a present binary must prove the
+# exact pinned Caddy and GoDaddy-module identity. Without the binary check a
+# foreign root-owned executable at the managed path would be silently
+# overwritten by publication.
 require_reconcilable_caddy_state() {
   local index destination
   caddy_artifact_contract
   for index in "${!CADDY_ARTIFACT_DESTS[@]}"; do
     destination=${CADDY_ARTIFACT_DESTS[index]}
     path_exists "$destination" || continue
-    require_managed_caddy_artifact "$destination" "${CADDY_ARTIFACT_LABELS[index]}"
+    require_managed_caddy_artifact "$destination" "${CADDY_ARTIFACT_LABELS[index]}" || return 1
   done
+  if path_exists "$CADDY_BINARY"; then
+    validate_caddy_binary_identity || return 1
+  fi
   if path_exists "$CADDY_ENTRYPOINT"; then
-    cmp -s "$SCRIPT_DIR/caddy-entrypoint.sh" "$CADDY_ENTRYPOINT" ||
+    cmp -s "$SCRIPT_DIR/caddy-entrypoint.sh" "$CADDY_ENTRYPOINT" || {
       fail 'refusing to replace a foreign managed Caddy entrypoint'
+      return 1
+    }
   fi
   if path_exists "$CADDY_CONFIG"; then
-    cmp -s <(render_caddyfile) "$CADDY_CONFIG" ||
+    cmp -s <(render_caddyfile) "$CADDY_CONFIG" || {
       fail 'refusing to replace a foreign managed Caddyfile'
+      return 1
+    }
   fi
   if path_exists "$CADDY_UNIT"; then
     cmp -s <(render_caddy_unit "$CADDY_ENTRYPOINT") "$CADDY_UNIT" ||
@@ -525,12 +706,18 @@ build_caddy_candidate() {
   render_caddy_unit "$candidate/caddy-entrypoint" >"$candidate/pi-webui-caddy.service" || return 1
   render_caddy_unit "$CADDY_ENTRYPOINT" >"$candidate/installed-unit" || return 1
 
-  version=$("$candidate/caddy" version) || fail 'cannot read candidate Caddy version'
+  version=$("$candidate/caddy" version) || {
+    fail 'cannot read candidate Caddy version'
+    return 1
+  }
   [[ "$version" == "$SUPPORTED_CADDY_VERSION"* ]] ||
     fail "candidate Caddy is not $SUPPORTED_CADDY_VERSION"
   modules=$("$candidate/caddy" list-modules --packages) ||
     fail 'cannot read candidate Caddy modules'
   validate_godaddy_module_line "$modules"
+  modules=$("$candidate/caddy" list-modules --versions --packages) ||
+    fail 'cannot read candidate Caddy module versions'
+  validate_godaddy_module_version_line "$modules"
 
   # A placeholder credential keeps the real token out of the adapted JSON,
   # which is discarded rather than printed.
@@ -556,16 +743,47 @@ capture_prior_caddy_state() {
       cp "$destination" "$CADDY_STAGING/prior-${CADDY_ARTIFACT_NAMES[index]}" || return 1
     fi
   done
-  if systemctl is-enabled "$CADDY_SERVICE" >/dev/null 2>&1; then CADDY_PRIOR_ENABLED=1; fi
-  if systemctl is-active "$CADDY_SERVICE" >/dev/null 2>&1; then CADDY_PRIOR_ACTIVE=1; fi
+  CADDY_PRIOR_ENABLED=$(query_unit_state is-enabled "${CADDY_PRIOR_PRESENT[3]}") || return 1
+  CADDY_PRIOR_ACTIVE=$(query_unit_state is-active "${CADDY_PRIOR_PRESENT[3]}") || return 1
+}
+
+# systemd answers both is-enabled and is-active with a state word on stdout
+# and a nonzero status for the negative states, so a bare exit-status test
+# reads a D-Bus or manager error as "disabled"/"inactive" and silently loses
+# the prior state restoration has to put back. Only a recognized state word
+# is accepted; an absent unit file is the normal first-install case and is
+# the one situation where an empty answer is not an error.
+query_unit_state() {
+  local verb=$1 unit_present=$2 answer
+  answer=$(systemctl "$verb" "$CADDY_SERVICE" 2>/dev/null) || true
+  case "$answer" in
+    enabled | enabled-runtime | alias | static | indirect | generated | transient | active | activating | reloading | refreshing)
+      printf '1\n'
+      return 0
+      ;;
+    disabled | masked | masked-runtime | linked | linked-runtime | inactive | deactivating | failed | maintenance)
+      printf '0\n'
+      return 0
+      ;;
+  esac
+  if [[ "$unit_present" -eq 0 && (-z "$answer" || "$answer" == not-found) ]]; then
+    printf '0\n'
+    return 0
+  fi
+  fail "cannot determine systemd $verb state for $CADDY_SERVICE"
+  return 1
 }
 
 # Publishes one root-owned artifact atomically: install to a sibling
-# temporary path with the final mode, then rename over the destination.
+# temporary path with the final mode, then rename over the destination. A
+# failed rename leaves no half-published sibling behind.
 publish_caddy_artifact() {
   local source=$1 destination=$2 mode=$3 temporary=$2.pi-webui-new
   sudo install -o root -g root -m "$mode" "$source" "$temporary" || return 1
-  sudo mv -f "$temporary" "$destination" || return 1
+  sudo mv -f "$temporary" "$destination" || {
+    sudo rm -f -- "$temporary" || true
+    return 1
+  }
 }
 
 # Selects the bounded readiness budget. Tests may shorten it through the
@@ -583,12 +801,15 @@ caddy_ready_budget() {
 # Cheap, side-effect-free readiness signal that only paces the bounded wait:
 # the service is running and a normally CA-verified request already reaches
 # the proxied health endpoint, which cannot happen before DNS-01 issuance
-# completes. Every command is explicitly status-checked because this function
-# is called from a condition, where Bash suppresses errexit. The
-# authoritative validation runs afterwards, under normal error handling.
+# completes. The probe carries its own explicit bound so one stalled attempt
+# cannot outlast the whole documented budget. Every command is explicitly
+# status-checked because this function is called from a condition, where Bash
+# suppresses errexit. The authoritative validation runs afterwards, under
+# normal error handling.
 caddy_ready_signal() {
   systemctl is-active "$CADDY_SERVICE" >/dev/null 2>&1 || return 1
   curl --fail --silent --show-error \
+    --connect-timeout "$PROBE_CONNECT_TIMEOUT" --max-time "$CADDY_READY_PROBE_TIMEOUT" \
     --resolve "$CUSTOM_HOSTNAME:8443:127.0.0.1" \
     "https://$CUSTOM_HOSTNAME:8443/api/health" >/dev/null 2>&1 || return 1
 }
@@ -600,8 +821,9 @@ caddy_ready_signal() {
 wait_for_caddy_ready() {
   local attempt
   caddy_ready_budget
-  for ((attempt = 1; attempt < CADDY_READY_ATTEMPTS; attempt++)); do
+  for ((attempt = 1; attempt <= CADDY_READY_ATTEMPTS; attempt++)); do
     if caddy_ready_signal; then break; fi
+    [[ "$attempt" -lt "$CADDY_READY_ATTEMPTS" ]] || break
     sleep "$CADDY_READY_INTERVAL"
   done
   validate_installed_caddy
@@ -612,38 +834,53 @@ wait_for_caddy_ready() {
 # Publishes the validated candidate, reloads systemd, enables and restarts the
 # dedicated service, and waits for readiness. The Tailscale route is never
 # touched.
+#
+# Every cleanup flag is raised before the call it describes, not after: a
+# command that mutates and then reports failure would otherwise leave a side
+# effect that restoration never learns about.
 publish_caddy_candidate() {
   local index destination
   for index in "${!CADDY_ARTIFACT_DESTS[@]}"; do
     destination=${CADDY_ARTIFACT_DESTS[index]}
     sudo install -d -o root -g root -m 0755 "$(dirname "$destination")" || return 1
+    CADDY_PUBLISHED[index]=1
     publish_caddy_artifact "$CADDY_STAGING/${CADDY_ARTIFACT_NAMES[index]}" \
       "$destination" "${CADDY_ARTIFACT_MODES[index]}" || return 1
-    CADDY_PUBLISHED[index]=1
   done
-  sudo systemctl daemon-reload || return 1
   caddy_daemon_reloaded=1
-  sudo systemctl enable "$CADDY_SERVICE" || return 1
+  sudo systemctl daemon-reload || return 1
   caddy_enablement_changed=1
+  sudo systemctl enable "$CADDY_SERVICE" || return 1
   # restart, not start: start is a no-op for an already-active unit, which
   # would leave a prior Caddy process serving the previous binary in memory
   # while every on-disk and endpoint check passes. restart also starts an
   # inactive or newly installed unit, so first install is unchanged.
-  sudo systemctl restart "$CADDY_SERVICE" || return 1
   caddy_started=1
+  sudo systemctl restart "$CADDY_SERVICE" || return 1
   wait_for_caddy_ready
 }
 
-# Stops the candidate, restores every published artifact in reverse order,
-# reloads systemd, and restores prior enablement and activity. Certificates,
-# ACME state, and the encrypted credential are never removed. A failed
-# restoration retains and reports the private staging path.
+# Stops the candidate, restores prior enablement while the unit still exists,
+# restores every published artifact in reverse order, reloads systemd, and
+# restores prior activity. Certificates, ACME state, and the encrypted
+# credential are never removed. A failed restoration retains and reports the
+# private staging path.
 restore_prior_caddy() {
   local failed=0 index destination temporary
   set +e
   if [[ "$caddy_started" -eq 1 ]]; then
     sudo systemctl stop "$CADDY_SERVICE" || failed=1
     caddy_started=0
+  fi
+  # `systemctl disable` needs the unit file to resolve its [Install] section,
+  # so an enablement introduced by this run has to be undone before the file
+  # is removed; otherwise the symlink survives as dangling enablement.
+  if [[ "$caddy_enablement_changed" -eq 1 && "$CADDY_PRIOR_ENABLED" -eq 0 ]]; then
+    if sudo systemctl disable "$CADDY_SERVICE"; then
+      caddy_enablement_changed=0
+    else
+      failed=1
+    fi
   fi
   for ((index = ${#CADDY_ARTIFACT_DESTS[@]} - 1; index >= 0; index--)); do
     [[ "${CADDY_PUBLISHED[index]}" -eq 1 ]] || continue
@@ -764,12 +1001,16 @@ readonly CADDY_STATE_DIRECTORY=/var/lib/pi-webui-caddy
 
 migration_restore_armed=0
 MIGRATION_PID=
+LEGACY_ROUTE_ACTION=none
 
 # Emits the node's MagicDNS name without the trailing dot: the legacy
 # `.ts.net` URL that migration retires and restoration proves again.
 tailscale_dns_name() {
   local status
-  status=$(tailscale status --json) || fail 'cannot read Tailscale status'
+  status=$(tailscale status --json) || {
+    fail 'cannot read Tailscale status'
+    return 1
+  }
   node - "$status" <<'NODE' || fail 'cannot read the node MagicDNS name'
 const status = JSON.parse(process.argv[2]);
 const dns = typeof status?.Self?.DNSName === 'string' ? status.Self.DNSName.replace(/\.$/, '') : '';
@@ -836,8 +1077,14 @@ confirm_migration_step() {
 # Serve state contains routes only; no credential can appear here.
 report_serve_schema() {
   local serve human
-  serve=$(tailscale serve status --json) || fail 'cannot read Tailscale Serve state'
-  human=$(tailscale serve status) || fail 'cannot read human Tailscale Serve status'
+  serve=$(tailscale serve status --json) || {
+    fail 'cannot read Tailscale Serve state'
+    return 1
+  }
+  human=$(tailscale serve status) || {
+    fail 'cannot read human Tailscale Serve status'
+    return 1
+  }
   printf 'Observed Serve JSON: %s\n' "$serve"
   printf 'Observed Serve status:\n%s\n' "$human"
 }
@@ -853,13 +1100,30 @@ report_manual_recovery() {
   printf '  sudo tailscale serve --bg --https=443 %s\n' "$LEGACY_BACKEND" >&2
 }
 
+# Proves the retired MagicDNS URL actually answers. Rollback runs this before
+# any Caddy teardown, whether the legacy route was just restored or was
+# already published, so the old URL is never assumed to work.
+require_legacy_url_health() {
+  local legacy_host
+  legacy_host=$(tailscale_dns_name) || return 1
+  curl --fail --silent --show-error \
+    --connect-timeout "$PROBE_CONNECT_TIMEOUT" --max-time "$PROBE_MAX_TIME" \
+    "https://$legacy_host/api/health" >/dev/null || {
+    printf 'error: the legacy route did not answer https://%s/api/health\n' "$legacy_host" >&2
+    return 1
+  }
+}
+
 # Restores the exact legacy HTTPS route. It acts only from `empty` or
 # `raw-exact`, treats an already-published `legacy-exact` as nothing to do,
-# and refuses to overwrite any other state. Every step is status-checked
-# explicitly because this runs from a trap and from condition contexts, where
-# Bash suppresses errexit inside the called function.
+# and refuses to overwrite any other state. LEGACY_ROUTE_ACTION reports which
+# of those happened so callers never claim a mutation that did not occur.
+# Every step is status-checked explicitly because this runs from a trap and
+# from condition contexts, where Bash suppresses errexit inside the called
+# function.
 restore_legacy_route() {
-  local state legacy_host
+  local state
+  LEGACY_ROUTE_ACTION=none
   state=$(route_state) || {
     printf 'error: cannot classify the Tailscale route; refusing automatic restoration\n' >&2
     report_manual_recovery
@@ -869,6 +1133,7 @@ restore_legacy_route() {
     raw-exact) serve_raw_off || return 1 ;;
     empty) ;;
     legacy-exact)
+      LEGACY_ROUTE_ACTION=already-present
       printf 'the legacy route is already published; no restoration was needed\n' >&2
       return 0
       ;;
@@ -881,11 +1146,8 @@ restore_legacy_route() {
   require_route_state empty || return 1
   serve_legacy || return 1
   require_route_state legacy-exact || return 1
-  legacy_host=$(tailscale_dns_name) || return 1
-  curl --fail --silent --show-error "https://$legacy_host/api/health" >/dev/null || {
-    printf 'error: the restored legacy route did not answer https://%s/api/health\n' "$legacy_host" >&2
-    return 1
-  }
+  require_legacy_url_health || return 1
+  LEGACY_ROUTE_ACTION=restored
 }
 
 # Runs from the ERR, INT, and TERM traps. It preserves the status that
@@ -907,7 +1169,9 @@ migration_recover() {
   [[ -z "$reason" ]] || printf 'error: migration aborted: %s\n' "$reason" >&2
   printf 'error: migration failed with status %s; restoring the legacy route\n' "$status" >&2
   if restore_legacy_route; then
-    printf 'legacy route restored: HTTPS 443 -> %s\n' "$LEGACY_BACKEND" >&2
+    if [[ "${LEGACY_ROUTE_ACTION:-none}" == restored ]]; then
+      printf 'legacy route restored: HTTPS 443 -> %s\n' "$LEGACY_BACKEND" >&2
+    fi
   else
     printf 'error: RESTORATION FAILED; the tailnet route needs manual recovery\n' >&2
   fi
@@ -993,39 +1257,58 @@ migrate_domain() {
 # validate_installed_caddy(), an inactive service is acceptable: rollback must
 # still work when Caddy is already stopped.
 require_removable_caddy_artifacts() {
-  local version modules
-  require_managed_caddy_artifact "$CADDY_BINARY" 'managed Caddy binary'
-  [[ -x "$CADDY_BINARY" ]] || fail 'managed Caddy binary is not executable'
-  require_managed_caddy_artifact "$CADDY_ENTRYPOINT" 'managed Caddy entrypoint'
-  require_managed_caddy_artifact "$CADDY_CONFIG" 'managed Caddyfile'
-  require_managed_caddy_artifact "$CADDY_UNIT" 'managed Caddy unit'
+  require_managed_caddy_artifact "$CADDY_BINARY" 'managed Caddy binary' || return 1
+  [[ -x "$CADDY_BINARY" ]] || {
+    fail 'managed Caddy binary is not executable'
+    return 1
+  }
+  require_managed_caddy_artifact "$CADDY_ENTRYPOINT" 'managed Caddy entrypoint' || return 1
+  require_managed_caddy_artifact "$CADDY_CONFIG" 'managed Caddyfile' || return 1
+  require_managed_caddy_artifact "$CADDY_UNIT" 'managed Caddy unit' || return 1
 
-  cmp -s "$SCRIPT_DIR/caddy-entrypoint.sh" "$CADDY_ENTRYPOINT" ||
+  cmp -s "$SCRIPT_DIR/caddy-entrypoint.sh" "$CADDY_ENTRYPOINT" || {
     fail 'refusing to remove a foreign managed Caddy entrypoint'
-  cmp -s <(render_caddyfile) "$CADDY_CONFIG" ||
+    return 1
+  }
+  cmp -s <(render_caddyfile) "$CADDY_CONFIG" || {
     fail 'refusing to remove a foreign managed Caddyfile'
-  cmp -s <(render_caddy_unit "$CADDY_ENTRYPOINT") "$CADDY_UNIT" ||
+    return 1
+  }
+  cmp -s <(render_caddy_unit "$CADDY_ENTRYPOINT") "$CADDY_UNIT" || {
     fail 'refusing to remove a foreign managed Caddy unit'
+    return 1
+  }
 
-  version=$("$CADDY_BINARY" version) || fail 'cannot read managed Caddy version'
-  [[ "$version" == "$SUPPORTED_CADDY_VERSION"* ]] ||
-    fail "refusing to remove a foreign Caddy binary: not $SUPPORTED_CADDY_VERSION"
-  modules=$("$CADDY_BINARY" list-modules --packages) || fail 'cannot read managed Caddy modules'
-  validate_godaddy_module_line "$modules"
+  validate_caddy_binary_identity ||
+    fail "refusing to remove a foreign Caddy binary: not $SUPPORTED_CADDY_VERSION with $EXPECTED_GODADDY_PACKAGE@v$GODADDY_MODULE_VERSION"
 }
 
-# Conservative custom-domain rollback: restore legacy ingress, then remove
-# only the exact managed Caddy service artifacts.
+# Removes only the exact managed Caddy service artifacts. The caller is
+# responsible for having brought the Tailscale route to the state it wants
+# and for reclassifying it immediately before this runs.
+remove_managed_caddy() {
+  sudo systemctl stop "$CADDY_SERVICE"
+  sudo systemctl disable "$CADDY_SERVICE"
+  sudo rm -f -- "$CADDY_UNIT" "$CADDY_CONFIG" "$CADDY_ENTRYPOINT" "$CADDY_BINARY"
+  sudo systemctl daemon-reload
+}
+
+# Conservative custom-domain rollback: restore legacy ingress, prove the old
+# URL answers, then remove only the exact managed Caddy service artifacts.
+#
+# `--full` is the removal path the Web UI rollback needs instead: it takes the
+# exact raw or exact transitional legacy route down to empty, removes the same
+# managed artifacts, and leaves Serve empty so ai/pi/webui/rollback.sh can run.
 #
 # Certificates, ACME state, the encrypted credential, Pi state, the managed
 # Web UI runtime and worktree, and the Tailscale node identity are all
-# preserved; deleting any of them would require its own explicit flag and is
-# deliberately not offered here. The strict Firstp1ck preflight is not
-# repeated: restoration itself proves the legacy URL answers, which is the
+# preserved in both modes; deleting any of them would require its own explicit
+# flag and is deliberately not offered here. The strict Firstp1ck preflight is
+# not repeated: restoration itself proves the legacy URL answers, which is the
 # behavior that matters, and rollback must stay available when other managed
 # state has drifted.
 rollback_domain() {
-  local route
+  local mode=${1:-default} route
   require_supported_platform
   resolve_source
   set_managed_paths
@@ -1036,47 +1319,75 @@ rollback_domain() {
   require_removable_caddy_artifacts
 
   route=$(route_state) || return 1
-  case "$route" in
-    raw-exact)
-      restore_legacy_route ||
-        fail 'custom-domain rollback could not restore the legacy route; the Caddy service was left untouched'
-      ;;
-    legacy-exact) ;;
-    *) fail "unexpected Tailscale route state for custom-domain rollback: $route" ;;
-  esac
-
-  # Reclassify immediately before teardown. A concurrent republication between
-  # restoration and removal would otherwise leave raw or foreign ingress live
-  # while its backend artifacts are deleted.
-  require_route_state legacy-exact
-
-  sudo systemctl stop "$CADDY_SERVICE"
-  sudo systemctl disable "$CADDY_SERVICE"
-  sudo rm -f -- "$CADDY_UNIT" "$CADDY_CONFIG" "$CADDY_ENTRYPOINT" "$CADDY_BINARY"
-  sudo systemctl daemon-reload
-  printf 'custom domain rolled back: legacy HTTPS 443 -> %s is published and %s is removed\n' \
-    "$LEGACY_BACKEND" "$CADDY_SERVICE"
+  if [[ "$mode" == full ]]; then
+    case "$route" in
+      raw-exact) serve_raw_off || fail 'custom-domain rollback could not remove the raw route; the Caddy service was left untouched' ;;
+      legacy-exact) serve_legacy_off || fail 'custom-domain rollback could not remove the legacy route; the Caddy service was left untouched' ;;
+      empty) ;;
+      *) fail "unexpected Tailscale route state for custom-domain rollback: $route" ;;
+    esac
+    # Reclassify immediately before teardown. A concurrent republication
+    # between removal and teardown would otherwise leave live ingress in front
+    # of artifacts that are about to be deleted.
+    require_route_state empty
+    remove_managed_caddy
+    printf 'custom domain removed: Tailscale Serve is empty and %s is removed\n' "$CADDY_SERVICE"
+    printf 'run %s/rollback.sh next to remove the Pi Web UI service\n' "$SCRIPT_DIR"
+  else
+    case "$route" in
+      raw-exact)
+        restore_legacy_route ||
+          fail 'custom-domain rollback could not restore the legacy route; the Caddy service was left untouched'
+        ;;
+      legacy-exact)
+        printf 'the legacy route is already published; no restoration was needed\n'
+        require_legacy_url_health ||
+          fail 'the already-published legacy route did not answer; the Caddy service was left untouched'
+        ;;
+      *) fail "unexpected Tailscale route state for custom-domain rollback: $route" ;;
+    esac
+    require_route_state legacy-exact
+    remove_managed_caddy
+    printf 'custom domain rolled back: legacy HTTPS 443 -> %s is published and %s is removed\n' \
+      "$LEGACY_BACKEND" "$CADDY_SERVICE"
+  fi
   printf 'preserved: %s, %s, Pi state, Web UI state, and the Tailscale node identity\n' \
     "$CADDY_CREDENTIAL" "$CADDY_STATE_DIRECTORY"
 }
 
 usage() {
-  printf 'usage: %s check|setup|migrate|rollback\n' "$0"
+  printf 'usage: %s check|setup|migrate|rollback [--full]\n' "$0"
 }
 
 main() {
-  [[ $# -eq 1 ]] || {
-    usage >&2
-    return 2
-  }
+  case "${1:-}" in
+    check | setup | migrate)
+      [[ $# -eq 1 ]] || {
+        usage >&2
+        return 2
+      }
+      ;;
+    rollback)
+      [[ $# -eq 1 || ($# -eq 2 && "$2" == --full) ]] || {
+        usage >&2
+        return 2
+      }
+      ;;
+    *)
+      usage >&2
+      return 2
+      ;;
+  esac
   case "$1" in
     check) check_domain ;;
     setup) setup_domain ;;
     migrate) migrate_domain ;;
-    rollback) rollback_domain ;;
-    *)
-      usage >&2
-      return 2
+    rollback)
+      if [[ ${2:-} == --full ]]; then
+        rollback_domain full
+      else
+        rollback_domain default
+      fi
       ;;
   esac
 }

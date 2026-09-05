@@ -308,11 +308,7 @@ write_route() {
       printf '%s\n' \
         '{"TCP":{"443":{"TCPForward":"127.0.0.1:8443"}}}' \
         >"$TEST_ROOT/route.json"
-      printf '%s\n' \
-        'tcp://wsl.test.ts.net:443 (tailnet only)' \
-        '|-- tcp://100.64.0.1:443' \
-        '|--> tcp://127.0.0.1:8443' \
-        >"$TEST_ROOT/route.txt"
+      write_raw_human >"$TEST_ROOT/route.txt"
       ;;
     funnel)
       write_route legacy-exact
@@ -330,10 +326,23 @@ write_route() {
   cp "$TEST_ROOT/route.json" "$TEST_ROOT/funnel.json"
 }
 
+# The exact human `tailscale serve status` tree Tailscale 1.102.3 prints for a
+# node-level raw TCP forward on 443 (cmd/tailscale/cli/serve_legacy.go,
+# printTCPStatusTree): a "|-- tcp://<host>:<port> (<funnel status>)" line, one
+# "|-- tcp://<addr>:<port>" line per st.TailscaleIPs rendered through
+# net.JoinHostPort (so IPv6 is bracketed), then "|--> tcp://<backend>".
+write_raw_human() {
+  printf '%s\n' \
+    '|-- tcp://wsl.test.ts.net:443 (tailnet only)' \
+    '|-- tcp://100.64.0.1:443' \
+    '|-- tcp://[fd7a:115c:a1e0::1]:443' \
+    '|--> tcp://127.0.0.1:8443'
+}
+
 stub_tailscale_system() {
   stub_healthy_system
   write_route "${1:-empty}"
-  printf '%s\n' '{"BackendState":"Running","Version":"1.102.3","Self":{"Online":true,"DNSName":"wsl.test.ts.net.","TailscaleIPs":["100.64.0.1"]}}' >"$TEST_ROOT/tailscale-status.json"
+  printf '%s\n' '{"BackendState":"Running","Version":"1.102.3","TailscaleIPs":["100.64.0.1","fd7a:115c:a1e0::1"],"Self":{"Online":true,"DNSName":"wsl.test.ts.net.","TailscaleIPs":["100.64.0.1","fd7a:115c:a1e0::1"]}}' >"$TEST_ROOT/tailscale-status.json"
   stub_command systemctl 'case "$*" in
     "is-active tailscaled"|"--user show-environment"|"--user is-active pi-webui.service") exit 0 ;;
     *) printf "systemctl %s\\n" "$*" >>"$MUTATION_CALLS"; exit 99 ;;
@@ -378,7 +387,7 @@ stub_tailscale_system() {
       "tailscale serve --bg --tcp=443 tcp://127.0.0.1:8443")
         printf "%s\\n" "{\"TCP\":{\"443\":{\"TCPForward\":\"127.0.0.1:8443\"}}}" >"$TEST_ROOT/route.json"
         cp "$TEST_ROOT/route.json" "$TEST_ROOT/funnel.json"
-        printf "tcp://wsl.test.ts.net:443 (tailnet only)\\n|-- tcp://100.64.0.1:443\\n|--> tcp://127.0.0.1:8443\\n" >"$TEST_ROOT/route.txt" ;;
+        printf "%s\\n" "|-- tcp://wsl.test.ts.net:443 (tailnet only)" "|-- tcp://100.64.0.1:443" "|-- tcp://[fd7a:115c:a1e0::1]:443" "|--> tcp://127.0.0.1:8443" >"$TEST_ROOT/route.txt" ;;
       "tailscale serve --tcp=443 off")
         if [[ ${SERVE_OFF_STICKS:-} != 1 ]]; then
           printf "{}\\n" >"$TEST_ROOT/route.json"
@@ -467,7 +476,12 @@ write_caddy_stub_binary() {
   cat >>"$path" <<'EOF'
 case "$1" in
   version) printf '%s\n' "${CADDY_VERSION_OUTPUT:-v2.11.4 h1:test}" ;;
-  list-modules) printf '%s\n' "${CADDY_MODULES:-dns.providers.godaddy github.com/caddy-dns/godaddy}" ;;
+  list-modules)
+    case " $* " in
+      *" --versions "*)
+        printf '%s\n' "${CADDY_MODULE_VERSIONS:-dns.providers.godaddy v1.2.0 github.com/caddy-dns/godaddy}" ;;
+      *) printf '%s\n' "${CADDY_MODULES:-dns.providers.godaddy github.com/caddy-dns/godaddy}" ;;
+    esac ;;
   adapt)
     printf 'caddy adapt token=%s\n' "${GODADDY_API_TOKEN:-unset}" >>"$CALLS"
     if [[ ${FAIL_POINT:-} == adapt ]]; then
@@ -531,9 +545,16 @@ prepare_custom_domain_check() {
   export CADDY_VERSION_OUTPUT='v2.11.4 h1:test'
   export CADDY_HEALTH_JSON="$HEALTH_JSON"
 
+  # Bounds every TLS probe the implementation runs through `timeout`; the
+  # stall fixture reproduces coreutils' 124 exit status without waiting.
+  stub_command timeout 'if [[ ${TLS_STALL:-0} == 1 ]]; then exit 124; fi
+    exec /usr/bin/timeout "$@"'
+
   stub_command systemctl 'case "$*" in
     "--user show-environment"|"--user is-active pi-webui.service"|"is-active tailscaled") exit 0 ;;
-    "is-active pi-webui-caddy.service") [[ ${CADDY_SERVICE_INACTIVE:-0} != 1 ]] ;;
+    "is-active pi-webui-caddy.service")
+      if [[ ${CADDY_SERVICE_INACTIVE:-0} == 1 ]]; then printf "inactive\n"; exit 3; fi
+      printf "active\n" ;;
     *) printf "systemctl %s\n" "$*" >>"$MUTATION_CALLS"; exit 99 ;;
   esac'
 
@@ -584,6 +605,7 @@ prepare_custom_domain_check() {
       *" http://127.0.0.1:31415/api/health "*) printf "%s\n" "$HEALTH_JSON" ;;
       *" https://pi.dpao.la:8443/api/health "*)
         if [[ ${CADDY_HEALTH_FAIL:-0} == 1 ]]; then exit 22; fi
+        if [[ ${CURL_STALL:-0} == 1 ]]; then exit 28; fi
         printf "%s\n" "${CADDY_HEALTH_JSON:-$HEALTH_JSON}" ;;
       *" -o "*)
         if [[ ${BAD_KEY_DOWNLOAD:-} == 1 ]]; then printf bad-key; else printf key-bytes; fi >"${@: -1}" ;;
@@ -677,17 +699,30 @@ prepare_custom_domain_setup() {
   fi'
 
   stub_command systemctl 'printf "systemctl %s\n" "$*" >>"$CALLS"
+    unit="$PI_WEBUI_CADDY_ROOT/etc/systemd/system/pi-webui-caddy.service"
+    unit_binary="$PI_WEBUI_CADDY_ROOT/usr/local/lib/pi-webui/caddy"
     case "$*" in
       "--user show-environment"|"is-active tailscaled") exit 0 ;;
       "--user is-active pi-webui.service") [[ ${FIRSTPICK_INACTIVE:-0} != 1 ]] ;;
-      "is-active pi-webui-caddy.service") [[ -f "$TEST_ROOT/caddy-active" ]] ;;
-      "is-enabled pi-webui-caddy.service") [[ -f "$TEST_ROOT/caddy-enabled" ]] ;;
+      "is-active pi-webui-caddy.service")
+        if [[ ${STATE_QUERY_FAILS:-} == is-active ]]; then exit 1; fi
+        if [[ -f "$TEST_ROOT/caddy-active" ]]; then printf "active\n"; else printf "inactive\n"; exit 3; fi ;;
+      "is-enabled pi-webui-caddy.service")
+        if [[ ${STATE_QUERY_FAILS:-} == is-enabled ]]; then exit 1; fi
+        if [[ -f "$TEST_ROOT/caddy-enabled" ]]; then printf "enabled\n"; else printf "disabled\n"; exit 1; fi ;;
       "daemon-reload") printf "systemctl %s\n" "$*" >>"$MUTATION_CALLS" ;;
       "enable pi-webui-caddy.service")
         printf "systemctl %s\n" "$*" >>"$MUTATION_CALLS"
-        touch "$TEST_ROOT/caddy-enabled" ;;
+        touch "$TEST_ROOT/caddy-enabled"
+        [[ ${FAIL_POINT:-} != enable-partial ]] || exit 1 ;;
       "disable pi-webui-caddy.service")
         printf "systemctl %s\n" "$*" >>"$MUTATION_CALLS"
+        # systemd cannot remove an enablement symlink for a unit whose file no
+        # longer exists, so restoration has to disable before it deletes.
+        if [[ ! -f "$unit" ]]; then
+          printf "Failed to disable unit: Unit file pi-webui-caddy.service does not exist.\n" >&2
+          exit 1
+        fi
         rm -f "$TEST_ROOT/caddy-enabled" ;;
       "start pi-webui-caddy.service")
         printf "systemctl %s\n" "$*" >>"$MUTATION_CALLS"
@@ -696,13 +731,14 @@ prepare_custom_domain_setup() {
         if [[ -f "$TEST_ROOT/caddy-active" ]]; then exit 0; fi
         if [[ ${FAIL_POINT:-} == caddy-start ]]; then exit 1; fi
         touch "$TEST_ROOT/caddy-active"
-        sed -n "2p" "$PI_WEBUI_CADDY_ROOT/usr/local/lib/pi-webui/caddy" >"$TEST_ROOT/caddy-running" ;;
+        sed -n "2p" "$unit_binary" >"$TEST_ROOT/caddy-running" ;;
       "restart pi-webui-caddy.service")
         printf "systemctl %s\n" "$*" >>"$MUTATION_CALLS"
         rm -f "$TEST_ROOT/caddy-active" "$TEST_ROOT/caddy-running"
         if [[ ${FAIL_POINT:-} == caddy-start ]]; then exit 1; fi
         touch "$TEST_ROOT/caddy-active"
-        sed -n "2p" "$PI_WEBUI_CADDY_ROOT/usr/local/lib/pi-webui/caddy" >"$TEST_ROOT/caddy-running" ;;
+        sed -n "2p" "$unit_binary" >"$TEST_ROOT/caddy-running"
+        [[ ${FAIL_POINT:-} != restart-partial ]] || exit 1 ;;
       "stop pi-webui-caddy.service")
         printf "systemctl %s\n" "$*" >>"$MUTATION_CALLS"
         rm -f "$TEST_ROOT/caddy-active" "$TEST_ROOT/caddy-running" ;;
@@ -744,7 +780,7 @@ prepare_custom_domain_setup() {
             *) arguments+=("$1"); shift ;;
           esac
         done
-        if [[ ${FAIL_POINT:-} == publish && "${arguments[*]}" == *pi-webui-caddy.service* ]]; then exit 1; fi
+        if [[ ${FAIL_POINT:-} == publish && "${arguments[*]}" == *pi-webui-caddy.service.pi-webui-new* ]]; then exit 1; fi
         exec /usr/bin/install "${arguments[@]}" ;;
       mv)
         shift
@@ -824,7 +860,11 @@ prepare_custom_domain_migration() {
       "--user show-environment"|"is-active tailscaled") exit 0 ;;
       "--user is-active pi-webui.service") [[ ${FIRSTPICK_INACTIVE:-0} != 1 ]] ;;
       "is-active pi-webui-caddy.service")
-        [[ ${CADDY_SERVICE_INACTIVE:-0} != 1 && -f "$TEST_ROOT/caddy-active" ]] ;;
+        if [[ ${CADDY_SERVICE_INACTIVE:-0} != 1 && -f "$TEST_ROOT/caddy-active" ]]; then
+          printf "active\n"
+        else
+          printf "inactive\n"; exit 3
+        fi ;;
       "stop pi-webui-caddy.service")
         printf "systemctl %s\n" "$*" >>"$MUTATION_CALLS"
         rm -f "$TEST_ROOT/caddy-active" ;;
@@ -1428,6 +1468,49 @@ run_rollback() {
   done
 }
 
+@test "raw human status is parsed as an exact dual-stack address set" {
+  prepare_tailscale_check raw
+  run_tailscale_function 'route_state'
+  [ "$status" -eq 0 ]
+  [ "$output" = raw-exact ]
+
+  # The address lines are a set, so the daemon's family order does not matter.
+  local human
+  printf '%s\n' \
+    '|-- tcp://wsl.test.ts.net:443 (tailnet only)' \
+    '|-- tcp://[fd7a:115c:a1e0::1]:443' \
+    '|-- tcp://100.64.0.1:443' \
+    '|--> tcp://127.0.0.1:8443' >"$TEST_ROOT/route.txt"
+  run_tailscale_function 'route_state'
+  [ "$status" -eq 0 ]
+  [ "$output" = raw-exact ]
+
+  # Every malformed tree below is rejected: a missing address line, a
+  # duplicated address line, a foreign address line, a Funnel or
+  # TLS-terminated descriptor, an unbracketed IPv6 address, an extra line,
+  # and the pre-1.102.3 prefixless host line.
+  for human in \
+    '|-- tcp://wsl.test.ts.net:443 (tailnet only)\n|-- tcp://100.64.0.1:443\n|--> tcp://127.0.0.1:8443\n' \
+    '|-- tcp://wsl.test.ts.net:443 (tailnet only)\n|-- tcp://100.64.0.1:443\n|-- tcp://100.64.0.1:443\n|--> tcp://127.0.0.1:8443\n' \
+    '|-- tcp://wsl.test.ts.net:443 (tailnet only)\n|-- tcp://100.64.0.1:443\n|-- tcp://100.64.0.9:443\n|--> tcp://127.0.0.1:8443\n' \
+    '|-- tcp://wsl.test.ts.net:443 (Funnel on)\n|-- tcp://100.64.0.1:443\n|-- tcp://[fd7a:115c:a1e0::1]:443\n|--> tcp://127.0.0.1:8443\n' \
+    '|-- tcp://wsl.test.ts.net:443 (TLS-terminated TCP, tailnet only)\n|-- tcp://100.64.0.1:443\n|-- tcp://[fd7a:115c:a1e0::1]:443\n|--> tcp://127.0.0.1:8443\n' \
+    '|-- tcp://wsl.test.ts.net:443 (tailnet only)\n|-- tcp://100.64.0.1:443\n|-- tcp://fd7a:115c:a1e0::1:443\n|--> tcp://127.0.0.1:8443\n' \
+    '|-- tcp://wsl.test.ts.net:443 (tailnet only)\n|-- tcp://100.64.0.1:443\n|-- tcp://[fd7a:115c:a1e0::1]:443\n|--> tcp://127.0.0.1:8443\n|--> tcp://127.0.0.1:9999\n' \
+    'tcp://wsl.test.ts.net:443 (tailnet only)\n|-- tcp://100.64.0.1:443\n|-- tcp://[fd7a:115c:a1e0::1]:443\n|--> tcp://127.0.0.1:8443\n'; do
+    printf "$human" >"$TEST_ROOT/route.txt"
+    run_tailscale_function 'route_state'
+    [ "$status" -ne 0 ]
+  done
+
+  # The node address set itself must agree between Self and the node-level
+  # status the human formatter actually reads.
+  write_route raw
+  printf '%s\n' '{"BackendState":"Running","Version":"1.102.3","TailscaleIPs":["100.64.0.1"],"Self":{"Online":true,"DNSName":"wsl.test.ts.net.","TailscaleIPs":["100.64.0.1","fd7a:115c:a1e0::1"]}}' >"$TEST_ROOT/tailscale-status.json"
+  run_tailscale_function 'route_state'
+  [ "$status" -ne 0 ]
+}
+
 @test "route operations reject mismatched Tailscale client or daemon versions" {
   prepare_tailscale_check raw
   export TAILSCALE_CLIENT_VERSION=1.103.0
@@ -1464,10 +1547,10 @@ run_rollback() {
   write_route raw
   run_tailscale check
   [ "$status" -eq 0 ]
-  printf '  tcp://wsl.test.ts.net:443   (tailnet only)  \n  |--   tcp://100.64.0.1:443  \n  |-->   tcp://127.0.0.1:8443  \n' >"$TEST_ROOT/route.txt"
+  printf '  |--   tcp://wsl.test.ts.net:443   (tailnet only)  \n  |--   tcp://100.64.0.1:443  \n  |--  tcp://[fd7a:115c:a1e0::1]:443 \n  |-->   tcp://127.0.0.1:8443  \n' >"$TEST_ROOT/route.txt"
   run_tailscale check
   [ "$status" -eq 0 ]
-  printf 'tcp://wsl.test.ts.net:443\n|-- tcp://100.64.0.1:443\n|--> tcp://127.0.0.1:8443\n' >"$TEST_ROOT/route.txt"
+  printf 'tcp://wsl.test.ts.net:443\n|-- tcp://100.64.0.1:443\n|-- tcp://[fd7a:115c:a1e0::1]:443\n|--> tcp://127.0.0.1:8443\n' >"$TEST_ROOT/route.txt"
   run_tailscale check
   [ "$status" -ne 0 ]
 
@@ -1518,10 +1601,49 @@ run_rollback() {
   [ "$status" -ne 0 ]
   [[ "$output" == *"route remains after removal"* ]]
   unset SERVE_OFF_STICKS
-  printf '%s\n' '{"BackendState":"Running","Version":"1.102.3","Self":{"Online":false,"DNSName":"wsl.test.ts.net.","TailscaleIPs":["100.64.0.1"]}}' >"$TEST_ROOT/tailscale-status.json"
+  printf '%s\n' '{"BackendState":"Running","Version":"1.102.3","TailscaleIPs":["100.64.0.1","fd7a:115c:a1e0::1"],"Self":{"Online":false,"DNSName":"wsl.test.ts.net.","TailscaleIPs":["100.64.0.1","fd7a:115c:a1e0::1"]}}' >"$TEST_ROOT/tailscale-status.json"
   run_tailscale serve-off
   [ "$status" -eq 0 ]
   grep -Fx 'sudo tailscale serve --tcp=443 off' "$CALLS"
+}
+
+@test "transitional legacy ingress has explicit public publish and removal verbs" {
+  prepare_tailscale_check empty
+  run_tailscale help
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'serve-legacy'* && "$output" == *'serve-legacy-off'* ]]
+
+  run_tailscale serve-legacy
+  [ "$status" -eq 0 ]
+  grep -Fx 'sudo tailscale serve --bg --https=443 http://127.0.0.1:31415' "$CALLS"
+
+  : >"$CALLS"
+  run_tailscale serve-legacy-off
+  [ "$status" -eq 0 ]
+  grep -Fx 'sudo tailscale serve --https=443 off' "$CALLS"
+
+  # Idempotent from empty, and never applied over a foreign route.
+  : >"$CALLS"
+  run_tailscale serve-legacy-off
+  [ "$status" -eq 0 ]
+  ! grep -q 'tailscale serve' "$CALLS"
+
+  write_route foreign
+  : >"$CALLS"
+  run_tailscale serve-legacy
+  [ "$status" -ne 0 ]
+  run_tailscale serve-legacy-off
+  [ "$status" -ne 0 ]
+  ! grep -q 'tailscale serve' "$CALLS"
+
+  # The transitional publication requires the same strict local service the
+  # raw publication does.
+  write_route empty
+  rm -rf "$INSTALLED_RUNTIME"
+  : >"$CALLS"
+  run_tailscale serve-legacy
+  [ "$status" -ne 0 ]
+  [ ! -s "$CALLS" ]
 }
 
 @test "LAN detection excludes tailscale0 without assuming eth0" {
@@ -1749,6 +1871,23 @@ run_rollback() {
   [ "$status" -eq 0 ]
   [ "$(<"$CALLS")" = $'ordinary:\nordinary:--check' ]
   ! grep -q '^domain:' "$CALLS"
+
+  # The two Web UI recipes stay isolated from the custom-domain subsystem as
+  # well: they invoke only install.sh. The one intended behavior change is
+  # reached transitively through `tailscale.sh check`, which install.sh
+  # --check runs, and which now accepts empty or the raw route rather than
+  # the legacy route.
+  : >"$CALLS"
+  printf '#!/usr/bin/env bash\nprintf "webui:%%s\\n" "$*" >>"$CALLS"\n' \
+    >"$fixture/ai/pi/webui/install.sh"
+  chmod +x "$fixture/ai/pi/webui/install.sh" "$fixture/ai/pi/webui/custom-domain.sh"
+  run make -s -C "$fixture" ai-webui
+  [ "$status" -eq 0 ]
+  run make -s -C "$fixture" ai-webui-check
+  [ "$status" -eq 0 ]
+  [ "$(<"$CALLS")" = $'webui:--apply\nwebui:--check' ]
+  ! grep -q '^domain:' "$CALLS"
+  grep -Fq 'require_route_state empty raw-exact' "$REPO_ROOT/ai/pi/webui/tailscale.sh"
 }
 
 @test "custom-domain runbook documents the complete live-operation sequence" {
@@ -1767,6 +1906,8 @@ run_rollback() {
     'make ai-webui-domain-setup' \
     'custom-domain.sh migrate' \
     'custom-domain.sh rollback' \
+    'custom-domain.sh rollback --full' \
+    'tailscale.sh serve-legacy' \
     'HTTPS 443 -> http://127.0.0.1:31415' \
     'TCP 443 -> tcp://127.0.0.1:8443' \
     'browser WebSockets disconnect' \
@@ -1781,9 +1922,13 @@ run_rollback() {
     'classic GoDaddy' \
     'deprecated' \
     '_acme-challenge.pi.dpao.la' \
+    'empty or exactly the raw route' \
+    'refused' \
     'sudo systemd-creds encrypt --name=godaddy-api-token'; do
     grep -Fq -- "$text" "$runbook"
   done
+  # The automatic-restoration claim must not be unqualified.
+  ! grep -Fq 'Any preflight, verification, or confirmation failure automatically restores' "$runbook"
 }
 
 @test "runbook documents setup trust boundary accepted limitations and rollback" {
@@ -1791,7 +1936,8 @@ run_rollback() {
   for text in 'make ai-webui-check' 'make ai-webui' 'http://127.0.0.1:31415' \
     'full authority of the WSL account' 'loopback-only' 'initial landing worktree' \
     'other project tabs' 'permission modal' 'Restart' 'Update the pins' 'preserves' \
-    'serve-off` → rollback → Tailscale uninstall' 'before Pi or mise is upgraded or removed' \
+    'serve-legacy-off' 'custom-domain.sh rollback --full' \
+    'before Pi or mise is upgraded or removed' \
     '--remove-runtime' '--remove-worktree' 'journalctl --user -u pi-webui.service -e'; do
     grep -Fq -- "$text" "$runbook"
   done
@@ -2047,6 +2193,46 @@ run_rollback() {
   unset LAN_31415_REACHABLE
 }
 
+@test "listener checks stay closed against a large listener table" {
+  prepare_custom_domain_check legacy-exact
+
+  # A forbidden listener that matches early, followed by enough further
+  # output to fill a pipe buffer: a `grep -q` short-circuit would SIGPIPE the
+  # producer and, under `set -o pipefail`, be read as "no match".
+  {
+    printf '%s\n' 'LISTEN 0 4096 0.0.0.0:80 0.0.0.0:*'
+    printf '%s\n' 'LISTEN 0 4096 127.0.0.1:8443 0.0.0.0:*'
+    for i in $(seq 1 20000); do
+      printf 'LISTEN 0 4096 10.%d.%d.%d:9000 0.0.0.0:*\n' $((i / 65536 % 256)) $((i / 256 % 256)) $((i % 256))
+    done
+  } >"$TEST_ROOT/caddy-listeners"
+  run_custom_domain_function 'validate_caddy_listener'
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'unexpected Caddy listener on port 80'* ]]
+
+  printf '%s\n' 'LISTEN 0 4096 127.0.0.1:8443 0.0.0.0:*' >"$TEST_ROOT/caddy-listeners"
+  {
+    printf '%s\n' 'UNCONN 0 0 0.0.0.0:8443 0.0.0.0:*'
+    for i in $(seq 1 20000); do
+      printf 'UNCONN 0 0 10.%d.%d.%d:9000 0.0.0.0:*\n' $((i / 65536 % 256)) $((i / 256 % 256)) $((i % 256))
+    done
+  } >"$TEST_ROOT/caddy-listeners-udp"
+  run_custom_domain_function 'validate_caddy_listener'
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'UDP listener on port 8443'* ]]
+  : >"$TEST_ROOT/caddy-listeners-udp"
+
+  # A large but clean table still passes.
+  {
+    printf '%s\n' 'LISTEN 0 4096 127.0.0.1:8443 0.0.0.0:*'
+    for i in $(seq 1 20000); do
+      printf 'LISTEN 0 4096 10.%d.%d.%d:9000 0.0.0.0:*\n' $((i / 65536 % 256)) $((i / 256 % 256)) $((i % 256))
+    done
+  } >"$TEST_ROOT/caddy-listeners"
+  run_custom_domain_function 'validate_caddy_listener'
+  [ "$status" -eq 0 ]
+}
+
 @test "Caddy TLS health validation rejects untrusted invalid or unhealthy backend certificates" {
   prepare_custom_domain_check legacy-exact
   run_custom_domain_function 'validate_caddy_tls_health'
@@ -2074,6 +2260,92 @@ run_rollback() {
   run_custom_domain_function 'validate_caddy_tls_health'
   [ "$status" -ne 0 ]
   [[ "$output" == *'health identity is invalid'* ]]
+}
+
+@test "network and TLS probes are explicitly bounded and fail on a stall" {
+  prepare_custom_domain_check legacy-exact
+  run_custom_domain_function 'validate_caddy_tls_health'
+  [ "$status" -eq 0 ]
+
+  # Every probing curl carries an explicit connect and total bound.
+  local line
+  while IFS= read -r line; do
+    [[ "$line" == *'--connect-timeout '* ]]
+    [[ "$line" == *'--max-time '* ]]
+  done < <(grep '^curl ' "$CALLS")
+
+  # openssl s_client is bounded by an explicit external timeout.
+  run_custom_domain_function 'command -v timeout >/dev/null && printf found\\n'
+  [ "$status" -eq 0 ]
+  export TLS_STALL=1
+  run_custom_domain_function 'validate_caddy_tls_health'
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'is not trusted'* ]]
+  unset TLS_STALL
+
+  # A stalled proxied health request is a failure, not a hang.
+  export CURL_STALL=1
+  run_custom_domain_function 'validate_caddy_tls_health'
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'health endpoint failed'* ]]
+  unset CURL_STALL
+
+  # The documented readiness bound is truthful in the worst case.
+  run_custom_domain_function 'caddy_ready_budget; printf "%s %s\\n" "$CADDY_READY_ATTEMPTS" "$CADDY_READY_INTERVAL"'
+  [ "$status" -eq 0 ]
+  attempts=${output% *}
+  interval=${output#* }
+  run_custom_domain_function 'printf "%s\\n" "$CADDY_READY_PROBE_TIMEOUT"'
+  [ "$status" -eq 0 ]
+  probe=$output
+  [ $((attempts * probe + (attempts - 1) * interval)) -le 300 ]
+}
+
+@test "condition-context helpers refuse output from a failing command" {
+  prepare_custom_domain_check legacy-exact
+
+  # Each stub prints otherwise-valid output and then exits nonzero: no
+  # classification, DNS view, or check may succeed on it.
+  stub_command tailscale 'case "$*" in
+    "version --json") printf "{\"short\":\"1.102.3\"}\n"; exit 1 ;;
+    "status --json") cat "$TEST_ROOT/tailscale-status.json" ;;
+    "serve status --json") cat "$TEST_ROOT/route.json" ;;
+    "funnel status --json") cat "$TEST_ROOT/funnel.json" ;;
+    "serve status") cat "$TEST_ROOT/route.txt" ;;
+    *) exit 98 ;;
+  esac'
+  run_tailscale_function 'route_state'
+  [ "$status" -ne 0 ]
+  [[ "$output" != *legacy-exact* && "$output" != *raw-exact* ]]
+  run_tailscale_function 'if require_tailscale_version; then printf "accepted\n"; fi'
+  [[ "$output" != *accepted* ]]
+  run_custom_domain check
+  [ "$status" -ne 0 ]
+  [ ! -s "$MUTATION_CALLS" ]
+
+  : >"$MUTATION_CALLS"
+  stub_command dig 'shift
+    case "$1" in
+      NS) cat "$TEST_ROOT/dns-ns" ;;
+      A) cat "$TEST_ROOT/dns-a"; exit 1 ;;
+      AAAA) cat "$TEST_ROOT/dns-aaaa" ;;
+      CNAME) cat "$TEST_ROOT/dns-cname" ;;
+      *) exit 1 ;;
+    esac'
+  stub_command tailscale 'case "$*" in
+    "status --json") cat "$TEST_ROOT/tailscale-status.json" ;;
+    "version --json") printf "{\"short\":\"1.102.3\"}\n" ;;
+    "serve status --json") cat "$TEST_ROOT/route.json" ;;
+    "funnel status --json") cat "$TEST_ROOT/funnel.json" ;;
+    "serve status") cat "$TEST_ROOT/route.txt" ;;
+    *) exit 98 ;;
+  esac'
+  run_custom_domain_function 'if validate_dns_view "" 100.64.0.1; then printf "accepted\n"; fi'
+  [[ "$output" != *accepted* ]]
+  [[ "$output" == *'cannot query A'* ]]
+  run_custom_domain check
+  [ "$status" -ne 0 ]
+  [ ! -s "$MUTATION_CALLS" ]
 }
 
 @test "check_domain classifies ready-to-migrate raw-exact and pre-install states and refuses foreign routes" {
@@ -2120,11 +2392,18 @@ run_rollback() {
   run_custom_domain
   [ "$status" -eq 2 ]
   [[ "$output" == *'usage: '*'check|setup|migrate|rollback'* ]]
+  [[ "$output" == *'--full'* ]]
 
   run_custom_domain bogus
   [ "$status" -eq 2 ]
 
   run_custom_domain check setup
+  [ "$status" -eq 2 ]
+
+  run_custom_domain rollback --bogus
+  [ "$status" -eq 2 ]
+
+  run_custom_domain check --full
   [ "$status" -eq 2 ]
 }
 
@@ -2341,6 +2620,81 @@ run_rollback() {
   [ "$(fingerprint_paths "$CADDY_ROOT")" = "$before" ]
   ! grep -q '^go ' "$CALLS"
   assert_no_caddy_publication
+}
+
+@test "setup refuses a foreign or unidentifiable existing Caddy binary before building" {
+  prepare_custom_domain_setup legacy-exact prior
+  before=$(fingerprint_paths "$CADDY_ROOT")
+
+  export CADDY_VERSION_OUTPUT='v2.10.0 h1:other'
+  run_custom_domain setup
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'is not v2.11.4'* ]]
+  export CADDY_VERSION_OUTPUT='v2.11.4 h1:test'
+
+  export CADDY_MODULES='dns.providers.cloudflare github.com/caddy-dns/cloudflare'
+  run_custom_domain setup
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'must list exactly one dns.providers.godaddy module'* ]]
+  unset CADDY_MODULES
+
+  export CADDY_MODULE_VERSIONS='dns.providers.godaddy v1.1.0 github.com/caddy-dns/godaddy'
+  run_custom_domain setup
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'v1.2.0'* ]]
+  unset CADDY_MODULE_VERSIONS
+
+  chmod 0644 "$CADDY_ROOT/usr/local/lib/pi-webui/caddy"
+  run_custom_domain setup
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'not executable'* ]]
+  chmod 0755 "$CADDY_ROOT/usr/local/lib/pi-webui/caddy"
+
+  [ "$(fingerprint_paths "$CADDY_ROOT")" = "$before" ]
+  ! grep -q '^go ' "$CALLS"
+  assert_no_caddy_publication
+}
+
+@test "setup aborts before publication when a systemd state query fails" {
+  prepare_custom_domain_setup legacy-exact prior
+  before=$(fingerprint_paths "$CADDY_ROOT")
+
+  local query
+  for query in is-enabled is-active; do
+    : >"$CALLS"
+    : >"$MUTATION_CALLS"
+    export STATE_QUERY_FAILS="$query"
+    run_custom_domain setup
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"cannot determine"* ]]
+    [ "$(fingerprint_paths "$CADDY_ROOT")" = "$before" ]
+    ! grep -q '^sudo install ' "$CALLS"
+    ! compgen -G "$STATE_ROOT/.caddy-setup.*" >/dev/null
+    unset STATE_QUERY_FAILS
+  done
+}
+
+@test "setup restores after a mutating systemctl call that then fails" {
+  prepare_custom_domain_setup legacy-exact
+  local scenario
+  for scenario in enable-partial restart-partial; do
+    : >"$CALLS"
+    : >"$MUTATION_CALLS"
+    export FAIL_POINT="$scenario"
+    run_custom_domain setup
+    [ "$status" -ne 0 ]
+
+    while IFS= read -r path; do
+      [ ! -e "$path" ]
+    done < <(managed_caddy_paths)
+    [ ! -e "$TEST_ROOT/caddy-enabled" ]
+    [ ! -e "$TEST_ROOT/caddy-active" ]
+    [ ! -e "$TEST_ROOT/caddy-running" ]
+    grep -q '^systemctl disable pi-webui-caddy.service$' "$MUTATION_CALLS"
+    [ -f "$CADDY_CREDENTIAL" ]
+    ! compgen -G "$STATE_ROOT/.caddy-setup.*" >/dev/null
+    unset FAIL_POINT
+  done
 }
 
 @test "setup restores an absent prior installation after a service start failure" {
@@ -2731,6 +3085,69 @@ run_rollback() {
   [ "$probe" -lt "$stop" ]
 }
 
+@test "custom-domain rollback proves the old URL from an already-legacy route" {
+  prepare_custom_domain_migration legacy-exact
+  export LEGACY_HEALTH_FAIL=1
+  run_custom_domain rollback
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'https://wsl.test.ts.net/api/health'* ]]
+  [ ! -s "$ROUTE_ORDER" ]
+  [ ! -s "$MUTATION_CALLS" ]
+  while IFS= read -r path; do
+    [ -e "$path" ]
+  done < <(managed_caddy_paths)
+  unset LEGACY_HEALTH_FAIL
+
+  reset_migration_state legacy-exact
+  run_custom_domain rollback
+  [ "$status" -eq 0 ]
+  # No route command runs: the legacy route is reported as already present
+  # rather than republished.
+  [ ! -s "$ROUTE_ORDER" ]
+  [[ "$output" == *'already published'* ]]
+  grep -q 'https://wsl.test.ts.net/api/health' "$CALLS"
+  probe=$(grep -n 'https://wsl.test.ts.net/api/health' "$CALLS" | cut -d: -f1 | head -1)
+  stop=$(grep -n '^sudo systemctl stop pi-webui-caddy.service$' "$CALLS" | cut -d: -f1 | head -1)
+  [ "$probe" -lt "$stop" ]
+  while IFS= read -r path; do
+    [ ! -e "$path" ]
+  done < <(managed_caddy_paths)
+}
+
+@test "custom-domain rollback --full leaves Serve empty and permits Web UI rollback" {
+  prepare_custom_domain_migration raw
+  run_custom_domain rollback --full
+  [ "$status" -eq 0 ]
+  [ "$(route_call_order)" = 'raw-off' ]
+  [ "$(current_route_fixture)" = empty ]
+  [[ "$output" == *'rollback.sh'* ]]
+  while IFS= read -r path; do
+    [ ! -e "$path" ]
+  done < <(managed_caddy_paths)
+  [ -f "$CADDY_CREDENTIAL" ]
+  [ -f "$CADDY_STATE_DIR/acme.json" ]
+
+  # The transitional legacy route is removed the same way.
+  make_caddy_fixture
+  touch "$TEST_ROOT/caddy-active"
+  reset_migration_state legacy-exact
+  run_custom_domain rollback --full
+  [ "$status" -eq 0 ]
+  [ "$(route_call_order)" = 'legacy-off' ]
+  [ "$(current_route_fixture)" = empty ]
+
+  # A foreign route is never removed.
+  make_caddy_fixture
+  touch "$TEST_ROOT/caddy-active"
+  reset_migration_state foreign
+  run_custom_domain rollback --full
+  [ "$status" -ne 0 ]
+  [ ! -s "$ROUTE_ORDER" ]
+  while IFS= read -r path; do
+    [ -e "$path" ]
+  done < <(managed_caddy_paths)
+}
+
 @test "custom-domain rollback preserves certificates credential Pi state and Tailscale identity" {
   prepare_custom_domain_migration raw
   before=$(fingerprint_paths "$CADDY_STATE_DIR" "$CADDY_CREDENTIAL" "$HOME/.pi" \
@@ -2800,7 +3217,14 @@ run_rollback() {
   write_route raw
   run_rollback
   [ "$status" -ne 0 ]
-  [[ "$output" == *'custom-domain.sh rollback'* ]]
+  [[ "$output" == *'custom-domain.sh rollback --full'* ]]
+  [ ! -s "$MUTATION_CALLS" ]
+
+  # The transitional legacy route names its own explicit removal verb.
+  write_route legacy-exact
+  run_rollback
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'serve-legacy-off'* ]]
   [ ! -s "$MUTATION_CALLS" ]
 }
 

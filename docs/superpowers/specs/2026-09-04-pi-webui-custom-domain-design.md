@@ -321,7 +321,28 @@ closed on unexpected nonempty keys or disagreement. It recognizes:
 
 It rejects every other state, including Funnel, HTTP or HTTPS termination on the
 new route, `TerminateTLS`, Web handlers, extra ports, extra targets, foreign
-backends, and unknown nonempty fields. Acceptance is caller-specific:
+backends, and unknown nonempty fields.
+
+The human `tailscale serve status` tree is parsed against the exact 1.102.3
+formatter (`cmd/tailscale/cli/serve_legacy.go`, `printTCPStatusTree` and
+`printWebStatusTree`, dispatched from `serve_status.go`). A node-level raw TCP
+forward renders as:
+
+```text
+|-- tcp://<magicdns-name>:443 (tailnet only)
+|-- tcp://<tailscale-ip>:443          one line per Status.TailscaleIPs
+|--> tcp://127.0.0.1:8443
+```
+
+Address lines are rendered through `net.JoinHostPort`, so an IPv6 address is
+bracketed and a dual-stack node prints one line per family. The classifier
+therefore compares the address lines as a set against the node's own
+`Self.TailscaleIPs`, requires each expected address exactly once and no extra
+line, and requires the exact `(tailnet only)` descriptor: `Funnel on` and
+`TLS-terminated TCP` change that descriptor and are refused. It also refuses to
+classify when `Status.TailscaleIPs` and `Self.TailscaleIPs` disagree.
+
+Acceptance is caller-specific:
 
 - `tailscale.sh check` and normal post-change validation accept only `empty` or
   `raw-exact`;
@@ -357,6 +378,12 @@ sudo tailscale serve --tcp=443 off
 sudo tailscale serve --bg --https=443 http://127.0.0.1:31415
 ```
 
+`tailscale.sh serve` and `serve-off` own the raw route exclusively. Because the
+raw route is meaningless before Caddy exists, the transitional legacy route has
+its own explicit public verbs, `serve-legacy` and `serve-legacy-off`, which
+first install and full uninstall use. Both remain exact and Funnel-free and
+reuse the same classifier.
+
 ## Setup flow
 
 The explicit setup target is candidate-first and does not alter Tailscale Serve:
@@ -373,19 +400,35 @@ The explicit setup target is candidate-first and does not alter Tailscale Serve:
 5. Require the encrypted credential to exist; validate GoDaddy API access
    without exposing it.
 6. Refuse foreign Caddy binaries, configs, units, state ownership, or listeners.
+   An existing binary at the managed path is reconcilable only when it is
+   executable and reports exactly Caddy `v2.11.4` with exactly
+   `dns.providers.godaddy` at `v1.2.0` from `github.com/caddy-dns/godaddy`
+   (`caddy list-modules --packages` and `--versions --packages`).
 7. Build and validate a private pinned Caddy candidate.
 8. Render and validate the exact Caddyfile, entrypoint, and system unit.
 9. Publish only the dedicated managed paths, reload systemd, and start/enable
    `pi-webui-caddy.service`.
-10. Wait for DNS-01 issuance and verify local certificate trust, hostname,
-    expiry, loopback listener, and proxied Firstp1ck health.
+10. Wait, bounded, for DNS-01 issuance and verify local certificate trust,
+    hostname, expiry, loopback listener, and proxied Firstp1ck health. The
+    budget is 20 attempts, a 10-second probe bound, and a 5-second interval,
+    so the worst case stays inside the documented five minutes. Every
+    readiness, health, LAN, and legacy probe carries explicit connect and
+    total timeouts, and each `openssl s_client` handshake is bounded by
+    `timeout`.
 11. Leave the legacy Serve route untouched and report readiness for a separately
     approved migration.
 
 A pre-publication failure removes only candidate files. A failure after managed
 publication restores the prior managed binary, Caddyfile, entrypoint, unit,
-enablement, and activity where they existed. It does not delete certificates,
-credentials, Pi state, Tailscale state, or unrelated Caddy installations.
+enablement, and activity where they existed. Each cleanup flag is raised before
+the call it describes, so a command that mutates and then reports failure still
+triggers restoration; an enablement introduced by the run is undone while the
+unit file still exists, because `systemctl disable` cannot remove an enablement
+symlink for a deleted unit. Prior enablement and activity are read from
+systemd's state words rather than from exit status alone, so a D-Bus or manager
+error aborts before publication instead of being recorded as
+disabled/inactive. Restoration does not delete certificates, credentials, Pi
+state, Tailscale state, or unrelated Caddy installations.
 
 ## Migration transaction
 
@@ -440,11 +483,17 @@ from a client with Tailscale disconnected.
 
 Custom-domain rollback has two modes:
 
-- migration rollback removes only `raw-exact`, restores `legacy-exact`, verifies
-  the old URL, then stops/disables the managed Caddy service;
-- full Web UI removal first removes only `raw-exact`, removes the managed Caddy
-  service artifacts, leaves Serve empty, and then permits the existing Web UI
-  rollback flow.
+- migration rollback (`custom-domain.sh rollback`) removes `raw-exact`,
+  restores `legacy-exact`, verifies the old URL, then stops/disables and
+  removes the managed Caddy service. From an already-`legacy-exact` route it
+  reports that no restoration was needed and still proves the old URL before
+  teardown;
+- full removal (`custom-domain.sh rollback --full`) removes the exact raw or
+  exact transitional legacy route, leaves Serve empty, removes the managed
+  Caddy service artifacts, and then permits the existing Web UI rollback flow.
+
+The Web UI rollback refuses to run while either route is published and names
+the exact command that removes it.
 
 Default rollback preserves:
 

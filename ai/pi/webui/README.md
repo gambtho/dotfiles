@@ -29,13 +29,24 @@ ai/pi/webui/tailscale.sh up
 make ai-webui-check
 # review reported state and obtain separate approval before applying
 make ai-webui
-ai/pi/webui/tailscale.sh serve
-make ai-webui-check
+ai/pi/webui/tailscale.sh serve-legacy
 ```
 
 `up` authenticates interactively and never accepts an auth key. Check mode is
 read-only and must precede every separately approved apply. Review its reported
 state and obtain approval rather than expecting an apply plan.
+
+`serve-legacy` publishes the transitional MagicDNS HTTPS route
+(`HTTPS 443 -> http://127.0.0.1:31415`), which is the only ingress available
+before the custom-domain Caddy service exists and the only state custom-domain
+setup accepts. `serve` and `serve-off` own the raw custom-domain route
+exclusively and must not be used before Caddy is installed and healthy: raw
+forwarding to an absent `127.0.0.1:8443` publishes a dead route.
+
+While the transitional legacy route is published, `make ai-webui-check`
+intentionally refuses it: this branch's accepted steady states are empty Serve
+or the raw custom-domain route. Use `ai/pi/webui/custom-domain.sh check` in
+that window, and rerun `make ai-webui-check` once migration has completed.
 
 From Windows, open exactly `http://127.0.0.1:31415`. A tailnet client opens the
 `https://...` URL printed by `tailscale serve status`.
@@ -75,7 +86,9 @@ mise exec -- npm install --package-lock-only --ignore-scripts --omit=optional \
 Review the complete lock diff and run focused and repository checks before merging.
 
 Before pulling changed runtime pins on an installed host, use the old checkout
-to remove Serve, run `ai/pi/webui/rollback.sh`, then run it again with
+to remove Serve (`ai/pi/webui/tailscale.sh serve-legacy-off`, or
+`ai/pi/webui/custom-domain.sh rollback --full` when the custom domain is
+installed), run `ai/pi/webui/rollback.sh`, then run it again with
 `--remove-runtime`. Pull, update Pi if needed, check, obtain approval, apply,
 restore Serve, and check again. Rollback must run before Pi or mise is upgraded or removed
 because the exact Pi identity is required to prove the managed unit.
@@ -152,9 +165,12 @@ listener `127.0.0.1:31415`; Funnel remains disabled throughout.
    exact route (`New: TCP 443 -> tcp://127.0.0.1:8443`), verifies TLS and
    health through the tailnet, and prompts for a separate trusted-tailnet-
    client confirmation before disarming restoration. Interruption is normally
-   several seconds; browser WebSockets disconnect during the switch. Any
-   preflight, verification, or confirmation failure automatically restores
-   the legacy route.
+   several seconds; browser WebSockets disconnect during the switch. A
+   preflight, verification, or confirmation failure restores the legacy route
+   automatically only when the observed route is
+   empty or exactly the raw route; an unexpected or foreign concurrent route
+   is refused rather than overwritten, and is reported with the exact manual
+   recovery commands.
 8. Verify: a trusted tailnet client reaches `https://pi.dpao.la` successfully;
    an off-tailnet client fails to connect; Caddy and the Tailscale Serve
    backend expose only loopback listeners and no LAN listener; Funnel remains
@@ -162,8 +178,9 @@ listener `127.0.0.1:31415`; Funnel remains disabled throughout.
    reboot both restore service correctly; and no orphaned process remains.
    The old `.ts.net` URL is no longer valid once migration succeeds.
 9. Recover with `ai/pi/webui/custom-domain.sh rollback`, which restores the
-   legacy route and removes only the managed Caddy service artifacts, or with
-   the exact route commands printed by the migration plan
+   legacy route, proves the old URL answers, and removes only the managed
+   Caddy service artifacts, or with the exact route commands printed by the
+   migration plan
    (`sudo tailscale serve --tcp=443 off; sudo tailscale serve --bg --https=443
    http://127.0.0.1:31415`) if the script itself is unavailable. Rollback
    preserves certificates, the encrypted credential, Pi state, and the
@@ -171,13 +188,31 @@ listener `127.0.0.1:31415`; Funnel remains disabled throughout.
 
 ## Rollback and uninstall
 
-The mandatory operator order is **`serve-off` → rollback → Tailscale uninstall**:
+The mandatory operator order is **remove ingress → Web UI rollback → Tailscale
+uninstall**. Which ingress removal applies depends on what is published:
 
 ```bash
+# custom domain installed (raw or transitional legacy route)
+ai/pi/webui/custom-domain.sh rollback --full
+
+# custom domain never installed, transitional legacy route published
+ai/pi/webui/tailscale.sh serve-legacy-off
+
+# raw route published with the Caddy service already removed
 ai/pi/webui/tailscale.sh serve-off
+
+# then, in every case
 ai/pi/webui/rollback.sh
 ai/pi/webui/tailscale.sh uninstall
 ```
+
+`custom-domain.sh rollback` (without `--full`) is the migration rollback: it
+returns ingress to the transitional legacy route, proves the old MagicDNS URL
+answers, and removes the managed Caddy artifacts. `custom-domain.sh rollback
+--full` is the uninstall path: it takes the exact raw or exact legacy route
+down to empty, removes the same artifacts, and leaves Serve empty so
+`rollback.sh` can run. Both preserve certificates, ACME state, and the
+encrypted credential.
 
 Default rollback removes only the proven service and unit. It preserves the
 runtime, worktrees, Pi settings, transcripts, supervisor state, backups,

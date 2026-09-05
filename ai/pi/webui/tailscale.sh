@@ -32,7 +32,10 @@ require_tailscale_daemon() {
 require_tailscale() {
   local status
   require_tailscale_daemon
-  status=$(tailscale status --json) || fail 'cannot read Tailscale status'
+  status=$(tailscale status --json) || {
+    fail 'cannot read Tailscale status'
+    return 1
+  }
   node - "$status" <<'NODE' || fail 'Tailscale is not authenticated and online'
 const value = JSON.parse(process.argv[2]);
 if (value.BackendState !== 'Running' || value.Self?.Online !== true) process.exit(1);
@@ -41,8 +44,14 @@ NODE
 
 require_tailscale_version() {
   local client status
-  client=$(tailscale version --json) || fail 'cannot read Tailscale client version'
-  status=$(tailscale status --json) || fail 'cannot read Tailscale daemon version'
+  client=$(tailscale version --json) || {
+    fail 'cannot read Tailscale client version'
+    return 1
+  }
+  status=$(tailscale status --json) || {
+    fail 'cannot read Tailscale daemon version'
+    return 1
+  }
   node - "$client" "$status" "$SUPPORTED_TAILSCALE_VERSION" <<'NODE' || fail 'unsupported Tailscale client or daemon version'
 const [clientText, statusText, supported] = process.argv.slice(2);
 const client = JSON.parse(clientText);
@@ -55,10 +64,22 @@ NODE
 route_state() {
   local serve funnel human status
   require_tailscale_version || return 1
-  serve=$(tailscale serve status --json) || fail 'cannot read Tailscale Serve state'
-  funnel=$(tailscale funnel status --json) || fail 'cannot read Tailscale Funnel state'
-  human=$(tailscale serve status) || fail 'cannot read human Tailscale Serve status'
-  status=$(tailscale status --json) || fail 'cannot read Tailscale status'
+  serve=$(tailscale serve status --json) || {
+    fail 'cannot read Tailscale Serve state'
+    return 1
+  }
+  funnel=$(tailscale funnel status --json) || {
+    fail 'cannot read Tailscale Funnel state'
+    return 1
+  }
+  human=$(tailscale serve status) || {
+    fail 'cannot read human Tailscale Serve status'
+    return 1
+  }
+  status=$(tailscale status --json) || {
+    fail 'cannot read Tailscale status'
+    return 1
+  }
   node - "$serve" "$funnel" "$human" "$LEGACY_BACKEND" "$RAW_BACKEND" "$status" <<'NODE' || fail 'Tailscale route is foreign, additional, public, or ambiguous'
 const [serveText, funnelText, human, legacyBackend, rawBackend, statusText] = process.argv.slice(2);
 const canonical = value => {
@@ -77,23 +98,53 @@ const serve = JSON.parse(serveText);
 const funnel = JSON.parse(funnelText);
 const status = JSON.parse(statusText);
 const dns = status.Self?.DNSName;
-const ip = Array.isArray(status.Self?.TailscaleIPs) ? status.Self.TailscaleIPs[0] : undefined;
 if (typeof dns !== 'string' || !dns.replace(/\.$/, '')) process.exit(1);
 if (JSON.stringify(canonical(serve)) !== JSON.stringify(canonical(funnel))) process.exit(1);
 if (empty(serve)) { console.log('empty'); process.exit(0); }
 if (!serve || Array.isArray(serve) || typeof serve !== 'object') process.exit(1);
 if (Object.keys(serve).some(key => !['TCP', 'Web', 'AllowFunnel'].includes(key) && !empty(serve[key]))) process.exit(1);
 const host = dns.replace(/\.$/, '');
+// Human `tailscale serve status` lines, trimmed and internally collapsed so
+// only the formatter's tokens matter, never its column padding.
+const lines = human.split(/\r?\n/).map(line => line.trim().replace(/\s+/g, ' ')).filter(Boolean);
 const tcpKeys = Object.keys(serve.TCP || {});
 const isRaw = tcpKeys.length === 1 && tcpKeys[0] === '443' &&
   serve.TCP['443']?.TCPForward === rawBackend &&
   Object.entries(serve.TCP['443']).every(([key, value]) => key === 'TCPForward' || empty(value)) &&
   empty(serve.Web) && empty(serve.AllowFunnel);
 if (isRaw) {
-  if (typeof ip !== 'string' || !ip) process.exit(1);
-  const lines = human.split(/\r?\n/).map(line => line.trim().replace(/\s+/g, ' ')).filter(Boolean);
-  if (lines.length !== 3 || lines[0] !== `tcp://${host}:443 (tailnet only)` ||
-      lines[1] !== `|-- tcp://${ip}:443` || lines[2] !== `|--> tcp://${rawBackend}`) process.exit(1);
+  // Tailscale 1.102.3 renders a node-level raw TCP forward in
+  // cmd/tailscale/cli/serve_legacy.go printTCPStatusTree as exactly:
+  //   |-- tcp://<dnsName>:<port> (tailnet only)
+  //   |-- tcp://<addr>:<port>            once per st.TailscaleIPs, in order,
+  //                                      through net.JoinHostPort, so an IPv6
+  //                                      address is bracketed
+  //   |--> tcp://<TCPForward>
+  // Funnel and TLS termination change the first line's descriptor, so the
+  // exact-match below is what keeps this classification tailnet-only and
+  // termination-free. The address lines are compared as a set: a dual-stack
+  // node prints one line per family and the order is the daemon's.
+  const selfIps = Array.isArray(status.Self?.TailscaleIPs) ? status.Self.TailscaleIPs : [];
+  if (!selfIps.length || selfIps.some(ip => typeof ip !== 'string' || !ip)) process.exit(1);
+  // The formatter reads the node-level Status.TailscaleIPs; refuse to
+  // classify at all when the two views of the node's addresses disagree.
+  const nodeIps = status.TailscaleIPs;
+  if (nodeIps !== undefined) {
+    if (!Array.isArray(nodeIps) || nodeIps.length !== selfIps.length ||
+        [...nodeIps].sort().join('|') !== [...selfIps].sort().join('|')) process.exit(1);
+  }
+  const address = ip => (ip.includes(':') ? `[${ip}]` : ip);
+  const expected = new Set(selfIps.map(ip => `|-- tcp://${address(ip)}:443`));
+  if (expected.size !== selfIps.length) process.exit(1);
+  if (lines.length !== selfIps.length + 2) process.exit(1);
+  if (lines[0] !== `|-- tcp://${host}:443 (tailnet only)`) process.exit(1);
+  if (lines[lines.length - 1] !== `|--> tcp://${rawBackend}`) process.exit(1);
+  const seen = new Set();
+  for (const line of lines.slice(1, -1)) {
+    if (!expected.has(line) || seen.has(line)) process.exit(1);
+    seen.add(line);
+  }
+  if (seen.size !== expected.size) process.exit(1);
   console.log('raw-exact');
   process.exit(0);
 }
@@ -110,7 +161,8 @@ if (!handlers || Object.keys(handlers).length !== 1 || !handlers['/'] ||
     handlers['/'].Proxy !== legacyBackend || Object.entries(handlers['/']).some(([key, value]) => key !== 'Proxy' && !empty(value))) process.exit(1);
 const allow = serve.AllowFunnel;
 if (allow && (Object.keys(allow).length !== 1 || allow[hostKey] !== false)) process.exit(1);
-const lines = human.split(/\r?\n/).map(line => line.trim().replace(/\s+/g, ' ')).filter(Boolean);
+// printWebStatusTree renders the URL line without a prefix and one padded
+// "|-- <mount> <type> <description>" line per handler.
 if (lines.length !== 2 || lines[0] !== `https://${host} (tailnet only)` ||
     lines[1] !== `|-- / proxy ${legacyBackend}`) process.exit(1);
 console.log('legacy-exact');
@@ -140,25 +192,36 @@ check_local_service() {
   if path_exists "$INSTALLED_RUNTIME"; then
     "$SOURCE_ROOT/bin/validate-pi-webui" --installed-runtime "$INSTALLED_RUNTIME"
   else
-    [[ "$strict" -eq 0 ]] || fail 'installed runtime is unavailable'
+    [[ "$strict" -eq 0 ]] || {
+      fail 'installed runtime is unavailable'
+      return 1
+    }
   fi
   if path_exists "$UNIT_PATH"; then
     validate_unit "$UNIT_PATH"
   else
-    [[ "$strict" -eq 0 ]] || fail 'installed service unit is unavailable'
+    [[ "$strict" -eq 0 ]] || {
+      fail 'installed service unit is unavailable'
+      return 1
+    }
   fi
   if systemctl --user is-active pi-webui.service >/dev/null 2>&1; then
     validate_active_health "$PI_LAUNCHER"
   else
-    [[ "$strict" -eq 0 ]] || fail 'Pi Web UI service is not active'
+    [[ "$strict" -eq 0 ]] || {
+      fail 'Pi Web UI service is not active'
+      return 1
+    }
   fi
 }
 
 check_lan() {
   local addresses interface address count=0
   addresses=$(ip -o -4 addr show scope global |
-    awk '{ interface=$2; for (i=3; i<=NF; i++) if ($i == "inet") { split($(i+1), a, "/"); print interface, a[1] } }') ||
+    awk '{ interface=$2; for (i=3; i<=NF; i++) if ($i == "inet") { split($(i+1), a, "/"); print interface, a[1] } }') || {
     fail 'cannot inspect global IPv4 addresses'
+    return 1
+  }
   while read -r interface address; do
     [[ -n "$address" && "$interface" != tailscale0 ]] || continue
     ((count += 1))
@@ -184,13 +247,21 @@ install_tailscale() {
   require_supported_platform
   set_tailscale_paths
   if path_exists "$KEYRING"; then
-    [[ -f "$KEYRING" && ! -L "$KEYRING" ]] || fail 'existing Tailscale keyring is not a regular file'
+    [[ -f "$KEYRING" && ! -L "$KEYRING" ]] || {
+      fail 'existing Tailscale keyring is not a regular file'
+      return 1
+    }
     hash=$(sha256sum "$KEYRING" | awk '{print $1}')
-    [[ "$hash" == "$KEY_SHA" ]] || fail 'existing Tailscale keyring is not managed'
+    [[ "$hash" == "$KEY_SHA" ]] || {
+      fail 'existing Tailscale keyring is not managed'
+      return 1
+    }
   fi
   if path_exists "$APT_SOURCE"; then
-    [[ -f "$APT_SOURCE" && ! -L "$APT_SOURCE" && "$(<"$APT_SOURCE")" == "$SOURCE_LINE" ]] ||
+    [[ -f "$APT_SOURCE" && ! -L "$APT_SOURCE" && "$(<"$APT_SOURCE")" == "$SOURCE_LINE" ]] || {
       fail 'existing Tailscale apt source is not managed'
+      return 1
+    }
   fi
   temporary=$(mktemp -d)
   chmod 0700 "$temporary"
@@ -199,7 +270,10 @@ install_tailscale() {
   source=$temporary/tailscale.list
   curl --fail --silent --show-error --location "$KEY_URL" -o "$key"
   hash=$(sha256sum "$key" | awk '{print $1}')
-  [[ "$hash" == "$KEY_SHA" ]] || fail 'downloaded Tailscale key has the wrong SHA-256'
+  [[ "$hash" == "$KEY_SHA" ]] || {
+    fail 'downloaded Tailscale key has the wrong SHA-256'
+    return 1
+  }
   printf '%s\n' "$SOURCE_LINE" >"$source"
   sudo install -o root -g root -m 0644 "$key" "$KEYRING"
   sudo install -o root -g root -m 0644 "$source" "$APT_SOURCE"
@@ -248,25 +322,49 @@ serve_off() {
   serve_raw_off
 }
 
+# The transitional MagicDNS HTTPS ingress. It is the only route a first
+# install can publish before the custom-domain Caddy service exists, and the
+# only route custom-domain setup accepts, so it needs explicit public verbs
+# of its own: `serve`/`serve-off` own the raw route exclusively.
+publish_legacy_ingress() {
+  require_supported_platform
+  check_local_service 1
+  require_tailscale
+  serve_legacy
+}
+
+remove_legacy_ingress() {
+  require_supported_platform
+  require_tailscale_daemon
+  serve_legacy_off
+}
+
 uninstall_tailscale() {
   require_supported_platform
   require_tailscale_daemon
-  [[ $(route_state) == empty ]] || fail 'remove the active Tailscale route before uninstalling'
+  [[ $(route_state) == empty ]] || {
+    fail 'remove the active Tailscale route before uninstalling'
+    return 1
+  }
   set_tailscale_paths
   if path_exists "$KEYRING"; then
-    [[ -f "$KEYRING" && ! -L "$KEYRING" && "$(sha256sum "$KEYRING" | awk '{print $1}')" == "$KEY_SHA" ]] ||
+    [[ -f "$KEYRING" && ! -L "$KEYRING" && "$(sha256sum "$KEYRING" | awk '{print $1}')" == "$KEY_SHA" ]] || {
       fail 'refusing to remove a foreign Tailscale keyring'
+      return 1
+    }
   fi
   if path_exists "$APT_SOURCE"; then
-    [[ -f "$APT_SOURCE" && ! -L "$APT_SOURCE" && "$(<"$APT_SOURCE")" == "$SOURCE_LINE" ]] ||
+    [[ -f "$APT_SOURCE" && ! -L "$APT_SOURCE" && "$(<"$APT_SOURCE")" == "$SOURCE_LINE" ]] || {
       fail 'refusing to remove a foreign Tailscale apt source'
+      return 1
+    }
   fi
   sudo apt-get remove --yes tailscale
   sudo rm -f -- "$KEYRING" "$APT_SOURCE"
 }
 
 usage() {
-  printf 'usage: %s help|check|install|up|serve|serve-off|uninstall\n' "$0"
+  printf 'usage: %s help|check|install|up|serve|serve-off|serve-legacy|serve-legacy-off|uninstall\n' "$0"
 }
 
 main() {
@@ -284,6 +382,8 @@ main() {
       ;;
     serve) serve ;;
     serve-off) serve_off ;;
+    serve-legacy) publish_legacy_ingress ;;
+    serve-legacy-off) remove_legacy_ingress ;;
     uninstall) uninstall_tailscale ;;
     *)
       usage >&2
