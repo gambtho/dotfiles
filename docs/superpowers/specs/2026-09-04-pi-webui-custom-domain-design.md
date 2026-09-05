@@ -410,11 +410,14 @@ The explicit setup target is candidate-first and does not alter Tailscale Serve:
    `pi-webui-caddy.service`.
 10. Wait, bounded, for DNS-01 issuance and verify local certificate trust,
     hostname, expiry, loopback listener, and proxied Firstp1ck health. The
-    budget is 20 attempts, a 10-second probe bound, and a 5-second interval,
-    so the worst case stays inside the documented five minutes. Every
-    readiness, health, LAN, and legacy probe carries explicit connect and
-    total timeouts, and each `openssl s_client` handshake is bounded by
-    `timeout`.
+    retry loop paces that wait with 15 attempts, a 10-second probe bound, and
+    a 5-second interval, and the whole readiness operation — the loop plus
+    every authoritative installed, listener, LAN, and TLS/health check — runs
+    inside one 290-second `timeout` with 5 seconds of kill grace, so the
+    documented five minutes is a wall-clock guarantee even though the LAN
+    probes scale with the host's interface count. Every readiness, health,
+    LAN, and legacy probe also carries explicit connect and total timeouts,
+    and each `openssl s_client` handshake is bounded by `timeout`.
 11. Leave the legacy Serve route untouched and report readiness for a separately
     approved migration.
 

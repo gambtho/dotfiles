@@ -33,16 +33,25 @@ readonly EXPECTED_GODADDY_PACKAGE=github.com/caddy-dns/godaddy
 readonly DNS_ZONE=dpao.la
 readonly CERT_MIN_VALIDITY_SECONDS=604800
 # Bounded post-publication wait for the listener, DNS-01 issuance, trusted
-# certificate, and proxy health. wait_for_caddy_ready() always runs one more
-# authoritative validate_caddy_tls_health() after the loop exits, bounded by
-# TLS_HANDSHAKE_TIMEOUT + PROBE_MAX_TIME = 15 + 30 = 45 seconds. So the full
-# worst case is attempts * probe timeout + (attempts - 1) * interval + 45 =
-# 17 * 10 + 16 * 5 + 45 = 295 seconds, keeping the documented "at most five
-# minutes" true even when every probe stalls to its own bound instead of
-# failing fast.
-readonly CADDY_READY_ATTEMPTS_DEFAULT=17
+# certificate, and proxy health. The retry loop only paces that wait: its
+# worst case is attempts * probe timeout + (attempts - 1) * interval =
+# 15 * 10 + 14 * 5 = 220 seconds, which leaves room inside the hard deadline
+# below for the authoritative installed/listener/LAN/TLS/health checks that
+# always follow it (the trailing validate_caddy_tls_health alone is bounded
+# by TLS_HANDSHAKE_TIMEOUT + PROBE_MAX_TIME = 45 seconds), so a still-unready
+# service normally fails with its own exact boundary error.
+readonly CADDY_READY_ATTEMPTS_DEFAULT=15
 readonly CADDY_READY_INTERVAL_DEFAULT=5
 readonly CADDY_READY_PROBE_TIMEOUT=10
+# The real bound on readiness, which arithmetic alone cannot provide:
+# validate_caddy_listener's check_lan() and check_caddy_lan() probe every
+# non-Tailscale global IPv4 address, so the cost of the authoritative checks
+# scales with the host's interface count. wait_for_caddy_ready() therefore
+# runs the loop and every authoritative check inside one `timeout`, making the
+# documented "at most five minutes" a wall-clock guarantee: 290 seconds plus
+# 5 seconds of kill grace = 295 seconds, whatever the interface count.
+readonly CADDY_READY_DEADLINE_DEFAULT=290
+readonly CADDY_READY_KILL_GRACE=5
 # Explicit bounds for every other network and TLS probe, so a black-holed
 # packet path fails within a known deadline instead of hanging a mutation
 # window open.
@@ -801,6 +810,17 @@ caddy_ready_budget() {
   fi
 }
 
+# Selects the bounded wall-clock deadline for the whole readiness operation.
+# Resolved in the parent, because the worker itself runs under it. Tests may
+# shorten it through the usual Bats-only override guard.
+caddy_ready_deadline() {
+  CADDY_READY_DEADLINE=$CADDY_READY_DEADLINE_DEFAULT
+  if [[ -n ${PI_WEBUI_TEST_READY_DEADLINE:-} ]]; then
+    require_test_override "$STATE_ROOT"
+    CADDY_READY_DEADLINE=$PI_WEBUI_TEST_READY_DEADLINE
+  fi
+}
+
 # Cheap, side-effect-free readiness signal that only paces the bounded wait:
 # the service is running and a normally CA-verified request already reaches
 # the proxied health endpoint, which cannot happen before DNS-01 issuance
@@ -817,11 +837,13 @@ caddy_ready_signal() {
     "https://$CUSTOM_HOSTNAME:8443/api/health" >/dev/null 2>&1 || return 1
 }
 
-# Waits, bounded, for the loopback listener, DNS-01 issuance, a trusted
-# certificate, and proxied Firstp1ck health, then requires the full installed
-# state to be exact. A still-unready service fails with the exact remaining
-# boundary error.
-wait_for_caddy_ready() {
+# The readiness operation itself: pace until the cheap signal answers, then
+# require the full installed, listener, LAN, and TLS/health state to be
+# exact. Runs as the child of wait_for_caddy_ready()'s `timeout`, in a
+# subprocess that re-sources this script, so it must depend only on exported
+# state: the managed and Caddy paths, PI_LAUNCHER, STATE_ROOT, and the
+# Bats-only overrides all are, and no credential is in the environment here.
+caddy_readiness_worker() {
   local attempt
   caddy_ready_budget
   for ((attempt = 1; attempt <= CADDY_READY_ATTEMPTS; attempt++)); do
@@ -832,6 +854,31 @@ wait_for_caddy_ready() {
   validate_installed_caddy
   validate_caddy_listener
   validate_caddy_tls_health
+}
+
+# Waits for readiness under one hard wall-clock deadline. A still-unready
+# service fails with the exact remaining boundary error; an operation that
+# outlasts the deadline fails with the deadline error. Both return nonzero to
+# publish_caddy_candidate, so setup's cleanup and restoration are unchanged.
+#
+# `timeout` runs the worker in its own process group, so expiry ends every
+# probe the worker started rather than leaving one behind past the bound.
+wait_for_caddy_ready() {
+  local status=0
+  command -v timeout >/dev/null || {
+    fail 'timeout is required to bound the Caddy readiness wait'
+    return 1
+  }
+  caddy_ready_deadline
+  timeout --kill-after="$CADDY_READY_KILL_GRACE" "$CADDY_READY_DEADLINE" \
+    bash -c 'source "$1"; caddy_readiness_worker' bash "$SCRIPT_DIR/custom-domain.sh" || status=$?
+  # 124 is coreutils' expiry status; 137 is the SIGKILL --kill-after sends
+  # when the worker did not stop on the first signal.
+  if [[ "$status" -eq 124 || "$status" -eq 137 ]]; then
+    fail "Caddy readiness exceeded its $CADDY_READY_DEADLINE-second deadline"
+    return 1
+  fi
+  return "$status"
 }
 
 # Publishes the validated candidate, reloads systemd, enables and restarts the

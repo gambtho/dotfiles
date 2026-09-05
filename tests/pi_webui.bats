@@ -2290,11 +2290,21 @@ run_rollback() {
   [[ "$output" == *'health endpoint failed'* ]]
   unset CURL_STALL
 
-  # The documented readiness bound is truthful in the worst case, including
+  # The documented readiness bound is enforced by wall clock, not by an
+  # arithmetic sum: the authoritative listener check probes every
+  # non-Tailscale global IPv4 address, so its cost scales with the host's
+  # interface count and cannot be added up in advance.
+  run_custom_domain_function 'caddy_ready_deadline; printf "%s %s\\n" "$CADDY_READY_DEADLINE" "$CADDY_READY_KILL_GRACE"'
+  [ "$status" -eq 0 ]
+  deadline=${output% *}
+  kill_grace=${output#* }
+  [ $((deadline + kill_grace)) -le 300 ]
+
+  # The retry loop only paces inside that deadline: its own worst case plus
   # the authoritative TLS/health validation that always runs once more after
-  # the loop exits (wait_for_caddy_ready's trailing validate_caddy_tls_health,
-  # bounded by TLS_HANDSHAKE_TIMEOUT + PROBE_MAX_TIME), not just the loop
-  # itself.
+  # the loop exits (bounded by TLS_HANDSHAKE_TIMEOUT + PROBE_MAX_TIME) still
+  # fits, so a still-unready service normally fails with the exact remaining
+  # boundary error rather than with the deadline error.
   run_custom_domain_function 'caddy_ready_budget; printf "%s %s\\n" "$CADDY_READY_ATTEMPTS" "$CADDY_READY_INTERVAL"'
   [ "$status" -eq 0 ]
   attempts=${output% *}
@@ -2307,7 +2317,7 @@ run_rollback() {
   handshake_timeout=${output% *}
   probe_max_time=${output#* }
   post_loop_validation=$((handshake_timeout + probe_max_time))
-  [ $((attempts * probe + (attempts - 1) * interval + post_loop_validation)) -le 300 ]
+  [ $((attempts * probe + (attempts - 1) * interval + post_loop_validation)) -le "$deadline" ]
 }
 
 @test "condition-context helpers refuse output from a failing command" {
@@ -2748,6 +2758,55 @@ run_rollback() {
 
   [ -f "$TEST_ROOT/caddy-active" ]
   [ -f "$TEST_ROOT/caddy-enabled" ]
+  ! compgen -G "$STATE_ROOT/.caddy-setup.*" >/dev/null
+  ! grep -q 'tailscale serve' "$CALLS"
+}
+
+@test "the bounded readiness worker runs every authoritative check inside one deadline" {
+  prepare_custom_domain_setup legacy-exact prior
+
+  # The worker runs in a subprocess that re-sources the script, so success
+  # here also proves the subprocess inherited the Bats-only path overrides,
+  # the readiness budget override, and the stubbed commands: the managed
+  # artifacts it validates exist only under the test caddy root.
+  run_custom_domain_function 'wait_for_caddy_ready'
+  [ "$status" -eq 0 ]
+  grep -F -- '--resolve pi.dpao.la:8443:127.0.0.1' "$CALLS"
+
+  # A failing authoritative check still reports its own exact boundary error
+  # through the deadline wrapper, not a generic timeout.
+  export CADDY_HEALTH_FAIL=1
+  run_custom_domain_function 'wait_for_caddy_ready'
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'health endpoint failed'* ]]
+  unset CADDY_HEALTH_FAIL
+
+  # The deadline override is a Bats-only override like the budget.
+  run_custom_domain_function 'unset PI_WEBUI_TESTING; PI_WEBUI_TEST_READY_DEADLINE=1 caddy_ready_deadline'
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'test overrides are unavailable outside Bats'* ]]
+}
+
+@test "setup restores prior state when readiness outlasts its wall-clock deadline" {
+  prepare_custom_domain_setup legacy-exact prior
+  before=$(fingerprint_paths "$CADDY_ROOT")
+
+  # The readiness signal never answers and one pacing sleep alone outlasts
+  # the whole deadline, so the operation is cut off by wall clock instead of
+  # running to the end of its own arithmetic budget.
+  export CADDY_HEALTH_FAIL=1 PI_WEBUI_TEST_READY_DEADLINE=1 PI_WEBUI_TEST_READY_BUDGET=2:5
+  run_custom_domain setup
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'readiness exceeded its 1-second deadline'* ]]
+
+  # Deadline expiry is an ordinary readiness failure: the prior installation
+  # is restored exactly and staging is removed.
+  [ "$(fingerprint_paths "$CADDY_ROOT")" = "$before" ]
+  ! grep -qF 'candidate build' "$CADDY_ROOT/usr/local/lib/pi-webui/caddy"
+  [ -f "$TEST_ROOT/caddy-enabled" ]
+  [ -f "$TEST_ROOT/caddy-active" ]
+  [ -f "$CADDY_CREDENTIAL" ]
+  [ -f "$CADDY_STATE_DIR/acme.json" ]
   ! compgen -G "$STATE_ROOT/.caddy-setup.*" >/dev/null
   ! grep -q 'tailscale serve' "$CALLS"
 }
