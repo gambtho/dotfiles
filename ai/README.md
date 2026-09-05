@@ -49,11 +49,11 @@ Each `subagent` invocation supplies one self-contained `prompt`, a 3–5 word `d
 
 `ai/pi/config/permission-system.json` is a relaxed-but-guarded baseline:
 
-- routine tools, unmatched parent Bash commands, local Git subcommands, normal fetch/push, explicitly fast-forward-only pulls, PR/issue creation and editing, `lsp_fix`, loopback HTTP probes, and literal `/tmp` cleanup are allowed;
-- unknown tools and Git subcommands, non-fast-forward pulls, selected destructive Git operations, PR merges and issue closure, remote shell/network commands, recursive deletion outside `/tmp`, and arbitrary external paths ask;
+- routine tools, unmatched parent Bash commands, local Git subcommands, normal fetch/push, explicitly fast-forward-only pulls, PR/issue creation and editing, `lsp_fix`, and loopback HTTP probes are allowed;
+- unknown tools and Git subcommands, non-fast-forward pulls, selected destructive Git operations, PR merges and issue closure, remote shell/network commands, deletion, and arbitrary external paths ask;
 - policy denies recognized credential and browser-profile path access, catastrophic deletion, force operations, subprocess-capable search flags, and privilege escalation; worktree guard separately denies direct model-facing write, edit, and mutating LSP operations in primary checkouts;
 - common reader/output commands containing unresolved `$` expansion and direct environment-dump commands ask, while named children hard-deny all unresolved shell-variable indirection; use `NAME=value command` rather than the opaque `env NAME=value command` wrapper so ordinary scoped commands remain inspectable and silent;
-- trusted global skill/package directories and established Dotfiles/FlyGD Wingman worktree roots bypass the external-directory prompt, while unrelated external locations remain gated;
+- reads from trusted global skill/package directories and access to established Dotfiles/FlyGD Wingman worktree roots bypass the external-directory prompt, while skill/package writes and unrelated external locations remain gated;
 - `/permission-system` can enable temporary YOLO, which converts asks to allows but preserves explicit denies.
 
 ### Important containment boundaries

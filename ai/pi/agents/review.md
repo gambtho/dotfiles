@@ -6,75 +6,53 @@ thinking: high
 tools: read, bash, grep, find, ls
 prompt_mode: append
 permission:
-  path_write: deny
+  path_write: allow
   write: deny
   edit: deny
   bash:
-    "*": allow
-    "git branch *": deny
-    "*/git branch *": deny
-    "git worktree *": deny
-    "*/git worktree *": deny
-    "git add *": deny
-    "*/git add *": deny
-    "git commit *": deny
-    "*/git commit *": deny
-    "git fetch*": deny
-    "*/git fetch*": deny
-    "git pull*": deny
-    "*/git pull*": deny
-    "git pull --ff-only*": deny
-    "git push*": deny
-    "*/git push*": deny
-    "git switch *": deny
-    "*/git switch *": deny
-    "git merge *": deny
-    "*/git merge *": deny
-    "git rebase *": deny
-    "*/git rebase *": deny
-    "git cherry-pick *": deny
-    "*/git cherry-pick *": deny
-    "git revert *": deny
-    "*/git revert *": deny
-    "git stash *": deny
-    "*/git stash *": deny
-    "git tag *": deny
-    "*/git tag *": deny
-    "git reset *": deny
-    "*/git reset *": deny
-    "git rm *": deny
-    "*/git rm *": deny
-    "git mv *": deny
-    "*/git mv *": deny
-    "git format-patch *": deny
-    "*/git format-patch *": deny
-    "git apply *": deny
-    "*/git apply *": deny
-    "git am *": deny
-    "*/git am *": deny
-    "git bundle *": deny
-    "*/git bundle *": deny
-    "git notes *": deny
-    "*/git notes *": deny
-    "git bisect *": deny
-    "*/git bisect *": deny
-    "git sparse-checkout *": deny
-    "*/git sparse-checkout *": deny
-    "git branch --show-current *": allow
-    "git branch --list *": allow
-    "git branch --merged *": allow
-    "git worktree list *": allow
-    "git reflog show *": allow
-    "bats *": allow
-    "make *": allow
-    "npm *": allow
-    "pnpm *": allow
-    "cargo *": allow
-    "go *": allow
-    "pytest*": allow
-    "python -m pytest*": allow
-    "ruff *": allow
-    "rubocop*": allow
+    "*": ask
+    "*git *": deny
+    "git status*": allow
+    "git show*": allow
+    "git diff*": allow
+    "git log*": allow
+    "git grep*": allow
+    "git rev-parse*": allow
+    "git merge-base*": allow
+    "git branch --show-current*": allow
+    "git branch --list*": allow
+    "git branch --merged*": allow
+    "git worktree list*": allow
+    "git blame*": allow
+    "git describe*": allow
+    "git shortlog*": allow
+    "git name-rev*": allow
+    "git ls-files*": allow
+    "git ls-tree*": allow
+    "git cat-file*": allow
+    "git for-each-ref*": allow
+    "git check-ignore*": allow
+    "git check-attr*": allow
+    "git range-diff*": allow
+    "git fsck*": allow
+    "git count-objects*": allow
+    "git reflog show*": allow
+    "git submodule status*": allow
+    "git remote -v": allow
+    "git remote get-url*": allow
+    "git config --get*": allow
+    "git config --get-regexp*": allow
+    "git config --list*": allow
+    "git config -l*": allow
+    "*git *show *--ext-d*": deny
+    "*git *show *--textc*": deny
+    "*git *diff *--ext-d*": deny
+    "*git *diff *--textc*": deny
+    "*git *log *--ext-d*": deny
+    "*git *log *--textc*": deny
+    "*git *grep -*O*": deny
+    "*git *grep * -*O*": deny
+    "*git *grep *--op*": deny
     "gh auth status*": allow
     "gh repo view*": allow
     "gh pr list*": allow
@@ -84,14 +62,14 @@ permission:
     "gh issue view*": allow
     "gh run list*": allow
     "gh run view*": allow
-    "gh pr create*": deny
-    "gh pr edit*": deny
-    "gh pr merge*": deny
-    "gh issue create*": deny
-    "gh issue edit*": deny
-    "gh issue close*": deny
-    "gh repo delete*": deny
-    "gh api * --method DELETE*": deny
+    "*gh pr create*": deny
+    "*gh pr edit*": deny
+    "*gh pr merge*": deny
+    "*gh issue create*": deny
+    "*gh issue edit*": deny
+    "*gh issue close*": deny
+    "*gh repo delete*": deny
+    "*gh api * --method DELETE*": deny
     "*$*": deny
 ---
 

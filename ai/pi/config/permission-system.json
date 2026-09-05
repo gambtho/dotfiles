@@ -96,10 +96,6 @@
     "external_directory_write": {
       "*": "ask",
       "/tmp/*": "allow",
-      "~/.agents/skills/*": "allow",
-      "~/.pi/agent/skills/*": "allow",
-      "~/.pi/agent/git/*": "allow",
-      "~/.dotfiles/ai/marketplace/plugins/my/skills/*": "allow",
       "~/.dotfiles/.worktrees/*": "allow",
       "~/.dotfiles/tmp/worktrees/*": "allow",
       "/mnt/c/dev/flygd-wingman-*": "allow",
@@ -154,8 +150,10 @@
       "*/gh *": "ask",
       "curl *": "ask",
       "*/curl *": "ask",
-      "curl *http://127.0.0.1*": "allow",
-      "curl *http://localhost*": "allow",
+      "curl *http://127.0.0.1/*": "allow",
+      "curl *http://127.0.0.1:*": "allow",
+      "curl *http://localhost/*": "allow",
+      "curl *http://localhost:*": "allow",
       "curl *https://*": "ask",
       "curl *http://*http://*": "ask",
       "curl *ftp://*": "ask",
@@ -460,8 +458,7 @@
       "*rm /* *-*R*": "deny",
       "*rm * /*/*": "ask",
       "*rm * /*/* *": "ask",
-      "*rm /*/* *": "ask",
-      "rm */tmp/*": "allow"
+      "*rm /*/* *": "ask"
     }
   }
 }

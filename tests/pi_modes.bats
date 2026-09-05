@@ -81,45 +81,21 @@ agent_frontmatter() {
   for agent in rush deep review; do
     actual=$(agent_frontmatter "$agent")
     run jq -e '
-      .permission.path_write == "deny"
+      .permission.path_write == "allow"
       and .permission.write == "deny"
       and .permission.edit == "deny"
-      and .permission.bash["*"] == "allow"
+      and .permission.bash["*"] == "ask"
+      and .permission.bash["*git *"] == "deny"
       and (.permission.bash as $bash
         | all([
-            "git branch *",
-            "git worktree *",
-            "git add *",
-            "git commit *",
-            "git fetch*",
-            "git pull*",
-            "git push*",
-            "git switch *",
-            "git merge *",
-            "git rebase *",
-            "git cherry-pick *",
-            "git revert *",
-            "git stash *",
-            "git tag *",
-            "git reset *",
-            "git rm *",
-            "git mv *",
-            "git format-patch *",
-            "git apply *",
-            "git am *",
-            "git bundle *",
-            "git notes *",
-            "git bisect *",
-            "git sparse-checkout *",
-            "gh pr create*",
-            "gh pr edit*",
-            "gh pr merge*",
-            "gh issue create*",
-            "gh issue edit*",
-            "gh issue close*"
-          ][]; . as $pattern | $bash[$pattern] == "deny"))
-      and (.permission.bash as $bash
-        | all([
+            "git status*",
+            "git show*",
+            "git diff*",
+            "git log*",
+            "git grep*",
+            "git rev-parse*",
+            "git branch --show-current*",
+            "git worktree list*",
             "gh auth status*",
             "gh repo view*",
             "gh pr list*",
@@ -128,21 +104,30 @@ agent_frontmatter() {
             "gh issue list*",
             "gh issue view*",
             "gh run list*",
-            "gh run view*",
-            "bats *",
-            "make *",
-            "npm *",
-            "pnpm *",
-            "cargo *",
-            "go *",
-            "pytest*",
-            "python -m pytest*",
-            "ruff *",
-            "rubocop*"
+            "gh run view*"
           ][]; . as $pattern | $bash[$pattern] == "allow"))
-      and .permission.bash["gh repo delete*"] == "deny"
-      and .permission.bash["gh api * --method DELETE*"] == "deny"
-      and .permission.bash["*$*"] == "deny"
+      and (.permission.bash as $bash
+        | all([
+            "*git *show *--ext-d*",
+            "*git *show *--textc*",
+            "*git *diff *--ext-d*",
+            "*git *diff *--textc*",
+            "*git *log *--ext-d*",
+            "*git *log *--textc*",
+            "*git *grep -*O*",
+            "*gh pr create*",
+            "*gh pr edit*",
+            "*gh pr merge*",
+            "*gh issue create*",
+            "*gh issue edit*",
+            "*gh issue close*",
+            "*gh repo delete*",
+            "*gh api * --method DELETE*",
+            "*$*"
+          ][]; . as $pattern | $bash[$pattern] == "deny"))
+      and (.permission.bash as $bash
+        | all(["make *", "npm *", "pnpm *", "cargo *", "go *"][];
+            . as $pattern | $bash | has($pattern) | not))
     ' <<<"$actual"
     [ "$status" -eq 0 ]
   done

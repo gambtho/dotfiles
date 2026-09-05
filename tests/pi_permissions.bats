@@ -104,7 +104,7 @@ setup() {
     and .permission.external_directory_read["*"] == "ask"
     and .permission.external_directory_write["*"] == "ask"
     and .permission.external_directory_read["~/.agents/skills/*"] == "allow"
-    and .permission.external_directory_write["~/.agents/skills/*"] == "allow"
+    and (.permission.external_directory_write | has("~/.agents/skills/*") | not)
     and .permission.external_directory_read["/mnt/c/dev/flygd-wingman-*"] == "allow"
     and .permission.external_directory_write["/mnt/c/dev/flygd-wingman-*"] == "allow"
   ' "$PERMISSION_CONFIG"
@@ -140,8 +140,8 @@ setup() {
     and $bash["*/gh *"] == "ask"
     and $bash["curl *"] == "ask"
     and $bash["*/curl *"] == "ask"
-    and $bash["curl *http://127.0.0.1*"] == "allow"
-    and $bash["curl *http://localhost*"] == "allow"
+    and $bash["curl *http://127.0.0.1:*"] == "allow"
+    and $bash["curl *http://localhost:*"] == "allow"
     and $bash["curl *https://*"] == "ask"
     and $bash["wget *"] == "ask"
     and $bash["ssh *"] == "ask"
@@ -190,7 +190,6 @@ setup() {
     and $bash["*rm *-*r* /* *"] == "deny"
     and $bash["*rm * /*/*"] == "ask"
     and $bash["*rm /*/* *"] == "ask"
-    and $bash["rm */tmp/*"] == "allow"
   ' "$PERMISSION_CONFIG"
   [ "$status" -eq 0 ]
 }

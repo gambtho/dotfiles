@@ -65,10 +65,11 @@ function checkPath(
   surface: "path_read" | "path_write" | "external_directory_read" | "external_directory_write",
   value: string,
   expected: PermissionState,
+  agentName?: string,
 ): void {
   expectState(
-    `${surface} ${value}`,
-    manager.check({ kind: "path-values", surface, values: [value] }).state,
+    `${agentName ?? "global"} ${surface} ${value}`,
+    manager.check({ kind: "path-values", surface, values: [value], agentName }).state,
     expected,
   );
 }
@@ -326,8 +327,13 @@ try {
   checkBash(manager, "curl --max-time 2 http://localhost:8765/health", "allow");
   checkBash(manager, "curl https://example.com http://127.0.0.1:9222", "ask");
   checkBash(manager, "curl http://127.0.0.1:9222 http://example.com", "ask");
-  checkBash(manager, "rm -f /tmp/example", "allow");
-  checkBash(manager, "rm -rf /tmp/example", "allow");
+  checkBash(manager, "curl http://localhost.evil.example/", "ask");
+  checkBash(manager, "curl http://localhost@evil.example/", "ask");
+  checkBash(manager, "rm -f /tmp/example", "ask");
+  checkBash(manager, "rm -rf /tmp/example", "ask");
+  checkBash(manager, "rm -rf important /tmp/example", "ask");
+  checkBash(manager, "rm -rf /tmp/example important", "ask");
+  checkBash(manager, "rm -rf /tmp/../important", "ask");
   checkBash(manager, "/bin/rm -rf .", "ask");
   checkBash(manager, "nc example.com 443", "ask");
   checkBash(manager, '/bin/cat "$SECRET_PATH"', "ask");
@@ -402,7 +408,7 @@ try {
   }
   const trustedSkillPath = join(homedir(), ".agents", "skills", "impeccable", "SKILL.md");
   checkPath(manager, "external_directory_read", trustedSkillPath, "allow");
-  checkPath(manager, "external_directory_write", trustedSkillPath, "allow");
+  checkPath(manager, "external_directory_write", trustedSkillPath, "ask");
   const wingmanWorktreePath = "/mnt/c/dev/flygd-wingman-worktrees/example/README.md";
   checkPath(manager, "external_directory_read", wingmanWorktreePath, "allow");
   checkPath(manager, "external_directory_write", wingmanWorktreePath, "allow");
@@ -411,6 +417,7 @@ try {
 
   for (const agentName of ["rush", "deep", "review"] as const) {
     expectState(`${agentName} write tool`, manager.getToolPermission("write", agentName), "deny");
+    checkPath(manager, "path_write", join(repoRoot, "README.md"), "allow", agentName);
     checkBash(manager, "git status", "allow", agentName);
     checkBash(manager, "git branch --show-current", "allow", agentName);
     checkBash(manager, "git worktree list --porcelain", "allow", agentName);
@@ -422,7 +429,7 @@ try {
     checkBash(manager, "git pull --ff-only", "deny", agentName);
     checkBash(manager, "git push origin main", "deny", agentName);
     checkBash(manager, "git reset --hard HEAD", "deny", agentName);
-    checkBash(manager, "unknown-reader --version", "allow", agentName);
+    checkBash(manager, "unknown-reader --version", "ask", agentName);
     checkBash(manager, "gh pr view 1", "allow", agentName);
     checkBash(manager, "make check", "allow", agentName);
     checkBash(manager, "gh repo delete owner/repo", "deny", agentName);
@@ -445,6 +452,10 @@ try {
   checkPath(yolo, "path_read", authPath, "deny");
   for (const agentName of ["rush", "deep", "review"] as const) {
     checkBash(yolo, "git reset --hard HEAD", "deny", agentName);
+    checkBash(yolo, "git branch -D feature/example", "deny", agentName);
+    checkBash(yolo, "git worktree remove --force /tmp/example", "deny", agentName);
+    checkBash(yolo, "git commit --amend --no-edit", "deny", agentName);
+    checkBash(yolo, "git restore README.md", "deny", agentName);
     checkBash(yolo, "git push -qf origin main", "deny", agentName);
     checkBash(yolo, "gh repo delete owner/repo", "deny", agentName);
     checkBash(yolo, "gh api repos/o/r --method DELETE", "deny", agentName);
