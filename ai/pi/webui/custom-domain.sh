@@ -33,11 +33,14 @@ readonly EXPECTED_GODADDY_PACKAGE=github.com/caddy-dns/godaddy
 readonly DNS_ZONE=dpao.la
 readonly CERT_MIN_VALIDITY_SECONDS=604800
 # Bounded post-publication wait for the listener, DNS-01 issuance, trusted
-# certificate, and proxy health. Worst case is attempts * probe timeout +
-# (attempts - 1) * interval = 20 * 10 + 19 * 5 = 295 seconds, so the
-# documented "at most five minutes" holds even when every probe stalls to its
-# own bound instead of failing fast.
-readonly CADDY_READY_ATTEMPTS_DEFAULT=20
+# certificate, and proxy health. wait_for_caddy_ready() always runs one more
+# authoritative validate_caddy_tls_health() after the loop exits, bounded by
+# TLS_HANDSHAKE_TIMEOUT + PROBE_MAX_TIME = 15 + 30 = 45 seconds. So the full
+# worst case is attempts * probe timeout + (attempts - 1) * interval + 45 =
+# 17 * 10 + 16 * 5 + 45 = 295 seconds, keeping the documented "at most five
+# minutes" true even when every probe stalls to its own bound instead of
+# failing fast.
+readonly CADDY_READY_ATTEMPTS_DEFAULT=17
 readonly CADDY_READY_INTERVAL_DEFAULT=5
 readonly CADDY_READY_PROBE_TIMEOUT=10
 # Explicit bounds for every other network and TLS probe, so a black-holed

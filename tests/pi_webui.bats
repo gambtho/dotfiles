@@ -2290,7 +2290,11 @@ run_rollback() {
   [[ "$output" == *'health endpoint failed'* ]]
   unset CURL_STALL
 
-  # The documented readiness bound is truthful in the worst case.
+  # The documented readiness bound is truthful in the worst case, including
+  # the authoritative TLS/health validation that always runs once more after
+  # the loop exits (wait_for_caddy_ready's trailing validate_caddy_tls_health,
+  # bounded by TLS_HANDSHAKE_TIMEOUT + PROBE_MAX_TIME), not just the loop
+  # itself.
   run_custom_domain_function 'caddy_ready_budget; printf "%s %s\\n" "$CADDY_READY_ATTEMPTS" "$CADDY_READY_INTERVAL"'
   [ "$status" -eq 0 ]
   attempts=${output% *}
@@ -2298,7 +2302,12 @@ run_rollback() {
   run_custom_domain_function 'printf "%s\\n" "$CADDY_READY_PROBE_TIMEOUT"'
   [ "$status" -eq 0 ]
   probe=$output
-  [ $((attempts * probe + (attempts - 1) * interval)) -le 300 ]
+  run_custom_domain_function 'printf "%s %s\\n" "$TLS_HANDSHAKE_TIMEOUT" "$PROBE_MAX_TIME"'
+  [ "$status" -eq 0 ]
+  handshake_timeout=${output% *}
+  probe_max_time=${output#* }
+  post_loop_validation=$((handshake_timeout + probe_max_time))
+  [ $((attempts * probe + (attempts - 1) * interval + post_loop_validation)) -le 300 ]
 }
 
 @test "condition-context helpers refuse output from a failing command" {
