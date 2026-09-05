@@ -32,7 +32,13 @@ make_webui_fixture() {
   cp "$REPO_ROOT/ai/pi/webui/rollback.sh" "$WEBUI_FIXTURE/ai/pi/webui/rollback.sh"
   cp "$REPO_ROOT/ai/pi/webui/pi-webui.service.in" \
     "$WEBUI_FIXTURE/ai/pi/webui/pi-webui.service.in"
-  chmod +x "$WEBUI_FIXTURE/bin/validate-pi-webui" "$WEBUI_FIXTURE/ai/pi/webui/"{install,tailscale,rollback}.sh
+  cp "$REPO_ROOT/ai/pi/webui/Caddyfile.in" "$WEBUI_FIXTURE/ai/pi/webui/Caddyfile.in"
+  cp "$REPO_ROOT/ai/pi/webui/pi-webui-caddy.service.in" \
+    "$WEBUI_FIXTURE/ai/pi/webui/pi-webui-caddy.service.in"
+  cp "$REPO_ROOT/ai/pi/webui/caddy-entrypoint.sh" "$WEBUI_FIXTURE/ai/pi/webui/caddy-entrypoint.sh"
+  cp "$REPO_ROOT/ai/pi/webui/custom-domain.sh" "$WEBUI_FIXTURE/ai/pi/webui/custom-domain.sh"
+  chmod +x "$WEBUI_FIXTURE/bin/validate-pi-webui" \
+    "$WEBUI_FIXTURE/ai/pi/webui/"{install,tailscale,rollback,caddy-entrypoint,custom-domain}.sh
   printf 'ID=ubuntu\nVERSION_ID="24.04"\nVERSION_CODENAME=noble\n' >"$PI_WEBUI_TEST_OS_RELEASE"
   printf '.pi/\n' >"$WEBUI_FIXTURE/.gitignore"
   git -C "$WEBUI_FIXTURE" init -q -b main
@@ -404,6 +410,12 @@ run_tailscale_function() {
   local body=$1
   run bash -c 'source "$1"; shift; eval "$1"' bash \
     "$WEBUI_FIXTURE/ai/pi/webui/tailscale.sh" "$body"
+}
+
+run_custom_domain_function() {
+  local body=$1
+  run bash -c 'source "$1"; shift; eval "$1"' bash \
+    "$WEBUI_FIXTURE/ai/pi/webui/custom-domain.sh" "$body"
 }
 
 prepare_rollback() {
@@ -1191,4 +1203,39 @@ run_rollback() {
 @test "public READMEs link to the Web UI runbook" {
   grep -Fq '[Pi Web UI](ai/pi/webui/README.md)' "$REPO_ROOT/README.md"
   grep -Fq '[Pi Web UI](pi/webui/README.md)' "$REPO_ROOT/ai/README.md"
+}
+
+@test "Caddy source fixes hostname listener backend and DNS provider" {
+  make_webui_fixture
+  run_custom_domain_function 'render_caddyfile'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *$'admin off'* ]]
+  [[ "$output" == *$'auto_https disable_redirects'* ]]
+  [[ "$output" == *$'https_port 8443'* ]]
+  [[ "$output" == *$'protocols h1 h2'* ]]
+  [[ "$output" == *$'pi.dpao.la {'* ]]
+  [[ "$output" == *$'bind 127.0.0.1'* ]]
+  [[ "$output" == *$'api_token {env.GODADDY_API_TOKEN}'* ]]
+  [[ "$output" == *$'reverse_proxy 127.0.0.1:31415'* ]]
+  [[ "$output" != *'0.0.0.0'* ]]
+  [[ "$output" != *'::'* ]]
+}
+
+@test "Caddy unit uses encrypted credential and no remote admin or secret argv" {
+  make_webui_fixture
+  run_custom_domain_function 'render_caddy_unit'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'LoadCredentialEncrypted=godaddy-api-token'* ]]
+  [[ "$output" == *'DynamicUser=yes'* ]]
+  [[ "$output" == *'StateDirectory=pi-webui-caddy'* ]]
+  [[ "$output" == *'Restart=on-failure'* ]]
+  [[ "$output" != *'GODADDY_API_TOKEN='* ]]
+  [[ "$output" != *'--environ'* ]]
+}
+
+@test "tracked custom-domain files contain no credential or private key" {
+  run grep -REn --include='*' \
+    '(BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|[A-Za-z0-9]{20,}:[A-Za-z0-9]{20,})' \
+    "$REPO_ROOT/ai/pi/webui"
+  [ "$status" -eq 1 ]
 }

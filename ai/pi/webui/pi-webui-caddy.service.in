@@ -1,0 +1,36 @@
+[Unit]
+Description=Pi Web UI custom-domain TLS proxy
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=notify
+DynamicUser=yes
+StateDirectory=pi-webui-caddy
+Environment=HOME=/var/lib/pi-webui-caddy
+Environment=XDG_DATA_HOME=/var/lib/pi-webui-caddy/data
+Environment=XDG_CONFIG_HOME=/var/lib/pi-webui-caddy/config
+LoadCredentialEncrypted=godaddy-api-token
+ExecStart=@CADDY_ENTRYPOINT@
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+AmbientCapabilities=
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
