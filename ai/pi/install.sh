@@ -591,6 +591,8 @@ main() {
   reconcile_authored_links
   reconcile_mutable_file "$ROOT/ai/pi/config/modes.json" "$PI_AGENT_DIR/modes.json" \
     "Pi modes" 0644 'ai/pi/modes.json'
+  reconcile_mutable_file "$ROOT/ai/pi/config/models.json" "$PI_AGENT_DIR/models.json" \
+    "Pi model overrides" 0644
   reconcile_mutable_file "$ROOT/ai/pi/config/subagents.json" "$PI_AGENT_DIR/subagents.json" \
     "Pi subagent settings" 0600
   remove_retired_sandbox_exclusion "$PI_AGENT_DIR/subagents.json"

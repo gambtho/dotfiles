@@ -10,6 +10,12 @@ Pi connects directly to the GitHub Copilot subscription; no model proxy is requi
 - Select an enabled model with `/model`; Ctrl+S saves the highlighted model as the startup default.
 - Keep OAuth credentials in `~/.pi/agent/auth.json`. Never commit or link that file.
 
+### Temporary GPT-6 Astra transport override
+
+Pi 0.85.1's generated GitHub Copilot catalog assigns `gpt-6-astra` to `openai-completions`. Copilot exposes Astra only through its Responses endpoint, so the unmodified entry fails with `unsupported_api_for_model`. `ai/pi/config/models.json` replaces that one built-in entry with an `openai-responses` definition while leaving all other built-in Copilot models intact.
+
+The override includes the IDE identity headers Copilot requires. Those header versions mirror the affected Pi release and may age, so this is a temporary compatibility baseline rather than a permanent custom model. Run `make ai`, reopen `/model`, and reselect `github-copilot/gpt-6-astra` after installation. The installer preserves an existing, differing `~/.pi/agent/models.json`; merge the Astra entry manually or use `PI_AI_RESET_MUTABLE_CONFIG=1 make ai` if replacing all mutable Pi baselines is acceptable. When upstream Pi corrects Astra's Copilot transport, remove the baseline, its installer reconciliation, and these notes. Also delete `~/.pi/agent/models.json` when it contains only this override, or remove its Astra entry while preserving other local models; deleting tracked files alone does not remove the copied runtime override.
+
 ## Capability stack
 
 Generic runtime behavior comes from pinned packages. The local `my` package remains responsible for personal review and implementation workflows.
@@ -85,6 +91,7 @@ ai/
     agents/{rush,smart,deep,review}.md
     config/
       modes.json
+      models.json
       permission-system.json
       subagents.json
       web-search.json
@@ -99,12 +106,13 @@ ai/
     skills/
 ```
 
-Immutable guidance, keybindings, named agents, and the two authored extensions are individual links. The installer owns these **five mutable runtime files** as regular machine-local files:
+Immutable guidance, keybindings, named agents, and the two authored extensions are individual links. The installer owns these **six mutable runtime files** as regular machine-local files:
 
 | Tracked baseline | Runtime destination | Routine install behavior |
 |---|---|---|
 | `ai/pi/settings.json` | `~/.pi/agent/settings.json` | merges only `.packages`; preserves every other runtime key |
 | `ai/pi/config/modes.json` | `~/.pi/agent/modes.json` | installs when missing; preserves drift |
+| `ai/pi/config/models.json` | `~/.pi/agent/models.json` | temporarily corrects Copilot Astra's API transport; installs when missing and preserves drift |
 | `ai/pi/config/permission-system.json` | `~/.pi/agent/extensions/pi-permission-system/config.json` | renders the active agent auth path; preserves drift |
 | `ai/pi/config/subagents.json` | `~/.pi/agent/subagents.json` | installs when missing; preserves drift |
 | `ai/pi/config/web-search.json` | `$PI_CODING_AGENT_DIR/web-search.json`, `$XDG_CONFIG_HOME/pi/web-search.json`, or `~/.pi/web-search.json` | installs when missing; preserves drift |
@@ -115,7 +123,7 @@ Use runtime commands such as `/permission-system` and `/subagents:settings` for 
 PI_AI_RESET_MUTABLE_CONFIG=1 make ai
 ```
 
-Authentication, sessions, trust decisions, generated model catalogs, package caches, permission logs, grants, and runtime credentials remain machine-local and untracked.
+Authentication, sessions, trust decisions, upstream-generated model catalogs, package caches, permission logs, grants, and runtime credentials remain machine-local and untracked. The tracked `models.json` is a narrow temporary override, not a copy of the generated catalog.
 
 When retiring a legacy `pi-sandbox` installation, the installer backs up and resets the permission policy to the tracked non-YOLO, unmatched-Bash-allows baseline, then removes the retired `pi-sandbox` child exclusion before reconciling packages. A previous `~/.pi/agent/sandbox.json` and cached package checkout are preserved as inactive machine-local state; neither is loaded once the package source is absent from `settings.json`. They may be deleted manually after restarting Pi if rollback is not needed.
 

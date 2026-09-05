@@ -15,6 +15,7 @@ ai/
     agents/                   # Named gotgenes subagent definitions
     config/
       modes.json              # Mutable main-session mode baseline
+      models.json             # Temporary Copilot model transport override
       permission-system.json  # Balanced permission baseline
       subagents.json          # Child runtime defaults/exclusions
       web-search.json         # Keyless web routing baseline
@@ -27,7 +28,7 @@ ai/
     package.json              # Pi resource manifest
 ```
 
-Run `make ai` or `bash ai/pi/install.sh`. The installer links immutable authored resources, publishes runtime-mutated settings and security configuration as regular machine-local files, reconciles packages, and leaves authentication, sessions, trust decisions, package caches, logs, and generated model catalogs machine-local. Tracked baselines such as `ai/pi/config/modes.json` and `ai/pi/config/permission-system.json` are first-install/reset inputs, not live runtime files.
+Run `make ai` or `bash ai/pi/install.sh`. The installer links immutable authored resources, publishes runtime-mutated settings and security configuration as regular machine-local files, reconciles packages, and leaves authentication, sessions, trust decisions, package caches, logs, and generated model catalogs machine-local. Tracked baselines such as `ai/pi/config/modes.json`, `ai/pi/config/models.json`, and `ai/pi/config/permission-system.json` are first-install/reset inputs, not live runtime files.
 
 Pi authenticates directly to the GitHub Copilot subscription through `/login`. Select any enabled Copilot model with `/model`; press Ctrl+S in the picker to save it as the startup default.
 
@@ -55,6 +56,7 @@ Pi authenticates directly to the GitHub Copilot subscription through `/login`. S
 ## Conventions
 
 - Keep authored Pi baselines in this repository; use runtime commands for mutable machine-local files under `~/.pi/agent/`.
+- `ai/pi/config/models.json` is a temporary GPT-6 Astra transport workaround; once Pi fixes the route upstream, remove both the tracked integration and its copied runtime entry.
 - Never commit `auth.json`, sessions, trust decisions, generated model catalogs, or package caches.
 - Language rules live in `ai/marketplace/plugins/my/skills/polish-core/rules/`.
 - After changing Pi configuration or package resources, run `bash bin/validate-ai` and the relevant tests.
