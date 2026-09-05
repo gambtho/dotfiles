@@ -533,11 +533,11 @@ validate_caddy_tls_health_through_tailnet() {
 # Tailscale version/online checks, DNS, source integrity, installed Caddy
 # state, listener/TLS health, and route classification, in that order, so
 # nothing mutation-adjacent runs before every boundary has been proven.
-# `empty` is accepted only as a genuine non-published pre-install state (no
-# managed Caddy artifact exists yet); any other state requires Caddy to be
-# fully healthy, and `legacy-exact` is reported as ready-to-migrate rather
-# than as steady-state success. route_state() already fails closed on any
-# foreign or additional route, so no other value can reach the final case.
+# `empty` or the transitional `legacy-exact` route is accepted as a
+# pre-install state only when no managed Caddy artifact exists. `raw-exact`
+# always requires a healthy Caddy backend. route_state() already fails closed
+# on any foreign or additional route, so no other value can reach the final
+# case.
 check_domain() {
   local route
   strict_firstpick_preflight
@@ -548,9 +548,10 @@ check_domain() {
   set_caddy_paths
   route=$(route_state) || return 1
 
-  if [[ "$route" == empty ]] && ! path_exists "$CADDY_BINARY" && ! path_exists "$CADDY_ENTRYPOINT" &&
+  if [[ "$route" == empty || "$route" == legacy-exact ]] &&
+    ! path_exists "$CADDY_BINARY" && ! path_exists "$CADDY_ENTRYPOINT" &&
     ! path_exists "$CADDY_CONFIG" && ! path_exists "$CADDY_UNIT"; then
-    printf 'custom domain is not yet installed\n'
+    printf 'custom domain is not yet installed; Tailscale route is %s\n' "$route"
     return 0
   fi
 

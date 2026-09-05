@@ -2394,6 +2394,24 @@ run_rollback() {
   [ ! -s "$MUTATION_CALLS" ]
 }
 
+@test "check_domain reports artifact-free legacy ingress as pre-install but rejects artifact-free raw ingress" {
+  prepare_custom_domain_check legacy-exact
+  rm -rf "$CADDY_ROOT/usr/local/lib/pi-webui" "$CADDY_ROOT/etc/pi-webui-caddy" \
+    "$CADDY_ROOT/etc/systemd/system"
+
+  run_custom_domain check
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'custom domain is not yet installed; Tailscale route is legacy-exact'* ]]
+  [ ! -s "$MUTATION_CALLS" ]
+
+  write_route raw
+  run_custom_domain check
+  [ "$status" -ne 0 ]
+  [[ "$output" != *'custom domain is not yet installed'* ]]
+  [[ "$output" == *'managed Caddy binary is unavailable'* ]]
+  [ ! -s "$MUTATION_CALLS" ]
+}
+
 @test "check_domain treats a leftover managed Caddy entrypoint as a partial install, not pre-install" {
   prepare_custom_domain_check empty
   rm -rf "$CADDY_ROOT/usr/local/lib/pi-webui/caddy" "$CADDY_ROOT/etc/pi-webui-caddy" \
