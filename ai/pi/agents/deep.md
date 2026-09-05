@@ -6,93 +6,73 @@ thinking: high
 tools: read, bash, grep, find, ls
 prompt_mode: append
 permission:
-  path_write: deny
+  path_write: allow
   write: deny
   edit: deny
   bash:
     "*": ask
-    "rg *": ask
-    "fd *": ask
-    "yq *": ask
-    "git diff --ext-diff*": ask
-    "git branch *": ask
-    "*/git branch *": ask
-    "git worktree *": ask
-    "*/git worktree *": ask
-    "git add *": ask
-    "*/git add *": ask
-    "git commit *": ask
-    "*/git commit *": ask
-    "git fetch *": ask
-    "git pull --ff-only": ask
-    "git switch *": ask
-    "*/git switch *": ask
-    "git merge *": ask
-    "*/git merge *": ask
-    "git rebase *": ask
-    "*/git rebase *": ask
-    "git cherry-pick *": ask
-    "*/git cherry-pick *": ask
-    "git revert *": ask
-    "*/git revert *": ask
-    "git stash *": ask
-    "*/git stash *": ask
-    "git tag *": ask
-    "*/git tag *": ask
-    "git reset *": ask
-    "*/git reset *": ask
-    "git rm *": ask
-    "*/git rm *": ask
-    "git mv *": ask
-    "*/git mv *": ask
-    "git format-patch *": ask
-    "*/git format-patch *": ask
-    "git apply *": ask
-    "*/git apply *": ask
-    "git am *": ask
-    "*/git am *": ask
-    "git bundle *": ask
-    "*/git bundle *": ask
-    "git fsck *": ask
-    "*/git fsck *": ask
-    "git reflog *": ask
-    "*/git reflog *": ask
-    "git notes *": ask
-    "*/git notes *": ask
-    "git bisect *": ask
-    "*/git bisect *": ask
-    "git sparse-checkout *": ask
-    "*/git sparse-checkout *": ask
-    "git branch --show-current *": allow
-    "git branch --list *": allow
-    "git branch --merged *": allow
-    "git worktree list *": allow
-    "git reflog show *": allow
-    "bats *": ask
-    "make *": ask
-    "npm *": ask
-    "pnpm *": ask
-    "cargo *": ask
-    "go *": ask
-    "pytest*": ask
-    "python -m pytest*": ask
-    "ruff *": ask
-    "rubocop*": ask
-    "gh auth status*": ask
-    "gh repo view*": ask
-    "gh pr list*": ask
-    "gh pr view*": ask
-    "gh pr checks*": ask
-    "gh issue list*": ask
-    "gh issue view*": ask
-    "gh run list*": ask
-    "gh run view*": ask
-    "gh repo delete*": deny
-    "gh api * --method DELETE*": deny
+    "*git *": deny
+    "git status*": allow
+    "git show*": allow
+    "git diff*": allow
+    "git log*": allow
+    "git grep*": allow
+    "git rev-parse*": allow
+    "git merge-base*": allow
+    "git branch --show-current*": allow
+    "git branch --list*": allow
+    "git branch --merged*": allow
+    "git worktree list*": allow
+    "git blame*": allow
+    "git describe*": allow
+    "git shortlog*": allow
+    "git name-rev*": allow
+    "git ls-files*": allow
+    "git ls-tree*": allow
+    "git cat-file*": allow
+    "git for-each-ref*": allow
+    "git check-ignore*": allow
+    "git check-attr*": allow
+    "git range-diff*": allow
+    "git fsck*": allow
+    "git count-objects*": allow
+    "git reflog show*": allow
+    "git submodule status*": allow
+    "git remote -v": allow
+    "git remote get-url*": allow
+    "git config --get*": allow
+    "git config --get-regexp*": allow
+    "git config --list*": allow
+    "git config -l*": allow
+    "*git *show *--ext-d*": deny
+    "*git *show *--textc*": deny
+    "*git *diff *--ext-d*": deny
+    "*git *diff *--textc*": deny
+    "*git *log *--ext-d*": deny
+    "*git *log *--textc*": deny
+    "*git *grep -*O*": deny
+    "*git *grep * -*O*": deny
+    "*git *grep *--op*": deny
+    "gh auth status*": allow
+    "gh repo view*": allow
+    "gh pr list*": allow
+    "gh pr view*": allow
+    "gh pr checks*": allow
+    "gh issue list*": allow
+    "gh issue view*": allow
+    "gh run list*": allow
+    "gh run view*": allow
+    "*gh pr create*": deny
+    "*gh pr edit*": deny
+    "*gh pr merge*": deny
+    "*gh issue create*": deny
+    "*gh issue edit*": deny
+    "*gh issue close*": deny
+    "*gh repo delete*": deny
+    "*gh api * --method DELETE*": deny
     "*$*": deny
 ---
 
 Operate read-only. Investigate architecture, security, and difficult diagnoses
-with evidence. Local inspection commands allowed by global policy remain
-available; commands with execution, credential, or build side effects require
-parent approval. Never mutate repository or external state.
+with evidence. Routine inspection and verification commands run without parent
+approval; repository, remote, package, and runtime mutations are denied.

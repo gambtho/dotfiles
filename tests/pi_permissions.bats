@@ -38,7 +38,7 @@ setup() {
     and .permission.write == "allow"
     and .permission.edit == "allow"
     and .permission.lsp_diagnostics == "allow"
-    and .permission.lsp_fix == "ask"
+    and .permission.lsp_fix == "allow"
     and .permission.mcp["*"] == "ask"
     and .permission.skill["*"] == "allow"
   ' "$PERMISSION_CONFIG"
@@ -103,6 +103,10 @@ setup() {
     )
     and .permission.external_directory_read["*"] == "ask"
     and .permission.external_directory_write["*"] == "ask"
+    and .permission.external_directory_read["~/.agents/skills/*"] == "allow"
+    and (.permission.external_directory_write | has("~/.agents/skills/*") | not)
+    and .permission.external_directory_read["/mnt/c/dev/flygd-wingman-*"] == "allow"
+    and .permission.external_directory_write["/mnt/c/dev/flygd-wingman-*"] == "allow"
   ' "$PERMISSION_CONFIG"
   [ "$status" -eq 0 ]
 }
@@ -119,15 +123,15 @@ setup() {
     and ($bash | has("*/git worktree *") | not)
     and $bash["git commit *"] == "allow"
     and ($bash | has("git -C * worktree *") | not)
-    and $bash["git fetch"] == "allow"
-    and $bash["git fetch origin"] == "allow"
-    and $bash["git fetch*"] == "ask"
+    and $bash["git fetch*"] == "allow"
+    and $bash["*/git fetch*"] == "ask"
     and $bash["git pull*"] == "ask"
-    and $bash["git pull --ff-only"] == "allow"
+    and $bash["git pull --ff-only*"] == "allow"
     and $bash["*/git pull*"] == "ask"
-    and ($bash | has("git pull --ff-only *") | not)
     and ($bash | has("git -C * pull --ff-only *") | not)
-    and $bash["git push*"] == "ask"
+    and $bash["git push*"] == "allow"
+    and $bash["*git *push *--delete*"] == "ask"
+    and $bash["*git *push *--all*"] == "ask"
     and $bash["git clone*"] == "ask"
     and $bash["*git *branch * -D*"] == "ask"
     and $bash["*git *worktree remove * -f*"] == "ask"
@@ -136,6 +140,9 @@ setup() {
     and $bash["*/gh *"] == "ask"
     and $bash["curl *"] == "ask"
     and $bash["*/curl *"] == "ask"
+    and $bash["curl *http://127.0.0.1:*"] == "allow"
+    and $bash["curl *http://localhost:*"] == "allow"
+    and $bash["curl *https://*"] == "ask"
     and $bash["wget *"] == "ask"
     and $bash["ssh *"] == "ask"
     and $bash["scp *"] == "ask"
