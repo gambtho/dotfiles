@@ -608,6 +608,9 @@ prepare_custom_domain_setup() {
   if [[ "$prior" == prior ]]; then
     make_caddy_fixture
     touch "$TEST_ROOT/caddy-active" "$TEST_ROOT/caddy-enabled"
+    # Models the prior Caddy process already in memory, so a no-op start
+    # cannot be mistaken for a candidate restart.
+    sed -n '2p' "$CADDY_ROOT/usr/local/lib/pi-webui/caddy" >"$TEST_ROOT/caddy-running"
   fi
 
   CADDY_CREDENTIAL="$CADDY_ROOT/etc/credstore.encrypted/godaddy-api-token"
@@ -688,11 +691,21 @@ prepare_custom_domain_setup() {
         rm -f "$TEST_ROOT/caddy-enabled" ;;
       "start pi-webui-caddy.service")
         printf "systemctl %s\n" "$*" >>"$MUTATION_CALLS"
+        # systemd treats start as a no-op for an already-active unit: the
+        # process in memory keeps running the binary it was started with.
+        if [[ -f "$TEST_ROOT/caddy-active" ]]; then exit 0; fi
         if [[ ${FAIL_POINT:-} == caddy-start ]]; then exit 1; fi
-        touch "$TEST_ROOT/caddy-active" ;;
+        touch "$TEST_ROOT/caddy-active"
+        sed -n "2p" "$PI_WEBUI_CADDY_ROOT/usr/local/lib/pi-webui/caddy" >"$TEST_ROOT/caddy-running" ;;
+      "restart pi-webui-caddy.service")
+        printf "systemctl %s\n" "$*" >>"$MUTATION_CALLS"
+        rm -f "$TEST_ROOT/caddy-active" "$TEST_ROOT/caddy-running"
+        if [[ ${FAIL_POINT:-} == caddy-start ]]; then exit 1; fi
+        touch "$TEST_ROOT/caddy-active"
+        sed -n "2p" "$PI_WEBUI_CADDY_ROOT/usr/local/lib/pi-webui/caddy" >"$TEST_ROOT/caddy-running" ;;
       "stop pi-webui-caddy.service")
         printf "systemctl %s\n" "$*" >>"$MUTATION_CALLS"
-        rm -f "$TEST_ROOT/caddy-active" ;;
+        rm -f "$TEST_ROOT/caddy-active" "$TEST_ROOT/caddy-running" ;;
       *) printf "systemctl %s\n" "$*" >>"$MUTATION_CALLS"; exit 99 ;;
     esac'
 
@@ -2117,6 +2130,33 @@ run_rollback() {
   ! grep -q 'tailscale serve' "$CALLS"
 }
 
+@test "setup restarts an active prior installation before readiness and leaves it active" {
+  prepare_custom_domain_setup legacy-exact prior
+  [ "$(cat "$TEST_ROOT/caddy-running")" = '# installed fixture' ]
+  run_custom_domain setup
+  [ "$status" -eq 0 ]
+
+  # The process actually in memory is the published candidate, not the prior
+  # binary an already-active unit would have kept running through a no-op
+  # start.
+  [ "$(cat "$TEST_ROOT/caddy-running")" = '# candidate build' ]
+  grep -Fq 'candidate build' "$CADDY_ROOT/usr/local/lib/pi-webui/caddy"
+  grep -q '^systemctl restart pi-webui-caddy.service$' "$MUTATION_CALLS"
+  ! grep -q '^systemctl start pi-webui-caddy.service$' "$MUTATION_CALLS"
+
+  # The restart precedes every readiness probe of the proxied endpoint.
+  restart=$(grep -n '^sudo systemctl restart pi-webui-caddy.service$' "$CALLS" | cut -d: -f1 | head -1)
+  health=$(grep -n 'https://pi.dpao.la:8443/api/health' "$CALLS" | cut -d: -f1 | head -1)
+  [ -n "$restart" ]
+  [ -n "$health" ]
+  [ "$restart" -lt "$health" ]
+
+  [ -f "$TEST_ROOT/caddy-active" ]
+  [ -f "$TEST_ROOT/caddy-enabled" ]
+  ! compgen -G "$STATE_ROOT/.caddy-setup.*" >/dev/null
+  ! grep -q 'tailscale serve' "$CALLS"
+}
+
 @test "setup restores prior files enablement and activity after a TLS health failure" {
   prepare_custom_domain_setup legacy-exact prior
   before=$(fingerprint_paths "$CADDY_ROOT")
@@ -2127,6 +2167,7 @@ run_rollback() {
 
   [ "$(fingerprint_paths "$CADDY_ROOT")" = "$before" ]
   ! grep -qF 'candidate build' "$CADDY_ROOT/usr/local/lib/pi-webui/caddy"
+  [ "$(cat "$TEST_ROOT/caddy-running")" = '# installed fixture' ]
   [ -f "$TEST_ROOT/caddy-enabled" ]
   [ -f "$TEST_ROOT/caddy-active" ]
   grep -q '^systemctl stop pi-webui-caddy.service$' "$MUTATION_CALLS"

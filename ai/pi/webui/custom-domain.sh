@@ -592,7 +592,7 @@ wait_for_caddy_ready() {
   validate_caddy_tls_health
 }
 
-# Publishes the validated candidate, reloads systemd, enables and starts the
+# Publishes the validated candidate, reloads systemd, enables and restarts the
 # dedicated service, and waits for readiness. The Tailscale route is never
 # touched.
 publish_caddy_candidate() {
@@ -608,7 +608,11 @@ publish_caddy_candidate() {
   caddy_daemon_reloaded=1
   sudo systemctl enable "$CADDY_SERVICE" || return 1
   caddy_enablement_changed=1
-  sudo systemctl start "$CADDY_SERVICE" || return 1
+  # restart, not start: start is a no-op for an already-active unit, which
+  # would leave a prior Caddy process serving the previous binary in memory
+  # while every on-disk and endpoint check passes. restart also starts an
+  # inactive or newly installed unit, so first install is unchanged.
+  sudo systemctl restart "$CADDY_SERVICE" || return 1
   caddy_started=1
   wait_for_caddy_ready
 }
