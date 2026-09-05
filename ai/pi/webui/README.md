@@ -80,6 +80,95 @@ to remove Serve, run `ai/pi/webui/rollback.sh`, then run it again with
 restore Serve, and check again. Rollback must run before Pi or mise is upgraded or removed
 because the exact Pi identity is required to prove the managed unit.
 
+## Custom domain (`pi.dpao.la`)
+
+This opt-in, separate layer publishes the existing loopback-only Web UI at
+`https://pi.dpao.la` over public GoDaddy DNS and a Tailscale raw TCP route,
+without adding LAN, wildcard, or Funnel ingress:
+
+```text
+pi.dpao.la -> public GoDaddy A 100.84.88.33 -> WSL Tailscale IP:443
+  -> Tailscale Serve raw TCP -> Caddy 127.0.0.1:8443 -> Firstp1ck 127.0.0.1:31415
+```
+
+It is entirely separate from ordinary `make ai`, `make ai-check`, `make
+ai-webui`, and `make ai-webui-check`, which are unchanged by this layer and do
+not acquire any custom-domain side effect. The only public entry points are
+`make ai-webui-domain-check` and `make ai-webui-domain-setup`; live route
+migration and rollback remain explicit script commands, never Make
+dependencies.
+
+### Disclosure and credential
+
+The public `pi.dpao.la A 100.84.88.33` record intentionally discloses the
+hostname and the CGNAT-range Tailscale address. ACME DNS-01 issuance also
+discloses the hostname through Certificate Transparency logs. The address
+remains unroutable without Tailscale connectivity and applicable tailnet
+policy, but some client resolvers or browsers reject a public answer in
+`100.64.0.0/10` through DNS-rebinding or Private Network Access defenses, so
+every expected client must be tested. If the node is deleted and re-enrolled,
+a changed Tailscale IP causes a hard stale-DNS failure until the record is
+manually updated.
+
+The classic GoDaddy Production credential is broad and deprecated; isolate its
+use and rotate it. The `caddy-dns/godaddy` module manages the exact
+`_acme-challenge.pi.dpao.la` TXT record; reserve that name for this flow and
+never point an unrelated value or a concurrent certificate client there.
+
+Caddy is a pinned private build (Caddy `v2.11.4` with `caddy-dns/godaddy`
+`v1.2.0` via xcaddy `v0.4.7`), installed under `/usr/local/lib/pi-webui/` and
+run as the dedicated system service `pi-webui-caddy.service`. It listens only
+on loopback `127.0.0.1:8443` and reverse-proxies to the existing Firstp1ck
+listener `127.0.0.1:31415`; Funnel remains disabled throughout.
+
+### Live operation, in order
+
+1. Resolve the known Pi drift under a separate approval before any
+   custom-domain setup or migration; the strict preflight refuses until
+   alignment is proven, and a restart or WSL reboot before alignment risks
+   launching the unaligned Pi version.
+2. Manually create `pi.dpao.la A 100.84.88.33` in GoDaddy (no CNAME or AAAA),
+   using the current node's Tailscale IPv4, and wait for exact public
+   resolvers to answer it before proceeding.
+3. Create the encrypted GoDaddy credential without shell-history exposure:
+
+   ```bash
+   sudo install -d -o root -g root -m 0700 /etc/credstore.encrypted
+   sudo systemd-creds encrypt --name=godaddy-api-token - \
+     /etc/credstore.encrypted/godaddy-api-token
+   # Paste KEY:SECRET, then press Ctrl-D. Do not paste it into chat.
+   sudo chmod 0600 /etc/credstore.encrypted/godaddy-api-token
+   ```
+
+4. Inspect read-only state: `make ai-webui-domain-check`.
+5. Review the report and obtain separate approval, then build and install the
+   candidate Caddy service while legacy ingress stays live:
+   `make ai-webui-domain-setup`.
+6. Inspect the exact installed service, unit, loopback listeners, and issued
+   certificate before migrating.
+7. Review the printed migration plan and obtain approval, then run
+   `ai/pi/webui/custom-domain.sh migrate`. It removes only the legacy exact
+   route (`Old: HTTPS 443 -> http://127.0.0.1:31415`), publishes only the raw
+   exact route (`New: TCP 443 -> tcp://127.0.0.1:8443`), verifies TLS and
+   health through the tailnet, and prompts for a separate trusted-tailnet-
+   client confirmation before disarming restoration. Interruption is normally
+   several seconds; browser WebSockets disconnect during the switch. Any
+   preflight, verification, or confirmation failure automatically restores
+   the legacy route.
+8. Verify: a trusted tailnet client reaches `https://pi.dpao.la` successfully;
+   an off-tailnet client fails to connect; Caddy and the Tailscale Serve
+   backend expose only loopback listeners and no LAN listener; Funnel remains
+   disabled; `systemctl --user restart pi-webui.service` and a full WSL
+   reboot both restore service correctly; and no orphaned process remains.
+   The old `.ts.net` URL is no longer valid once migration succeeds.
+9. Recover with `ai/pi/webui/custom-domain.sh rollback`, which restores the
+   legacy route and removes only the managed Caddy service artifacts, or with
+   the exact route commands printed by the migration plan
+   (`sudo tailscale serve --tcp=443 off; sudo tailscale serve --bg --https=443
+   http://127.0.0.1:31415`) if the script itself is unavailable. Rollback
+   preserves certificates, the encrypted credential, Pi state, and the
+   Tailscale identity by default.
+
 ## Rollback and uninstall
 
 The mandatory operator order is **`serve-off` → rollback → Tailscale uninstall**:

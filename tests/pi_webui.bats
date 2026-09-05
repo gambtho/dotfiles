@@ -1727,6 +1727,65 @@ run_rollback() {
   [ "$(<"$CALLS")" = $'ordinary:\nordinary:--check' ]
 }
 
+@test "custom-domain Make targets are explicit and ordinary AI targets are unchanged" {
+  fixture="$TEST_ROOT/domain-make"
+  mkdir -p "$fixture/ai/pi/webui" "$fixture/ai/pi"
+  cp "$REPO_ROOT/Makefile" "$fixture/Makefile"
+  printf '#!/usr/bin/env bash\nprintf "domain:%%s\\n" "$*" >>"$CALLS"\n' \
+    >"$fixture/ai/pi/webui/custom-domain.sh"
+  printf '#!/usr/bin/env bash\nprintf "ordinary:%%s\\n" "$*" >>"$CALLS"\n' \
+    >"$fixture/ai/pi/install.sh"
+
+  run make -s -C "$fixture" ai-webui-domain-check
+  [ "$status" -eq 0 ]
+  run make -s -C "$fixture" ai-webui-domain-setup
+  [ "$status" -eq 0 ]
+  [ "$(<"$CALLS")" = $'domain:check\ndomain:setup' ]
+
+  : >"$CALLS"
+  run make -s -C "$fixture" ai
+  [ "$status" -eq 0 ]
+  run make -s -C "$fixture" ai-check
+  [ "$status" -eq 0 ]
+  [ "$(<"$CALLS")" = $'ordinary:\nordinary:--check' ]
+  ! grep -q '^domain:' "$CALLS"
+}
+
+@test "custom-domain runbook documents the complete live-operation sequence" {
+  runbook="$REPO_ROOT/ai/pi/webui/README.md"
+  for text in \
+    'pi.dpao.la' \
+    'A 100.84.88.33' \
+    'Certificate Transparency' \
+    'DNS-rebinding' \
+    '/etc/credstore.encrypted/godaddy-api-token' \
+    'Caddy `v2.11.4`' \
+    '127.0.0.1:8443' \
+    'Firstp1ck' \
+    'Funnel' \
+    'make ai-webui-domain-check' \
+    'make ai-webui-domain-setup' \
+    'custom-domain.sh migrate' \
+    'custom-domain.sh rollback' \
+    'HTTPS 443 -> http://127.0.0.1:31415' \
+    'TCP 443 -> tcp://127.0.0.1:8443' \
+    'browser WebSockets disconnect' \
+    'Pi drift' \
+    'separate approval' \
+    'certificates' \
+    'trusted' \
+    'off-tailnet' \
+    'restart' \
+    'reboot' \
+    '.ts.net` URL is no longer valid' \
+    'classic GoDaddy' \
+    'deprecated' \
+    '_acme-challenge.pi.dpao.la' \
+    'sudo systemd-creds encrypt --name=godaddy-api-token'; do
+    grep -Fq -- "$text" "$runbook"
+  done
+}
+
 @test "runbook documents setup trust boundary accepted limitations and rollback" {
   runbook="$REPO_ROOT/ai/pi/webui/README.md"
   for text in 'make ai-webui-check' 'make ai-webui' 'http://127.0.0.1:31415' \

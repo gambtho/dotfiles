@@ -1,4 +1,4 @@
-.PHONY: install bootstrap update relink ai ai-check ai-webui ai-webui-check pins pins-check pins-update check syntax lint test python-test validate
+.PHONY: install bootstrap update relink ai ai-check ai-webui ai-webui-check ai-webui-domain-check ai-webui-domain-setup pins pins-check pins-update check syntax lint test python-test validate
 
 # ── Main targets ──────────────────────────────────────────────────────────────
 
@@ -38,6 +38,12 @@ ai-webui: ## Install/update the opt-in Pi Web UI
 
 ai-webui-check: ## Inspect Pi Web UI state without mutation
 	bash ai/pi/webui/install.sh --check
+
+ai-webui-domain-check: ## Inspect Pi Web UI custom-domain state without mutation
+	bash ai/pi/webui/custom-domain.sh check
+
+ai-webui-domain-setup: ## Build and install the opt-in custom-domain Caddy service
+	bash ai/pi/webui/custom-domain.sh setup
 
 pins: ## List managed dependency versions and refs
 	bash bin/versions list
