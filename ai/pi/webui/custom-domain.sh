@@ -39,6 +39,14 @@ readonly -a CADDY_MANAGED_SOURCE_FILES=(
   "$SCRIPT_DIR/custom-domain.sh"
 )
 
+# Pinned SHA-256 identities of the two approved static templates, the same
+# exact-tracked-content contract bin/validate-pi-webui uses for the runtime
+# manifest/lock. Any drift in either template — even syntactically valid,
+# placeholder-free, secret-free drift — must be a reviewed source change
+# that updates this pin, not a silent pass.
+readonly CADDYFILE_SHA256=a0c851372d974aa647e1e37de93fc374a11b1fc7ed361f8a74a6423d4c17c1b4
+readonly CADDY_UNIT_TEMPLATE_SHA256=1736be815881c48685b584f3906a1d3aa80811de118b601365c16097c4176eaf
+
 render_caddyfile() { cat "$SCRIPT_DIR/Caddyfile.in"; }
 
 # shellcheck disable=SC2120 # entrypoint override is used by later staged-build tasks
@@ -52,7 +60,7 @@ render_caddy_unit() {
 }
 
 validate_caddy_source() {
-  local entrypoint_script=$SCRIPT_DIR/caddy-entrypoint.sh rendered file
+  local entrypoint_script=$SCRIPT_DIR/caddy-entrypoint.sh rendered file actual_hash
 
   [[ -f "$SCRIPT_DIR/Caddyfile.in" && ! -L "$SCRIPT_DIR/Caddyfile.in" ]] ||
     fail 'tracked Caddyfile template is unavailable'
@@ -60,6 +68,13 @@ validate_caddy_source() {
     fail 'tracked Caddy unit template is unavailable'
   [[ -f "$entrypoint_script" && ! -L "$entrypoint_script" && -x "$entrypoint_script" ]] ||
     fail 'Caddy entrypoint script must be an executable regular file'
+
+  actual_hash=$(sha256sum "$SCRIPT_DIR/Caddyfile.in" | awk '{print $1}')
+  [[ "$actual_hash" == "$CADDYFILE_SHA256" ]] ||
+    fail "tracked Caddyfile SHA-256 must be $CADDYFILE_SHA256; got $actual_hash"
+  actual_hash=$(sha256sum "$SCRIPT_DIR/pi-webui-caddy.service.in" | awk '{print $1}')
+  [[ "$actual_hash" == "$CADDY_UNIT_TEMPLATE_SHA256" ]] ||
+    fail "tracked Caddy unit template SHA-256 must be $CADDY_UNIT_TEMPLATE_SHA256; got $actual_hash"
 
   rendered=$(render_caddyfile) || return 1
   [[ "$rendered" != *'{{'*'}}'* && "$rendered" != *'@'*'@'* ]] ||

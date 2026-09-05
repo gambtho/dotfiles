@@ -1239,3 +1239,20 @@ run_rollback() {
     "$REPO_ROOT/ai/pi/webui"
   [ "$status" -eq 1 ]
 }
+
+@test "Caddy source identity is pinned by exact SHA-256 and rejects harmless template drift" {
+  make_webui_fixture
+  run_custom_domain_function 'validate_caddy_source'
+  [ "$status" -eq 0 ]
+
+  printf '\n# harmless trailing comment\n' >>"$WEBUI_FIXTURE/ai/pi/webui/Caddyfile.in"
+  run_custom_domain_function 'validate_caddy_source'
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'Caddyfile SHA-256'* ]]
+
+  cp "$REPO_ROOT/ai/pi/webui/Caddyfile.in" "$WEBUI_FIXTURE/ai/pi/webui/Caddyfile.in"
+  printf '\n# harmless trailing comment\n' >>"$WEBUI_FIXTURE/ai/pi/webui/pi-webui-caddy.service.in"
+  run_custom_domain_function 'validate_caddy_source'
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'Caddy unit template SHA-256'* ]]
+}
