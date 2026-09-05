@@ -1,0 +1,21 @@
+{
+	admin off
+	auto_https disable_redirects
+	https_port 8443
+
+	servers {
+		protocols h1 h2
+	}
+}
+
+pi.dpao.la {
+	bind 127.0.0.1
+
+	tls {
+		dns godaddy {
+			api_token {env.GODADDY_API_TOKEN}
+		}
+	}
+
+	reverse_proxy 127.0.0.1:31415
+}

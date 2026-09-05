@@ -18,13 +18,30 @@ usage() {
 }
 
 preflight() {
+  local route
   require_supported_platform
   resolve_source
   resolve_mise
   resolve_pi
   set_managed_paths
   require_tailscale_daemon
-  [[ $(route_state) == empty ]] || fail 'remove the Tailscale Serve route before rollback'
+  route=$(route_state) || return 1
+  # Raw ingress means the custom domain is still published in front of this
+  # service, so the custom-domain rollback has to run first; the transitional
+  # legacy route has its own explicit removal verb. Anything else nonempty is
+  # an ordinary "remove the route first" refusal.
+  [[ "$route" != raw-exact ]] || {
+    fail "run $SCRIPT_DIR/custom-domain.sh rollback --full before Web UI rollback: raw custom-domain ingress is published"
+    return 1
+  }
+  [[ "$route" != legacy-exact ]] || {
+    fail "run $SCRIPT_DIR/tailscale.sh serve-legacy-off before Web UI rollback: the transitional legacy route is published"
+    return 1
+  }
+  [[ "$route" == empty ]] || {
+    fail 'remove the Tailscale Serve route before rollback'
+    return 1
+  }
 
   if systemctl --user is-active pi-webui.service >/dev/null 2>&1; then
     service_active=1
@@ -33,11 +50,17 @@ preflight() {
     validate_unit "$UNIT_PATH"
     unit_present=1
   else
-    [[ "$service_active" -eq 0 ]] || fail 'active Pi Web UI service has no managed unit'
+    [[ "$service_active" -eq 0 ]] || {
+      fail 'active Pi Web UI service has no managed unit'
+      return 1
+    }
   fi
 
   if [[ "$remove_runtime" -eq 1 ]] && path_exists "$INSTALLED_RUNTIME"; then
-    [[ "$service_active" -eq 0 ]] || fail 'runtime removal requires an inactive service'
+    [[ "$service_active" -eq 0 ]] || {
+      fail 'runtime removal requires an inactive service'
+      return 1
+    }
     require_managed_directory "$INSTALLED_RUNTIME" 'installed runtime'
     "$SOURCE_ROOT/bin/validate-pi-webui" --installed-runtime "$INSTALLED_RUNTIME"
   fi
@@ -55,7 +78,10 @@ remove_service() {
     rm -f -- "$UNIT_PATH"
     systemctl --user daemon-reload
   fi
-  listeners=$(ss -ltnH 'sport = :31415') || fail 'cannot inspect Pi Web UI listener'
+  listeners=$(ss -ltnH 'sport = :31415') || {
+    fail 'cannot inspect Pi Web UI listener'
+    return 1
+  }
   [[ -z "$listeners" ]] || fail 'a listener remains on port 31415'
 }
 

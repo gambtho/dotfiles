@@ -22,13 +22,32 @@ canonical_existing() {
 
 require_test_override() {
   local path=$1 root home_real path_real
-  [[ ${PI_WEBUI_TESTING:-} == 1 && -n ${BATS_TEST_TMPDIR:-} ]] ||
+  [[ ${PI_WEBUI_TESTING:-} == 1 && -n ${BATS_TEST_TMPDIR:-} ]] || {
     fail 'test overrides are unavailable outside Bats'
-  root=$(canonical_existing "$BATS_TEST_TMPDIR") || fail 'invalid Bats test root'
-  home_real=$(canonical_existing "$HOME") || fail 'invalid test HOME'
-  path_real=$(canonical_existing "$path") || fail "invalid test fixture path: $path"
-  case "$home_real/" in "$root/"*) ;; *) fail 'test HOME must be below the Bats test root' ;; esac
-  case "$path_real/" in "$root/"*) ;; *) fail 'test fixture must be below the Bats test root' ;; esac
+    return 1
+  }
+  root=$(canonical_existing "$BATS_TEST_TMPDIR") || {
+    fail 'invalid Bats test root'
+    return 1
+  }
+  home_real=$(canonical_existing "$HOME") || {
+    fail 'invalid test HOME'
+    return 1
+  }
+  path_real=$(canonical_existing "$path") || {
+    fail "invalid test fixture path: $path"
+    return 1
+  }
+  case "$home_real/" in "$root/"*) ;; *)
+    fail 'test HOME must be below the Bats test root'
+    return 1
+    ;;
+  esac
+  case "$path_real/" in "$root/"*) ;; *)
+    fail 'test fixture must be below the Bats test root'
+    return 1
+    ;;
+  esac
 }
 
 require_supported_platform() {
@@ -37,7 +56,10 @@ require_supported_platform() {
     require_test_override "$PI_WEBUI_TEST_OS_RELEASE"
     os_release=$PI_WEBUI_TEST_OS_RELEASE
   fi
-  [[ -f "$os_release" ]] || fail 'operating-system identity is unavailable'
+  [[ -f "$os_release" ]] || {
+    fail 'operating-system identity is unavailable'
+    return 1
+  }
   id=$(bash -c '. "$1"; printf "%s" "${ID:-}"' bash "$os_release")
   version=$(bash -c '. "$1"; printf "%s" "${VERSION_ID:-}"' bash "$os_release")
   codename=$(bash -c '. "$1"; printf "%s" "${VERSION_CODENAME:-}"' bash "$os_release")
@@ -47,8 +69,10 @@ require_supported_platform() {
     kernel=$PI_WEBUI_TEST_UNAME_RELEASE
   fi
   [[ "$id" == ubuntu && "$version" == 24.04 && "$codename" == noble &&
-    "$kernel" == *[Mm]icrosoft* ]] ||
+    "$kernel" == *[Mm]icrosoft* ]] || {
     fail 'Pi Web UI requires Ubuntu 24.04 Noble under WSL'
+    return 1
+  }
   systemctl --user show-environment >/dev/null ||
     fail 'a working systemd user manager is required'
 }
@@ -61,10 +85,14 @@ resolve_source() {
     require_test_override "$PI_WEBUI_TEST_SOURCE_ROOT"
     SOURCE_ROOT=$(canonical_existing "$PI_WEBUI_TEST_SOURCE_ROOT")
   fi
-  [[ -d "$SOURCE_ROOT/.git" || -f "$SOURCE_ROOT/.git" ]] ||
+  [[ -d "$SOURCE_ROOT/.git" || -f "$SOURCE_ROOT/.git" ]] || {
     fail 'source root is not a Git checkout'
-  git_dir=$(git -C "$SOURCE_ROOT" rev-parse --path-format=absolute --git-dir) ||
+    return 1
+  }
+  git_dir=$(git -C "$SOURCE_ROOT" rev-parse --path-format=absolute --git-dir) || {
     fail 'cannot resolve source Git directory'
+    return 1
+  }
   SOURCE_GIT_DIR=$(canonical_existing "$git_dir")
   SOURCE_GIT_COMMON_DIR=$(canonical_existing "$(git -C "$SOURCE_ROOT" rev-parse --path-format=absolute --git-common-dir)")
   PRIMARY_CHECKOUT=$(git -C "$SOURCE_ROOT" worktree list --porcelain | awk 'NR == 1 { print substr($0, 10); exit }')
@@ -72,8 +100,10 @@ resolve_source() {
   if [[ -n ${PI_WEBUI_TEST_SOURCE_ROOT:-} ]]; then
     CANONICAL_CHECKOUT=$PRIMARY_CHECKOUT
   else
-    CANONICAL_CHECKOUT=$(canonical_existing "$HOME/.dotfiles") ||
+    CANONICAL_CHECKOUT=$(canonical_existing "$HOME/.dotfiles") || {
       fail 'cannot resolve the canonical primary checkout'
+      return 1
+    }
   fi
   export SOURCE_ROOT SOURCE_GIT_DIR SOURCE_GIT_COMMON_DIR PRIMARY_CHECKOUT CANONICAL_CHECKOUT
 }
@@ -81,26 +111,47 @@ resolve_source() {
 validate_apply_source() {
   local head upstream
   [[ "$SOURCE_GIT_DIR" == "$SOURCE_GIT_COMMON_DIR" && "$SOURCE_ROOT" == "$PRIMARY_CHECKOUT" &&
-    "$PRIMARY_CHECKOUT" == "$CANONICAL_CHECKOUT" ]] ||
+    "$PRIMARY_CHECKOUT" == "$CANONICAL_CHECKOUT" ]] || {
     fail 'apply requires the canonical primary checkout'
-  [[ -z $(git -C "$SOURCE_ROOT" status --porcelain --untracked-files=all) ]] ||
+    return 1
+  }
+  [[ -z $(git -C "$SOURCE_ROOT" status --porcelain --untracked-files=all) ]] || {
     fail 'apply requires a clean source checkout'
+    return 1
+  }
   head=$(git -C "$SOURCE_ROOT" rev-parse HEAD)
-  upstream=$(git -C "$SOURCE_ROOT" rev-parse refs/remotes/origin/main 2>/dev/null) ||
+  upstream=$(git -C "$SOURCE_ROOT" rev-parse refs/remotes/origin/main 2>/dev/null) || {
     fail 'origin/main is unavailable'
+    return 1
+  }
   [[ "$head" == "$upstream" ]] || fail 'apply requires HEAD to equal origin/main'
 }
 
 resolve_mise() {
-  MISE_LAUNCHER=$(command -v mise 2>/dev/null) || fail 'mise launcher is unavailable'
-  [[ "$MISE_LAUNCHER" == /* && -x "$MISE_LAUNCHER" ]] || fail 'mise launcher is invalid'
-  MISE_LAUNCHER=$(canonical_existing "$MISE_LAUNCHER") || fail 'cannot resolve mise launcher'
+  MISE_LAUNCHER=$(command -v mise 2>/dev/null) || {
+    fail 'mise launcher is unavailable'
+    return 1
+  }
+  [[ "$MISE_LAUNCHER" == /* && -x "$MISE_LAUNCHER" ]] || {
+    fail 'mise launcher is invalid'
+    return 1
+  }
+  MISE_LAUNCHER=$(canonical_existing "$MISE_LAUNCHER") || {
+    fail 'cannot resolve mise launcher'
+    return 1
+  }
   export MISE_LAUNCHER
 }
 
 resolve_pi() {
-  PI_LAUNCHER=$("$MISE_LAUNCHER" which pi 2>/dev/null) || fail 'Pi must be available through mise'
-  [[ -x "$PI_LAUNCHER" && "$PI_LAUNCHER" == /* ]] || fail 'mise returned an invalid Pi launcher'
+  PI_LAUNCHER=$("$MISE_LAUNCHER" which pi 2>/dev/null) || {
+    fail 'Pi must be available through mise'
+    return 1
+  }
+  [[ -x "$PI_LAUNCHER" && "$PI_LAUNCHER" == /* ]] || {
+    fail 'mise returned an invalid Pi launcher'
+    return 1
+  }
   PI_LAUNCHER=$(canonical_existing "$PI_LAUNCHER")
   node - "$PI_LAUNCHER" <<'NODE' || fail 'Pi launcher is not @earendil-works/pi-coding-agent@0.84.4'
 const fs = require('node:fs');
@@ -130,30 +181,61 @@ validate_landing_worktree() {
   if [[ ! -e "$worktree" && ! -L "$worktree" ]]; then
     existing=$(dirname "$worktree")
     while [[ ! -e "$existing" ]]; do existing=$(dirname "$existing"); done
-    [[ -d "$existing" && ! -L "$existing" ]] || fail 'landing worktree parent must be a real directory'
+    [[ -d "$existing" && ! -L "$existing" ]] || {
+      fail 'landing worktree parent must be a real directory'
+      return 1
+    }
     owner=$(stat -c %u "$existing")
-    [[ "$owner" == "$(id -u)" ]] || fail 'landing worktree parent must be owned by the current user'
+    [[ "$owner" == "$(id -u)" ]] || {
+      fail 'landing worktree parent must be owned by the current user'
+      return 1
+    }
     printf 'landing worktree would be created: %s\n' "$worktree"
     return 0
   fi
-  [[ -d "$worktree" && ! -L "$worktree" ]] || fail 'landing worktree must be a real directory'
+  [[ -d "$worktree" && ! -L "$worktree" ]] || {
+    fail 'landing worktree must be a real directory'
+    return 1
+  }
   owner=$(stat -c %u "$worktree")
-  [[ "$owner" == "$(id -u)" ]] || fail 'landing worktree must be owned by the current user'
-  common=$(canonical_existing "$(git -C "$worktree" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)") ||
+  [[ "$owner" == "$(id -u)" ]] || {
+    fail 'landing worktree must be owned by the current user'
+    return 1
+  }
+  common=$(canonical_existing "$(git -C "$worktree" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)") || {
     fail 'landing worktree is not a Git worktree'
-  [[ "$common" == "$SOURCE_GIT_COMMON_DIR" ]] || fail 'landing worktree belongs to a foreign repository'
+    return 1
+  }
+  [[ "$common" == "$SOURCE_GIT_COMMON_DIR" ]] || {
+    fail 'landing worktree belongs to a foreign repository'
+    return 1
+  }
   if git -C "$worktree" symbolic-ref -q HEAD >/dev/null; then
     fail 'landing worktree must be detached'
+    return 1
   fi
-  [[ -z $(git -C "$worktree" status --porcelain --untracked-files=all) ]] ||
+  [[ -z $(git -C "$worktree" status --porcelain --untracked-files=all) ]] || {
     fail 'landing worktree must be clean'
+    return 1
+  }
   ignored=$(git -C "$worktree" status --porcelain --ignored --untracked-files=all)
-  [[ -z "$ignored" || "$ignored" == '!! .pi/' ]] || fail 'landing worktree contains ignored state'
+  [[ -z "$ignored" || "$ignored" == '!! .pi/' ]] || {
+    fail 'landing worktree contains ignored state'
+    return 1
+  }
   if [[ -e "$worktree/.pi" ]]; then
-    [[ -d "$worktree/.pi" && ! -L "$worktree/.pi" ]] || fail '.pi must be a real directory'
-    [[ -d "$worktree/.pi/plans" && ! -L "$worktree/.pi/plans" ]] || fail '.pi may contain only plans/'
-    [[ -z $(find "$worktree/.pi" -mindepth 1 -maxdepth 1 ! -name plans -print -quit) ]] ||
+    [[ -d "$worktree/.pi" && ! -L "$worktree/.pi" ]] || {
+      fail '.pi must be a real directory'
+      return 1
+    }
+    [[ -d "$worktree/.pi/plans" && ! -L "$worktree/.pi/plans" ]] || {
       fail '.pi may contain only plans/'
+      return 1
+    }
+    [[ -z $(find "$worktree/.pi" -mindepth 1 -maxdepth 1 ! -name plans -print -quit) ]] || {
+      fail '.pi may contain only plans/'
+      return 1
+    }
     [[ -z $(find "$worktree/.pi/plans" -mindepth 1 -print -quit) ]] || fail '.pi/plans must be empty'
   fi
 }
@@ -182,7 +264,10 @@ render_unit() {
   safe_unit_path "$pi_launcher" || return 1
   safe_unit_path "$mise_launcher" || return 1
   template="$SOURCE_ROOT/ai/pi/webui/pi-webui.service.in"
-  [[ -f "$template" && ! -L "$template" ]] || fail 'service template is unavailable'
+  [[ -f "$template" && ! -L "$template" ]] || {
+    fail 'service template is unavailable'
+    return 1
+  }
   rendered=$(<"$template")
   rendered=${rendered//@RUNTIME_LAUNCHER@/\"$runtime_launcher\"}
   rendered=${rendered//@WORKTREE@/\"$worktree\"}
@@ -196,21 +281,37 @@ render_unit() {
 
 validate_unit() {
   local unit=${1:-$UNIT_PATH}
-  [[ -f "$unit" && ! -L "$unit" ]] || fail 'installed service unit is unavailable'
+  [[ -f "$unit" && ! -L "$unit" ]] || {
+    fail 'installed service unit is unavailable'
+    return 1
+  }
   cmp -s "$unit" <(render_unit "$RUNTIME_LAUNCHER" "$LANDING_WORKTREE" "$PI_LAUNCHER") ||
     fail 'installed service unit differs from the managed configuration'
 }
 
 validate_active_health() {
   local pi_launcher=${1:-$PI_LAUNCHER} listeners health
-  systemctl --user is-active pi-webui.service >/dev/null || fail 'Pi Web UI service is not active'
-  listeners=$(ss -ltnH 'sport = :31415') || fail 'cannot inspect Pi Web UI listener'
-  [[ $(printf '%s\n' "$listeners" | awk 'NF { count++ } END { print count+0 }') -eq 1 ]] ||
+  systemctl --user is-active pi-webui.service >/dev/null || {
+    fail 'Pi Web UI service is not active'
+    return 1
+  }
+  listeners=$(ss -ltnH 'sport = :31415') || {
+    fail 'cannot inspect Pi Web UI listener'
+    return 1
+  }
+  [[ $(printf '%s\n' "$listeners" | awk 'NF { count++ } END { print count+0 }') -eq 1 ]] || {
     fail 'expected exactly one Pi Web UI listener'
-  [[ $(printf '%s\n' "$listeners" | awk 'NF { print $4 }') == 127.0.0.1:31415 ]] ||
+    return 1
+  }
+  [[ $(printf '%s\n' "$listeners" | awk 'NF { print $4 }') == 127.0.0.1:31415 ]] || {
     fail 'Pi Web UI listener is not loopback-only'
-  health=$(curl --fail --silent --show-error http://127.0.0.1:31415/api/health) ||
+    return 1
+  }
+  health=$(curl --fail --silent --show-error --connect-timeout 5 --max-time 15 \
+    http://127.0.0.1:31415/api/health) || {
     fail 'Pi Web UI health endpoint failed'
+    return 1
+  }
   node - "$pi_launcher" "$health" <<'NODE' || fail 'Pi Web UI health identity is invalid'
 const launcher = process.argv[2];
 const response = JSON.parse(process.argv[3]);
