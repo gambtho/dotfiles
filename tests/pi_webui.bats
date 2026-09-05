@@ -455,25 +455,44 @@ write_ns() {
   done
 }
 
+# Writes a fixture private Caddy binary that answers exactly the subcommands
+# the implementation runs. $2 distinguishes a prior installed binary from a
+# freshly built candidate so restoration can be proven byte-for-byte. The
+# real `caddy list-modules --packages` shape is one "<module id> <package>"
+# line per module (Caddy v2.11.4 cmd/commandfuncs.go printModuleInfo), with
+# blank-line-separated "  Standard modules: N" section counts.
+write_caddy_stub_binary() {
+  local path=$1 marker=$2
+  printf '#!/usr/bin/env bash\n# %s\n' "$marker" >"$path"
+  cat >>"$path" <<'EOF'
+case "$1" in
+  version) printf '%s\n' "${CADDY_VERSION_OUTPUT:-v2.11.4 h1:test}" ;;
+  list-modules) printf '%s\n' "${CADDY_MODULES:-dns.providers.godaddy github.com/caddy-dns/godaddy}" ;;
+  adapt)
+    printf 'caddy adapt token=%s\n' "${GODADDY_API_TOKEN:-unset}" >>"$CALLS"
+    if [[ ${FAIL_POINT:-} == adapt ]]; then
+      printf 'adapt: invalid configuration\n' >&2
+      exit 1
+    fi
+    printf '{"apps":{}}\n' ;;
+  *) exit 1 ;;
+esac
+EOF
+  chmod 0755 "$path"
+}
+
 # Writes a fixture private Caddy binary, entrypoint, Caddyfile, and unit
 # under $CADDY_ROOT, matching what set_caddy_paths() computes from
-# $PI_WEBUI_CADDY_ROOT. The Caddyfile is byte-identical to the tracked
-# template; the unit is rendered with the real fixture entrypoint path so
-# validate_installed_caddy()'s byte-for-byte comparison succeeds.
+# $PI_WEBUI_CADDY_ROOT. The Caddyfile and entrypoint are byte-identical to
+# the tracked sources; the unit is rendered with the real fixture entrypoint
+# path so validate_installed_caddy()'s byte-for-byte comparison succeeds.
 make_caddy_fixture() {
   mkdir -p "$CADDY_ROOT/usr/local/lib/pi-webui" "$CADDY_ROOT/etc/pi-webui-caddy" \
     "$CADDY_ROOT/etc/systemd/system"
   cp "$WEBUI_FIXTURE/ai/pi/webui/Caddyfile.in" "$CADDY_ROOT/etc/pi-webui-caddy/Caddyfile"
-  cat >"$CADDY_ROOT/usr/local/lib/pi-webui/caddy" <<'EOF'
-#!/usr/bin/env bash
-case "$1" in
-  version) printf '%s\n' "${CADDY_VERSION_OUTPUT:-v2.11.4 h1:test}" ;;
-  list-modules) printf '%s\n' "${CADDY_MODULES:-  dns.providers.godaddy (github.com/caddy-dns/godaddy@v1.2.0)}" ;;
-  *) exit 1 ;;
-esac
-EOF
-  chmod +x "$CADDY_ROOT/usr/local/lib/pi-webui/caddy"
-  printf '#!/usr/bin/env bash\n' >"$CADDY_ROOT/usr/local/lib/pi-webui/caddy-entrypoint"
+  write_caddy_stub_binary "$CADDY_ROOT/usr/local/lib/pi-webui/caddy" 'installed fixture'
+  cp "$WEBUI_FIXTURE/ai/pi/webui/caddy-entrypoint.sh" \
+    "$CADDY_ROOT/usr/local/lib/pi-webui/caddy-entrypoint"
   chmod +x "$CADDY_ROOT/usr/local/lib/pi-webui/caddy-entrypoint"
   bash -c 'source "$1"; set_caddy_paths; render_caddy_unit "$CADDY_ENTRYPOINT"' bash \
     "$WEBUI_FIXTURE/ai/pi/webui/custom-domain.sh" \
@@ -499,7 +518,16 @@ prepare_custom_domain_check() {
 
   printf '%s\n' 'LISTEN 0 4096 127.0.0.1:8443 0.0.0.0:*' >"$TEST_ROOT/caddy-listeners"
   : >"$TEST_ROOT/caddy-listeners-udp"
-  export CADDY_MODULES='  dns.providers.godaddy (github.com/caddy-dns/godaddy@v1.2.0)'
+  export CADDY_MODULES
+  CADDY_MODULES=$(printf '%s\n' \
+    'admin.api.load github.com/caddyserver/caddy/v2' \
+    'http.handlers.reverse_proxy github.com/caddyserver/caddy/v2' \
+    '' \
+    '  Standard modules: 2' \
+    '' \
+    'dns.providers.godaddy github.com/caddy-dns/godaddy' \
+    '' \
+    '  Non-standard modules: 1')
   export CADDY_VERSION_OUTPUT='v2.11.4 h1:test'
   export CADDY_HEALTH_JSON="$HEALTH_JSON"
 
@@ -565,6 +593,177 @@ prepare_custom_domain_check() {
         if [[ ${LAN_31415_REACHABLE:-0} == 1 ]]; then exit 0; else exit 7; fi ;;
       *) exit 7 ;;
     esac'
+}
+
+# Full fixture for candidate-first setup. Extends the read-only check fixture
+# with stubs for every build, credential, publication, and service boundary:
+# nothing is really built, downloaded, decrypted, installed, started, or
+# routed. $2 == prior seeds an existing managed installation so restoration
+# can be proven.
+prepare_custom_domain_setup() {
+  local mode=${1:-legacy-exact} prior=${2:-}
+  prepare_custom_domain_check "$mode"
+  rm -rf "$CADDY_ROOT/usr" "$CADDY_ROOT/etc/pi-webui-caddy" "$CADDY_ROOT/etc/systemd"
+  rm -f "$TEST_ROOT/caddy-active" "$TEST_ROOT/caddy-enabled"
+  if [[ "$prior" == prior ]]; then
+    make_caddy_fixture
+    touch "$TEST_ROOT/caddy-active" "$TEST_ROOT/caddy-enabled"
+  fi
+
+  CADDY_CREDENTIAL="$CADDY_ROOT/etc/credstore.encrypted/godaddy-api-token"
+  CADDY_STATE_DIR="$CADDY_ROOT/var/lib/pi-webui-caddy"
+  export CADDY_CREDENTIAL CADDY_STATE_DIR
+  mkdir -p "$(dirname "$CADDY_CREDENTIAL")" "$CADDY_STATE_DIR"
+  printf 'encrypted-credential-blob\n' >"$CADDY_CREDENTIAL"
+  chmod 0600 "$CADDY_CREDENTIAL"
+  printf 'acme account state\n' >"$CADDY_STATE_DIR/acme.json"
+
+  write_caddy_stub_binary "$TEST_ROOT/candidate-caddy" 'candidate build'
+  # Two attempts with no delay: a bounded readiness wait that never sleeps.
+  export PI_WEBUI_TEST_READY_BUDGET=2:0
+
+  stub_command mise 'if [[ "$1 $2" == "which pi" ]]; then
+    printf "%s\n" "$PI_LAUNCHER"
+  elif [[ "$1 $2" == "exec --" ]]; then
+    shift 2
+    exec "$@"
+  else
+    exit 97
+  fi'
+  MISE_LAUNCHER="$STUB_BIN/mise"
+  export MISE_LAUNCHER
+
+  stub_command go 'printf "go %s\n" "$*" >>"$CALLS"
+    if [[ ${FAIL_POINT:-} == build ]]; then
+      printf "xcaddy: build failed\n" >&2
+      exit 1
+    fi
+    output=
+    previous=
+    for argument in "$@"; do
+      if [[ "$previous" == --output ]]; then output=$argument; fi
+      previous=$argument
+    done
+    [[ -n "$output" ]] || exit 3
+    cp "$TEST_ROOT/candidate-caddy" "$output"
+    chmod 0755 "$output"'
+
+  stub_command shellcheck 'printf "shellcheck %s\n" "$*" >>"$CALLS"
+    [[ ${FAIL_POINT:-} != shellcheck ]]'
+
+  stub_command systemd-analyze 'printf "systemd-analyze %s\n" "$*" >>"$CALLS"
+    [[ ${FAIL_POINT:-} != unit-verify ]]'
+
+  # Intercepts only the credential validator (node -e); every other Node
+  # program in the implementation still runs for real.
+  stub_command node 'if [[ "$1" == -e ]]; then
+    token=$(cat)
+    printf "godaddy-api-request\n" >>"$CREDENTIAL_CALLS"
+    case "$token" in
+      *:*) ;;
+      *) exit 2 ;;
+    esac
+    if [[ "${GODADDY_API_STATUS:-200}" == 200 ]]; then
+      printf "GoDaddy DNS API credential is valid\n"
+    else
+      printf "error: GoDaddy DNS API returned HTTP %s\n" "$GODADDY_API_STATUS" >&2
+      exit 1
+    fi
+  else
+    exec "$SANDBOX_TOOL_BIN/node" "$@"
+  fi'
+
+  stub_command systemctl 'printf "systemctl %s\n" "$*" >>"$CALLS"
+    case "$*" in
+      "--user show-environment"|"is-active tailscaled") exit 0 ;;
+      "--user is-active pi-webui.service") [[ ${FIRSTPICK_INACTIVE:-0} != 1 ]] ;;
+      "is-active pi-webui-caddy.service") [[ -f "$TEST_ROOT/caddy-active" ]] ;;
+      "is-enabled pi-webui-caddy.service") [[ -f "$TEST_ROOT/caddy-enabled" ]] ;;
+      "daemon-reload") printf "systemctl %s\n" "$*" >>"$MUTATION_CALLS" ;;
+      "enable pi-webui-caddy.service")
+        printf "systemctl %s\n" "$*" >>"$MUTATION_CALLS"
+        touch "$TEST_ROOT/caddy-enabled" ;;
+      "disable pi-webui-caddy.service")
+        printf "systemctl %s\n" "$*" >>"$MUTATION_CALLS"
+        rm -f "$TEST_ROOT/caddy-enabled" ;;
+      "start pi-webui-caddy.service")
+        printf "systemctl %s\n" "$*" >>"$MUTATION_CALLS"
+        if [[ ${FAIL_POINT:-} == caddy-start ]]; then exit 1; fi
+        touch "$TEST_ROOT/caddy-active" ;;
+      "stop pi-webui-caddy.service")
+        printf "systemctl %s\n" "$*" >>"$MUTATION_CALLS"
+        rm -f "$TEST_ROOT/caddy-active" ;;
+      *) printf "systemctl %s\n" "$*" >>"$MUTATION_CALLS"; exit 99 ;;
+    esac'
+
+  stub_command stat 'case "$3" in
+    "$CADDY_CREDENTIAL")
+      case "$1 $2" in
+        "-c %u") printf "%s\n" "${CREDENTIAL_OWNER:-0}" ;;
+        "-c %a") printf "%s\n" "${CREDENTIAL_MODE:-600}" ;;
+        *) exec /usr/bin/stat "$@" ;;
+      esac ;;
+    "$PI_WEBUI_CADDY_ROOT/usr/local/lib/pi-webui/caddy"|"$PI_WEBUI_CADDY_ROOT/usr/local/lib/pi-webui/caddy-entrypoint"|"$PI_WEBUI_CADDY_ROOT/etc/pi-webui-caddy/Caddyfile"|"$PI_WEBUI_CADDY_ROOT/etc/systemd/system/pi-webui-caddy.service")
+      if [[ "$1 $2" == "-c %u" ]]; then
+        if [[ ${CADDY_FOREIGN_OWNER:-0} == 1 ]]; then printf "1000\n"; else printf "0\n"; fi
+      else
+        exec /usr/bin/stat "$@"
+      fi ;;
+    *) exec /usr/bin/stat "$@" ;;
+  esac'
+
+  # sudo runs nothing privileged: it records the exact command, answers the
+  # credential decryption with a fixture token, and performs publication with
+  # the unprivileged real install/mv/rm inside $CADDY_ROOT.
+  stub_command sudo 'printf "sudo %s\n" "$*" >>"$CALLS"
+    case "$1" in
+      systemd-creds)
+        printf "credential-check\n" >>"$CALLS"
+        printf "systemd-creds decrypt\n" >>"$CREDENTIAL_CALLS"
+        if [[ ${FAIL_POINT:-} == decrypt ]]; then exit 1; fi
+        printf "%s" "${GODADDY_TOKEN_FIXTURE-testkey:testsecret}" ;;
+      install)
+        shift
+        arguments=()
+        while [[ $# -gt 0 ]]; do
+          case "$1" in
+            -o|-g) shift 2 ;;
+            *) arguments+=("$1"); shift ;;
+          esac
+        done
+        if [[ ${FAIL_POINT:-} == publish && "${arguments[*]}" == *pi-webui-caddy.service* ]]; then exit 1; fi
+        exec /usr/bin/install "${arguments[@]}" ;;
+      mv)
+        shift
+        if [[ ${RESTORE_FAIL:-0} == 1 && "$*" == *.pi-webui-restore* ]]; then exit 1; fi
+        exec /usr/bin/mv "$@" ;;
+      rm)
+        shift
+        exec /usr/bin/rm "$@" ;;
+      systemctl)
+        shift
+        exec systemctl "$@" ;;
+      *) printf "%s\n" "$*" >>"$MUTATION_CALLS"; exit 98 ;;
+    esac'
+}
+
+# Absolute managed artifact paths under the test Caddy root, in publication
+# order: binary, entrypoint, Caddyfile, unit.
+managed_caddy_paths() {
+  printf '%s\n' \
+    "$CADDY_ROOT/usr/local/lib/pi-webui/caddy" \
+    "$CADDY_ROOT/usr/local/lib/pi-webui/caddy-entrypoint" \
+    "$CADDY_ROOT/etc/pi-webui-caddy/Caddyfile" \
+    "$CADDY_ROOT/etc/systemd/system/pi-webui-caddy.service"
+}
+
+assert_no_caddy_publication() {
+  [ ! -s "$MUTATION_CALLS" ]
+  ! grep -q '^sudo install ' "$CALLS"
+  ! grep -q 'tailscale serve' "$CALLS"
+  [ -f "$CADDY_CREDENTIAL" ]
+  [ -f "$CADDY_STATE_DIR/acme.json" ]
+  ! compgen -G "$STATE_ROOT/.caddy-setup.*" >/dev/null
 }
 
 prepare_rollback() {
@@ -1030,8 +1229,7 @@ run_rollback() {
     '{"TCP":{"443":{"TCPForward":"127.0.0.1:8443"},"8443":{"TCPForward":"127.0.0.1:8443"}}}' \
     '{"TCP":{"443":{"TCPForward":"127.0.0.1:8443"}},"Web":{"wsl.test.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:31415"}}}}}' \
     '{"TCP":{"443":{"TCPForward":"127.0.0.1:8443"}},"AllowFunnel":{"wsl.test.ts.net:443":true}}' \
-    '{"TCP":{"443":{"TCPForward":"127.0.0.1:8443"}},"Unknown":{"anything":true}}' \
-  ; do
+    '{"TCP":{"443":{"TCPForward":"127.0.0.1:8443"}},"Unknown":{"anything":true}}'; do
     printf '%s\n' "$shape" >"$TEST_ROOT/route.json"
     cp "$TEST_ROOT/route.json" "$TEST_ROOT/funnel.json"
     run_tailscale_function 'route_state'
@@ -1496,13 +1694,30 @@ run_rollback() {
   export CADDY_MODULES='  dns.providers.godaddy (github.com/foreign/godaddy)'
   run_custom_domain_function 'validate_installed_caddy'
   [ "$status" -ne 0 ]
-  [[ "$output" == *'must map to package github.com/caddy-dns/godaddy'* ]]
+  [[ "$output" == *'must map module dns.providers.godaddy to exactly'* ]]
+
+  export CADDY_MODULES='dns.providers.godaddy github.com/foreign/godaddy'
+  run_custom_domain_function 'validate_installed_caddy'
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'must map module dns.providers.godaddy to exactly'* ]]
   [[ "$output" == *'github.com/foreign/godaddy'* ]]
+
+  # A local replace directive or a module-info error annotation changes the
+  # provenance of an otherwise correctly named package and must be refused.
+  export CADDY_MODULES='dns.providers.godaddy github.com/caddy-dns/godaddy => ../local-godaddy'
+  run_custom_domain_function 'validate_installed_caddy'
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'must map module dns.providers.godaddy to exactly'* ]]
+
+  export CADDY_MODULES='dns.providers.godaddy github.com/caddy-dns/godaddy [missing go.mod]'
+  run_custom_domain_function 'validate_installed_caddy'
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'must map module dns.providers.godaddy to exactly'* ]]
 
   # A foreign module whose name merely contains the expected module name as a
   # substring (the exact shape a bare substring check would have accepted)
   # must also be rejected.
-  export CADDY_MODULES='  dns.providers.godaddyfoo (github.com/attacker/evil)'
+  export CADDY_MODULES='dns.providers.godaddyfoo github.com/attacker/evil'
   run_custom_domain_function 'validate_installed_caddy'
   [ "$status" -ne 0 ]
   [[ "$output" == *'must list exactly one dns.providers.godaddy module; found 0'* ]]
@@ -1556,8 +1771,7 @@ run_rollback() {
     'LISTEN 0 4096 [::]:8443 [::]:*' \
     'LISTEN 0 4096 172.20.1.4:8443 0.0.0.0:*' \
     'LISTEN 0 4096 0.0.0.0:80 0.0.0.0:*' \
-    $'LISTEN 0 4096 127.0.0.1:8443 0.0.0.0:*\nLISTEN 0 4096 172.20.1.4:8443 0.0.0.0:*' \
-  ; do
+    $'LISTEN 0 4096 127.0.0.1:8443 0.0.0.0:*\nLISTEN 0 4096 172.20.1.4:8443 0.0.0.0:*'; do
     printf '%s\n' "$shape" >"$TEST_ROOT/caddy-listeners"
     run_custom_domain_function 'validate_caddy_listener'
     [ "$status" -ne 0 ]
@@ -1651,7 +1865,7 @@ run_rollback() {
   [ ! -s "$MUTATION_CALLS" ]
 }
 
-@test "custom-domain CLI accepts only check and reports other verbs as not implemented" {
+@test "custom-domain CLI accepts check and setup and reports migrate and rollback as not implemented" {
   make_webui_fixture
   run_custom_domain
   [ "$status" -eq 2 ]
@@ -1660,10 +1874,6 @@ run_rollback() {
   run_custom_domain bogus
   [ "$status" -eq 2 ]
 
-  run_custom_domain setup
-  [ "$status" -ne 0 ]
-  [[ "$output" == *'not implemented'* ]]
-
   run_custom_domain migrate
   [ "$status" -ne 0 ]
   [[ "$output" == *'not implemented'* ]]
@@ -1671,4 +1881,283 @@ run_rollback() {
   run_custom_domain rollback
   [ "$status" -ne 0 ]
   [[ "$output" == *'not implemented'* ]]
+}
+
+@test "setup validates Firstp1ck route DNS and credential before publication" {
+  prepare_custom_domain_setup legacy-exact
+  run_custom_domain setup
+  [ "$status" -eq 0 ]
+  first_build=$(grep -n '^go ' "$CALLS" | cut -d: -f1)
+  first_publish=$(grep -n '^sudo install ' "$CALLS" | cut -d: -f1 | head -1)
+  credential=$(grep -n '^credential-check$' "$CALLS" | cut -d: -f1)
+  [ "$credential" -lt "$first_build" ]
+  [ "$first_build" -lt "$first_publish" ]
+  ! grep -F 'tailscale serve' "$CALLS"
+}
+
+@test "setup publishes exact managed artifacts and leaves the route and credential untouched" {
+  prepare_custom_domain_setup legacy-exact
+  route_before=$(cat "$TEST_ROOT/route.json")
+  run_custom_domain setup
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'ready-to-migrate'* ]]
+
+  # The exact pinned build, in the exact staged validation order.
+  grep -Fq 'go run github.com/caddyserver/xcaddy/cmd/xcaddy@v0.4.7 build v2.11.4 --with github.com/caddy-dns/godaddy@v1.2.0 --output' "$CALLS"
+  grep -Fq 'caddy adapt token=placeholder:placeholder' "$CALLS"
+  grep -q '^systemd-analyze verify ' "$CALLS"
+
+  # The four managed artifacts, with the exact published modes.
+  managed=()
+  while IFS= read -r path; do managed+=("$path"); done < <(managed_caddy_paths)
+  modes=(755 755 644 644)
+  for index in 0 1 2 3; do
+    [ -f "${managed[index]}" ]
+    [ "$(/usr/bin/stat -c %a "${managed[index]}")" = "${modes[index]}" ]
+  done
+  grep -Fq 'candidate build' "${managed[0]}"
+  cmp "${managed[1]}" "$WEBUI_FIXTURE/ai/pi/webui/caddy-entrypoint.sh"
+  cmp "${managed[2]}" "$WEBUI_FIXTURE/ai/pi/webui/Caddyfile.in"
+  grep -Fq "ExecStart=${managed[1]}" "${managed[3]}"
+
+  # The service is enabled and running, the staging directory is gone, and
+  # neither the encrypted credential nor the Tailscale route was touched.
+  [ -f "$TEST_ROOT/caddy-enabled" ]
+  [ -f "$TEST_ROOT/caddy-active" ]
+  ! compgen -G "$STATE_ROOT/.caddy-setup.*" >/dev/null
+  [ -f "$CADDY_CREDENTIAL" ]
+  [ -f "$CADDY_STATE_DIR/acme.json" ]
+  ! grep -rqF 'encrypted-credential-blob' "$CADDY_ROOT/usr" "$CADDY_ROOT/etc/pi-webui-caddy" \
+    "$CADDY_ROOT/etc/systemd"
+  [ "$(cat "$TEST_ROOT/route.json")" = "$route_before" ]
+
+  # The published state now satisfies the independent read-only check.
+  run_custom_domain check
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'ready-to-migrate'* ]]
+}
+
+@test "setup refuses Pi drift runtime service version route and DNS failures without mutation" {
+  prepare_custom_domain_setup legacy-exact
+  before=$(fingerprint_paths "$CADDY_ROOT")
+
+  printf '%s\n' \
+    '{"name":"@earendil-works/pi-coding-agent","version":"0.85.0","bin":{"pi":"dist/bundle/cli.js"}}' \
+    >"$PI_PACKAGE/package.json"
+  run_custom_domain setup
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'Pi must be available through mise'* || "$output" == *'0.84.4'* ]]
+  printf '%s\n' \
+    '{"name":"@earendil-works/pi-coding-agent","version":"0.84.4","bin":{"pi":"dist/bundle/cli.js"}}' \
+    >"$PI_PACKAGE/package.json"
+
+  mv "$INSTALLED_RUNTIME" "$TEST_ROOT/runtime-away"
+  run_custom_domain setup
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'installed runtime is unavailable'* ]]
+  mv "$TEST_ROOT/runtime-away" "$INSTALLED_RUNTIME"
+
+  export FIRSTPICK_INACTIVE=1
+  run_custom_domain setup
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'Pi Web UI service is not active'* ]]
+  unset FIRSTPICK_INACTIVE
+
+  export TAILSCALE_CLIENT_VERSION=1.100.0
+  run_custom_domain setup
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'unsupported Tailscale client or daemon version'* ]]
+  unset TAILSCALE_CLIENT_VERSION
+
+  write_route raw
+  run_custom_domain setup
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'unexpected Tailscale route state'* ]]
+  write_route legacy-exact
+
+  write_dns A 100.64.0.9
+  run_custom_domain setup
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'stale Tailscale IPv4'* ]]
+  write_dns A 100.64.0.1
+
+  [ "$(fingerprint_paths "$CADDY_ROOT")" = "$before" ]
+  ! grep -q '^go ' "$CALLS"
+  [ ! -s "$CREDENTIAL_CALLS" ]
+  assert_no_caddy_publication
+}
+
+@test "setup refuses credential build module adapt and unit verification failures without publication" {
+  prepare_custom_domain_setup legacy-exact
+  before=$(fingerprint_paths "$CADDY_ROOT")
+
+  mv "$CADDY_CREDENTIAL" "$TEST_ROOT/credential-away"
+  run_custom_domain setup
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'encrypted GoDaddy credential is unavailable'* ]]
+  mv "$TEST_ROOT/credential-away" "$CADDY_CREDENTIAL"
+
+  export CREDENTIAL_MODE=640
+  run_custom_domain setup
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'must not be group- or world-accessible'* ]]
+  unset CREDENTIAL_MODE
+
+  export CREDENTIAL_OWNER=1000
+  run_custom_domain setup
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'must be owned by root'* ]]
+  unset CREDENTIAL_OWNER
+
+  export GODADDY_API_STATUS=401
+  run_custom_domain setup
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'HTTP 401'* ]]
+  [[ "$output" != *testkey* && "$output" != *testsecret* ]]
+  export GODADDY_API_STATUS=403
+  run_custom_domain setup
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'HTTP 403'* ]]
+  unset GODADDY_API_STATUS
+  ! grep -q '^go ' "$CALLS"
+
+  export FAIL_POINT=build
+  run_custom_domain setup
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'pinned Caddy candidate build failed'* ]]
+
+  export FAIL_POINT=
+  export CADDY_MODULES='dns.providers.cloudflare github.com/caddy-dns/cloudflare'
+  run_custom_domain setup
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'must list exactly one dns.providers.godaddy module'* ]]
+  unset CADDY_MODULES
+
+  export FAIL_POINT=adapt
+  run_custom_domain setup
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'candidate Caddy configuration failed validation'* ]]
+
+  export FAIL_POINT=unit-verify
+  run_custom_domain setup
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'failed systemd verification'* ]]
+  unset FAIL_POINT
+
+  [ "$(fingerprint_paths "$CADDY_ROOT")" = "$before" ]
+  assert_no_caddy_publication
+}
+
+@test "setup refuses a malformed credential through the shipped validator without a network call" {
+  prepare_custom_domain_setup legacy-exact
+  before=$(fingerprint_paths "$CADDY_ROOT")
+  # Restore the real Node runtime: the shipped validator itself must reject a
+  # credential that is not exactly key:secret before it opens any connection.
+  stub_command node 'exec "$SANDBOX_TOOL_BIN/node" "$@"'
+  export GODADDY_TOKEN_FIXTURE='not-a-valid-token'
+  run_custom_domain setup
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'GoDaddy DNS API credential validation failed'* ]]
+  [[ "$output" != *not-a-valid-token* ]]
+  ! grep -q '^go ' "$CALLS"
+  [ "$(fingerprint_paths "$CADDY_ROOT")" = "$before" ]
+  assert_no_caddy_publication
+}
+
+@test "setup refuses foreign existing managed Caddy artifacts before building" {
+  prepare_custom_domain_setup legacy-exact prior
+  before=$(fingerprint_paths "$CADDY_ROOT")
+
+  printf '\nforeign\n' >>"$CADDY_ROOT/etc/pi-webui-caddy/Caddyfile"
+  run_custom_domain setup
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'refusing to replace a foreign managed Caddyfile'* ]]
+  cp "$WEBUI_FIXTURE/ai/pi/webui/Caddyfile.in" "$CADDY_ROOT/etc/pi-webui-caddy/Caddyfile"
+
+  printf '\nforeign\n' >>"$CADDY_ROOT/usr/local/lib/pi-webui/caddy-entrypoint"
+  run_custom_domain setup
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'refusing to replace a foreign managed Caddy entrypoint'* ]]
+  cp "$WEBUI_FIXTURE/ai/pi/webui/caddy-entrypoint.sh" \
+    "$CADDY_ROOT/usr/local/lib/pi-webui/caddy-entrypoint"
+
+  printf '\nforeign\n' >>"$CADDY_ROOT/etc/systemd/system/pi-webui-caddy.service"
+  run_custom_domain setup
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'refusing to replace a foreign managed Caddy unit'* ]]
+  make_caddy_fixture
+
+  export CADDY_FOREIGN_OWNER=1
+  run_custom_domain setup
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'must be owned by root'* ]]
+  unset CADDY_FOREIGN_OWNER
+
+  [ "$(fingerprint_paths "$CADDY_ROOT")" = "$before" ]
+  ! grep -q '^go ' "$CALLS"
+  assert_no_caddy_publication
+}
+
+@test "setup restores an absent prior installation after a service start failure" {
+  prepare_custom_domain_setup legacy-exact
+  export FAIL_POINT=caddy-start
+  run_custom_domain setup
+  [ "$status" -ne 0 ]
+
+  while IFS= read -r path; do
+    [ ! -e "$path" ]
+  done < <(managed_caddy_paths)
+  [ ! -e "$TEST_ROOT/caddy-enabled" ]
+  [ ! -e "$TEST_ROOT/caddy-active" ]
+  grep -q '^systemctl disable pi-webui-caddy.service$' "$MUTATION_CALLS"
+  [ "$(grep -c '^systemctl daemon-reload$' "$MUTATION_CALLS")" -eq 2 ]
+  [ -f "$CADDY_CREDENTIAL" ]
+  [ -f "$CADDY_STATE_DIR/acme.json" ]
+  ! compgen -G "$STATE_ROOT/.caddy-setup.*" >/dev/null
+  ! grep -q 'tailscale serve' "$CALLS"
+}
+
+@test "setup restores prior files enablement and activity after a TLS health failure" {
+  prepare_custom_domain_setup legacy-exact prior
+  before=$(fingerprint_paths "$CADDY_ROOT")
+  export CADDY_HEALTH_FAIL=1
+  run_custom_domain setup
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'health endpoint failed'* ]]
+
+  [ "$(fingerprint_paths "$CADDY_ROOT")" = "$before" ]
+  ! grep -qF 'candidate build' "$CADDY_ROOT/usr/local/lib/pi-webui/caddy"
+  [ -f "$TEST_ROOT/caddy-enabled" ]
+  [ -f "$TEST_ROOT/caddy-active" ]
+  grep -q '^systemctl stop pi-webui-caddy.service$' "$MUTATION_CALLS"
+  grep -q '^systemctl start pi-webui-caddy.service$' "$MUTATION_CALLS"
+  [ -f "$CADDY_CREDENTIAL" ]
+  [ -f "$CADDY_STATE_DIR/acme.json" ]
+  ! compgen -G "$STATE_ROOT/.caddy-setup.*" >/dev/null
+  ! grep -q 'tailscale serve' "$CALLS"
+}
+
+@test "setup restores prior state after a partial publication failure" {
+  prepare_custom_domain_setup legacy-exact prior
+  before=$(fingerprint_paths "$CADDY_ROOT")
+  export FAIL_POINT=publish
+  run_custom_domain setup
+  [ "$status" -ne 0 ]
+  grep -q '^sudo install ' "$CALLS"
+
+  [ "$(fingerprint_paths "$CADDY_ROOT")" = "$before" ]
+  [ -f "$TEST_ROOT/caddy-enabled" ]
+  [ -f "$TEST_ROOT/caddy-active" ]
+  ! compgen -G "$STATE_ROOT/.caddy-setup.*" >/dev/null
+}
+
+@test "setup reports the retained staging path when restoration fails" {
+  prepare_custom_domain_setup legacy-exact prior
+  export CADDY_HEALTH_FAIL=1 RESTORE_FAIL=1
+  run_custom_domain setup
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'restoration failed; preserving staging path: '*"$STATE_ROOT/.caddy-setup."* ]]
+  compgen -G "$STATE_ROOT/.caddy-setup.*" >/dev/null
+  [ -f "$CADDY_CREDENTIAL" ]
+  [ -f "$CADDY_STATE_DIR/acme.json" ]
 }

@@ -2,13 +2,14 @@
 # Read-only checks, candidate-first setup, migration, and rollback for the
 # tailnet-only custom HTTPS hostname (pi.dpao.la) in front of Pi Web UI.
 #
-# This file currently implements the static Caddy source contract (fixed
-# managed paths, the exact tracked Caddyfile/unit renderers, and a
-# source-only integrity check) and the full read-only `check` CLI verb:
-# strict Firstp1ck preflight, DNS, installed Caddy, listener, and TLS/health
-# validation, plus route classification. `setup`, `migrate`, and `rollback`
-# are accepted by the CLI but report themselves as not implemented until
-# their own TDD tasks land.
+# This file implements the static Caddy source contract (fixed managed paths,
+# the exact tracked Caddyfile/unit renderers, and a source-only integrity
+# check), the full read-only `check` CLI verb (strict Firstp1ck preflight,
+# DNS, installed Caddy, listener, and TLS/health validation, plus route
+# classification), and the candidate-first `setup` verb (credential
+# validation, pinned private Caddy build, bounded publication, and automatic
+# restoration). `migrate` and `rollback` are accepted by the CLI but report
+# themselves as not implemented until their own TDD tasks land.
 
 set -euo pipefail
 
@@ -22,12 +23,17 @@ readonly CADDY_VERSION=2.11.4
 readonly XCADDY_VERSION=0.4.7
 readonly GODADDY_MODULE_VERSION=1.2.0
 readonly CADDY_PREFIX=/usr/local/lib/pi-webui
-readonly CADDY_CREDENTIAL=/etc/credstore.encrypted/godaddy-api-token
+readonly CADDY_SERVICE=pi-webui-caddy.service
+readonly CREDENTIAL_NAME=godaddy-api-token
 readonly SUPPORTED_CADDY_VERSION=v$CADDY_VERSION
 readonly EXPECTED_GODADDY_MODULE=dns.providers.godaddy
 readonly EXPECTED_GODADDY_PACKAGE=github.com/caddy-dns/godaddy
 readonly DNS_ZONE=dpao.la
 readonly CERT_MIN_VALIDITY_SECONDS=604800
+# Bounded post-publication wait for the listener, DNS-01 issuance, trusted
+# certificate, and proxy health: at most five minutes.
+readonly CADDY_READY_ATTEMPTS_DEFAULT=60
+readonly CADDY_READY_INTERVAL_DEFAULT=5
 # Real managed Caddy artifact paths. Not readonly: set_caddy_paths() (below,
 # mirroring tailscale.sh's set_tailscale_paths()) reassigns them under an
 # optional test root so tests never touch real system paths.
@@ -35,8 +41,7 @@ CADDY_BINARY=$CADDY_PREFIX/caddy
 CADDY_ENTRYPOINT=$CADDY_PREFIX/caddy-entrypoint
 CADDY_CONFIG=/etc/pi-webui-caddy/Caddyfile
 CADDY_UNIT=/etc/systemd/system/pi-webui-caddy.service
-# CADDY_CREDENTIAL, XCADDY_VERSION, and GODADDY_MODULE_VERSION are consumed
-# by later setup/migration/rollback tasks; not read within this file yet.
+CADDY_CREDENTIAL=/etc/credstore.encrypted/$CREDENTIAL_NAME
 export CUSTOM_HOSTNAME CADDY_VERSION XCADDY_VERSION GODADDY_MODULE_VERSION \
   CADDY_PREFIX CADDY_BINARY CADDY_ENTRYPOINT CADDY_CONFIG CADDY_UNIT CADDY_CREDENTIAL
 
@@ -49,7 +54,8 @@ set_caddy_paths() {
   CADDY_ENTRYPOINT=$root$CADDY_PREFIX/caddy-entrypoint
   CADDY_CONFIG=$root/etc/pi-webui-caddy/Caddyfile
   CADDY_UNIT=$root/etc/systemd/system/pi-webui-caddy.service
-  export CADDY_BINARY CADDY_ENTRYPOINT CADDY_CONFIG CADDY_UNIT
+  CADDY_CREDENTIAL=$root/etc/credstore.encrypted/$CREDENTIAL_NAME
+  export CADDY_BINARY CADDY_ENTRYPOINT CADDY_CONFIG CADDY_UNIT CADDY_CREDENTIAL
 }
 
 # Matches a PEM private-key header or a colon-joined pair of long
@@ -225,7 +231,7 @@ validate_installed_caddy() {
   cmp -s <(render_caddy_unit "$CADDY_ENTRYPOINT") "$CADDY_UNIT" ||
     fail 'installed Caddy unit differs from the managed configuration'
 
-  systemctl is-active pi-webui-caddy.service >/dev/null ||
+  systemctl is-active "$CADDY_SERVICE" >/dev/null ||
     fail 'Caddy service is not active'
 
   version=$("$CADDY_BINARY" version) || fail 'cannot read managed Caddy version'
@@ -237,23 +243,23 @@ validate_installed_caddy() {
 }
 
 # Requires exactly one caddy list-modules --packages line for
-# $EXPECTED_GODADDY_MODULE, and requires that exact line to map the module
-# to $EXPECTED_GODADDY_PACKAGE (an optional "@version" suffix is tolerated;
-# version provenance is Task 4's concern, not this read-only check). A
-# foreign package mentioning the module name as a substring, or the module
-# paired with a different package, is rejected -- a bare substring match on
-# the module name alone is not sufficient.
+# $EXPECTED_GODADDY_MODULE, and requires that exact line to be the module
+# paired with exactly $EXPECTED_GODADDY_PACKAGE. Caddy v2.11.4 prints one
+# "<module id> <go module path>" line per module for --packages, appending
+# " => <path>" for a local replace directive and " [<error>]" when module
+# info could not be read (cmd/commandfuncs.go printModuleInfo), so a package
+# with different provenance, a replaced package, or a module id that merely
+# contains the expected name as a substring is rejected.
 validate_godaddy_module_line() {
-  local modules=$1 line count module_pattern package_pattern
+  local modules=$1 line count module_pattern
   module_pattern=${EXPECTED_GODADDY_MODULE//./\\.}
-  package_pattern=${EXPECTED_GODADDY_PACKAGE//./\\.}
-  line=$(printf '%s\n' "$modules" | grep -E "^[[:space:]]*${module_pattern}[[:space:]]" || true)
+  line=$(printf '%s\n' "$modules" | grep -E "^[[:space:]]*${module_pattern}([[:space:]]|$)" || true)
   count=$(printf '%s\n' "$line" | grep -c . || true)
   [[ "$count" -eq 1 ]] ||
     fail "managed Caddy must list exactly one $EXPECTED_GODADDY_MODULE module; found $count"
   line=$(printf '%s\n' "$line" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')
-  [[ "$line" =~ ^${module_pattern}[[:space:]]+\(${package_pattern}(@[^()[:space:]]+)?\)$ ]] ||
-    fail "managed Caddy $EXPECTED_GODADDY_MODULE must map to package $EXPECTED_GODADDY_PACKAGE; got: $line"
+  [[ "$line" == "$EXPECTED_GODADDY_MODULE $EXPECTED_GODADDY_PACKAGE" ]] ||
+    fail "managed Caddy must map module $EXPECTED_GODADDY_MODULE to exactly $EXPECTED_GODADDY_PACKAGE; got: $line"
 }
 
 # Mirrors tailscale.sh's check_lan() for the Caddy listener: no non-Tailscale
@@ -370,6 +376,358 @@ check_domain() {
   esac
 }
 
+# ---------------------------------------------------------------------------
+# Candidate-first setup
+# ---------------------------------------------------------------------------
+
+# The fixed publication contract for the four managed artifacts, in
+# publication order: destination, staged file name, mode, and label.
+# restore_prior_caddy() walks the same arrays in reverse.
+caddy_artifact_contract() {
+  CADDY_ARTIFACT_DESTS=("$CADDY_BINARY" "$CADDY_ENTRYPOINT" "$CADDY_CONFIG" "$CADDY_UNIT")
+  CADDY_ARTIFACT_NAMES=(caddy caddy-entrypoint Caddyfile installed-unit)
+  CADDY_ARTIFACT_MODES=(0755 0755 0644 0644)
+  CADDY_ARTIFACT_LABELS=(
+    'managed Caddy binary'
+    'managed Caddy entrypoint'
+    'managed Caddyfile'
+    'managed Caddy unit'
+  )
+}
+
+# Requires the encrypted credential to be a root-owned regular file with no
+# group or other permission bits, then proves the classic GoDaddy key is
+# accepted by the production Domains API with a non-mutating record read.
+# The plaintext never reaches argv, an environment variable, a temporary
+# file, or any output: systemd-creds decrypts straight into the validator's
+# standard input, and only a status-only result is reported. Shell tracing is
+# never enabled here.
+validate_godaddy_credential() {
+  local owner mode
+  [[ -f "$CADDY_CREDENTIAL" && ! -L "$CADDY_CREDENTIAL" ]] ||
+    fail "encrypted GoDaddy credential is unavailable: $CADDY_CREDENTIAL"
+  owner=$(stat -c %u "$CADDY_CREDENTIAL") ||
+    fail 'cannot inspect the encrypted GoDaddy credential'
+  [[ "$owner" == 0 ]] || fail 'encrypted GoDaddy credential must be owned by root'
+  mode=$(stat -c %a "$CADDY_CREDENTIAL") ||
+    fail 'cannot inspect encrypted GoDaddy credential permissions'
+  [[ $((8#$mode & 8#077)) -eq 0 ]] ||
+    fail 'encrypted GoDaddy credential must not be group- or world-accessible'
+
+  set -o pipefail
+  sudo systemd-creds decrypt \
+    --name="$CREDENTIAL_NAME" \
+    "$CADDY_CREDENTIAL" - |
+    node -e '
+const https = require("node:https");
+let token = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", chunk => { token += chunk; });
+process.stdin.on("end", () => {
+  token = token.replace(/\r?\n$/, "");
+  if (!/^[^:\r\n]+:[^:\r\n]+$/.test(token)) process.exit(2);
+  const request = https.get({
+    hostname: "api.godaddy.com",
+    path: "/v1/domains/dpao.la/records?limit=1",
+    headers: {Authorization: `sso-key ${token}`, Accept: "application/json"},
+  }, response => {
+    response.resume();
+    response.on("end", () => {
+      if (response.statusCode === 200) {
+        console.log("GoDaddy DNS API credential is valid");
+      } else {
+        console.error(`error: GoDaddy DNS API returned HTTP ${response.statusCode}`);
+        process.exitCode = 1;
+      }
+    });
+  });
+  request.on("error", () => {
+    console.error("error: GoDaddy DNS API request failed");
+    process.exitCode = 1;
+  });
+});' ||
+    fail 'GoDaddy DNS API credential validation failed'
+}
+
+# Refuses to reconcile over an existing managed path that is not an exact
+# managed artifact. An absent artifact is a normal first install; a present
+# one must be a root-owned regular file, and each present static artifact
+# must be byte-identical to its tracked source.
+require_reconcilable_caddy_state() {
+  local index destination
+  caddy_artifact_contract
+  for index in "${!CADDY_ARTIFACT_DESTS[@]}"; do
+    destination=${CADDY_ARTIFACT_DESTS[index]}
+    path_exists "$destination" || continue
+    require_managed_caddy_artifact "$destination" "${CADDY_ARTIFACT_LABELS[index]}"
+  done
+  if path_exists "$CADDY_ENTRYPOINT"; then
+    cmp -s "$SCRIPT_DIR/caddy-entrypoint.sh" "$CADDY_ENTRYPOINT" ||
+      fail 'refusing to replace a foreign managed Caddy entrypoint'
+  fi
+  if path_exists "$CADDY_CONFIG"; then
+    cmp -s <(render_caddyfile) "$CADDY_CONFIG" ||
+      fail 'refusing to replace a foreign managed Caddyfile'
+  fi
+  if path_exists "$CADDY_UNIT"; then
+    cmp -s <(render_caddy_unit "$CADDY_ENTRYPOINT") "$CADDY_UNIT" ||
+      fail 'refusing to replace a foreign managed Caddy unit'
+  fi
+}
+
+# Builds and fully validates the pinned private candidate in a fresh 0700
+# staging directory. Nothing here touches a managed path or the live service,
+# so any failure leaves the system exactly as it was.
+build_caddy_candidate() {
+  local candidate version modules
+  CADDY_STAGING=$(mktemp -d "$STATE_ROOT/.caddy-setup.XXXXXX") || return 1
+  chmod 0700 "$CADDY_STAGING" || return 1
+  candidate=$CADDY_STAGING
+
+  "$MISE_LAUNCHER" exec -- go run "github.com/caddyserver/xcaddy/cmd/xcaddy@v$XCADDY_VERSION" \
+    build "v$CADDY_VERSION" \
+    --with "$EXPECTED_GODADDY_PACKAGE@v$GODADDY_MODULE_VERSION" \
+    --output "$candidate/caddy" ||
+    fail 'pinned Caddy candidate build failed'
+  [[ -f "$candidate/caddy" && -x "$candidate/caddy" ]] ||
+    fail 'pinned Caddy candidate binary was not produced'
+
+  cp "$SCRIPT_DIR/caddy-entrypoint.sh" "$candidate/caddy-entrypoint" || return 1
+  chmod 0755 "$candidate/caddy-entrypoint" || return 1
+  bash -n "$candidate/caddy-entrypoint" ||
+    fail 'candidate Caddy entrypoint failed syntax validation'
+  command -v shellcheck >/dev/null ||
+    fail 'ShellCheck is required to validate the candidate Caddy entrypoint'
+  shellcheck "$candidate/caddy-entrypoint" ||
+    fail 'candidate Caddy entrypoint failed ShellCheck'
+
+  render_caddyfile >"$candidate/Caddyfile" || return 1
+  # The staged unit names the staged entrypoint so systemd-analyze verifies a
+  # real executable path; the separately rendered installed unit names the
+  # fixed live entrypoint that installed-state checks compare byte-for-byte.
+  render_caddy_unit "$candidate/caddy-entrypoint" >"$candidate/pi-webui-caddy.service" || return 1
+  render_caddy_unit "$CADDY_ENTRYPOINT" >"$candidate/installed-unit" || return 1
+
+  version=$("$candidate/caddy" version) || fail 'cannot read candidate Caddy version'
+  [[ "$version" == "$SUPPORTED_CADDY_VERSION"* ]] ||
+    fail "candidate Caddy is not $SUPPORTED_CADDY_VERSION"
+  modules=$("$candidate/caddy" list-modules --packages) ||
+    fail 'cannot read candidate Caddy modules'
+  validate_godaddy_module_line "$modules"
+
+  # A placeholder credential keeps the real token out of the adapted JSON,
+  # which is discarded rather than printed.
+  GODADDY_API_TOKEN=placeholder:placeholder \
+    "$candidate/caddy" adapt --config "$candidate/Caddyfile" --adapter caddyfile --validate >/dev/null ||
+    fail 'candidate Caddy configuration failed validation'
+  systemd-analyze verify "$candidate/pi-webui-caddy.service" ||
+    fail 'candidate Caddy unit failed systemd verification'
+}
+
+# Records prior presence, exact file contents, enablement, and activity in
+# the private staging directory so restoration can be exact.
+capture_prior_caddy_state() {
+  local index destination
+  CADDY_PRIOR_PRESENT=()
+  CADDY_PRIOR_ENABLED=0
+  CADDY_PRIOR_ACTIVE=0
+  for index in "${!CADDY_ARTIFACT_DESTS[@]}"; do
+    destination=${CADDY_ARTIFACT_DESTS[index]}
+    CADDY_PRIOR_PRESENT[index]=0
+    if path_exists "$destination"; then
+      CADDY_PRIOR_PRESENT[index]=1
+      cp "$destination" "$CADDY_STAGING/prior-${CADDY_ARTIFACT_NAMES[index]}" || return 1
+    fi
+  done
+  if systemctl is-enabled "$CADDY_SERVICE" >/dev/null 2>&1; then CADDY_PRIOR_ENABLED=1; fi
+  if systemctl is-active "$CADDY_SERVICE" >/dev/null 2>&1; then CADDY_PRIOR_ACTIVE=1; fi
+}
+
+# Publishes one root-owned artifact atomically: install to a sibling
+# temporary path with the final mode, then rename over the destination.
+publish_caddy_artifact() {
+  local source=$1 destination=$2 mode=$3 temporary=$2.pi-webui-new
+  sudo install -o root -g root -m "$mode" "$source" "$temporary" || return 1
+  sudo mv -f "$temporary" "$destination" || return 1
+}
+
+# Selects the bounded readiness budget. Tests may shorten it through the
+# usual Bats-only override guard; production always waits the full budget.
+caddy_ready_budget() {
+  CADDY_READY_ATTEMPTS=$CADDY_READY_ATTEMPTS_DEFAULT
+  CADDY_READY_INTERVAL=$CADDY_READY_INTERVAL_DEFAULT
+  if [[ -n ${PI_WEBUI_TEST_READY_BUDGET:-} ]]; then
+    require_test_override "$STATE_ROOT"
+    CADDY_READY_ATTEMPTS=${PI_WEBUI_TEST_READY_BUDGET%%:*}
+    CADDY_READY_INTERVAL=${PI_WEBUI_TEST_READY_BUDGET##*:}
+  fi
+}
+
+# Cheap, side-effect-free readiness signal that only paces the bounded wait:
+# the service is running and a normally CA-verified request already reaches
+# the proxied health endpoint, which cannot happen before DNS-01 issuance
+# completes. Every command is explicitly status-checked because this function
+# is called from a condition, where Bash suppresses errexit. The
+# authoritative validation runs afterwards, under normal error handling.
+caddy_ready_signal() {
+  systemctl is-active "$CADDY_SERVICE" >/dev/null 2>&1 || return 1
+  curl --fail --silent --show-error \
+    --resolve "$CUSTOM_HOSTNAME:8443:127.0.0.1" \
+    "https://$CUSTOM_HOSTNAME:8443/api/health" >/dev/null 2>&1 || return 1
+}
+
+# Waits, bounded, for the loopback listener, DNS-01 issuance, a trusted
+# certificate, and proxied Firstp1ck health, then requires the full installed
+# state to be exact. A still-unready service fails with the exact remaining
+# boundary error.
+wait_for_caddy_ready() {
+  local attempt
+  caddy_ready_budget
+  for ((attempt = 1; attempt < CADDY_READY_ATTEMPTS; attempt++)); do
+    if caddy_ready_signal; then break; fi
+    sleep "$CADDY_READY_INTERVAL"
+  done
+  validate_installed_caddy
+  validate_caddy_listener
+  validate_caddy_tls_health
+}
+
+# Publishes the validated candidate, reloads systemd, enables and starts the
+# dedicated service, and waits for readiness. The Tailscale route is never
+# touched.
+publish_caddy_candidate() {
+  local index destination
+  for index in "${!CADDY_ARTIFACT_DESTS[@]}"; do
+    destination=${CADDY_ARTIFACT_DESTS[index]}
+    sudo install -d -o root -g root -m 0755 "$(dirname "$destination")" || return 1
+    publish_caddy_artifact "$CADDY_STAGING/${CADDY_ARTIFACT_NAMES[index]}" \
+      "$destination" "${CADDY_ARTIFACT_MODES[index]}" || return 1
+    CADDY_PUBLISHED[index]=1
+  done
+  sudo systemctl daemon-reload || return 1
+  caddy_daemon_reloaded=1
+  sudo systemctl enable "$CADDY_SERVICE" || return 1
+  caddy_enablement_changed=1
+  sudo systemctl start "$CADDY_SERVICE" || return 1
+  caddy_started=1
+  wait_for_caddy_ready
+}
+
+# Stops the candidate, restores every published artifact in reverse order,
+# reloads systemd, and restores prior enablement and activity. Certificates,
+# ACME state, and the encrypted credential are never removed. A failed
+# restoration retains and reports the private staging path.
+restore_prior_caddy() {
+  local failed=0 index destination temporary
+  set +e
+  if [[ "$caddy_started" -eq 1 ]]; then
+    sudo systemctl stop "$CADDY_SERVICE" || failed=1
+    caddy_started=0
+  fi
+  for ((index = ${#CADDY_ARTIFACT_DESTS[@]} - 1; index >= 0; index--)); do
+    [[ "${CADDY_PUBLISHED[index]}" -eq 1 ]] || continue
+    destination=${CADDY_ARTIFACT_DESTS[index]}
+    if [[ "${CADDY_PRIOR_PRESENT[index]}" -eq 1 ]]; then
+      temporary=$destination.pi-webui-restore
+      if ! sudo install -o root -g root -m "${CADDY_ARTIFACT_MODES[index]}" \
+        "$CADDY_STAGING/prior-${CADDY_ARTIFACT_NAMES[index]}" "$temporary" ||
+        ! sudo mv -f "$temporary" "$destination"; then
+        failed=1
+      fi
+    else
+      sudo rm -f -- "$destination" || failed=1
+    fi
+    CADDY_PUBLISHED[index]=0
+  done
+  if [[ "$caddy_daemon_reloaded" -eq 1 ]]; then
+    sudo systemctl daemon-reload || failed=1
+    caddy_daemon_reloaded=0
+  fi
+  if [[ "$caddy_enablement_changed" -eq 1 ]]; then
+    if [[ "$CADDY_PRIOR_ENABLED" -eq 1 ]]; then
+      sudo systemctl enable "$CADDY_SERVICE" || failed=1
+    else
+      sudo systemctl disable "$CADDY_SERVICE" || failed=1
+    fi
+    caddy_enablement_changed=0
+  fi
+  if [[ "$CADDY_PRIOR_ACTIVE" -eq 1 ]]; then
+    sudo systemctl start "$CADDY_SERVICE" || failed=1
+  fi
+  if [[ "$failed" -eq 0 ]]; then
+    cleanup_caddy_staging || failed=1
+  fi
+  set -e
+  if [[ "$failed" -ne 0 ]]; then
+    fail "restoration failed; preserving staging path: $CADDY_STAGING"
+    return 1
+  fi
+}
+
+cleanup_caddy_staging() {
+  [[ -n ${CADDY_STAGING:-} ]] || return 0
+  path_exists "$CADDY_STAGING" || return 0
+  rm -rf -- "$CADDY_STAGING"
+}
+
+# Runs on any early exit from setup: a pre-publication failure removes only
+# the private candidate, and a post-publication failure restores the prior
+# managed state.
+caddy_setup_cleanup() {
+  [[ "$caddy_setup_complete" -eq 0 ]] || return 0
+  if [[ "${CADDY_PUBLISHED[*]}" == *1* || "$caddy_started" -eq 1 ||
+    "$caddy_daemon_reloaded" -eq 1 || "$caddy_enablement_changed" -eq 1 ]]; then
+    restore_prior_caddy || true
+  else
+    cleanup_caddy_staging || true
+  fi
+}
+
+# Candidate-first custom-domain setup. Every external boundary is proven
+# before the private build, the build is fully validated before publication,
+# and publication is bounded and reversible. The Tailscale Serve route is
+# deliberately left untouched: migration is a separate, explicitly approved
+# operation.
+#
+# Recovery runs from an EXIT trap rather than from an `if` around publication
+# so that normal errexit stays active throughout: Bash suppresses errexit for
+# a function called in a condition, which would let a failed boundary check
+# continue into the next one.
+setup_domain() {
+  require_supported_platform
+  resolve_source
+  validate_apply_source
+  strict_firstpick_preflight
+  require_tailscale
+  require_tailscale_version
+  require_route_state legacy-exact
+  validate_public_dns
+  validate_caddy_source
+  set_caddy_paths
+  validate_godaddy_credential
+  require_reconcilable_caddy_state
+
+  caddy_started=0
+  caddy_daemon_reloaded=0
+  caddy_enablement_changed=0
+  caddy_setup_complete=0
+  CADDY_PUBLISHED=(0 0 0 0)
+  CADDY_PRIOR_PRESENT=(0 0 0 0)
+  CADDY_PRIOR_ENABLED=0
+  CADDY_PRIOR_ACTIVE=0
+
+  trap caddy_setup_cleanup EXIT
+  build_caddy_candidate
+  capture_prior_caddy_state
+  publish_caddy_candidate
+  caddy_setup_complete=1
+  trap - EXIT
+
+  cleanup_caddy_staging
+  printf 'custom domain is ready-to-migrate: %s is healthy and the legacy route is unchanged\n' \
+    "$CADDY_SERVICE"
+}
+
 usage() {
   printf 'usage: %s check|setup|migrate|rollback\n' "$0"
 }
@@ -381,7 +739,8 @@ main() {
   }
   case "$1" in
     check) check_domain ;;
-    setup | migrate | rollback) fail "$1 is not implemented yet" ;;
+    setup) setup_domain ;;
+    migrate | rollback) fail "$1 is not implemented yet" ;;
     *)
       usage >&2
       return 2
