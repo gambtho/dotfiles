@@ -968,6 +968,12 @@ migrate_domain() {
     migration_recover 1 'operator rejection'
   fi
 
+  # The route can change concurrently while verification and confirmation run,
+  # so success is reported only after one final exact reclassification
+  # immediately before recovery is disarmed. A mismatch fails and is handed to
+  # the same safe recovery rules as any other post-mutation failure.
+  require_route_state raw-exact
+
   migration_restore_armed=0
   trap - ERR INT TERM
   set +E
@@ -1038,6 +1044,11 @@ rollback_domain() {
     legacy-exact) ;;
     *) fail "unexpected Tailscale route state for custom-domain rollback: $route" ;;
   esac
+
+  # Reclassify immediately before teardown. A concurrent republication between
+  # restoration and removal would otherwise leave raw or foreign ingress live
+  # while its backend artifacts are deleted.
+  require_route_state legacy-exact
 
   sudo systemctl stop "$CADDY_SERVICE"
   sudo systemctl disable "$CADDY_SERVICE"

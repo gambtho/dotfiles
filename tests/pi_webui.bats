@@ -847,8 +847,27 @@ prepare_custom_domain_migration() {
         printf "%s\n" "${CADDY_HEALTH_JSON:-$HEALTH_JSON}" ;;
       *" https://wsl.test.ts.net/api/health "*)
         if [[ ${LEGACY_HEALTH_FAIL:-0} == 1 ]]; then exit 22; fi
-        printf "%s\n" "$HEALTH_JSON" ;;
+        printf "%s\n" "$HEALTH_JSON"
+        # One-shot concurrent route change in the window between restoration
+        # and Caddy teardown: the old-URL probe is the last call before it.
+        if [[ -n ${ROUTE_CHANGE_BEFORE_TEARDOWN:-} && ! -e "$TEST_ROOT/route-changed" ]]; then
+          touch "$TEST_ROOT/route-changed"
+          cp "$TEST_ROOT/fixture-$ROUTE_CHANGE_BEFORE_TEARDOWN.json" "$TEST_ROOT/route.json"
+          cp "$TEST_ROOT/fixture-$ROUTE_CHANGE_BEFORE_TEARDOWN.json" "$TEST_ROOT/funnel.json"
+          cp "$TEST_ROOT/fixture-$ROUTE_CHANGE_BEFORE_TEARDOWN.txt" "$TEST_ROOT/route.txt"
+        fi ;;
       *"https://172.20.1.4:8443/"*|*"https://192.168.1.7:8443/"*)
+        # One-shot concurrent route change in the window between the last
+        # automated verification and the success report: check_caddy_lan is
+        # the final probe migration runs before the operator confirmation.
+        # Gated on the published raw route so the identical pre-mutation
+        # listener check is left alone.
+        if [[ -n ${ROUTE_CHANGE_AFTER_VERIFY:-} && $raw == 1 && ! -e "$TEST_ROOT/route-changed" ]]; then
+          touch "$TEST_ROOT/route-changed"
+          cp "$TEST_ROOT/fixture-$ROUTE_CHANGE_AFTER_VERIFY.json" "$TEST_ROOT/route.json"
+          cp "$TEST_ROOT/fixture-$ROUTE_CHANGE_AFTER_VERIFY.json" "$TEST_ROOT/funnel.json"
+          cp "$TEST_ROOT/fixture-$ROUTE_CHANGE_AFTER_VERIFY.txt" "$TEST_ROOT/route.txt"
+        fi
         if [[ ${LAN_8443_REACHABLE:-0} == 1 ]]; then exit 0; else exit 7; fi ;;
       *"http://172.20.1.4:31415/"*|*"http://192.168.1.7:31415/"*)
         if [[ ${LAN_31415_REACHABLE:-0} == 1 ]]; then exit 0; else exit 7; fi ;;
@@ -928,6 +947,7 @@ reset_migration_state() {
   : >"$ROUTE_ORDER"
   : >"$CALLS"
   : >"$MUTATION_CALLS"
+  rm -f "$TEST_ROOT/route-changed"
 }
 
 assert_no_route_mutation() {
@@ -2723,4 +2743,75 @@ run_rollback() {
   [ "$status" -ne 0 ]
   [[ "$output" == *'custom-domain.sh rollback'* ]]
   [ ! -s "$MUTATION_CALLS" ]
+}
+
+@test "migration refuses success when the route changes after verification" {
+  prepare_custom_domain_migration legacy-exact
+  export MIGRATION_CONFIRM=yes TAILNET_CLIENT_CONFIRM=yes
+
+  # A concurrent foreign publication lands after the last automated check:
+  # success is never reported and the foreign route is never overwritten.
+  reset_migration_state
+  export ROUTE_CHANGE_AFTER_VERIFY=foreign
+  run_custom_domain migrate
+  [ "$status" -ne 0 ]
+  [[ "$output" != *'is now canonical'* ]]
+  [[ "$output" == *'refusing automatic restoration'* ]]
+  [[ "$output" == *'RESTORATION FAILED'* ]]
+  [ "$(route_call_order)" = $'legacy-off\nraw-on' ]
+  [ "$(current_route_fixture)" = foreign ]
+
+  # A concurrent removal is recoverable under the existing rules: the exact
+  # legacy route is republished instead of reporting a successful migration.
+  reset_migration_state
+  export ROUTE_CHANGE_AFTER_VERIFY=empty
+  run_custom_domain migrate
+  [ "$status" -ne 0 ]
+  [[ "$output" != *'is now canonical'* ]]
+  [[ "$output" == *'legacy route restored'* ]]
+  [ "$(route_call_order)" = $'legacy-off\nraw-on\nlegacy-on' ]
+  [ "$(current_route_fixture)" = legacy-exact ]
+
+  # A concurrent legacy republication is reported, not overwritten again.
+  reset_migration_state
+  export ROUTE_CHANGE_AFTER_VERIFY=legacy-exact
+  run_custom_domain migrate
+  [ "$status" -ne 0 ]
+  [[ "$output" != *'is now canonical'* ]]
+  [ "$(route_call_order)" = $'legacy-off\nraw-on' ]
+  [ "$(current_route_fixture)" = legacy-exact ]
+  unset ROUTE_CHANGE_AFTER_VERIFY
+}
+
+@test "custom-domain rollback refuses teardown when the route changes before teardown" {
+  prepare_custom_domain_migration raw
+  local change
+  for change in raw foreign; do
+    reset_migration_state raw
+    export ROUTE_CHANGE_BEFORE_TEARDOWN="$change"
+    run_custom_domain rollback
+    [ "$status" -ne 0 ]
+    [[ "$output" == *'unexpected Tailscale route state'* ||
+      "$output" == *'foreign, additional, public, or ambiguous'* ]]
+
+    # Restoration ran, but no Caddy artifact, unit state, or service state was
+    # touched afterwards.
+    [ "$(route_call_order)" = $'raw-off\nlegacy-on' ]
+    [ ! -s "$MUTATION_CALLS" ]
+    [ -f "$TEST_ROOT/caddy-active" ]
+    ! grep -q '^sudo rm ' "$CALLS"
+    while IFS= read -r path; do
+      [ -e "$path" ]
+    done < <(managed_caddy_paths)
+    unset ROUTE_CHANGE_BEFORE_TEARDOWN
+  done
+
+  # With no concurrent change the same fixture still rolls back cleanly.
+  reset_migration_state raw
+  run_custom_domain rollback
+  [ "$status" -eq 0 ]
+  [ "$(current_route_fixture)" = legacy-exact ]
+  while IFS= read -r path; do
+    [ ! -e "$path" ]
+  done < <(managed_caddy_paths)
 }
