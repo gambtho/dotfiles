@@ -16,7 +16,7 @@ neovim = "0.12.4"
 # on every call. Pinning here makes `bin/versions list_mise` report it for free.
 "npm:@devcontainers/cli" = "0.86.1"
 git-lfs = "3.7.1"
-ruff = "latest"
+ruff = "0.16.6"
 
 [settings]
 idiomatic_version_file_enable_tools = ["node"]
