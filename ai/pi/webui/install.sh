@@ -333,6 +333,89 @@ const response = JSON.parse(process.argv[3]);
 NODE
 }
 
+# Selects the bounded readiness probe budget: a small number of attempts,
+# paced by a short interval, that only paces the wait for the health
+# endpoint to answer before the authoritative check below runs. Tests may
+# shorten it through the usual Bats-only override guard; production always
+# uses the same fixed budget.
+webui_ready_budget() {
+  WEBUI_READY_ATTEMPTS=5
+  WEBUI_READY_INTERVAL=1
+  if [[ -n ${PI_WEBUI_TEST_STARTUP_READY_BUDGET:-} ]]; then
+    require_test_override "$STATE_ROOT"
+    WEBUI_READY_ATTEMPTS=${PI_WEBUI_TEST_STARTUP_READY_BUDGET%%:*}
+    WEBUI_READY_INTERVAL=${PI_WEBUI_TEST_STARTUP_READY_BUDGET##*:}
+  fi
+}
+
+# Selects the bounded wall-clock deadline for the whole readiness operation.
+# Resolved in the parent, because the worker itself runs under it. Tests may
+# shorten it through the usual Bats-only override guard.
+webui_ready_deadline() {
+  WEBUI_READY_DEADLINE=30
+  if [[ -n ${PI_WEBUI_TEST_STARTUP_READY_DEADLINE:-} ]]; then
+    require_test_override "$STATE_ROOT"
+    WEBUI_READY_DEADLINE=$PI_WEBUI_TEST_STARTUP_READY_DEADLINE
+  fi
+}
+
+# Cheap, side-effect-free readiness signal that only paces the bounded wait:
+# the service is running and the health endpoint already answers. Its own
+# short connect/max-time bound keeps one stalled attempt from consuming the
+# whole probe budget. Every command is explicitly status-checked because this
+# function is called from a condition, where Bash suppresses errexit.
+webui_ready_signal() {
+  systemctl --user is-active pi-webui.service >/dev/null 2>&1 || return 1
+  curl --fail --silent --show-error --connect-timeout 1 --max-time 1 \
+    http://127.0.0.1:31415/api/health >/dev/null 2>&1 || return 1
+}
+
+# The readiness operation itself: pace until the cheap signal answers (or
+# the probe budget is exhausted), then always run the exact strict listener
+# and health identity checks. Runs as the child of wait_for_active_health()'s
+# `timeout`, in a subprocess that re-sources this script, so it must depend
+# only on exported state: PI_LAUNCHER and the Bats-only overrides all are.
+webui_readiness_worker() {
+  local attempt
+  webui_ready_budget
+  for ((attempt = 1; attempt <= WEBUI_READY_ATTEMPTS; attempt++)); do
+    if webui_ready_signal; then break; fi
+    [[ "$attempt" -lt "$WEBUI_READY_ATTEMPTS" ]] || break
+    sleep "$WEBUI_READY_INTERVAL"
+  done
+  validate_active_health "$PI_LAUNCHER"
+}
+
+# Waits for readiness under one hard wall-clock deadline (about 30 seconds by
+# default) instead of validating immediately after `systemctl start`, which
+# races the service's own startup work. A still-unready service fails with
+# its own exact strict-validation error; an operation that outlasts the
+# deadline fails with one clear boundary error instead of the noisy repeated
+# per-attempt failures the probe loop would otherwise produce.
+#
+# `timeout` runs the worker in its own process group, so expiry ends every
+# probe and sleep the worker started rather than leaving one behind past the
+# bound. validate_active_health's own curl call already has its own
+# max-time, so a naive fixed retry count on top of it would not actually
+# bound the wall-clock time; the outer `timeout` is what does.
+wait_for_active_health() {
+  local status=0
+  command -v timeout >/dev/null || {
+    fail 'timeout is required to bound the Pi Web UI readiness wait'
+    return 1
+  }
+  webui_ready_deadline
+  timeout --kill-after=2 "$WEBUI_READY_DEADLINE" \
+    bash -c 'source "$1"; webui_readiness_worker' bash "${BASH_SOURCE[0]}" || status=$?
+  # 124 is coreutils' expiry status; 137 is the SIGKILL --kill-after sends
+  # when the worker did not stop on the first signal.
+  if [[ "$status" -eq 124 || "$status" -eq 137 ]]; then
+    fail "Pi Web UI readiness exceeded its $WEBUI_READY_DEADLINE-second deadline"
+    return 1
+  fi
+  return "$status"
+}
+
 set_managed_paths() {
   STATE_ROOT=${XDG_DATA_HOME:-$HOME/.local/share}/pi-webui
   INSTALLED_RUNTIME=$STATE_ROOT/runtimes/current
@@ -487,7 +570,7 @@ publish_candidate() {
   enablement_changed=1
   systemctl --user start pi-webui.service || return 1
   candidate_started=1
-  validate_active_health "$PI_LAUNCHER" || return 1
+  wait_for_active_health || return 1
   if [[ "$PRIOR_UNIT_PRESENT" -eq 1 && "$PRIOR_ACTIVE" -eq 0 ]]; then
     systemctl --user stop pi-webui.service || return 1
     candidate_started=0

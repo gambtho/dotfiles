@@ -1423,6 +1423,10 @@ run_rollback() {
 @test "apply restores prior commit enablement and activity after health failure" {
   prepare_apply_fixture health-failure
   export FAIL_POINT=health
+  # A single readiness attempt keeps this fast: the strict authoritative
+  # check's own curl call fails immediately regardless of pacing, so no
+  # retry budget is needed to reach its exact error.
+  export PI_WEBUI_TEST_STARTUP_READY_BUDGET=1:0
   stub_apply_system
 
   run_installer --apply
@@ -1430,6 +1434,153 @@ run_rollback() {
   [ "$status" -ne 0 ]
   grep -F "systemctl --user start pi-webui.service" "$CALLS"
   assert_prior_apply_state health-failure 0 0
+}
+
+@test "the startup readiness worker runs the strict listener and health checks inside one deadline" {
+  make_webui_fixture
+  make_external_pi
+  mkdir -p "$STATE_ROOT"
+  export HEALTH_JSON='{"ok":true,"webuiVersion":"0.10.4","piVersion":"0.85.1","network":{"open":false,"host":"127.0.0.1","port":31415,"networkUrls":[]},"tabs":[]}'
+  stub_command systemctl 'case "$*" in
+    "--user is-active pi-webui.service") exit 0 ;;
+    *) exit 97 ;;
+  esac'
+  stub_command ss 'printf "%s\\n" "LISTEN 0 128 127.0.0.1:31415 0.0.0.0:*"'
+  stub_command curl 'printf "%s\\n" "$HEALTH_JSON"'
+
+  # The worker runs in a subprocess that re-sources the script, so success
+  # here also proves the subprocess inherited PI_LAUNCHER and the stubbed
+  # commands, not just the parent test process's own state.
+  run_installer_function 'wait_for_active_health'
+  [ "$status" -eq 0 ]
+
+  # A failing authoritative check still reports its own exact strict-check
+  # error through the deadline wrapper, not a generic timeout. One attempt
+  # keeps this fast.
+  export PI_WEBUI_TEST_STARTUP_READY_BUDGET=1:0
+  stub_command curl 'exit 22'
+  run_installer_function 'wait_for_active_health'
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'health endpoint failed'* ]]
+
+  # The deadline override is a Bats-only override like the budget.
+  run_installer_function 'unset PI_WEBUI_TESTING; PI_WEBUI_TEST_STARTUP_READY_DEADLINE=1 webui_ready_deadline'
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'test overrides are unavailable outside Bats'* ]]
+}
+
+@test "readiness succeeds once the listener and health endpoint answer after a startup delay" {
+  make_webui_fixture
+  make_external_pi
+  mkdir -p "$STATE_ROOT"
+  export HEALTH_JSON='{"ok":true,"webuiVersion":"0.10.4","piVersion":"0.85.1","network":{"open":false,"host":"127.0.0.1","port":31415,"networkUrls":[]},"tabs":[]}'
+  export READY_AT=3
+  : >"$TEST_ROOT/curl-calls"
+  stub_command systemctl 'case "$*" in
+    "--user is-active pi-webui.service") exit 0 ;;
+    *) exit 97 ;;
+  esac'
+  # The listener and health endpoint both come up only once the cheap probe
+  # has been retried READY_AT times, the same shape as the real startup race:
+  # the service reports active immediately but the socket and endpoint are
+  # not ready until slightly later.
+  stub_command curl 'printf x >>"$TEST_ROOT/curl-calls"
+    count=$(wc -c <"$TEST_ROOT/curl-calls")
+    [ "$count" -ge "$READY_AT" ] || exit 7
+    printf "%s\\n" "$HEALTH_JSON"'
+  stub_command ss 'count=$(wc -c <"$TEST_ROOT/curl-calls" 2>/dev/null || printf 0)
+    if [ "$count" -ge "$READY_AT" ]; then
+      printf "%s\\n" "LISTEN 0 128 127.0.0.1:31415 0.0.0.0:*"
+    fi'
+  export PI_WEBUI_TEST_STARTUP_READY_BUDGET=5:0
+
+  run_installer_function 'wait_for_active_health'
+
+  [ "$status" -eq 0 ]
+  # Proves the loop actually retried rather than happening to succeed on the
+  # first probe: the cheap loop call plus the trailing authoritative call
+  # push the counter past READY_AT.
+  [ "$(wc -c <"$TEST_ROOT/curl-calls")" -gt "$READY_AT" ]
+}
+
+@test "the startup readiness budget and deadline fit the documented ~30-second bound" {
+  make_webui_fixture
+  run_installer_function 'webui_ready_deadline; printf "%s\\n" "$WEBUI_READY_DEADLINE"'
+  [ "$status" -eq 0 ]
+  deadline=$output
+  [ "$deadline" -le 30 ]
+
+  run_installer_function 'webui_ready_budget; printf "%s %s\\n" "$WEBUI_READY_ATTEMPTS" "$WEBUI_READY_INTERVAL"'
+  [ "$status" -eq 0 ]
+  attempts=${output% *}
+  interval=${output#* }
+
+  # The retry loop only paces inside the deadline: its own worst case (each
+  # cheap probe bounded by its 1-second connect/max-time) plus the
+  # authoritative check that always runs once more after the loop exits
+  # (bounded by validate_active_health's own 15-second curl max-time) still
+  # fits, so a still-unready service normally fails with the exact
+  # remaining strict-check error rather than the generic deadline error.
+  probe_max_time=1
+  authoritative_curl_max_time=15
+  [ $((attempts * probe_max_time + (attempts - 1) * interval + authoritative_curl_max_time)) -le "$deadline" ]
+}
+
+@test "readiness wait is bounded by wall clock and reports one clear error on expiry" {
+  make_webui_fixture
+  make_external_pi
+  mkdir -p "$STATE_ROOT"
+  stub_command systemctl 'case "$*" in
+    "--user is-active pi-webui.service") exit 0 ;;
+    *) exit 97 ;;
+  esac'
+  # The listener and health endpoint never come up, and the pacing interval
+  # (5s) alone outlasts the deadline (1s), so success requires the outer
+  # `timeout` to cut the operation off mid-sleep rather than merely letting
+  # the loop's own arithmetic run to completion.
+  stub_command curl 'exit 22'
+  stub_command ss ':'
+  export PI_WEBUI_TEST_STARTUP_READY_DEADLINE=1
+  export PI_WEBUI_TEST_STARTUP_READY_BUDGET=2:5
+
+  start=$(date +%s)
+  run_installer_function 'wait_for_active_health'
+  finish=$(date +%s)
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'Pi Web UI readiness exceeded its 1-second deadline'* ]]
+  # Exactly one boundary error: the loop's own per-attempt probe failures
+  # never reach the caller.
+  [ "$(grep -c '^error: ' <<<"$output")" -eq 1 ]
+  [ $((finish - start)) -le 5 ]
+}
+
+@test "apply restores an absent prior installation after the readiness deadline expires" {
+  # The real observed failure: no unit, runtime, or listener existed before
+  # `systemctl start`, the service starts, but its listener and health
+  # endpoint are not ready before the bounded deadline expires.
+  prepare_apply_fixture readiness-timeout-absent
+  export STRICT_UNLOADED=1
+  rm -rf "$INSTALLED_RUNTIME"
+  rm -f "$UNIT_PATH"
+  git -C "$WEBUI_FIXTURE" worktree remove --force "$LANDING_WORKTREE"
+  export FAIL_POINT=health
+  export PI_WEBUI_TEST_STARTUP_READY_DEADLINE=1
+  export PI_WEBUI_TEST_STARTUP_READY_BUDGET=2:5
+  stub_apply_system
+
+  run_installer --apply
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'readiness exceeded its 1-second deadline'* ]]
+  grep -F "systemctl --user start pi-webui.service" "$CALLS"
+  [ ! -e "$INSTALLED_RUNTIME" ]
+  [ ! -e "$UNIT_PATH" ]
+  [ ! -e "$LANDING_WORKTREE" ]
+  [ ! -e "$TEST_ROOT/service-active" ]
+  [ ! -e "$TEST_ROOT/service-enabled" ]
+  [ -z "$(find "$STATE_ROOT" -maxdepth 1 -name '.apply.*' -print -quit)" ]
+  [ -z "$(find "$STATE_ROOT/runtimes" -maxdepth 1 -name '.candidate.*' -print -quit)" ]
 }
 
 @test "route classifier distinguishes empty legacy and exact raw TCP" {
