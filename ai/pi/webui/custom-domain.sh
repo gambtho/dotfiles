@@ -588,29 +588,50 @@ caddy_artifact_contract() {
 # Requires the encrypted credential to be a root-owned regular file with no
 # group or other permission bits, then proves the classic GoDaddy key is
 # accepted by the production Domains API with a non-mutating record read.
+#
+# The metadata check itself must run privileged: the real credential store
+# is a root:root 0700 directory (systemd-creds' LoadCredentialEncrypted=
+# contract), so an unprivileged `stat` -- or an unprivileged `[[ -f ]]`/
+# `[[ -L ]]` test, which is the same syscall under a different name -- cannot
+# even traverse the parent to reach the file, and would misreport a real,
+# correctly provisioned credential as unavailable rather than proving
+# anything about its type, owner, or mode. One `sudo stat` call retrieves
+# only the raw mode (file type plus permission bits, as one locale-
+# independent hex field so neither an embedded space in `%F`'s description
+# nor a locale translation of it can ever be misparsed) and the numeric
+# owner; no content is ever read this way, and folding existence, type,
+# owner, and mode into that single privileged call avoids the
+# time-of-check-to-time-of-use gap a separate unprivileged existence/symlink
+# check followed by a second privileged stat would leave open.
+#
 # The plaintext never reaches argv, an environment variable, a temporary
 # file, or any output: systemd-creds decrypts straight into the validator's
 # standard input, and only a status-only result is reported. Shell tracing is
 # never enabled here.
 validate_godaddy_credential() {
-  local owner mode
-  [[ -f "$CADDY_CREDENTIAL" && ! -L "$CADDY_CREDENTIAL" ]] || {
+  local raw mode_hex owner mode_value file_type
+
+  raw=$(sudo stat -c '%f %u' "$CADDY_CREDENTIAL" 2>/dev/null) || {
     fail "encrypted GoDaddy credential is unavailable: $CADDY_CREDENTIAL"
     return 1
   }
-  owner=$(stat -c %u "$CADDY_CREDENTIAL") || {
+  [[ "$raw" =~ ^([0-9a-fA-F]+)\ ([0-9]+)$ ]] || {
     fail 'cannot inspect the encrypted GoDaddy credential'
+    return 1
+  }
+  mode_hex=${BASH_REMATCH[1]}
+  owner=${BASH_REMATCH[2]}
+  mode_value=$((16#$mode_hex))
+  file_type=$((mode_value & 8#170000))
+  [[ "$file_type" -eq $((8#100000)) ]] || {
+    fail 'encrypted GoDaddy credential must be a regular file'
     return 1
   }
   [[ "$owner" == 0 ]] || {
     fail 'encrypted GoDaddy credential must be owned by root'
     return 1
   }
-  mode=$(stat -c %a "$CADDY_CREDENTIAL") || {
-    fail 'cannot inspect encrypted GoDaddy credential permissions'
-    return 1
-  }
-  [[ $((8#$mode & 8#077)) -eq 0 ]] || {
+  [[ $((mode_value & 8#077)) -eq 0 ]] || {
     fail 'encrypted GoDaddy credential must not be group- or world-accessible'
     return 1
   }

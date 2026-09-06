@@ -745,13 +745,15 @@ prepare_custom_domain_setup() {
       *) printf "systemctl %s\n" "$*" >>"$MUTATION_CALLS"; exit 99 ;;
     esac'
 
+  # Unprivileged stat must never be able to answer for the encrypted
+  # credential: the real /etc/credstore.encrypted directory is root:root
+  # 0700, so an ordinary process cannot even traverse it to reach the file
+  # and would see exactly this failure. Only the privileged `sudo stat` case
+  # below may report the credential's type, owner, or mode.
   stub_command stat 'case "$3" in
     "$CADDY_CREDENTIAL")
-      case "$1 $2" in
-        "-c %u") printf "%s\n" "${CREDENTIAL_OWNER:-0}" ;;
-        "-c %a") printf "%s\n" "${CREDENTIAL_MODE:-600}" ;;
-        *) exec /usr/bin/stat "$@" ;;
-      esac ;;
+      printf "stat: cannot statx '"'"'%s'"'"': Permission denied\n" "$CADDY_CREDENTIAL" >&2
+      exit 1 ;;
     "$PI_WEBUI_CADDY_ROOT/usr/local/lib/pi-webui/caddy"|"$PI_WEBUI_CADDY_ROOT/usr/local/lib/pi-webui/caddy-entrypoint"|"$PI_WEBUI_CADDY_ROOT/etc/pi-webui-caddy/Caddyfile"|"$PI_WEBUI_CADDY_ROOT/etc/systemd/system/pi-webui-caddy.service")
       if [[ "$1 $2" == "-c %u" ]]; then
         if [[ ${CADDY_FOREIGN_OWNER:-0} == 1 ]]; then printf "1000\n"; else printf "0\n"; fi
@@ -762,8 +764,9 @@ prepare_custom_domain_setup() {
   esac'
 
   # sudo runs nothing privileged: it records the exact command, answers the
-  # credential decryption with a fixture token, and performs publication with
-  # the unprivileged real install/mv/rm inside $CADDY_ROOT.
+  # credential metadata query and decryption with fixture values, and
+  # performs publication with the unprivileged real install/mv/rm inside
+  # $CADDY_ROOT.
   stub_command sudo 'printf "sudo %s\n" "$*" >>"$CALLS"
     case "$1" in
       systemd-creds)
@@ -771,6 +774,35 @@ prepare_custom_domain_setup() {
         printf "systemd-creds decrypt\n" >>"$CREDENTIAL_CALLS"
         if [[ ${FAIL_POINT:-} == decrypt ]]; then exit 1; fi
         printf "%s" "${GODADDY_TOKEN_FIXTURE-testkey:testsecret}" ;;
+      stat)
+        shift
+        # The exact privileged metadata query custom-domain.sh performs: file
+        # type plus mode and numeric owner via one stat -c "%f %u"
+        # call, never file content. CREDENTIAL_TYPE/CREDENTIAL_OWNER/
+        # CREDENTIAL_MODE let tests drive every classification path without
+        # ever touching a real system credential. CADDY_CREDENTIAL_PARENT_LOCKED
+        # is a hidden fixture flag, set only by the dedicated privileged stat
+        # test, that models an operator who really cannot reach the file
+        # unprivileged: it skips this stub own unprivileged presence probe
+        # (which would otherwise get the same real EACCES as production and
+        # misreport a present credential as missing) while every other test,
+        # including the missing credential cases below, keeps proving
+        # presence through the genuine unprivileged check.
+        if [[ "$1 $2" == "-c %f %u" && "$3" == "$CADDY_CREDENTIAL" ]]; then
+          if [[ ${CADDY_CREDENTIAL_PARENT_LOCKED:-0} != 1 && ! -e "$CADDY_CREDENTIAL" ]]; then
+            printf "stat: cannot statx '"'"'%s'"'"': No such file or directory\n" "$CADDY_CREDENTIAL" >&2
+            exit 1
+          fi
+          type_octal=100000
+          case "${CREDENTIAL_TYPE:-regular}" in
+            symlink) type_octal=120000 ;;
+            directory) type_octal=040000 ;;
+          esac
+          mode_octal=$(( 8#$type_octal | 8#${CREDENTIAL_MODE:-600} ))
+          printf "%x %s\n" "$mode_octal" "${CREDENTIAL_OWNER:-0}"
+        else
+          exit 98
+        fi ;;
       install)
         shift
         arguments=()
@@ -2721,6 +2753,18 @@ run_rollback() {
   [[ "$output" == *'must be owned by root'* ]]
   unset CREDENTIAL_OWNER
 
+  export CREDENTIAL_TYPE=symlink
+  run_custom_domain setup
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'must be a regular file'* ]]
+  unset CREDENTIAL_TYPE
+
+  export CREDENTIAL_TYPE=directory
+  run_custom_domain setup
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'must be a regular file'* ]]
+  unset CREDENTIAL_TYPE
+
   export GODADDY_API_STATUS=401
   run_custom_domain setup
   [ "$status" -ne 0 ]
@@ -2758,6 +2802,31 @@ run_rollback() {
 
   [ "$(fingerprint_paths "$CADDY_ROOT")" = "$before" ]
   assert_no_caddy_publication
+}
+
+@test "setup validates the GoDaddy credential through privileged metadata invisible to unprivileged inspection" {
+  prepare_custom_domain_setup legacy-exact
+  # Models the real /etc/credstore.encrypted contract exactly -- and proves
+  # it, rather than merely stubbing the external `stat` binary: chmod 000 the
+  # real credential parent directory on this host so every unprivileged
+  # means of reaching the file -- `[[ -f ]]`, `[[ -e ]]`, `[[ -L ]]`, and an
+  # unprivileged external `stat` alike -- gets a genuine kernel EACCES, the
+  # same as the real root:root 0700 parent. Only the privileged `sudo stat`
+  # path can still answer. CADDY_CREDENTIAL_PARENT_LOCKED tells that stub's
+  # own unprivileged presence probe to stand down instead of tripping on the
+  # same real EACCES; the missing-credential tests do not set it and keep
+  # exercising the genuine check. Permissions are restored immediately after
+  # setup returns, before any assertion or teardown touches the path again.
+  local credential_dir
+  credential_dir=$(dirname "$CADDY_CREDENTIAL")
+  chmod 000 "$credential_dir"
+  export CADDY_CREDENTIAL_PARENT_LOCKED=1
+  run_custom_domain setup
+  chmod 0755 "$credential_dir"
+  unset CADDY_CREDENTIAL_PARENT_LOCKED
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'ready-to-migrate'* ]]
+  grep -qF "sudo stat -c %f %u $CADDY_CREDENTIAL" "$CALLS"
 }
 
 @test "setup refuses a malformed credential through the shipped validator without a network call" {
