@@ -15,6 +15,7 @@ pi.dpao.la {
 		dns godaddy {
 			api_token {env.GODADDY_API_TOKEN}
 		}
+		propagation_delay 60s
 	}
 
 	reverse_proxy 127.0.0.1:31415

@@ -32,18 +32,17 @@ readonly EXPECTED_GODADDY_MODULE=dns.providers.godaddy
 readonly EXPECTED_GODADDY_PACKAGE=github.com/caddy-dns/godaddy
 readonly DNS_ZONE=dpao.la
 readonly CERT_MIN_VALIDITY_SECONDS=604800
-# Bounded post-publication wait for the listener, DNS-01 issuance, trusted
-# certificate, and proxy health. The retry loop only paces that wait: its
-# worst case is attempts * probe timeout + (attempts - 1) * interval =
-# 15 * 10 + 14 * 5 = 220 seconds, which leaves room inside the hard deadline
-# below for the authoritative installed/listener/LAN/TLS/health checks that
-# always follow it (the trailing validate_caddy_tls_health alone is bounded
-# by TLS_HANDSHAKE_TIMEOUT + PROBE_MAX_TIME = 45 seconds), so a still-unready
-# service normally fails with its own exact boundary error.
-readonly CADDY_READY_ATTEMPTS_DEFAULT=15
+# Bounded post-publication wait for the listener, DNS-01 issuance (including
+# the Caddyfile's own 60-second GoDaddy propagation_delay before Caddy's first
+# validation attempt), trusted certificate, and proxy health. The retry loop
+# carries no attempt limit of its own: a still-unready signal is retried every
+# CADDY_READY_INTERVAL seconds for as long as the wall-clock deadline below
+# allows, so a run of fast failures (a slow-to-propagate DNS record, for
+# example) cannot end the operation before that deadline the way a fixed
+# attempt count would.
 readonly CADDY_READY_INTERVAL_DEFAULT=5
 readonly CADDY_READY_PROBE_TIMEOUT=10
-# The real bound on readiness, which arithmetic alone cannot provide:
+# The real bound on readiness, which the loop itself does not enforce:
 # validate_caddy_listener's check_lan() and check_caddy_lan() probe every
 # non-Tailscale global IPv4 address, so the cost of the authoritative checks
 # scales with the host's interface count. wait_for_caddy_ready() therefore
@@ -98,7 +97,7 @@ readonly -a CADDY_MANAGED_SOURCE_FILES=(
 # manifest/lock. Any drift in either template — even syntactically valid,
 # placeholder-free, secret-free drift — must be a reviewed source change
 # that updates this pin, not a silent pass.
-readonly CADDYFILE_SHA256=a0c851372d974aa647e1e37de93fc374a11b1fc7ed361f8a74a6423d4c17c1b4
+readonly CADDYFILE_SHA256=2a6d76da8268c4a7953087dc717a404fb5ca00dc8cbd39fb0c6cb6211f69bf21
 readonly CADDY_UNIT_TEMPLATE_SHA256=1736be815881c48685b584f3906a1d3aa80811de118b601365c16097c4176eaf
 export CADDY_READY_PROBE_TIMEOUT PROBE_CONNECT_TIMEOUT PROBE_MAX_TIME TLS_HANDSHAKE_TIMEOUT
 
@@ -820,15 +819,14 @@ publish_caddy_artifact() {
   }
 }
 
-# Selects the bounded readiness budget. Tests may shorten it through the
-# usual Bats-only override guard; production always waits the full budget.
+# Selects the bounded readiness pacing interval. Tests may shorten it through
+# the usual Bats-only override guard; production always paces at the full
+# default interval, with no attempt limit of its own (see wait_for_caddy_ready).
 caddy_ready_budget() {
-  CADDY_READY_ATTEMPTS=$CADDY_READY_ATTEMPTS_DEFAULT
   CADDY_READY_INTERVAL=$CADDY_READY_INTERVAL_DEFAULT
-  if [[ -n ${PI_WEBUI_TEST_READY_BUDGET:-} ]]; then
+  if [[ -n ${PI_WEBUI_TEST_READY_INTERVAL:-} ]]; then
     require_test_override "$STATE_ROOT"
-    CADDY_READY_ATTEMPTS=${PI_WEBUI_TEST_READY_BUDGET%%:*}
-    CADDY_READY_INTERVAL=${PI_WEBUI_TEST_READY_BUDGET##*:}
+    CADDY_READY_INTERVAL=$PI_WEBUI_TEST_READY_INTERVAL
   fi
 }
 
@@ -859,18 +857,21 @@ caddy_ready_signal() {
     "https://$CUSTOM_HOSTNAME:8443/api/health" >/dev/null 2>&1 || return 1
 }
 
-# The readiness operation itself: pace until the cheap signal answers, then
-# require the full installed, listener, LAN, and TLS/health state to be
-# exact. Runs as the child of wait_for_caddy_ready()'s `timeout`, in a
-# subprocess that re-sources this script, so it must depend only on exported
-# state: the managed and Caddy paths, PI_LAUNCHER, STATE_ROOT, and the
-# Bats-only overrides all are, and no credential is in the environment here.
+# The readiness operation itself: pace on the interval alone until the cheap
+# signal answers, then require the full installed, listener, LAN, and
+# TLS/health state to be exact. Runs as the child of wait_for_caddy_ready()'s
+# `timeout`, in a subprocess that re-sources this script, so it must depend
+# only on exported state: the managed and Caddy paths, PI_LAUNCHER,
+# STATE_ROOT, and the Bats-only overrides all are, and no credential is in
+# the environment here.
+#
+# The loop carries no attempt limit: it keeps retrying until the signal
+# succeeds or the surrounding `timeout` ends the whole operation, so pacing
+# a run of fast failures (a slow-to-propagate DNS record, for example) never
+# ends the operation before the documented wall-clock deadline.
 caddy_readiness_worker() {
-  local attempt
   caddy_ready_budget
-  for ((attempt = 1; attempt <= CADDY_READY_ATTEMPTS; attempt++)); do
-    if caddy_ready_signal; then break; fi
-    [[ "$attempt" -lt "$CADDY_READY_ATTEMPTS" ]] || break
+  until caddy_ready_signal; do
     sleep "$CADDY_READY_INTERVAL"
   done
   validate_installed_caddy

@@ -156,7 +156,14 @@ listener `127.0.0.1:31415`; Funnel remains disabled throughout.
 4. Inspect read-only state: `make ai-webui-domain-check`.
 5. Review the report and obtain separate approval, then build and install the
    candidate Caddy service while legacy ingress stays live:
-   `make ai-webui-domain-setup`.
+   `make ai-webui-domain-setup`. The Caddyfile's `propagation_delay 60s` makes
+   Caddy wait a fixed 60 seconds after publishing the `_acme-challenge`
+   GoDaddy TXT record before its first DNS-01 validation attempt, and
+   readiness afterward paces on a plain retry interval with no attempt limit
+   of its own: it keeps retrying until the service is healthy or the whole
+   operation's wall-clock deadline (290 seconds, plus 5 seconds of kill
+   grace) elapses, whichever comes first. A run that exceeds that deadline
+   restores the exact prior installation automatically.
 6. Inspect the exact installed service, unit, loopback listeners, and issued
    certificate before migrating.
 7. Review the printed migration plan and obtain approval, then run
