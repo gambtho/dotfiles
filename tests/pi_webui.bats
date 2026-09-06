@@ -606,6 +606,20 @@ prepare_custom_domain_check() {
       *" https://pi.dpao.la:8443/api/health "*)
         if [[ ${CADDY_HEALTH_FAIL:-0} == 1 ]]; then exit 22; fi
         if [[ ${CURL_STALL:-0} == 1 ]]; then exit 28; fi
+        if [[ -n ${CADDY_HEALTH_FAIL_ATTEMPTS:-} ]]; then
+          count=$(( $(cat "$TEST_ROOT/caddy-health-attempts" 2>/dev/null || printf 0) + 1 ))
+          printf "%s" "$count" >"$TEST_ROOT/caddy-health-attempts"
+          if [[ "$count" -le "$CADDY_HEALTH_FAIL_ATTEMPTS" ]]; then exit 22; fi
+        fi
+        # Lets the first N matching calls succeed (the cheap readiness
+        # signal) and every call after that fail (the strict
+        # validate_caddy_tls_health call the readiness worker runs once the
+        # signal answers), so the two probes can be told apart in a test.
+        if [[ -n ${CADDY_HEALTH_FAIL_AFTER_ATTEMPTS:-} ]]; then
+          count=$(( $(cat "$TEST_ROOT/caddy-health-ready-calls" 2>/dev/null || printf 0) + 1 ))
+          printf "%s" "$count" >"$TEST_ROOT/caddy-health-ready-calls"
+          if [[ "$count" -gt "$CADDY_HEALTH_FAIL_AFTER_ATTEMPTS" ]]; then exit 22; fi
+        fi
         printf "%s\n" "${CADDY_HEALTH_JSON:-$HEALTH_JSON}" ;;
       *" -o "*)
         if [[ ${BAD_KEY_DOWNLOAD:-} == 1 ]]; then printf bad-key; else printf key-bytes; fi >"${@: -1}" ;;
@@ -644,8 +658,9 @@ prepare_custom_domain_setup() {
   printf 'acme account state\n' >"$CADDY_STATE_DIR/acme.json"
 
   write_caddy_stub_binary "$TEST_ROOT/candidate-caddy" 'candidate build'
-  # Two attempts with no delay: a bounded readiness wait that never sleeps.
-  export PI_WEBUI_TEST_READY_BUDGET=2:0
+  # No delay between attempts and no attempt limit: a bounded readiness wait
+  # that never sleeps for real in the ordinary success-on-first-probe case.
+  export PI_WEBUI_TEST_READY_INTERVAL=0
 
   stub_command mise 'if [[ "$1 $2" == "which pi" ]]; then
     printf "%s\n" "$PI_LAUNCHER"
@@ -2091,6 +2106,9 @@ run_rollback() {
     'custom-domain.sh rollback' \
     'custom-domain.sh rollback --full' \
     'tailscale.sh serve-legacy' \
+    'propagation_delay 60s' \
+    'with no attempt limit' \
+    '290 seconds, plus' \
     'HTTPS 443 -> http://127.0.0.1:31415' \
     'TCP 443 -> tcp://127.0.0.1:8443' \
     'browser WebSockets disconnect' \
@@ -2142,6 +2160,7 @@ run_rollback() {
   [[ "$output" == *$'pi.dpao.la {'* ]]
   [[ "$output" == *$'bind 127.0.0.1'* ]]
   [[ "$output" == *$'api_token {env.GODADDY_API_TOKEN}'* ]]
+  [[ "$output" == *$'propagation_delay 60s'* ]]
   [[ "$output" == *$'reverse_proxy 127.0.0.1:31415'* ]]
   [[ "$output" != *'0.0.0.0'* ]]
   [[ "$output" != *'::'* ]]
@@ -2483,24 +2502,13 @@ run_rollback() {
   kill_grace=${output#* }
   [ $((deadline + kill_grace)) -le 300 ]
 
-  # The retry loop only paces inside that deadline: its own worst case plus
-  # the authoritative TLS/health validation that always runs once more after
-  # the loop exits (bounded by TLS_HANDSHAKE_TIMEOUT + PROBE_MAX_TIME) still
-  # fits, so a still-unready service normally fails with the exact remaining
-  # boundary error rather than with the deadline error.
-  run_custom_domain_function 'caddy_ready_budget; printf "%s %s\\n" "$CADDY_READY_ATTEMPTS" "$CADDY_READY_INTERVAL"'
+  # The retry loop itself carries no attempt limit: it paces on
+  # CADDY_READY_INTERVAL alone and is bounded solely by the surrounding
+  # wall-clock deadline above, so a run of fast failures cannot end the
+  # operation before that deadline.
+  run_custom_domain_function 'caddy_ready_budget; printf "%s\\n" "$CADDY_READY_INTERVAL"'
   [ "$status" -eq 0 ]
-  attempts=${output% *}
-  interval=${output#* }
-  run_custom_domain_function 'printf "%s\\n" "$CADDY_READY_PROBE_TIMEOUT"'
-  [ "$status" -eq 0 ]
-  probe=$output
-  run_custom_domain_function 'printf "%s %s\\n" "$TLS_HANDSHAKE_TIMEOUT" "$PROBE_MAX_TIME"'
-  [ "$status" -eq 0 ]
-  handshake_timeout=${output% *}
-  probe_max_time=${output#* }
-  post_loop_validation=$((handshake_timeout + probe_max_time))
-  [ $((attempts * probe + (attempts - 1) * interval + post_loop_validation)) -le "$deadline" ]
+  [ "$output" -gt 0 ]
 }
 
 @test "condition-context helpers refuse output from a failing command" {
@@ -3005,21 +3013,31 @@ run_rollback() {
 
   # The worker runs in a subprocess that re-sources the script, so success
   # here also proves the subprocess inherited the Bats-only path overrides,
-  # the readiness budget override, and the stubbed commands: the managed
+  # the readiness interval override, and the stubbed commands: the managed
   # artifacts it validates exist only under the test caddy root.
   run_custom_domain_function 'wait_for_caddy_ready'
   [ "$status" -eq 0 ]
   grep -F -- '--resolve pi.dpao.la:8443:127.0.0.1' "$CALLS"
 
-  # A failing authoritative check still reports its own exact boundary error
-  # through the deadline wrapper, not a generic timeout.
-  export CADDY_HEALTH_FAIL=1
+  # A signal that keeps failing past the former 15-attempt limit still
+  # succeeds once it finally answers: the retry loop paces on the interval
+  # alone and never gives up on its own attempt count.
+  rm -f "$TEST_ROOT/caddy-health-attempts"
+  export CADDY_HEALTH_FAIL_ATTEMPTS=20
+  run_custom_domain_function 'wait_for_caddy_ready'
+  [ "$status" -eq 0 ]
+  [ "$(cat "$TEST_ROOT/caddy-health-attempts")" -gt 15 ]
+  unset CADDY_HEALTH_FAIL_ATTEMPTS
+
+  # A signal that never answers is still bounded, but only by the wall-clock
+  # deadline now, and reports that deadline's own exact boundary error.
+  export CADDY_HEALTH_FAIL=1 PI_WEBUI_TEST_READY_DEADLINE=1
   run_custom_domain_function 'wait_for_caddy_ready'
   [ "$status" -ne 0 ]
-  [[ "$output" == *'health endpoint failed'* ]]
-  unset CADDY_HEALTH_FAIL
+  [[ "$output" == *'readiness exceeded its 1-second deadline'* ]]
+  unset CADDY_HEALTH_FAIL PI_WEBUI_TEST_READY_DEADLINE
 
-  # The deadline override is a Bats-only override like the budget.
+  # The deadline override is a Bats-only override like the interval.
   run_custom_domain_function 'unset PI_WEBUI_TESTING; PI_WEBUI_TEST_READY_DEADLINE=1 caddy_ready_deadline'
   [ "$status" -ne 0 ]
   [[ "$output" == *'test overrides are unavailable outside Bats'* ]]
@@ -3031,8 +3049,8 @@ run_rollback() {
 
   # The readiness signal never answers and one pacing sleep alone outlasts
   # the whole deadline, so the operation is cut off by wall clock instead of
-  # running to the end of its own arithmetic budget.
-  export CADDY_HEALTH_FAIL=1 PI_WEBUI_TEST_READY_DEADLINE=1 PI_WEBUI_TEST_READY_BUDGET=2:5
+  # relying on any attempt limit.
+  export CADDY_HEALTH_FAIL=1 PI_WEBUI_TEST_READY_DEADLINE=1 PI_WEBUI_TEST_READY_INTERVAL=5
   run_custom_domain setup
   [ "$status" -ne 0 ]
   [[ "$output" == *'readiness exceeded its 1-second deadline'* ]]
@@ -3052,10 +3070,19 @@ run_rollback() {
 @test "setup restores prior files enablement and activity after a TLS health failure" {
   prepare_custom_domain_setup legacy-exact prior
   before=$(fingerprint_paths "$CADDY_ROOT")
-  export CADDY_HEALTH_FAIL=1
+  rm -f "$TEST_ROOT/caddy-health-ready-calls"
+  # The cheap readiness signal succeeds on its first probe, so the readiness
+  # worker proceeds straight to validate_caddy_tls_health without ever
+  # sleeping or approaching the wall-clock deadline; that second, strict
+  # probe of the same endpoint is the one that fails here.
+  export CADDY_HEALTH_FAIL_AFTER_ATTEMPTS=1
   run_custom_domain setup
   [ "$status" -ne 0 ]
-  [[ "$output" == *'health endpoint failed'* ]]
+  [[ "$output" == *'Caddy-proxied Pi Web UI health endpoint failed at https://pi.dpao.la:8443/api/health'* ]]
+  # Proves the readiness signal and the strict validation are two distinct
+  # curl calls against the same endpoint, not one call reused.
+  [ "$(cat "$TEST_ROOT/caddy-health-ready-calls")" -ge 2 ]
+  unset CADDY_HEALTH_FAIL_AFTER_ATTEMPTS
 
   [ "$(fingerprint_paths "$CADDY_ROOT")" = "$before" ]
   ! grep -qF 'candidate build' "$CADDY_ROOT/usr/local/lib/pi-webui/caddy"
@@ -3086,7 +3113,7 @@ run_rollback() {
 
 @test "setup reports the retained staging path when restoration fails" {
   prepare_custom_domain_setup legacy-exact prior
-  export CADDY_HEALTH_FAIL=1 RESTORE_FAIL=1
+  export CADDY_HEALTH_FAIL=1 RESTORE_FAIL=1 PI_WEBUI_TEST_READY_DEADLINE=1
   run_custom_domain setup
   [ "$status" -ne 0 ]
   [[ "$output" == *'restoration failed; preserving staging path: '*"$STATE_ROOT/.caddy-setup."* ]]
