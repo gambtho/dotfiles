@@ -1,7 +1,7 @@
 # Pi Web UI operations
 
-This opt-in integration runs Firstp1ck `0.10.3` with the mise-managed Pi
-`0.84.4` on Ubuntu 24.04 Noble under WSL and a systemd user manager. It is
+This opt-in integration runs Firstp1ck `0.10.4` with the mise-managed Pi
+`0.85.1` on Ubuntu 24.04 Noble under WSL and a systemd user manager. It is
 separate from ordinary `make ai` and never registers Firstp1ck as a Pi package.
 
 ## Trust boundary

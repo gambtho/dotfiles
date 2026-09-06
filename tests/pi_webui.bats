@@ -62,7 +62,7 @@ make_installed_runtime() {
   cp "$WEBUI_FIXTURE/ai/pi/webui/runtime/package.json" "$INSTALLED_RUNTIME/package.json"
   cp "$WEBUI_FIXTURE/ai/pi/webui/runtime/package-lock.json" "$INSTALLED_RUNTIME/package-lock.json"
   printf '%s\n' \
-    '{"name":"@firstpick/pi-package-webui","version":"0.10.3","bin":{"pi-webui":"./bin/pi-webui-launcher.mjs"}}' \
+    '{"name":"@firstpick/pi-package-webui","version":"0.10.4","bin":{"pi-webui":"./bin/pi-webui-launcher.mjs"}}' \
     >"$INSTALLED_RUNTIME/node_modules/@firstpick/pi-package-webui/package.json"
   printf '#!/usr/bin/env node\n' \
     >"$INSTALLED_RUNTIME/node_modules/@firstpick/pi-package-webui/bin/pi-webui-launcher.mjs"
@@ -70,7 +70,7 @@ make_installed_runtime() {
   ln -s ../@firstpick/pi-package-webui/bin/pi-webui-launcher.mjs \
     "$INSTALLED_RUNTIME/node_modules/.bin/pi-webui"
   printf '%s\n' \
-    '{"name":"@earendil-works/pi-coding-agent","version":"0.84.4","bin":{"pi":"dist/bundle/cli.js"}}' \
+    '{"name":"@earendil-works/pi-coding-agent","version":"0.85.1","bin":{"pi":"dist/bundle/cli.js"}}' \
     >"$INSTALLED_RUNTIME/node_modules/@earendil-works/pi-coding-agent/package.json"
   printf '#!/usr/bin/env node\n' \
     >"$INSTALLED_RUNTIME/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js"
@@ -83,7 +83,7 @@ make_external_pi() {
   export PI_PACKAGE PI_LAUNCHER
   mkdir -p "$(dirname "$PI_LAUNCHER")"
   printf '%s\n' \
-    '{"name":"@earendil-works/pi-coding-agent","version":"0.84.4","bin":{"pi":"dist/bundle/cli.js"}}' \
+    '{"name":"@earendil-works/pi-coding-agent","version":"0.85.1","bin":{"pi":"dist/bundle/cli.js"}}' \
     >"$PI_PACKAGE/package.json"
   printf '#!/usr/bin/env node\n' >"$PI_LAUNCHER"
   chmod +x "$PI_LAUNCHER"
@@ -107,7 +107,7 @@ mkdir -p \
   "$runtime/node_modules/@firstpick/pi-package-webui/bin" \
   "$runtime/node_modules/@earendil-works/pi-coding-agent/dist/bundle"
 printf '%s\n' \
-  '{"name":"@firstpick/pi-package-webui","version":"0.10.3","bin":{"pi-webui":"./bin/pi-webui-launcher.mjs"}}' \
+  '{"name":"@firstpick/pi-package-webui","version":"0.10.4","bin":{"pi-webui":"./bin/pi-webui-launcher.mjs"}}' \
   >"$runtime/node_modules/@firstpick/pi-package-webui/package.json"
 printf '#!/usr/bin/env node\n' \
   >"$runtime/node_modules/@firstpick/pi-package-webui/bin/pi-webui-launcher.mjs"
@@ -115,7 +115,7 @@ chmod +x "$runtime/node_modules/@firstpick/pi-package-webui/bin/pi-webui-launche
 ln -s ../@firstpick/pi-package-webui/bin/pi-webui-launcher.mjs \
   "$runtime/node_modules/.bin/pi-webui"
 printf '%s\n' \
-  '{"name":"@earendil-works/pi-coding-agent","version":"0.84.4","bin":{"pi":"dist/bundle/cli.js"}}' \
+  '{"name":"@earendil-works/pi-coding-agent","version":"0.85.1","bin":{"pi":"dist/bundle/cli.js"}}' \
   >"$runtime/node_modules/@earendil-works/pi-coding-agent/package.json"
 printf '#!/usr/bin/env node\n' \
   >"$runtime/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js"
@@ -129,7 +129,7 @@ prepare_apply_fixture() {
   make_webui_fixture
   make_external_pi
   make_candidate_installer
-  export HEALTH_JSON='{"ok":true,"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"open":false,"host":"127.0.0.1","port":31415,"networkUrls":[]},"tabs":[]}'
+  export HEALTH_JSON='{"ok":true,"webuiVersion":"0.10.4","piVersion":"0.85.1","network":{"open":false,"host":"127.0.0.1","port":31415,"networkUrls":[]},"tabs":[]}'
   printf '%s\n' "$identity" >"$WEBUI_FIXTURE/prior-release"
   git -C "$WEBUI_FIXTURE" add prior-release
   git -C "$WEBUI_FIXTURE" commit -qm "prior $identity"
@@ -222,7 +222,7 @@ assert_prior_apply_state() {
 
 stub_healthy_system() {
   if [[ -z ${HEALTH_JSON:-} ]]; then
-    HEALTH_JSON='{"ok":true,"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"open":false,"host":"127.0.0.1","port":31415,"networkUrls":[]},"tabs":[{"cwd":"/tmp/another-project","running":true,"command":"'
+    HEALTH_JSON='{"ok":true,"webuiVersion":"0.10.4","piVersion":"0.85.1","network":{"open":false,"host":"127.0.0.1","port":31415,"networkUrls":[]},"tabs":[{"cwd":"/tmp/another-project","running":true,"command":"'
     HEALTH_JSON+="$PI_LAUNCHER --mode rpc --session x"
     HEALTH_JSON+='"}]}'
     export HEALTH_JSON
@@ -1136,18 +1136,18 @@ run_rollback() {
   [ "$status" -eq 0 ]
 
   printf '%s\n' \
-    '{"name":"foreign-pi","version":"0.84.4","bin":{"pi":"dist/bundle/cli.js"}}' \
+    '{"name":"foreign-pi","version":"0.85.1","bin":{"pi":"dist/bundle/cli.js"}}' \
     >"$PI_PACKAGE/package.json"
   run_installer_function 'resolve_pi'
   [ "$status" -ne 0 ]
-  [[ "$output" == *"Pi launcher is not @earendil-works/pi-coding-agent@0.84.4"* ]]
+  [[ "$output" == *"Pi launcher is not @earendil-works/pi-coding-agent@0.85.1"* ]]
 
   printf '%s\n' \
-    '{"name":"@earendil-works/pi-coding-agent","version":"0.84.3","bin":{"pi":"dist/bundle/cli.js"}}' \
+    '{"name":"@earendil-works/pi-coding-agent","version":"0.85.0","bin":{"pi":"dist/bundle/cli.js"}}' \
     >"$PI_PACKAGE/package.json"
   run_installer_function 'resolve_pi'
   [ "$status" -ne 0 ]
-  [[ "$output" == *"Pi launcher is not @earendil-works/pi-coding-agent@0.84.4"* ]]
+  [[ "$output" == *"Pi launcher is not @earendil-works/pi-coding-agent@0.85.1"* ]]
 }
 
 @test "landing worktree accepts clean detached state and empty .pi/plans" {
@@ -1211,20 +1211,20 @@ run_rollback() {
 @test "active health permits empty tabs and project cwd tabs but rejects wrong launchers or open networking" {
   make_webui_fixture
   make_external_pi
-  export HEALTH_JSON='{"ok":true,"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"open":false,"host":"127.0.0.1","port":31415,"networkUrls":[]},"tabs":[]}'
+  export HEALTH_JSON='{"ok":true,"webuiVersion":"0.10.4","piVersion":"0.85.1","network":{"open":false,"host":"127.0.0.1","port":31415,"networkUrls":[]},"tabs":[]}'
   stub_healthy_system
   run_installer_function 'validate_active_health "$PI_LAUNCHER"'
   [ "$status" -eq 0 ]
 
-  export HEALTH_JSON="{\"ok\":true,\"webuiVersion\":\"0.10.3\",\"piVersion\":\"0.84.4\",\"network\":{\"open\":false,\"host\":\"127.0.0.1\",\"port\":31415,\"networkUrls\":[]},\"tabs\":[{\"cwd\":\"/tmp/project\",\"running\":true,\"command\":\"$PI_LAUNCHER --mode rpc --session x\"}]}"
+  export HEALTH_JSON="{\"ok\":true,\"webuiVersion\":\"0.10.4\",\"piVersion\":\"0.85.1\",\"network\":{\"open\":false,\"host\":\"127.0.0.1\",\"port\":31415,\"networkUrls\":[]},\"tabs\":[{\"cwd\":\"/tmp/project\",\"running\":true,\"command\":\"$PI_LAUNCHER --mode rpc --session x\"}]}"
   run_installer_function 'validate_active_health "$PI_LAUNCHER"'
   [ "$status" -eq 0 ]
 
-  export HEALTH_JSON="{\"ok\":true,\"webuiVersion\":\"0.10.3\",\"piVersion\":\"0.84.4\",\"network\":{\"open\":false,\"host\":\"127.0.0.1\",\"port\":31415,\"networkUrls\":[]},\"tabs\":[{\"cwd\":\"/tmp/project\",\"running\":true,\"command\":\"/wrong/pi --mode rpc\"}]}"
+  export HEALTH_JSON="{\"ok\":true,\"webuiVersion\":\"0.10.4\",\"piVersion\":\"0.85.1\",\"network\":{\"open\":false,\"host\":\"127.0.0.1\",\"port\":31415,\"networkUrls\":[]},\"tabs\":[{\"cwd\":\"/tmp/project\",\"running\":true,\"command\":\"/wrong/pi --mode rpc\"}]}"
   run_installer_function 'validate_active_health "$PI_LAUNCHER"'
   [ "$status" -ne 0 ]
 
-  export HEALTH_JSON="{\"ok\":true,\"webuiVersion\":\"0.10.3\",\"piVersion\":\"0.84.4\",\"network\":{\"open\":true,\"host\":\"127.0.0.1\",\"port\":31415,\"networkUrls\":[]},\"tabs\":[]}"
+  export HEALTH_JSON="{\"ok\":true,\"webuiVersion\":\"0.10.4\",\"piVersion\":\"0.85.1\",\"network\":{\"open\":true,\"host\":\"127.0.0.1\",\"port\":31415,\"networkUrls\":[]},\"tabs\":[]}"
   run_installer_function 'validate_active_health "$PI_LAUNCHER"'
   [ "$status" -ne 0 ]
 }
@@ -1232,7 +1232,7 @@ run_rollback() {
 @test "active health rejects non-loopback or multiple listeners" {
   make_webui_fixture
   make_external_pi
-  export HEALTH_JSON='{"ok":true,"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"open":false,"host":"127.0.0.1","port":31415,"networkUrls":[]},"tabs":[]}'
+  export HEALTH_JSON='{"ok":true,"webuiVersion":"0.10.4","piVersion":"0.85.1","network":{"open":false,"host":"127.0.0.1","port":31415,"networkUrls":[]},"tabs":[]}'
   stub_healthy_system
 
   stub_command ss 'printf "%s\\n" "LISTEN 0 128 0.0.0.0:31415 0.0.0.0:*"'
@@ -1300,7 +1300,7 @@ run_rollback() {
   make_webui_fixture
   make_external_pi
   make_candidate_installer
-  export HEALTH_JSON='{"ok":true,"webuiVersion":"0.10.3","piVersion":"0.84.4","network":{"open":false,"host":"127.0.0.1","port":31415,"networkUrls":[]},"tabs":[]}'
+  export HEALTH_JSON='{"ok":true,"webuiVersion":"0.10.4","piVersion":"0.85.1","network":{"open":false,"host":"127.0.0.1","port":31415,"networkUrls":[]},"tabs":[]}'
   stub_apply_system
 
   for unsafe in "$TEST_ROOT/data%unsafe" "$TEST_ROOT/data\$unsafe" "$TEST_ROOT/data unsafe" \
@@ -2507,9 +2507,9 @@ run_rollback() {
     >"$PI_PACKAGE/package.json"
   run_custom_domain setup
   [ "$status" -ne 0 ]
-  [[ "$output" == *'Pi must be available through mise'* || "$output" == *'0.84.4'* ]]
+  [[ "$output" == *'Pi must be available through mise'* || "$output" == *'0.85.1'* ]]
   printf '%s\n' \
-    '{"name":"@earendil-works/pi-coding-agent","version":"0.84.4","bin":{"pi":"dist/bundle/cli.js"}}' \
+    '{"name":"@earendil-works/pi-coding-agent","version":"0.85.1","bin":{"pi":"dist/bundle/cli.js"}}' \
     >"$PI_PACKAGE/package.json"
 
   mv "$INSTALLED_RUNTIME" "$TEST_ROOT/runtime-away"
