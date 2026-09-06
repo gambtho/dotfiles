@@ -52,21 +52,20 @@ const path = require('node:path');
 
 const [runtimeArgument, mode] = process.argv.slice(2);
 const webuiName = '@firstpick/pi-package-webui';
-const webuiVersion = '0.10.3';
+const webuiVersion = '0.10.4';
 const piName = '@earendil-works/pi-coding-agent';
-const piVersion = '0.84.4';
-const manifestHash = '073ba87cad124eb709eb8cafdd77c44c10b5d12bf5841acea140a50ac5177763';
-const lockHash = '39593de061e22a36668a0a0d1449e339b84e644d6c65e6b1618af9d177fc71d0';
-const webuiIntegrity = 'sha512-46Hmgv/ccINvexRof3w7JzVoutrBcQ06OC2RiLh/aU1MAZvv7Uss6M0CgHkjb8fzzDaspNgihAbu+U0R0TGafQ==';
+const piVersion = '0.85.1';
+const manifestHash = '6f01ecc53b5691dd3f34f338d12fd222f9971c4a33f7ce709406bccc44fe7ef4';
+const lockHash = '324fef85b346363d358d764527bb73492e1c43330411baf127aa4408bf274123';
+const webuiIntegrity = 'sha512-7Fd6aoy35trczFzkKDm1xMsfOTHeMt0SZgoJWorWNEAOfhekQ/FcyH65AP0YlnIeRrH/gNXaS+H77JilYyIJsw==';
 const nestedPrefix = 'node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/';
-const earendilIntegrities = {
-  'pi-agent-core': 'sha512-HyUnjaOXj6oN/6SNcr8A1J/ElRQA50FtIE0XUTSKAQVqmdlb9qdojOyUQwF/jULE5+yOEtGuVgi/N1RnBiNG+g==',
-  'pi-ai': 'sha512-AClAZxf5+c4RRu44NJPS6wyQy+Nmq+Mzyyrdvm4ZVMNuixelO02RZX4G4Aq1F145Yzp43wnM5S+hLlSI7ypfVw==',
-  'pi-client': 'sha512-q398WY/3ZQHTizk7IKxApzqFV0xt4yM9LkSkwyqeLK5Bj5RwRjOWxESt26z4LgNp4O+8hqhqFPf/8fj4H5rE4A==',
-  'pi-protocol': 'sha512-acyE9ozxkMiWiz/xyWpU0O9vwnYv0hyG889Vniv6Sg9c9zfsX+8MePnDNphBacY2Fvm1rxdsGmiVDSZl9yuDFA==',
-  'pi-telemetry': 'sha512-8e2CuxM+ht+hedQXTZmi5JVl6/xDK9RpSDL2+MbITevKYQhMZ/z6lJOTFgox3HQyGxO8mOZEtYGVeQNaD4OzqA==',
-  'pi-tui': 'sha512-nPUnwDkLtupPXnZQYrCwPFcuTydCDqTY6ZbFqhsL4S4kVq0AT418kPa/6uXwtaCD+MjBNBltb7ScTYX65yeE1w==',
-};
+// Pi ships its own npm-shrinkwrap.json for this subtree (packages[...].hasShrinkwrap
+// is true on the top-level entry), so npm does not record a separate integrity
+// hash for each nested package here -- the top-level Pi tarball hash already
+// covers the whole shrinkwrapped subtree. Every nested package must still
+// resolve to the exact pinned Pi version and none may carry its own
+// unexpected integrity field.
+const nestedEarendilNames = ['chord', 'pi-agent-core', 'pi-ai', 'pi-telemetry', 'pi-tui'];
 
 function fail(message) { throw new Error(message); }
 function hash(raw) { return crypto.createHash('sha256').update(raw).digest('hex'); }
@@ -130,17 +129,22 @@ try {
     fail('lockfile must be version 3 with the exact root dependency');
   }
   const registryEntries = Object.entries(lock.packages).filter(([name]) => name !== '');
-  if (registryEntries.length !== 350 || registryEntries.some(([, value]) =>
+  if (registryEntries.length !== 379 || registryEntries.some(([, value]) =>
     typeof value.resolved !== 'string' || !value.resolved.startsWith('https://registry.npmjs.org/'))) {
-    fail('lockfile must contain exactly 350 registry entries');
+    fail('lockfile must contain exactly 379 registry entries');
   }
   const webui = lock.packages[`node_modules/${webuiName}`];
   if (webui?.version !== webuiVersion || webui.integrity !== webuiIntegrity) {
     fail('unexpected Firstp1ck package identity or integrity');
   }
-  for (const [name, integrity] of Object.entries(earendilIntegrities)) {
+  const nestedEarendilEntries = Object.keys(lock.packages)
+    .filter((name) => name.startsWith(nestedPrefix));
+  if (nestedEarendilEntries.length !== nestedEarendilNames.length) {
+    fail('unexpected nested Earendil package count');
+  }
+  for (const name of nestedEarendilNames) {
     const entry = lock.packages[`${nestedPrefix}${name}`];
-    if (entry?.version !== piVersion || entry.integrity !== integrity) {
+    if (entry?.version !== piVersion || 'integrity' in entry) {
       fail(`unexpected nested Earendil package: ${name}`);
     }
   }
@@ -165,7 +169,7 @@ try {
       'installed Pi executable');
     rejectNodePty(path.join(runtime, 'node_modules'));
   }
-  console.log('validated 350 registry packages');
+  console.log('validated 379 registry packages');
 } catch (error) {
   console.error(`error: ${error.message}`);
   process.exit(1);

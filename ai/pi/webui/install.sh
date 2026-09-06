@@ -153,7 +153,7 @@ resolve_pi() {
     return 1
   }
   PI_LAUNCHER=$(canonical_existing "$PI_LAUNCHER")
-  node - "$PI_LAUNCHER" <<'NODE' || fail 'Pi launcher is not @earendil-works/pi-coding-agent@0.84.4'
+  node - "$PI_LAUNCHER" <<'NODE' || fail 'Pi launcher is not @earendil-works/pi-coding-agent@0.85.1'
 const fs = require('node:fs');
 const path = require('node:path');
 const launcher = fs.realpathSync(process.argv[2]);
@@ -162,7 +162,7 @@ for (;;) {
   const manifest = path.join(directory, 'package.json');
   if (fs.existsSync(manifest)) {
     const value = JSON.parse(fs.readFileSync(manifest, 'utf8'));
-    if (value.name === '@earendil-works/pi-coding-agent' && value.version === '0.84.4' &&
+    if (value.name === '@earendil-works/pi-coding-agent' && value.version === '0.85.1' &&
         typeof value.bin?.pi === 'string' && fs.realpathSync(path.resolve(directory, value.bin.pi)) === launcher) {
       process.exit(0);
     }
@@ -318,7 +318,7 @@ const response = JSON.parse(process.argv[3]);
 {
   const data = response;
   const network = data?.network;
-  if (response.ok !== true || data?.webuiVersion !== '0.10.3' || data?.piVersion !== '0.84.4' ||
+  if (response.ok !== true || data?.webuiVersion !== '0.10.4' || data?.piVersion !== '0.85.1' ||
       network?.open !== false || network?.host !== '127.0.0.1' || network?.port !== 31415 ||
       !Array.isArray(network?.networkUrls) || network.networkUrls.length !== 0 ||
       !Array.isArray(data?.tabs)) process.exit(1);
