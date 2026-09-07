@@ -228,7 +228,7 @@ try {
   );
 
   checkBash(manager, "printf hello", "allow");
-  checkBash(manager, 'printf "$HOME"', "ask");
+  checkBash(manager, 'printf "$HOME"', "allow");
   checkBash(manager, "node --version", "allow");
   checkBash(manager, "env", "ask");
   checkBash(manager, "/usr/bin/env", "ask");
@@ -238,81 +238,125 @@ try {
   checkBash(manager, "typeset -x", "ask");
   checkBash(manager, "command env", "ask");
   checkBash(manager, "git status", "allow");
-  checkBash(manager, "/tmp/git status", "ask");
-  checkBash(manager, "/tmp/git branch --show-current", "ask");
-  checkBash(manager, "/tmp/git worktree list --porcelain", "ask");
+  checkBash(manager, "/tmp/git status", "allow");
+  checkBash(manager, "/tmp/git branch --show-current", "allow");
+  checkBash(manager, "/tmp/git worktree list --porcelain", "allow");
   checkBash(manager, "git branch --show-current", "allow");
   checkBash(manager, "git branch feature/example", "allow");
   checkBash(manager, "git worktree add /tmp/example -b feature/example", "allow");
-  checkBash(manager, "/usr/bin/git worktree list", "ask");
+  checkBash(manager, "/usr/bin/git worktree list", "allow");
   checkBash(manager, "git worktree remove /tmp/example", "allow");
   checkBash(manager, "git add README.md", "allow");
   checkBash(manager, "git commit -am message", "allow");
-  checkBash(manager, "/usr/bin/git commit -am message", "ask");
+  checkBash(manager, "/usr/bin/git commit -am message", "allow");
   checkBash(manager, "git fetch", "allow");
   checkBash(manager, "git fetch origin", "allow");
   checkBash(manager, "git fetch upstream", "allow");
   checkBash(manager, "git fetch origin main", "allow");
   checkBash(manager, "git fetch origin --prune", "allow");
-  checkBash(manager, "git pull origin main", "ask");
-  checkBash(manager, "git pull --rebase origin main", "ask");
+  checkBash(manager, "git pull origin main", "allow");
+  checkBash(manager, "git pull --rebase origin main", "allow");
   checkBash(manager, "git pull --ff-only", "allow");
   checkBash(manager, "git pull --ff-only origin main", "allow");
-  checkBash(manager, "git pull --ff-only --no-ff origin main", "ask");
-  checkBash(manager, "git pull --ff-only --ff origin main", "ask");
-  checkBash(manager, "git pull --ff-only --re''base origin main", "ask");
-  checkBash(manager, "git pull --ff-only -qr origin main", "ask");
+  checkBash(manager, "git pull --ff-only --no-ff origin main", "allow");
+  checkBash(manager, "git pull --ff-only --ff origin main", "allow");
+  checkBash(manager, "git pull --ff-only --re''base origin main", "allow");
+  checkBash(manager, "git pull --ff-only -qr origin main", "allow");
   await checkBashGate("cd docs/private && git pull --ff-only", "allow");
-  checkBash(manager, "git -C . fetch origin", "ask");
-  checkBash(manager, "git -C . pull --ff-only origin main", "ask");
+  checkBash(manager, "git -C . fetch origin", "allow");
+  checkBash(manager, "git -C . pull --ff-only origin main", "allow");
   checkBash(manager, "git push origin main", "allow");
-  checkBash(manager, "git push origin --delete old-branch", "ask");
-  checkBash(manager, "git push origin :old-branch", "ask");
-  checkBash(manager, "git push --all origin", "ask");
-  checkBash(manager, "git clone https://example.com/repo.git", "ask");
-  checkBash(manager, "git --git-dir=.git push origin main", "ask");
-  checkBash(manager, "git -C . fetch origin status", "ask");
-  checkBash(manager, "git -C . -c 'alias.x=!printf bypass' x status", "ask");
-  checkBash(manager, "git -c core.sshCommand=false fetch origin", "ask");
-  checkBash(manager, "git send-pack origin HEAD:main", "ask");
-  checkBash(manager, "git submodule add https://example.com/repo.git vendor/repo", "ask");
-  checkBash(manager, "git maintenance run --task=prefetch", "ask");
-  checkBash(manager, "git credential fill", "ask");
-  checkBash(manager, "git -c 'alias.x=!printf bypass' x", "ask");
-  checkBash(manager, "git statusx", "ask");
-  checkBash(manager, "git branchx feature/example", "ask");
-  checkBash(manager, "git commitx -am message", "ask");
+  checkBash(manager, "git push origin --delete old-branch", "allow");
+  checkBash(manager, "git push origin :old-branch", "allow");
+  checkBash(manager, "git push --all origin", "allow");
+  checkBash(manager, "git clone https://example.com/repo.git", "allow");
+  checkBash(manager, "git --git-dir=.git push origin main", "allow");
+  checkBash(manager, "git -C . fetch origin status", "allow");
+  checkBash(manager, "git -C . -c 'alias.x=!printf bypass' x status", "deny");
+  checkBash(manager, "git --config-env=alias.x=GIT_ALIAS x", "deny");
+  await checkBashGate("git -c 'credential.helper=!printf helper' credential fill", "deny");
+  checkBash(manager, "git --config-env=credential.helper=GIT_HELPER credential fill", "deny");
+  checkBash(manager, "git -c core.sshCommand=false fetch origin", "deny");
+  checkBash(manager, "git --config-env=core.sshCommand=GIT_SSH_COMMAND fetch origin", "deny");
+  checkBash(manager, "git -c diff.external=tool diff", "deny");
+  checkBash(manager, "git -c diff.example.command=tool diff", "deny");
+  checkBash(manager, "git -c diff.example.textconv=tool show HEAD:file", "deny");
+  checkBash(manager, "git -c filter.example.clean=tool checkout -- file", "deny");
+  checkBash(manager, "git -c filter.example.smudge=tool checkout -- file", "deny");
+  checkBash(manager, "git --config-env=filter.example.process=GIT_FILTER checkout -- file", "deny");
+  checkBash(manager, "git -c 'Credential.Helper=!printf helper' credential fill", "deny");
+  checkBash(manager, "git --config-env=Core.Sshcommand=GIT_SSH_COMMAND fetch origin", "deny");
+  checkBash(manager, "git config credential.helper '!printf helper'", "deny");
+  checkBash(manager, "git config --global credential.helper '!printf helper'", "deny");
+  checkBash(manager, "git config clean.requireForce false", "deny");
+  checkBash(manager, "git config --unset credential.helper", "deny");
+  checkBash(manager, "git -C . config credential.helper '!printf helper'", "deny");
+  checkBash(manager, "git --git-dir=.git config credential.helper '!printf helper'", "deny");
+  checkBash(manager, "git --work-tree=. config credential.helper '!printf helper'", "deny");
+  checkBash(manager, "/usr/bin/git config credential.helper '!printf helper'", "deny");
+  checkBash(manager, "git config --get credential.helper", "allow");
+  checkBash(manager, "git config --get-all credential.helper", "allow");
+  checkBash(manager, "git config --get-regexp '^credential\\.'", "allow");
+  checkBash(manager, "git config --get-urlmatch credential.https://example.com", "allow");
+  checkBash(manager, "git config --list", "allow");
+  checkBash(manager, "git config -l", "allow");
+  checkBash(manager, "git config --global --get credential.helper", "allow");
+  checkBash(manager, "git config --local --list", "allow");
+  checkBash(manager, "git config --show-origin --get-all remote.origin.fetch", "allow");
+  checkBash(manager, "git -C . config --get credential.helper", "allow");
+  await checkBashGate(
+    "git config credential.helper '!printf helper'; git config --get user.name",
+    "deny",
+  );
+  await checkBashGate(
+    "git config --get user.name; git config credential.helper '!printf helper'",
+    "deny",
+  );
+  checkBash(manager, "/usr/bin/git config --get credential.helper", "allow");
+  checkBash(manager, "git add ai/pi/config/permission-system.json", "allow");
+  checkBash(manager, "git diff -- ai/pi/config/permission-system.json", "allow");
+  checkBash(manager, "git log --grep=diff.external", "allow");
+  checkBash(manager, "git show --check HEAD", "allow");
+  checkBash(manager, 'git commit -m "fix: block persistent Git config writes"', "allow");
+  checkBash(manager, "git send-pack origin HEAD:main", "allow");
+  checkBash(manager, "git submodule add https://example.com/repo.git vendor/repo", "allow");
+  checkBash(manager, "git maintenance run --task=prefetch", "allow");
+  checkBash(manager, "git credential fill", "allow");
+  checkBash(manager, "git -c 'alias.x=!printf bypass' x", "deny");
+  checkBash(manager, "git statusx", "allow");
+  checkBash(manager, "git branchx feature/example", "allow");
+  checkBash(manager, "git commitx -am message", "allow");
   checkBash(manager, "git switch my-feature", "allow");
   checkBash(manager, "git rm docs/my-file.md", "allow");
   checkBash(manager, "git worktree remove /tmp/my-feature", "allow");
-  checkBash(manager, "git branch -D feature/example", "ask");
-  checkBash(manager, "git branch -f feature/example HEAD", "ask");
-  checkBash(manager, "git branch --del feature/example", "ask");
-  checkBash(manager, "git branch -M feature/example", "ask");
-  checkBash(manager, "git tag -a -f example HEAD", "ask");
-  checkBash(manager, "git switch -q -f feature/example", "ask");
-  checkBash(manager, "git switch -C feature/example", "ask");
-  checkBash(manager, "git reset --keep HEAD~1", "ask");
-  checkBash(manager, "git rm -f README.md", "ask");
-  checkBash(manager, "git rebase -i -x 'printf example' HEAD~2", "ask");
-  checkBash(manager, "git archive --rem=origin HEAD", "ask");
-  checkBash(manager, "git grep -Oless pattern", "ask");
-  checkBash(manager, "git grep -nOless pattern", "ask");
-  checkBash(manager, "git grep --open=less pattern", "ask");
-  checkBash(manager, "git grep --op=less pattern", "ask");
+  checkBash(manager, "git branch -D feature/example", "allow");
+  checkBash(manager, "git branch -f feature/example HEAD", "allow");
+  checkBash(manager, "git branch --del feature/example", "allow");
+  checkBash(manager, "git branch -M feature/example", "allow");
+  checkBash(manager, "git tag -a -f example HEAD", "allow");
+  checkBash(manager, "git switch -q -f feature/example", "allow");
+  checkBash(manager, "git switch -C feature/example", "allow");
+  checkBash(manager, "git reset --keep HEAD~1", "allow");
+  checkBash(manager, "git rm -f README.md", "allow");
+  checkBash(manager, "git rebase -i -x 'printf example' HEAD~2", "deny");
+  checkBash(manager, "git archive --rem=origin HEAD", "deny");
+  checkBash(manager, "git grep -Oless pattern", "deny");
+  checkBash(manager, "git grep -nOless pattern", "deny");
+  checkBash(manager, "git grep --open=less pattern", "deny");
+  checkBash(manager, "git grep --op=less pattern", "deny");
   checkBash(manager, "git branch --format='%(refname)'", "allow");
   checkBash(manager, "git tag --format='%(refname)'", "allow");
-  checkBash(manager, "git push --follow-tags origin main", "ask");
-  checkBash(manager, "git push --no-verify origin main", "ask");
-  checkBash(manager, "git push --repo=foo main", "ask");
-  checkBash(manager, "git diff --ext-d HEAD", "ask");
-  checkBash(manager, "git log --textc -p -1", "ask");
-  checkBash(manager, "git update-ref -d refs/heads/feature/example", "ask");
-  checkBash(manager, "git worktree remove --force /tmp/example", "ask");
-  checkBash(manager, "git -C . worktree remove --force /tmp/example", "ask");
-  checkBash(manager, "git commit --amend --no-edit", "ask");
-  checkBash(manager, "git -C . commit --amend --no-edit", "ask");
-  checkBash(manager, "git restore README.md", "ask");
+  checkBash(manager, "git push --follow-tags origin main", "allow");
+  checkBash(manager, "git push --no-verify origin main", "allow");
+  checkBash(manager, "git push --repo=foo main", "allow");
+  checkBash(manager, "git diff --ext-d HEAD", "deny");
+  checkBash(manager, "git log --textc -p -1", "deny");
+  checkBash(manager, "git update-ref -d refs/heads/feature/example", "allow");
+  checkBash(manager, "git worktree remove --force /tmp/example", "allow");
+  checkBash(manager, "git -C . worktree remove --force /tmp/example", "allow");
+  checkBash(manager, "git commit --amend --no-edit", "allow");
+  checkBash(manager, "git -C . commit --amend --no-edit", "allow");
+  checkBash(manager, "git restore README.md", "allow");
   checkBash(manager, "gh pr create --title example", "allow");
   checkBash(manager, "gh pr edit 42 --add-label ready", "allow");
   checkBash(manager, "gh issue create --title example", "allow");
@@ -320,6 +364,26 @@ try {
   checkBash(manager, "gh issue edit 42 --state closed", "ask");
   checkBash(manager, "gh pr merge 42", "ask");
   checkBash(manager, "gh issue close 42", "ask");
+  checkBash(manager, "gh api repos/o/r/pulls/1/comments", "allow");
+  checkBash(manager, "gh api repos/o/r/issues -X GET", "ask");
+  checkBash(manager, "gh api repos/o/r/issues -XGET", "ask");
+  checkBash(manager, "gh api repos/o/r/issues -X=GET", "ask");
+  checkBash(manager, "gh api repos/o/r/issues --method GET", "ask");
+  checkBash(manager, "gh api repos/o/r/issues --method=GET", "ask");
+  checkBash(manager, "gh api repos/o/r/issues -X POST", "ask");
+  checkBash(manager, "gh api repos/o/r/issues -XPOST", "ask");
+  checkBash(manager, "gh api repos/o/r/issues --method PATCH", "ask");
+  checkBash(manager, "gh api repos/o/r/issues --method PUT", "ask");
+  checkBash(manager, "gh api repos/o/r/issues -f title=example", "ask");
+  checkBash(manager, "gh api repos/o/r/issues -ftitle=example", "ask");
+  checkBash(manager, "gh api repos/o/r/issues --raw-field title=example", "ask");
+  checkBash(manager, "gh api repos/o/r/issues -F title=example", "ask");
+  checkBash(manager, "gh api repos/o/r/issues -Ftitle=example", "ask");
+  checkBash(manager, "gh api repos/o/r/issues --field title=example", "ask");
+  checkBash(manager, "gh api repos/o/r/issues --input payload.json", "ask");
+  checkBash(manager, "gh api repos/o/r/issues -f per_page=100 --method GET", "ask");
+  checkBash(manager, "gh api repos/o/r/issues --method GET --method POST", "ask");
+  checkBash(manager, "gh api repos/o/r/issues -XGET -XPOST", "ask");
   checkBash(manager, "/usr/bin/gh pr create --title example", "ask");
   checkBash(manager, "curl https://example.com", "ask");
   checkBash(manager, "/usr/bin/curl https://example.com", "ask");
@@ -336,20 +400,26 @@ try {
   checkBash(manager, "rm -rf /tmp/../important", "ask");
   checkBash(manager, "/bin/rm -rf .", "ask");
   checkBash(manager, "nc example.com 443", "ask");
-  checkBash(manager, '/bin/cat "$SECRET_PATH"', "ask");
+  checkBash(manager, '/bin/cat "$SECRET_PATH"', "allow");
+  checkBash(manager, 'printf \'shell=%s\\n\' "$SHELL"', "allow");
+  checkBash(manager, "command -v direnv", "allow");
+  await checkBashGate(
+    'printf \'shell=%s\\n\' "$SHELL"; for f in .envrc mise.toml .mise.toml .tool-versions; do [ -e "$f" ] && echo "$f"; done; command -v direnv >/dev/null && echo direnv=installed || echo direnv=missing; command -v mise >/dev/null && echo mise=installed || echo mise=missing',
+    "allow",
+  );
   await checkBashGate("cd . && curl https://example.com", "ask");
   await checkBashGate("env gh pr create --title example", "ask");
   await checkBashGate("sh -c 'git push origin main'", "ask");
-  checkBash(manager, "git show --ext-diff HEAD", "ask");
-  checkBash(manager, "git show --textconv HEAD:file", "ask");
-  checkBash(manager, "git diff --ext-diff HEAD", "ask");
-  checkBash(manager, "git diff --textconv HEAD", "ask");
-  checkBash(manager, "git log --ext-diff -1", "ask");
-  checkBash(manager, "git log --textconv -p -1", "ask");
+  checkBash(manager, "git show --ext-diff HEAD", "deny");
+  checkBash(manager, "git show --textconv HEAD:file", "deny");
+  checkBash(manager, "git diff --ext-diff HEAD", "deny");
+  checkBash(manager, "git diff --textconv HEAD", "deny");
+  checkBash(manager, "git log --ext-diff -1", "deny");
+  checkBash(manager, "git log --textconv -p -1", "deny");
   checkBash(manager, "rg --pre cat pattern .", "deny");
   checkBash(manager, "fd --exec rm {}", "deny");
   checkBash(manager, "yq -i '.x = 1' config.yaml", "ask");
-  checkBash(manager, 'cat "$SECRET_PATH"', "ask");
+  checkBash(manager, 'cat "$SECRET_PATH"', "allow");
   checkBash(manager, "sudo true", "deny");
   const destructiveCommands = [
     "git push origin main --force",
@@ -378,7 +448,7 @@ try {
     "/bin/rm -fR /",
     "rm / -rf",
   ];
-  for (const command of destructiveCommands) checkBash(manager, command, "deny");
+  for (const command of destructiveCommands) await checkBashGate(command, "deny");
 
   const authPath = join(agentDir, "auth.json");
   writeFileSync(authPath, "permission validator decoy\n", { mode: 0o600 });
@@ -406,9 +476,17 @@ try {
     checkPath(manager, "path_read", path, "deny");
     checkPath(manager, "path_write", path, "deny");
   }
-  const trustedSkillPath = join(homedir(), ".agents", "skills", "impeccable", "SKILL.md");
-  checkPath(manager, "external_directory_read", trustedSkillPath, "allow");
-  checkPath(manager, "external_directory_write", trustedSkillPath, "ask");
+  const trustedReadPaths = [
+    join(homedir(), ".pi", "sessions", "example.jsonl"),
+    join(homedir(), ".pi", "agent", "skills", "example", "SKILL.md"),
+    join(homedir(), ".pi", "agent", "git", "example", "skills", "example", "SKILL.md"),
+    join(homedir(), ".agents", "skills", "impeccable", "SKILL.md"),
+    join(homedir(), ".dotfiles", "ai", "marketplace", "plugins", "other", "skills", "example", "SKILL.md"),
+  ];
+  for (const trustedReadPath of trustedReadPaths) {
+    checkPath(manager, "external_directory_read", trustedReadPath, "allow");
+    checkPath(manager, "external_directory_write", trustedReadPath, "ask");
+  }
   const wingmanWorktreePath = "/mnt/c/dev/flygd-wingman-worktrees/example/README.md";
   checkPath(manager, "external_directory_read", wingmanWorktreePath, "allow");
   checkPath(manager, "external_directory_write", wingmanWorktreePath, "allow");

@@ -103,41 +103,41 @@ setup() {
     )
     and .permission.external_directory_read["*"] == "ask"
     and .permission.external_directory_write["*"] == "ask"
+    and .permission.external_directory_read["~/.pi/*"] == "allow"
     and .permission.external_directory_read["~/.agents/skills/*"] == "allow"
+    and .permission.external_directory_read["~/.dotfiles/ai/marketplace/plugins/*/skills/*"] == "allow"
+    and (.permission.external_directory_write | has("~/.pi/*") | not)
     and (.permission.external_directory_write | has("~/.agents/skills/*") | not)
+    and (.permission.external_directory_write | has("~/.dotfiles/ai/marketplace/plugins/*/skills/*") | not)
     and .permission.external_directory_read["/mnt/c/dev/flygd-wingman-*"] == "allow"
     and .permission.external_directory_write["/mnt/c/dev/flygd-wingman-*"] == "allow"
   ' "$PERMISSION_CONFIG"
   [ "$status" -eq 0 ]
 }
 
-@test "Pi permission Bash policy allows local Git while guarding risky operations" {
+@test "Pi permission Bash policy allows Git while retaining hard denies" {
   run jq -e '
     .permission.bash as $bash
     | $bash["*"] == "allow"
-    and $bash["git *"] == "ask"
-    and $bash["*/git *"] == "ask"
-    and $bash["git branch *"] == "allow"
-    and ($bash | has("*/git branch *") | not)
-    and $bash["git worktree *"] == "allow"
-    and ($bash | has("*/git worktree *") | not)
-    and $bash["git commit *"] == "allow"
-    and ($bash | has("git -C * worktree *") | not)
-    and $bash["git fetch*"] == "allow"
-    and $bash["*/git fetch*"] == "ask"
-    and $bash["git pull*"] == "ask"
-    and $bash["git pull --ff-only*"] == "allow"
-    and $bash["*/git pull*"] == "ask"
-    and ($bash | has("git -C * pull --ff-only *") | not)
-    and $bash["git push*"] == "allow"
-    and $bash["*git *push *--delete*"] == "ask"
-    and $bash["*git *push *--all*"] == "ask"
-    and $bash["git clone*"] == "ask"
-    and $bash["*git *branch * -D*"] == "ask"
-    and $bash["*git *worktree remove * -f*"] == "ask"
-    and $bash["*git *commit * --am*"] == "ask"
+    and ([
+      $bash
+      | to_entries[]
+      | select(.key | test("(^|[/ *])git([ *]|$)"))
+      | select(.value == "ask")
+    ] | length) == 0
     and $bash["gh *"] == "ask"
     and $bash["*/gh *"] == "ask"
+    and $bash["gh api *"] == "allow"
+    and $bash["*/gh api *"] == "allow"
+    and $bash["*gh *api *-X*"] == "ask"
+    and $bash["*gh *api *--method*"] == "ask"
+    and $bash["*gh *api *-f*"] == "ask"
+    and $bash["*gh *api *--raw-field*"] == "ask"
+    and $bash["*gh *api *-F*"] == "ask"
+    and $bash["*gh *api *--field*"] == "ask"
+    and $bash["*gh *api *--input*"] == "ask"
+    and ($bash | has("*gh *api *-X GET*") | not)
+    and ($bash | has("*gh *api *--method GET*") | not)
     and $bash["curl *"] == "ask"
     and $bash["*/curl *"] == "ask"
     and $bash["curl *http://127.0.0.1:*"] == "allow"
@@ -152,17 +152,11 @@ setup() {
     and $bash["nc *"] == "ask"
     and $bash["*/socat *"] == "ask"
     and $bash["command *"] == "ask"
+    and $bash["command -v *"] == "allow"
     and $bash.env == "ask"
     and $bash.printenv == "ask"
     and $bash.export == "ask"
     and $bash["declare *-x*"] == "ask"
-    and $bash["git status *"] == "allow"
-    and $bash["git show *--ext-d*"] == "ask"
-    and $bash["git show *--textc*"] == "ask"
-    and $bash["git diff *--ext-d*"] == "ask"
-    and $bash["git diff *--textc*"] == "ask"
-    and $bash["git log *--ext-d*"] == "ask"
-    and $bash["git log *--textc*"] == "ask"
     and $bash["*rg *--pre*"] == "deny"
     and $bash["*fd *--exec*"] == "deny"
     and $bash["*fd *-x*"] == "deny"
@@ -170,8 +164,10 @@ setup() {
     and $bash["yq -i*"] == "ask"
     and $bash["yq --inplace*"] == "ask"
     and ($bash | has("*$*") | not)
-    and $bash["*cat *$*"] == "ask"
-    and $bash["*rg *$*"] == "ask"
+    and ([
+      "echo", "printf", "cat", "head", "tail", "grep", "rg", "fd", "find",
+      "ls", "readlink", "realpath", "jq", "yq"
+    ] | all(. as $reader | $bash | has("*\($reader) *$*") | not))
     and $bash["*git *push *--for*"] == "deny"
     and $bash["*git *push -f*"] == "deny"
     and $bash["*git *push -qf*"] == "deny"
@@ -179,6 +175,32 @@ setup() {
     and $bash["*git *push *--mir*"] == "deny"
     and $bash["*git *reset *--har*"] == "deny"
     and $bash["*git *clean -*f*"] == "deny"
+    and $bash["*git *alias.*!*"] == "deny"
+    and $bash["*git *clean.requireForce=false*"] == "deny"
+    and $bash["*git config *"] == "deny"
+    and $bash["*git -C * config *"] == "deny"
+    and $bash["*git --git-dir=* config *"] == "deny"
+    and $bash["*git --work-tree=* config *"] == "deny"
+    and $bash["*git config --get *"] == "allow"
+    and $bash["*git config --get-all *"] == "allow"
+    and $bash["*git config --get-regexp *"] == "allow"
+    and $bash["*git config --get-urlmatch *"] == "allow"
+    and $bash["*git config --list*"] == "allow"
+    and $bash["*git config -l*"] == "allow"
+    and $bash["*git config --global --get *"] == "allow"
+    and $bash["*git config --local --list*"] == "allow"
+    and $bash["*git config --show-origin --get-all *"] == "allow"
+    and $bash["*git -C * config --get *"] == "allow"
+    and $bash["*git -c *"] == "deny"
+    and $bash["*git * -c *"] == "deny"
+    and $bash["*git --config-env=*"] == "deny"
+    and $bash["*git * --config-env=*"] == "deny"
+    and $bash["*git *show *--ext-d*"] == "deny"
+    and $bash["*git *diff *--textc*"] == "deny"
+    and $bash["*git *grep *--op*"] == "deny"
+    and $bash["*git *bisect *run*"] == "deny"
+    and $bash["*git *rebase *-x*"] == "deny"
+    and $bash["*git *archive *--rem*"] == "deny"
     and $bash["*gh *repo delete*"] == "deny"
     and $bash["*gh *api *DELETE*"] == "deny"
     and $bash["*sudo *"] == "deny"
