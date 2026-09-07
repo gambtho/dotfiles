@@ -83,12 +83,12 @@ The global baseline uses a balanced posture:
 - built-in `edit` and `write`: `allow`, subject to the worktree guard and path policy;
 - known workflow tools (`subagent`, `get_subagent_result`, `steer_subagent`, `handoff`, `session_query`, `plan`, Ralph tools, clipboard, and web research): `allow`;
 - `lsp_diagnostics`: `allow`;
-- `lsp_fix`: `ask`;
+- `lsp_fix`: `allow`, subject to the worktree guard for mutations in primary checkouts;
 - skills: `allow`;
 - unknown extension tools and MCP operations: `ask`;
 - paths outside the current working directory: `ask`, except Pi infrastructure reads handled by the package;
 - sensitive files and credential roots: `deny` across path-aware tools;
-- Bash: allow unmatched parent commands, common local Git subcommands, default/`origin` fetch, and argument-free `git pull --ff-only`; ask for unknown Git operations, other remote and selected destructive Git operations, GitHub mutation, remote shell/network commands, recursive deletion, opaque wrappers, direct environment dumps, and common reader/output commands containing unresolved `$` expansion; deny root deletion, force operations, privilege escalation, subprocess-capable search flags, and explicitly forbidden credential paths. Risky command-family rules cover both bare and absolute executable spellings.
+- Bash: allow unmatched parent commands, Git operations that do not match explicit hard denies, and reader/output commands containing unresolved `$` expansion; ask for GitHub mutation not specifically allowed, remote shell/network commands, deletion, opaque wrappers, and direct environment dumps; deny root deletion, force operations, privilege escalation, subprocess-capable search flags, and explicitly forbidden credential paths. Risky command-family rules cover both bare and absolute executable spellings.
 
 Within a permission map, broad rules precede specific exceptions because the package uses last-match-wins semantics.
 
@@ -325,7 +325,7 @@ This removes duplicate broken guidance without treating the entire user skill di
 
 The current machine already provides Ruff, rust-analyzer, gopls, and RuboCop. Missing language servers are reported rather than installed automatically.
 
-`lsp_diagnostics` is available by default in the parent. `lsp_fix` remains available but always goes through the permission system; `write=false` is the expected default. A primary-checkout `write=true` request is blocked by the worktree guard even if approved at the permission layer, including when an explicit `root` makes a relative `path` target the primary checkout.
+`lsp_diagnostics` and `lsp_fix` are available by default in the parent. A primary-checkout `lsp_fix` request with `write=true` is blocked by the worktree guard even though the permission layer allows the tool, including when an explicit `root` makes a relative `path` target the primary checkout.
 
 The named child agent allowlists do not include LSP tools initially, so LSP initialization remains parent-only. LSP results are intermediate feedback; repository-native format, lint, type-check, build, and test commands remain authoritative.
 
@@ -574,7 +574,7 @@ Machine-local package caches, backups, logs, and quarantined skill data may rema
 | Stale managed extension link breaks startup | Manifest-based pruning restricted to repository-owned symlinks |
 | Sandbox blocks unattended work | Reviewed parent allowlists, bounded timeout, representative preflight command, blocked-state reporting |
 | Sandbox gives false confidence | Document extension-process, child, and in-CWD mutation boundaries; retain worktrees and direct-tool guard |
-| LSP fixer bypasses worktree policy | Permission ask plus explicit worktree-guard handling of `lsp_fix write=true` |
+| LSP fixer bypasses worktree policy | Explicit worktree-guard handling of `lsp_fix write=true` in primary checkouts |
 | Web extension leaks cookies or remote content | Cookies, hosted fetches, cloning, media, and curator automation disabled by baseline |
 | Broken Brave guidance remains discoverable | Narrow identity-checked quarantine that preserves all sibling skills |
 | Mode and agent routing drift | Canonical tracked pins plus parity tests; document runtime `/mode` limitation |
