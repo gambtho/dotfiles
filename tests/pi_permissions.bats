@@ -167,6 +167,10 @@ setup() {
     and $bash["*git *alias.*!*"] == "deny"
     and $bash["*git *clean.requireForce=false*"] == "deny"
     and $bash["*git *config *alias.*"] == "deny"
+    and $bash["*git -c *"] == "deny"
+    and $bash["*git * -c *"] == "deny"
+    and $bash["*git --config-env=*"] == "deny"
+    and $bash["*git * --config-env=*"] == "deny"
     and $bash["*git *show *--ext-d*"] == "deny"
     and $bash["*git *diff *--textc*"] == "deny"
     and $bash["*git *grep *--op*"] == "deny"
@@ -243,7 +247,10 @@ setup() {
   run jq -s -e '
     [paths(objects) as $path
       | (getpath($path) | keys[]) as $key
-      | select($key | test("(api[_-]?key|token|secret|password|credential)"; "i"))]
+      | select(
+          ($key | test("(api[_-]?key|token|secret|password|credential)"; "i"))
+          and $key != "*git *credential.helper*"
+        )]
     | length == 0
   ' "$PERMISSION_CONFIG" "$SUBAGENT_CONFIG" "$WEB_CONFIG"
   [ "$status" -eq 0 ]
