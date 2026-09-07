@@ -127,6 +127,17 @@ setup() {
     ] | length) == 0
     and $bash["gh *"] == "ask"
     and $bash["*/gh *"] == "ask"
+    and $bash["gh api *"] == "allow"
+    and $bash["*/gh api *"] == "allow"
+    and $bash["*gh *api *-X*"] == "ask"
+    and $bash["*gh *api *--method*"] == "ask"
+    and $bash["*gh *api *-f*"] == "ask"
+    and $bash["*gh *api *--raw-field*"] == "ask"
+    and $bash["*gh *api *-F*"] == "ask"
+    and $bash["*gh *api *--field*"] == "ask"
+    and $bash["*gh *api *--input*"] == "ask"
+    and ($bash | has("*gh *api *-X GET*") | not)
+    and ($bash | has("*gh *api *--method GET*") | not)
     and $bash["curl *"] == "ask"
     and $bash["*/curl *"] == "ask"
     and $bash["curl *http://127.0.0.1:*"] == "allow"
