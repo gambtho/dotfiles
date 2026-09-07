@@ -177,7 +177,20 @@ setup() {
     and $bash["*git *clean -*f*"] == "deny"
     and $bash["*git *alias.*!*"] == "deny"
     and $bash["*git *clean.requireForce=false*"] == "deny"
-    and $bash["*git *config *alias.*"] == "deny"
+    and $bash["*git config *"] == "deny"
+    and $bash["*git -C * config *"] == "deny"
+    and $bash["*git --git-dir=* config *"] == "deny"
+    and $bash["*git --work-tree=* config *"] == "deny"
+    and $bash["*git config --get *"] == "allow"
+    and $bash["*git config --get-all *"] == "allow"
+    and $bash["*git config --get-regexp *"] == "allow"
+    and $bash["*git config --get-urlmatch *"] == "allow"
+    and $bash["*git config --list*"] == "allow"
+    and $bash["*git config -l*"] == "allow"
+    and $bash["*git config --global --get *"] == "allow"
+    and $bash["*git config --local --list*"] == "allow"
+    and $bash["*git config --show-origin --get-all *"] == "allow"
+    and $bash["*git -C * config --get *"] == "allow"
     and $bash["*git -c *"] == "deny"
     and $bash["*git * -c *"] == "deny"
     and $bash["*git --config-env=*"] == "deny"
@@ -258,10 +271,7 @@ setup() {
   run jq -s -e '
     [paths(objects) as $path
       | (getpath($path) | keys[]) as $key
-      | select(
-          ($key | test("(api[_-]?key|token|secret|password|credential)"; "i"))
-          and $key != "*git *credential.helper*"
-        )]
+      | select($key | test("(api[_-]?key|token|secret|password|credential)"; "i"))]
     | length == 0
   ' "$PERMISSION_CONFIG" "$SUBAGENT_CONFIG" "$WEB_CONFIG"
   [ "$status" -eq 0 ]

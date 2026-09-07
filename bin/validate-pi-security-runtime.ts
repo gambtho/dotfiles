@@ -286,9 +286,38 @@ try {
   checkBash(manager, "git --config-env=filter.example.process=GIT_FILTER checkout -- file", "deny");
   checkBash(manager, "git -c 'Credential.Helper=!printf helper' credential fill", "deny");
   checkBash(manager, "git --config-env=Core.Sshcommand=GIT_SSH_COMMAND fetch origin", "deny");
+  checkBash(manager, "git config credential.helper '!printf helper'", "deny");
+  checkBash(manager, "git config --global credential.helper '!printf helper'", "deny");
+  checkBash(manager, "git config clean.requireForce false", "deny");
+  checkBash(manager, "git config --unset credential.helper", "deny");
+  checkBash(manager, "git -C . config credential.helper '!printf helper'", "deny");
+  checkBash(manager, "git --git-dir=.git config credential.helper '!printf helper'", "deny");
+  checkBash(manager, "git --work-tree=. config credential.helper '!printf helper'", "deny");
+  checkBash(manager, "/usr/bin/git config credential.helper '!printf helper'", "deny");
   checkBash(manager, "git config --get credential.helper", "allow");
+  checkBash(manager, "git config --get-all credential.helper", "allow");
+  checkBash(manager, "git config --get-regexp '^credential\\.'", "allow");
+  checkBash(manager, "git config --get-urlmatch credential.https://example.com", "allow");
+  checkBash(manager, "git config --list", "allow");
+  checkBash(manager, "git config -l", "allow");
+  checkBash(manager, "git config --global --get credential.helper", "allow");
+  checkBash(manager, "git config --local --list", "allow");
+  checkBash(manager, "git config --show-origin --get-all remote.origin.fetch", "allow");
+  checkBash(manager, "git -C . config --get credential.helper", "allow");
+  await checkBashGate(
+    "git config credential.helper '!printf helper'; git config --get user.name",
+    "deny",
+  );
+  await checkBashGate(
+    "git config --get user.name; git config credential.helper '!printf helper'",
+    "deny",
+  );
+  checkBash(manager, "/usr/bin/git config --get credential.helper", "allow");
+  checkBash(manager, "git add ai/pi/config/permission-system.json", "allow");
+  checkBash(manager, "git diff -- ai/pi/config/permission-system.json", "allow");
   checkBash(manager, "git log --grep=diff.external", "allow");
   checkBash(manager, "git show --check HEAD", "allow");
+  checkBash(manager, 'git commit -m "fix: block persistent Git config writes"', "allow");
   checkBash(manager, "git send-pack origin HEAD:main", "allow");
   checkBash(manager, "git submodule add https://example.com/repo.git vendor/repo", "allow");
   checkBash(manager, "git maintenance run --task=prefetch", "allow");
