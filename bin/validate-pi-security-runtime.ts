@@ -868,6 +868,7 @@ try {
     checkBash(manager, "make check", "allow", agentName);
     checkBash(manager, "gh repo delete owner/repo", "deny", agentName);
     checkBash(manager, "gh api repos/o/r --method DELETE", "deny", agentName);
+    checkBash(manager, "gh api repos/o/r -X DELETE", "deny", agentName);
   }
   checkBash(manager, "unknown-tool --version", "allow", "smart");
   for (const agentName of ["rush", "smart", "deep", "review"] as const) {
