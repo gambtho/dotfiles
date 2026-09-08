@@ -352,6 +352,38 @@ setup() {
   [[ "$output" == *"permission schema"* ]]
 }
 
+@test "Pi permission config validator reports schema path for missing and malformed schema" {
+  local schema="$TEST_ROOT/missing-schema.json" malformed="$TEST_ROOT/malformed-schema.json" config="$TEST_ROOT/config.json"
+  printf '%s\n' '{"permission":{}}' >"$config"
+
+  run "$REPO_ROOT/bin/validate-pi-permission-config" --schema "$schema" --config "$config"
+  [ "$status" -ne 0 ]
+  [[ "$output" == "error: permission schema $schema:"* ]]
+  [[ "$output" != *"Traceback"* ]]
+
+  printf '%s\n' '{' >"$malformed"
+  run "$REPO_ROOT/bin/validate-pi-permission-config" --schema "$malformed" --config "$config"
+  [ "$status" -ne 0 ]
+  [[ "$output" == "error: permission schema $malformed:"* ]]
+  [[ "$output" != *"Traceback"* ]]
+}
+
+@test "Pi permission config validator reports config path for missing and malformed config" {
+  local schema="$TEST_ROOT/schema.json" missing="$TEST_ROOT/missing-config.json" malformed="$TEST_ROOT/malformed-config.json"
+  printf '%s\n' '{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","required":["permission"],"properties":{"permission":{"type":"object"}}}' >"$schema"
+
+  run "$REPO_ROOT/bin/validate-pi-permission-config" --schema "$schema" --config "$missing"
+  [ "$status" -ne 0 ]
+  [[ "$output" == "error: permission schema $missing:"* ]]
+  [[ "$output" != *"Traceback"* ]]
+
+  printf '%s\n' '{' >"$malformed"
+  run "$REPO_ROOT/bin/validate-pi-permission-config" --schema "$schema" --config "$malformed"
+  [ "$status" -ne 0 ]
+  [[ "$output" == "error: permission schema $malformed:"* ]]
+  [[ "$output" != *"Traceback"* ]]
+}
+
 @test "Pi runtime validator fails clearly when permission package is absent" {
   run "$REPO_ROOT/bin/validate-pi-security-runtime" \
     --package-root "$TEST_ROOT/missing-permission-package"

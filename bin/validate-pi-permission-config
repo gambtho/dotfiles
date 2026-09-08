@@ -19,21 +19,38 @@ except ImportError:
     raise SystemExit(1)
 
 
+LOAD_FAILED = object()
+
+
+def load_json(path: str):
+    try:
+        with open(path, encoding="utf-8") as stream:
+            return json.load(stream)
+    except OSError as error:
+        message = error.strerror or str(error)
+        print(f"error: permission schema {path}: {message}", file=sys.stderr)
+        return LOAD_FAILED
+    except json.JSONDecodeError as error:
+        print(f"error: permission schema {path}: {error.msg}", file=sys.stderr)
+        return LOAD_FAILED
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--schema", required=True)
     parser.add_argument("--config", required=True)
     args = parser.parse_args()
 
-    try:
-        with open(args.schema, encoding="utf-8") as stream:
-            schema = json.load(stream)
-        with open(args.config, encoding="utf-8") as stream:
-            config = json.load(stream)
-        Draft202012Validator.check_schema(schema)
-    except (OSError, json.JSONDecodeError, ValueError) as error:
-        print(f"error: {error}", file=sys.stderr)
+    schema = load_json(args.schema)
+    if schema is LOAD_FAILED:
         return 1
+
+    config = load_json(args.config)
+    if config is LOAD_FAILED:
+        return 1
+
+    try:
+        Draft202012Validator.check_schema(schema)
     except SchemaError as error:
         print(f"error: permission schema {args.schema}: {error.message}", file=sys.stderr)
         return 1
