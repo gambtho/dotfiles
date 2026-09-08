@@ -690,6 +690,14 @@ try {
     "curl --request put https://example.com/items",
     "curl --request patch https://example.com/items",
     "curl --request delete https://example.com/items/1",
+    "curl --request=POST https://example.com/items",
+    "curl --request=PUT https://example.com/items",
+    "curl --request=PATCH https://example.com/items",
+    "curl --request=DELETE https://example.com/items/1",
+    "curl --request=post https://example.com/items",
+    "curl --request=put https://example.com/items",
+    "curl --request=patch https://example.com/items",
+    "curl --request=delete https://example.com/items/1",
     "curl -X POST https://example.com/items",
     "curl -X PUT https://example.com/items",
     "curl -X PATCH https://example.com/items",
@@ -700,6 +708,7 @@ try {
     "curl -X delete https://example.com/items/1",
     "curl -H 'Authorization: Bearer example' https://example.com/private",
     "curl --header 'Authorization: Bearer example' https://example.com/private",
+    "curl -H 'authorization: Bearer example' https://example.com/private",
     "curl --user name:password https://example.com/private",
     "curl -u name:password https://example.com/private",
     "curl --cookie session=example https://example.com/private",
@@ -849,6 +858,19 @@ try {
     checkPath(manager, "path_write", join(homedir(), ".ssh", "config"), "deny", agentName);
     checkPath(manager, "path_write", join(repoRoot, "README.md"), "allow", agentName);
     checkBash(manager, "git status", "allow", agentName);
+    checkBash(manager, "git -C . status --short", "allow", agentName);
+    checkBash(manager, "git -C . diff --stat", "allow", agentName);
+    checkBash(manager, "git -C . log -1", "allow", agentName);
+    checkBash(manager, "git -C . grep -n TODO", "allow", agentName);
+    checkBash(manager, "git -C . config --get user.name", "allow", agentName);
+    checkBash(manager, "git show --ext-diff HEAD", "deny", agentName);
+    checkBash(manager, "git diff --textconv HEAD", "deny", agentName);
+    checkBash(manager, "git log --ext-diff -1", "deny", agentName);
+    checkBash(manager, "git -C . show --textconv HEAD:file", "deny", agentName);
+    checkBash(manager, "git -C . diff --ext-diff HEAD", "deny", agentName);
+    checkBash(manager, "git -C . log --textconv -p -1", "deny", agentName);
+    checkBash(manager, "git -C . grep -nOless TODO", "deny", agentName);
+    checkBash(manager, "git -C . add README.md", "deny", agentName);
     checkBash(manager, "git grep -n TODO", "allow", agentName);
     checkBash(manager, "git grep TODO", "allow", agentName);
     checkBash(manager, "git grep -nOless TODO", "deny", agentName);

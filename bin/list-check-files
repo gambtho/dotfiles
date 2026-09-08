@@ -30,6 +30,13 @@ is_shell_name() {
   esac
 }
 
+is_known_incompatible_interpreter() {
+  case "${1##*/}" in
+    python | python3 | node | ruby | perl | fish | pwsh | powershell | php) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 is_direct_bin_shell() {
   local path="$1" name first_line interpreter target
   local -a shebang_words=()
@@ -54,7 +61,8 @@ is_direct_bin_shell() {
 
       interpreter=${shebang_words[0]##*/}
       is_shell_name "$interpreter" && return 0
-      [[ "$interpreter" == env ]] || return 1
+      is_known_incompatible_interpreter "$interpreter" && return 1
+      [[ "$interpreter" == env ]] || return 0
       ((${#shebang_words[@]} > 1)) || return 0
 
       target=${shebang_words[1]}
@@ -62,7 +70,8 @@ is_direct_bin_shell() {
         ((${#shebang_words[@]} > 2)) || return 0
         target=${shebang_words[2]}
       fi
-      is_shell_name "$target"
+      is_shell_name "$target" && return 0
+      ! is_known_incompatible_interpreter "$target"
       ;;
   esac
 }

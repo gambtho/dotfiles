@@ -143,6 +143,13 @@ const RELAXED_PIPELINE_CASES: PipelineCase[] = [
     pattern: "*curl *Authorization:*",
   },
   {
+    label: "curl lowercase authorization asks",
+    command: "curl -H 'authorization: Bearer example' https://example.com/private",
+    expected: "ask",
+    surface: "bash",
+    pattern: "*curl *authorization:*",
+  },
+  {
     label: "curl FTP credential URL asks",
     command: "curl ftp://user:password@example.com/private/archive.tar.gz",
     expected: "ask",
@@ -528,6 +535,16 @@ const RELAXED_PIPELINE_CASES: PipelineCase[] = [
   },
 ];
 
+for (const method of ["POST", "PUT", "PATCH", "DELETE", "post", "put", "patch", "delete"] as const) {
+  RELAXED_PIPELINE_CASES.push({
+    label: `curl equals request ${method} asks`,
+    command: `curl --request=${method} https://example.com/items`,
+    expected: "ask",
+    surface: "bash",
+    pattern: `*curl *--request=${method}*`,
+  });
+}
+
 for (const agentName of ["rush", "deep", "review"] as const) {
   RELAXED_PIPELINE_CASES.push(
     {
@@ -567,6 +584,87 @@ for (const agentName of ["rush", "deep", "review"] as const) {
       expected: "allow",
       surface: "bash",
       pattern: "git grep*",
+      origin: "agent",
+    },
+    {
+      label: `${agentName} scoped git status`,
+      command: "git -C . status --short",
+      agentName,
+      expected: "allow",
+      surface: "bash",
+      pattern: "git -C ?* status*",
+      origin: "agent",
+    },
+    {
+      label: `${agentName} scoped git diff`,
+      command: "git -C . diff --stat",
+      agentName,
+      expected: "allow",
+      surface: "bash",
+      pattern: "git -C ?* diff*",
+      origin: "agent",
+    },
+    {
+      label: `${agentName} scoped git log`,
+      command: "git -C . log -1",
+      agentName,
+      expected: "allow",
+      surface: "bash",
+      pattern: "git -C ?* log*",
+      origin: "agent",
+    },
+    {
+      label: `${agentName} scoped git grep`,
+      command: "git -C . grep -n TODO",
+      agentName,
+      expected: "allow",
+      surface: "bash",
+      pattern: "git -C ?* grep*",
+      origin: "agent",
+    },
+    {
+      label: `${agentName} scoped git config read`,
+      command: "git -C . config --get user.name",
+      agentName,
+      expected: "allow",
+      surface: "bash",
+      pattern: "git -C ?* config --get*",
+      origin: "agent",
+    },
+    {
+      label: `${agentName} direct git external diff denial`,
+      command: "git diff --ext-diff HEAD",
+      agentName,
+      expected: "deny",
+      surface: "bash",
+      pattern: "git diff *--ext-d*",
+      origin: "agent",
+    },
+    {
+      label: `${agentName} scoped git external diff denial`,
+      command: "git -C . diff --ext-diff HEAD",
+      agentName,
+      expected: "deny",
+      surface: "bash",
+      pattern: "git -C ?* diff *--ext-d*",
+      origin: "agent",
+    },
+    {
+      label: `${agentName} scoped git grep pager denial`,
+      command: "git -C . grep -nOless TODO",
+      agentName,
+      expected: "deny",
+      surface: "bash",
+      pattern: "git -C ?* grep -nO*",
+      origin: "agent",
+    },
+    {
+      label: `${agentName} scoped git mutation denial`,
+      command: "git -C . add README.md",
+      agentName,
+      expected: "deny",
+      surface: "bash",
+      pattern: "*git *",
       origin: "agent",
     },
     {

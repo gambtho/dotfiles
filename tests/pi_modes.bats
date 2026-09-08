@@ -152,6 +152,155 @@ agent_frontmatter() {
   [ "$status" -eq 0 ]
 }
 
+@test "Pi read-oriented agent permissions stay structurally identical" {
+  local agent actual expected
+  expected=$(agent_frontmatter rush | jq -c '.permission')
+
+  for agent in deep review; do
+    actual=$(agent_frontmatter "$agent")
+    run jq -e --argjson expected "$expected" '.permission == $expected' <<<"$actual"
+    [ "$status" -eq 0 ]
+  done
+}
+
+@test "Pi read-oriented agents scope the complete direct Git reader allowlist" {
+  local agent actual
+  for agent in rush deep review; do
+    actual=$(agent_frontmatter "$agent")
+    run jq -e '
+      def direct_read_rules: [
+        "git status*",
+        "git show*",
+        "git diff*",
+        "git log*",
+        "git grep*",
+        "git rev-parse*",
+        "git merge-base*",
+        "git branch --show-current*",
+        "git branch --list*",
+        "git branch --merged*",
+        "git worktree list*",
+        "git blame*",
+        "git describe*",
+        "git shortlog*",
+        "git name-rev*",
+        "git ls-files*",
+        "git ls-tree*",
+        "git cat-file*",
+        "git for-each-ref*",
+        "git check-ignore*",
+        "git check-attr*",
+        "git range-diff*",
+        "git fsck*",
+        "git count-objects*",
+        "git reflog show*",
+        "git submodule status*",
+        "git remote -v",
+        "git remote get-url*",
+        "git config --get*",
+        "git config --get-regexp*",
+        "git config --list*",
+        "git config -l*"
+      ];
+      def scoped_read_rules: [
+        "git -C ?* status*",
+        "git -C ?* show*",
+        "git -C ?* diff*",
+        "git -C ?* log*",
+        "git -C ?* grep*",
+        "git -C ?* rev-parse*",
+        "git -C ?* merge-base*",
+        "git -C ?* branch --show-current*",
+        "git -C ?* branch --list*",
+        "git -C ?* branch --merged*",
+        "git -C ?* worktree list*",
+        "git -C ?* blame*",
+        "git -C ?* describe*",
+        "git -C ?* shortlog*",
+        "git -C ?* name-rev*",
+        "git -C ?* ls-files*",
+        "git -C ?* ls-tree*",
+        "git -C ?* cat-file*",
+        "git -C ?* for-each-ref*",
+        "git -C ?* check-ignore*",
+        "git -C ?* check-attr*",
+        "git -C ?* range-diff*",
+        "git -C ?* fsck*",
+        "git -C ?* count-objects*",
+        "git -C ?* reflog show*",
+        "git -C ?* submodule status*",
+        "git -C ?* remote -v",
+        "git -C ?* remote get-url*",
+        "git -C ?* config --get*",
+        "git -C ?* config --get-regexp*",
+        "git -C ?* config --list*",
+        "git -C ?* config -l*"
+      ];
+      def git_tripwire_rules: [
+        "git show *--ext-d*",
+        "git show *--textc*",
+        "git diff *--ext-d*",
+        "git diff *--textc*",
+        "git log *--ext-d*",
+        "git log *--textc*",
+        "git -C ?* show *--ext-d*",
+        "git -C ?* show *--textc*",
+        "git -C ?* diff *--ext-d*",
+        "git -C ?* diff *--textc*",
+        "git -C ?* log *--ext-d*",
+        "git -C ?* log *--textc*",
+        "*git *show *--ext-d*",
+        "*git *show *--textc*",
+        "*git *diff *--ext-d*",
+        "*git *diff *--textc*",
+        "*git *log *--ext-d*",
+        "*git *log *--textc*",
+        "git grep -O*",
+        "git grep -nO*",
+        "git grep -inO*",
+        "git grep -nHO*",
+        "git grep * -O*",
+        "git grep * -nO*",
+        "git grep * -inO*",
+        "git grep * -nHO*",
+        "git grep --open*",
+        "git grep * --open*",
+        "git grep --op=*",
+        "git grep * --op=*",
+        "git -C ?* grep -O*",
+        "git -C ?* grep -nO*",
+        "git -C ?* grep -inO*",
+        "git -C ?* grep -nHO*",
+        "git -C ?* grep * -O*",
+        "git -C ?* grep * -nO*",
+        "git -C ?* grep * -inO*",
+        "git -C ?* grep * -nHO*",
+        "git -C ?* grep --open*",
+        "git -C ?* grep * --open*",
+        "git -C ?* grep --op=*",
+        "git -C ?* grep * --op=*"
+      ];
+      .permission.bash as $bash
+      | ($bash | keys_unsorted) as $keys
+      | $bash["*git *"] == "deny"
+      and (direct_read_rules
+        | all(.[]; . as $pattern | $bash[$pattern] == "allow"))
+      and (scoped_read_rules
+        | all(.[]; . as $pattern | $bash[$pattern] == "allow"))
+      and (git_tripwire_rules
+        | all(.[]; . as $pattern | $bash[$pattern] == "deny"))
+      and (scoped_read_rules
+        | all(.[]; . as $pattern
+          | ($keys | index($pattern)) > ($keys | index("*git *"))))
+      and (([direct_read_rules[] as $pattern | $keys | index($pattern)] | max)
+        < ([scoped_read_rules[] as $pattern | $keys | index($pattern)] | min))
+      and (([scoped_read_rules[] as $pattern | $keys | index($pattern)] | max)
+        < ([git_tripwire_rules[] as $pattern | $keys | index($pattern)] | min))
+    ' <<<"$actual"
+    [ "$status" -eq 0 ]
+  done
+}
+
 @test "PR review fan-out uses only read-only named agent types" {
   local prompt="$REPO_ROOT/ai/marketplace/plugins/my/prompts/review-prs.md"
   run grep -F 'partition the selected PRs into `rush` and `deep` groups' "$prompt"

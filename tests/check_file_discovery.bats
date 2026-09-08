@@ -14,13 +14,19 @@ setup() {
   DIRECT_SH_FILE="$REPO_ROOT/bin/probe-direct-sh-$BATS_TEST_NUMBER"
   SPACED_SHELL_FILE="$REPO_ROOT/bin/probe-spaced-shell-$BATS_TEST_NUMBER"
   ENV_SPLIT_SHELL_FILE="$REPO_ROOT/bin/probe-env-split-shell-$BATS_TEST_NUMBER"
+  CUSTOM_SHELL_FILE="$REPO_ROOT/bin/probe-custom-shell-$BATS_TEST_NUMBER"
+  ENV_CUSTOM_SHELL_FILE="$REPO_ROOT/bin/probe-env-custom-shell-$BATS_TEST_NUMBER"
   PYTHON_FILE="$REPO_ROOT/bin/probe-python-$BATS_TEST_NUMBER"
+  FISH_FILE="$REPO_ROOT/bin/probe-fish-$BATS_TEST_NUMBER"
   UNKNOWN_FILE="$REPO_ROOT/bin/probe-unknown-$BATS_TEST_NUMBER"
   EMPTY_FILE="$REPO_ROOT/bin/probe-empty-$BATS_TEST_NUMBER"
   printf '#!/bin/sh\ntrue\n' >"$DIRECT_SH_FILE"
   printf '#!  /usr/bin/zsh -f\ntrue\n' >"$SPACED_SHELL_FILE"
   printf '#!/usr/bin/env -S bash -e\ntrue\n' >"$ENV_SPLIT_SHELL_FILE"
+  printf '#!/usr/bin/custom-shell\n' >"$CUSTOM_SHELL_FILE"
+  printf '#!/usr/bin/env custom-shell\n' >"$ENV_CUSTOM_SHELL_FILE"
   printf '#!/usr/bin/env python3\n' >"$PYTHON_FILE"
+  printf '#!/usr/bin/fish\n' >"$FISH_FILE"
   printf 'unrecognized extensionless content\n' >"$UNKNOWN_FILE"
   : >"$EMPTY_FILE"
 
@@ -55,7 +61,8 @@ setup() {
 teardown() {
   rm -f -- "$UNTRACKED_FILE" "$IGNORED_FILE" \
     "$DIRECT_SH_FILE" "$SPACED_SHELL_FILE" "$ENV_SPLIT_SHELL_FILE" \
-    "$PYTHON_FILE" "$UNKNOWN_FILE" "$EMPTY_FILE" \
+    "$CUSTOM_SHELL_FILE" "$ENV_CUSTOM_SHELL_FILE" "$PYTHON_FILE" "$FISH_FILE" \
+    "$UNKNOWN_FILE" "$EMPTY_FILE" \
     "$TOOL_INSTALL_FILE" "$TOOL_EXEC_FILE" "$TOOL_SUB_FILE" "$TOOL_ZSH_FILE" \
     "$TOOL_YAML_FILE" "$TOOL_CONF_FILE" "$TOOL_UNIT_FILE"
   rmdir "$IGNORED_DIR" 2>/dev/null || true
@@ -117,21 +124,24 @@ list_files() {
   done
 }
 
-@test "bash gates exclude extensionless Python entry points" {
+@test "bash gates exclude extensionless entry points with known incompatible interpreters" {
   local class
   for class in bash shellcheck shfmt; do
     list_files "$class"
     [ "$status" -eq 0 ]
     [[ "$output" != *"${PYTHON_FILE#"$REPO_ROOT/"}"* ]]
+    [[ "$output" != *"${FISH_FILE#"$REPO_ROOT/"}"* ]]
     [[ "$output" != *"bin/validate-pi-permission-config"* ]]
   done
 }
 
-@test "bash gates include unknown and empty extensionless entries" {
+@test "bash gates include ambiguous explicit and empty extensionless entries" {
   local class
   for class in bash shellcheck shfmt; do
     list_files "$class"
     [ "$status" -eq 0 ]
+    [[ "$output" == *"${CUSTOM_SHELL_FILE#"$REPO_ROOT/"}"* ]]
+    [[ "$output" == *"${ENV_CUSTOM_SHELL_FILE#"$REPO_ROOT/"}"* ]]
     [[ "$output" == *"${UNKNOWN_FILE#"$REPO_ROOT/"}"* ]]
     [[ "$output" == *"${EMPTY_FILE#"$REPO_ROOT/"}"* ]]
   done
