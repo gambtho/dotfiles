@@ -103,6 +103,8 @@ The cross-cutting `path_read` and `path_write` maps retain explicit denials for:
 
 Rule order remains catch-all first and specific overrides later because the permission package uses last-match-wins.
 
+The scalar `path_write: allow` overrides in `rush`, `deep`, and `review` must be removed. A scalar agent override replaces the global protected-path map instead of merely overriding its catch-all, which would otherwise make obvious protected writes such as `printf x > ~/.ssh/config` silent once external writes and Bash default to `allow`. Named-agent tests must exercise protected reads and writes through Bash redirects as well as through direct tools.
+
 ### Bash default
 
 The main Bash surface keeps `"*": "allow"`. Existing specific asks and denies remain later in the ordered map so they override the permissive fallback.
@@ -144,7 +146,9 @@ Later rules continue to ask for recognizable authority-bearing or mutating forms
 
 Known destructive API operations remain denied where an exact policy already exists.
 
-Tests must cover long options, short options, attached values, separated values, argument reordering, multiple URLs, absolute executable paths, and command chains. Unsupported or ambiguous encodings should be documented as residual risk rather than addressed through an unbounded parser expansion.
+The guaranteed lexical coverage is intentionally bounded to bare or slash-qualified `curl` command names, ordinary ASCII-space token separation, exact long-option spellings (`--data`, `--data-raw`, `--data-binary`, `--data-urlencode`, `--form`, `--upload-file`, `--request`, `--header`, `--user`, `--cookie`, `--cert`, `--key`, and `--netrc`), and separate-token short forms (`-d`, `-F`, `-T`, `-X`, `-H`, `-u`, `-b`, `-E`). Explicit request methods cover conventional upper- and lower-case `POST`, `PUT`, `PATCH`, and `DELETE`. Tests must cover these forms before and after URLs, multiple URLs, slash-qualified executables, and command chains.
+
+Attached short values, short-option clusters, tabs, escaped or concatenated option names, variable-expanded options or methods, aliases/functions, config/response files, mixed-case method spellings, and semantically equivalent interpreter or library requests are residual risk unless an exact behavioral test says otherwise. Broad wildcard patterns must not be presented as token-aware. A bare receiving shell (`curl … | sh`, `bash`, or equivalent) should retain an explicit ask where command decomposition exposes it, without making ordinary `bash path/to/script` validation prompt again.
 
 ### Other network and remote commands
 
@@ -156,9 +160,9 @@ The policy does not claim to detect equivalent networking performed by Node, Pyt
 
 The current `rush`, `deep`, and `review` definitions describe routine inspection as non-interactive but use a Bash catch-all of `ask`. Their effective policies must be changed so ordinary inspection and validation no longer forward prompts solely because of command spelling.
 
-Direct `write` and `edit` tools remain denied for read-oriented agents. Their recognizable mutating Git/GitHub operations and unresolved policy-bypass forms remain denied. Bash itself cannot be made securely read-only without containment; documentation must replace the absolute “operate read-only” claim with an accurate statement that direct mutation tools and recognized mutation commands are blocked, while arbitrary allowed Bash programs are not contained.
+Direct `write` and `edit` tools remain denied for read-oriented agents. The scalar `path_write: allow` entry must also be removed so the full global protected-path write map survives agent-scope composition. Their recognizable mutating Git/GitHub operations and unresolved policy-bypass forms remain denied. Bash itself cannot be made securely read-only without containment; documentation must replace the absolute “operate read-only” claim with an accurate statement that direct mutation tools, obvious protected paths, and recognized mutation commands are blocked, while arbitrary allowed Bash programs are not contained.
 
-The `smart` agent remains an implementation-capable child and follows the permissive parent baseline plus the repository's worktree rules.
+The `smart` agent remains an implementation-capable child and follows the permissive parent baseline plus the repository's worktree rules. Its effective path composition must be covered separately rather than inferred from the read-oriented agents.
 
 Agent frontmatter should share a generated or clearly single-sourced policy fragment if the package format supports it. If not, keep definitions structurally parallel and add a test that compares their intended common rule subset to prevent drift.
 
@@ -166,17 +170,24 @@ Agent frontmatter should share a generated or clearly single-sourced policy frag
 
 The tracked permission policy is a repository-owned operational and security baseline, not an ordinary user preference file. A successful permission-policy PR must affect the runtime policy after the normal installer runs.
 
-Revise reconciliation for this file only:
+Revise reconciliation for this file only, with an explicit ownership split:
+
+- the repository owns `permission` and stable operational fields;
+- the runtime owns the three fields the `/permission-system` UI writes: `yoloMode`, `debugLog`, and `permissionReviewLog`.
+
+Publication must:
 
 1. Render the active Pi agent path token.
-2. Validate the candidate against the exact installed package schema before publication.
-3. Compare it with the runtime policy.
-4. If different, create one timestamped backup and publish the rendered tracked policy atomically.
-5. Preserve owner-safe directory and file modes.
-6. Report the old and new policy identities without logging sensitive command payloads.
-7. Leave authentication, sessions, trust, logs, grants, model selection, and unrelated mutable settings untouched.
+2. Validate the tracked candidate against the exact installed package schema.
+3. Load a valid existing runtime file and preserve its three runtime-owned booleans in the candidate.
+4. Refuse policy replacement while the existing runtime has `yoloMode: true`; an active unattended relaxation must be disabled deliberately before its policy changes.
+5. Record the existing runtime file identity, then recheck it immediately before publication and abort on concurrent modification rather than losing a UI toggle.
+6. If the effective candidate differs, create one timestamped backup and publish atomically.
+7. Preserve owner-safe directory and file modes.
+8. Report the old and new policy identities without logging sensitive command payloads.
+9. Leave authentication, sessions, trust, logs, grants, model selection, and unrelated mutable settings untouched.
 
-Runtime `/permission-system` changes are therefore temporary machine-local overrides until the next `make ai`. Documentation must state that behavior. If durable machine-local overlays are needed later, they require an explicit supported merge design rather than silent whole-file drift.
+Runtime permission-map edits are temporary machine-local overrides until the next `make ai`; the three UI-owned runtime controls survive reconciliation. Documentation must state both behaviors. If further durable machine-local overlays are needed later, they require an explicit supported merge design rather than silent whole-file drift.
 
 Check mode should report drift. Whether drift makes `make ai-check` nonzero should follow existing repository check-mode conventions; at minimum, CI and tests must compare the tracked rendered policy with an isolated installed runtime result.
 
@@ -201,13 +212,12 @@ Continue testing policy resolution for individual surfaces, including global and
 
 ### Full gate-pipeline tests
 
-Exercise the installed package's actual tool-call pipeline with a prompt spy. Assert:
+Exercise the installed package's actual tool-call pipeline with a prompt spy. The test model must reflect the package's two stages rather than expecting `ask` as a terminal pipeline result:
 
-- final allow/ask/deny result;
-- deciding gate surface;
-- matched rule or synthetic sentinel;
-- named-agent scope;
-- whether a forwarded prompt would occur.
+- assert the pre-escalation policy state and whether the prompt path is invoked;
+- assert the terminal pipeline action (`allow` or `block`) after the prompt spy's decision;
+- collect reporter/decision evidence for deciding surface, matched rule or synthetic sentinel, origin, and named-agent scope;
+- assert whether a child request would be forwarded.
 
 Required regression cases include:
 
@@ -219,8 +229,10 @@ Required regression cases include:
 | `nl -ba ai/pi/install.sh` under `deep` | allow |
 | `make ai-check` under `deep` | allow |
 | `bash bin/validate-ai --verbose` under `deep` | allow |
+| `printf x > ~/.ssh/config` under `rush`, `deep`, and `review` | deny |
+| direct protected read and write tools under every named-agent scope | deny |
 | ordinary HTTPS `curl` GET/download | allow |
-| `curl --data`, `-F`, `-T`, or mutating `-X` | ask |
+| guaranteed `curl` data, form, upload, credential, or mutating-method forms | ask |
 | `curl` with explicit credentials/private keys | ask or deny according to the specific rule |
 | recursive `rm` | ask |
 | root-recursive `rm` | deny |
@@ -236,6 +248,9 @@ Verify that:
 
 - normal installation publishes a changed tracked permission policy;
 - a differing runtime policy is backed up once;
+- valid runtime `debugLog` and `permissionReviewLog` choices survive policy publication;
+- active runtime YOLO blocks policy replacement with actionable guidance;
+- a concurrent runtime-config change aborts publication rather than being overwritten;
 - malformed tracked policy aborts before replacing the runtime policy;
 - foreign symlinks and invalid destination types remain refused;
 - isolated custom `PI_CODING_AGENT_DIR` rendering protects its own `auth.json`;
@@ -282,7 +297,7 @@ If the permissive policy causes unacceptable behavior, restore the prior runtime
 - Intentional asks and hard denies remain effective through that same pipeline.
 - Ordinary `curl` downloads do not prompt; recognizable uploads, credentials, and mutating methods do.
 - Named routine inspection and validation workflows do not forward prompts.
-- Normal installer execution makes the tracked permission policy active and backs up the replaced runtime file.
+- Normal installer execution makes the tracked permission map active, preserves the three UI-owned runtime controls, refuses replacement during active YOLO, and backs up the replaced runtime file.
 - Direct protected-path access remains denied.
 - No sandbox, containment, or secure-read-only claim remains in active documentation.
 - Validation passes against both candidate and installed runtime policies.
