@@ -115,7 +115,18 @@ agent_frontmatter() {
             "*git *diff *--textc*",
             "*git *log *--ext-d*",
             "*git *log *--textc*",
-            "*git *grep -*O*",
+            "git grep -O*",
+            "git grep -nO*",
+            "git grep -inO*",
+            "git grep -nHO*",
+            "git grep * -O*",
+            "git grep * -nO*",
+            "git grep * -inO*",
+            "git grep * -nHO*",
+            "git grep --open*",
+            "git grep * --open*",
+            "git grep --op=*",
+            "git grep * --op=*",
             "*gh pr create*",
             "*gh pr edit*",
             "*gh pr merge*",
@@ -126,6 +137,9 @@ agent_frontmatter() {
             "*gh api * --method DELETE*",
             "*$*"
           ][]; . as $pattern | $bash[$pattern] == "deny"))
+      and (.permission.bash as $bash
+        | all(["*git *grep -*O*", "*git *grep * -*O*", "*git *grep *--op*"][];
+            . as $pattern | $bash | has($pattern) | not))
       and (.permission.bash as $bash
         | all(["make *", "npm *", "pnpm *", "cargo *", "go *"][];
             . as $pattern | $bash | has($pattern) | not))

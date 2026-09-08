@@ -49,9 +49,18 @@ permission:
     "*git *diff *--textc*": deny
     "*git *log *--ext-d*": deny
     "*git *log *--textc*": deny
-    "*git *grep -*O*": deny
-    "*git *grep * -*O*": deny
-    "*git *grep *--op*": deny
+    "git grep -O*": deny
+    "git grep -nO*": deny
+    "git grep -inO*": deny
+    "git grep -nHO*": deny
+    "git grep * -O*": deny
+    "git grep * -nO*": deny
+    "git grep * -inO*": deny
+    "git grep * -nHO*": deny
+    "git grep --open*": deny
+    "git grep * --open*": deny
+    "git grep --op=*": deny
+    "git grep * --op=*": deny
     "gh auth status*": allow
     "gh repo view*": allow
     "gh pr list*": allow

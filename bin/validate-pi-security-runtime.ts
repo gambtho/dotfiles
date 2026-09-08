@@ -298,6 +298,12 @@ try {
   checkBash(manager, "git -C . fetch origin status", "allow");
   checkBash(manager, "git -C . -c 'alias.x=!printf bypass' x status", "deny");
   checkBash(manager, "git -C . -c core.sshCommand=false fetch origin", "deny");
+  checkBash(manager, "git --no-pager -c 'credential.helper=!printf helper' credential fill", "deny");
+  checkBash(manager, "/usr/bin/git --no-pager -c core.pager=less log -1", "deny");
+  checkBash(manager, "git --git-dir=.git -c core.pager=less log -1", "deny");
+  checkBash(manager, "/usr/bin/git --git-dir .git -c credential.helper=store credential fill", "deny");
+  checkBash(manager, "git --work-tree=. -c 'alias.x=!printf bypass' x", "deny");
+  checkBash(manager, "/usr/bin/git --work-tree . -c clean.requireForce=false clean -d", "deny");
   checkBash(manager, "git -C . -c user.name=example status", "deny");
   checkBash(manager, "/usr/bin/git -C . -c color.ui=false status", "deny");
   checkBash(manager, "git switch -c feature/example", "allow");
@@ -361,6 +367,28 @@ try {
   checkBash(manager, "git --git-dir .git config --get user.name", "allow");
   checkBash(manager, "git --work-tree=. config --get user.name", "allow");
   checkBash(manager, "git --work-tree . config --get user.name", "allow");
+  const scopedConfigPrefixes = [
+    "git -C .",
+    "/usr/bin/git -C .",
+    "git --no-pager",
+    "/usr/bin/git --no-pager",
+    "git --git-dir=.git",
+    "/usr/bin/git --git-dir=.git",
+    "git --git-dir .git",
+    "/usr/bin/git --git-dir .git",
+    "git --work-tree=.",
+    "/usr/bin/git --work-tree=.",
+    "git --work-tree .",
+    "/usr/bin/git --work-tree .",
+  ];
+  const scopedConfigReads = [
+    "config --global --get credential.helper",
+    "config --local --list",
+    "config --show-origin --get-all remote.origin.fetch",
+  ];
+  for (const prefix of scopedConfigPrefixes) {
+    for (const read of scopedConfigReads) checkBash(manager, `${prefix} ${read}`, "allow");
+  }
   checkBash(manager, "git commit -m 'update config docs'", "allow");
   checkBash(manager, "git log --grep 'credential handling'", "allow");
   checkBash(manager, "git diff -- config ai/pi/config/permission-system.json", "allow");
@@ -411,10 +439,19 @@ try {
   checkBash(manager, "git reset --keep HEAD~1", "ask");
   checkBash(manager, "git rm -f README.md", "ask");
   checkBash(manager, "git rebase -i -x 'printf example' HEAD~2", "deny");
+  checkBash(manager, "git rebase --exec 'printf example' HEAD~2", "deny");
+  checkBash(manager, "git rebase fix-xyz", "allow");
   checkBash(manager, "git archive --rem=origin HEAD", "deny");
+  checkBash(manager, "git grep -n TODO", "allow");
+  checkBash(manager, "git grep TODO", "allow");
+  checkBash(manager, "git grep ordinary-query-containing-O", "allow");
   checkBash(manager, "git grep -Oless pattern", "deny");
   checkBash(manager, "git grep -nOless pattern", "deny");
-  checkBash(manager, "git grep --open=less pattern", "deny");
+  checkBash(manager, "git grep -inOless pattern", "deny");
+  checkBash(manager, "git grep pattern -Oless", "deny");
+  checkBash(manager, "git grep pattern -nOless", "deny");
+  checkBash(manager, "git grep --open-files-in-pager=less pattern", "deny");
+  checkBash(manager, "git grep pattern --open-files-in-pager=less", "deny");
   checkBash(manager, "git grep --op=less pattern", "deny");
   checkBash(manager, "git branch --format='%(refname)'", "allow");
   checkBash(manager, "git tag --format='%(refname)'", "allow");
@@ -489,14 +526,132 @@ try {
     "gh secret set EXAMPLE",
     "/usr/bin/gh secret delete EXAMPLE",
     "gh release create v1.0.0",
+    "gh release upload v1.0.0 artifact.tgz",
+    "/usr/bin/gh release delete v1.0.0 --yes",
+    "gh release edit v1.0.0 --title stable",
+    "gh pr checkout 42",
+    "gh pr close 42",
+    "gh pr comment 42 --body example",
+    "gh pr ready 42",
+    "gh pr reopen 42",
+    "gh pr review 42 --approve",
+    "gh pr update-branch 42",
+    "gh issue comment 42 --body example",
+    "gh issue delete 42 --yes",
+    "gh issue develop 42 --checkout",
+    "gh issue lock 42",
+    "gh issue pin 42",
+    "gh issue reopen 42",
+    "gh issue transfer 42 owner/other",
+    "gh issue unlock 42",
+    "gh issue unpin 42",
     "gh workflow run checks.yml",
+    "gh workflow disable checks.yml",
+    "gh workflow enable checks.yml",
     "gh repo create example",
     "gh repo fork owner/repo",
+    "gh repo edit owner/repo --visibility private",
+    "gh repo archive owner/repo --yes",
+    "gh repo autolink create --key-prefix EXAMPLE- --url-template https://example.com/num",
+    "gh repo autolink delete 123",
+    "gh repo clone owner/repo",
+    "gh repo deploy-key add key.pub --title example",
+    "gh repo deploy-key delete 123 --yes",
+    "gh repo rename renamed",
+    "gh repo set-default owner/repo",
+    "gh repo sync owner/repo",
+    "gh repo unarchive owner/repo --yes",
+    "gh gist clone abc123",
+    "gh gist create notes.txt --public",
+    "gh gist edit abc123 --add notes.txt",
+    "/usr/bin/gh gist delete abc123",
+    "gh gist rename abc123 renamed.md",
+    "gh extension exec owner/extension",
+    "gh extension install owner/extension",
+    "gh extension remove owner/extension",
+    "/usr/bin/gh extension upgrade owner/extension",
+    "gh alias set example 'pr view'",
+    "gh alias delete example",
+    "gh alias import aliases.yml",
+    "gh ssh-key add key.pub --title example",
+    "gh ssh-key delete 123 --yes",
+    "gh gpg-key add key.gpg",
+    "gh gpg-key delete 123 --yes",
+    "gh variable set EXAMPLE --body value",
+    "gh variable delete EXAMPLE",
+    "gh codespace code --codespace example",
+    "gh codespace create --repo owner/repo",
+    "gh codespace delete --codespace example",
+    "gh codespace edit --codespace example --display-name renamed",
+    "gh codespace rebuild --codespace example",
+    "gh codespace jupyter --codespace example",
+    "gh codespace stop --codespace example",
+    "gh codespace ssh --codespace example",
+    "gh codespace cp local.txt remote:/workspaces/repo/",
+    "gh codespace ports visibility 3000:public --codespace example",
+    "gh run cancel 123",
+    "gh run delete 123",
+    "gh run rerun 123",
+    "gh label clone owner/source --repo owner/destination",
+    "gh label create bug --color ff0000",
+    "gh label delete bug --yes",
+    "gh label edit bug --name defect",
+    "gh project close 1 --owner example",
+    "gh project copy 1 --owner example --title copy",
+    "gh project create --owner example --title example",
+    "gh project delete 1 --owner example",
+    "gh project edit --id PVT_example --title renamed",
+    "gh project field-create 1 --owner example --name Field --data-type TEXT",
+    "gh project field-delete --id PVTF_example",
+    "gh project item-add 1 --owner example --url https://github.com/owner/repo/issues/1",
+    "gh project item-archive 1 --owner example --id PVTI_example",
+    "gh project item-create 1 --owner example --title draft",
+    "gh project item-delete 1 --owner example --id PVTI_example",
+    "gh project item-edit --id PVTI_example --project-id PVT_example --body example",
+    "gh project link 1 --owner example --repo owner/repo",
+    "gh project mark-template 1 --owner example",
+    "gh project reopen 1 --owner example",
+    "gh project unlink 1 --owner example --repo owner/repo",
+    "gh config set git_protocol ssh",
+    "gh config clear-cache",
     "gh cache delete 123",
     "gh auth login",
     "gh auth refresh",
+    "gh auth logout",
+    "gh auth setup-git",
+    "gh auth switch --user example",
   ];
   for (const command of ghAttentionCommands) checkBash(manager, command, "ask");
+  const ghReadCommands = [
+    "gh gist list",
+    "gh gist view abc123",
+    "gh extension list",
+    "gh alias list",
+    "gh ssh-key list",
+    "gh gpg-key list",
+    "gh variable list",
+    "gh variable get EXAMPLE",
+    "gh release list",
+    "gh release view v1.0.0",
+    "gh codespace list",
+    "gh codespace logs --codespace example",
+    "gh codespace ports --codespace example",
+    "gh project list --owner example",
+    "gh project view 1 --owner example",
+    "gh project field-list 1 --owner example",
+    "gh project item-list 1 --owner example",
+    "gh repo autolink get 123",
+    "gh repo autolink list",
+    "gh repo deploy-key list",
+    "gh run list",
+    "gh run view 123",
+    "gh label list",
+    "gh workflow list",
+    "gh workflow view checks.yml",
+    "gh config get git_protocol",
+    "gh config list",
+  ];
+  for (const command of ghReadCommands) checkBash(manager, command, "allow");
   checkBash(manager, "gh api repos/o/r/pulls/1/comments", "allow");
   checkBash(manager, "gh api repos/o/r/issues -XGET", "ask");
   checkBash(manager, "gh api repos/o/r/issues -X=GET", "ask");
@@ -507,7 +662,6 @@ try {
   checkBash(manager, "gh api repos/o/r/issues -Ftitle=example", "ask");
   checkBash(manager, "curl https://example.com", "allow");
   checkBash(manager, "/usr/bin/curl https://example.com", "allow");
-
   checkBash(manager, "curl -fsS http://127.0.0.1:9222/json/version", "allow");
   checkBash(manager, "curl --max-time 2 http://localhost:8765/health", "allow");
   checkBash(manager, "curl https://example.com http://127.0.0.1:9222", "allow");
@@ -695,6 +849,10 @@ try {
     checkPath(manager, "path_write", join(homedir(), ".ssh", "config"), "deny", agentName);
     checkPath(manager, "path_write", join(repoRoot, "README.md"), "allow", agentName);
     checkBash(manager, "git status", "allow", agentName);
+    checkBash(manager, "git grep -n TODO", "allow", agentName);
+    checkBash(manager, "git grep TODO", "allow", agentName);
+    checkBash(manager, "git grep -nOless TODO", "deny", agentName);
+    checkBash(manager, "git grep --open-files-in-pager=less TODO", "deny", agentName);
     checkBash(manager, "git branch --show-current", "allow", agentName);
     checkBash(manager, "git worktree list --porcelain", "allow", agentName);
     checkBash(manager, "git branch feature/example", "deny", agentName);

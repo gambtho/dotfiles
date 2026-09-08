@@ -316,7 +316,11 @@ setup() {
           and $bash["\($prefix)--get-regexp*"] == "allow"
           and $bash["\($prefix)--list*"] == "allow"
           and $bash["\($prefix)-l*"] == "allow"
+          and $bash["\($prefix)--global --get*"] == "allow"
+          and $bash["\($prefix)--local --list*"] == "allow"
+          and $bash["\($prefix)--show-origin --get-all*"] == "allow"
           and (($keys | index("\($prefix)--get*")) > ($keys | index("\($prefix)*")))
+          and (($keys | index("\($prefix)--global --get*")) > ($keys | index("\($prefix)*")))
         )
     )
     and $bash["git config --global --get*"] == "allow"
@@ -399,18 +403,194 @@ setup() {
         "*/gh secret *",
         "gh release create*",
         "*/gh release create*",
+        "gh release upload*",
+        "*/gh release upload*",
+        "gh release delete*",
+        "*/gh release delete*",
+        "gh release edit*",
+        "*/gh release edit*",
+        "gh pr checkout*",
+        "*/gh pr checkout*",
+        "gh pr close*",
+        "*/gh pr close*",
+        "gh pr comment*",
+        "*/gh pr comment*",
+        "gh pr ready*",
+        "*/gh pr ready*",
+        "gh pr reopen*",
+        "*/gh pr reopen*",
+        "gh pr review*",
+        "*/gh pr review*",
+        "gh pr update-branch*",
+        "*/gh pr update-branch*",
+        "gh issue comment*",
+        "*/gh issue comment*",
+        "gh issue delete*",
+        "*/gh issue delete*",
+        "gh issue develop*",
+        "*/gh issue develop*",
+        "gh issue lock*",
+        "*/gh issue lock*",
+        "gh issue pin*",
+        "*/gh issue pin*",
+        "gh issue reopen*",
+        "*/gh issue reopen*",
+        "gh issue transfer*",
+        "*/gh issue transfer*",
+        "gh issue unlock*",
+        "*/gh issue unlock*",
+        "gh issue unpin*",
+        "*/gh issue unpin*",
         "gh workflow run*",
         "*/gh workflow run*",
+        "gh workflow disable*",
+        "*/gh workflow disable*",
+        "gh workflow enable*",
+        "*/gh workflow enable*",
         "gh repo create*",
         "*/gh repo create*",
         "gh repo fork*",
         "*/gh repo fork*",
-        "gh cache delete*",
-        "*/gh cache delete*",
+        "gh repo edit*",
+        "*/gh repo edit*",
+        "gh repo archive*",
+        "*/gh repo archive*",
+        "gh repo autolink create*",
+        "*/gh repo autolink create*",
+        "gh repo autolink delete*",
+        "*/gh repo autolink delete*",
+        "gh repo clone*",
+        "*/gh repo clone*",
+        "gh repo deploy-key add*",
+        "*/gh repo deploy-key add*",
+        "gh repo deploy-key delete*",
+        "*/gh repo deploy-key delete*",
+        "gh repo rename*",
+        "*/gh repo rename*",
+        "gh repo set-default*",
+        "*/gh repo set-default*",
+        "gh repo sync*",
+        "*/gh repo sync*",
+        "gh repo unarchive*",
+        "*/gh repo unarchive*",
+        "gh gist clone*",
+        "*/gh gist clone*",
+        "gh gist create*",
+        "*/gh gist create*",
+        "gh gist edit*",
+        "*/gh gist edit*",
+        "gh gist delete*",
+        "*/gh gist delete*",
+        "gh gist rename*",
+        "*/gh gist rename*",
+        "gh extension exec*",
+        "*/gh extension exec*",
+        "gh extension install*",
+        "*/gh extension install*",
+        "gh extension remove*",
+        "*/gh extension remove*",
+        "gh extension upgrade*",
+        "*/gh extension upgrade*",
+        "gh alias set*",
+        "*/gh alias set*",
+        "gh alias delete*",
+        "*/gh alias delete*",
+        "gh alias import*",
+        "*/gh alias import*",
+        "gh ssh-key add*",
+        "*/gh ssh-key add*",
+        "gh ssh-key delete*",
+        "*/gh ssh-key delete*",
+        "gh gpg-key add*",
+        "*/gh gpg-key add*",
+        "gh gpg-key delete*",
+        "*/gh gpg-key delete*",
+        "gh variable set*",
+        "*/gh variable set*",
+        "gh variable delete*",
+        "*/gh variable delete*",
+        "gh codespace code*",
+        "*/gh codespace code*",
+        "gh codespace create*",
+        "*/gh codespace create*",
+        "gh codespace delete*",
+        "*/gh codespace delete*",
+        "gh codespace edit*",
+        "*/gh codespace edit*",
+        "gh codespace rebuild*",
+        "*/gh codespace rebuild*",
+        "gh codespace jupyter*",
+        "*/gh codespace jupyter*",
+        "gh codespace stop*",
+        "*/gh codespace stop*",
+        "gh codespace ssh*",
+        "*/gh codespace ssh*",
+        "gh codespace cp*",
+        "*/gh codespace cp*",
+        "gh codespace ports visibility*",
+        "*/gh codespace ports visibility*",
+        "gh run cancel*",
+        "*/gh run cancel*",
+        "gh run delete*",
+        "*/gh run delete*",
+        "gh run rerun*",
+        "*/gh run rerun*",
+        "gh label clone*",
+        "*/gh label clone*",
+        "gh label create*",
+        "*/gh label create*",
+        "gh label delete*",
+        "*/gh label delete*",
+        "gh label edit*",
+        "*/gh label edit*",
+        "gh project close*",
+        "*/gh project close*",
+        "gh project copy*",
+        "*/gh project copy*",
+        "gh project create*",
+        "*/gh project create*",
+        "gh project delete*",
+        "*/gh project delete*",
+        "gh project edit*",
+        "*/gh project edit*",
+        "gh project field-create*",
+        "*/gh project field-create*",
+        "gh project field-delete*",
+        "*/gh project field-delete*",
+        "gh project item-add*",
+        "*/gh project item-add*",
+        "gh project item-archive*",
+        "*/gh project item-archive*",
+        "gh project item-create*",
+        "*/gh project item-create*",
+        "gh project item-delete*",
+        "*/gh project item-delete*",
+        "gh project item-edit*",
+        "*/gh project item-edit*",
+        "gh project link*",
+        "*/gh project link*",
+        "gh project mark-template*",
+        "*/gh project mark-template*",
+        "gh project reopen*",
+        "*/gh project reopen*",
+        "gh project unlink*",
+        "*/gh project unlink*",
         "gh auth login*",
         "*/gh auth login*",
         "gh auth refresh*",
-        "*/gh auth refresh*"
+        "*/gh auth refresh*",
+        "gh auth logout*",
+        "*/gh auth logout*",
+        "gh auth setup-git*",
+        "*/gh auth setup-git*",
+        "gh auth switch*",
+        "*/gh auth switch*",
+        "gh config set*",
+        "*/gh config set*",
+        "gh config clear-cache*",
+        "*/gh config clear-cache*",
+        "gh cache delete*",
+        "*/gh cache delete*"
       ]
       | all(.[]; . as $pattern | $bash[$pattern] == "ask")
     )
@@ -420,6 +600,21 @@ setup() {
     and $bash["*git *diff *--textc*"] == "deny"
     and $bash["*git *log *--ext-d*"] == "deny"
     and $bash["*git *log *--textc*"] == "deny"
+    and $bash["*git *grep -O*"] == "deny"
+    and $bash["*git *grep -nO*"] == "deny"
+    and $bash["*git *grep -inO*"] == "deny"
+    and $bash["*git *grep -nHO*"] == "deny"
+    and $bash["*git *grep * -O*"] == "deny"
+    and $bash["*git *grep * -nO*"] == "deny"
+    and $bash["*git *grep * -inO*"] == "deny"
+    and $bash["*git *grep * -nHO*"] == "deny"
+    and $bash["*git *grep --open*"] == "deny"
+    and $bash["*git *grep * --open*"] == "deny"
+    and $bash["*git *grep --op=*"] == "deny"
+    and $bash["*git *grep * --op=*"] == "deny"
+    and ($bash | has("*git *grep -*O*") | not)
+    and ($bash | has("*git *grep * -*O*") | not)
+    and ($bash | has("*git *grep *--op*") | not)
     and $bash["*rg *--pre*"] == "deny"
     and $bash["*fd *--exec*"] == "deny"
     and $bash["*fd *-x*"] == "deny"
@@ -432,10 +627,21 @@ setup() {
     and ($bash | has("*git * -c *=*") | not)
     and $bash["*git -c *"] == "deny"
     and $bash["*git -C * -c *=*"] == "deny"
+    and $bash["*git --no-pager -c *=*"] == "deny"
+    and $bash["*git --git-dir=* -c *=*"] == "deny"
+    and $bash["*git --git-dir * -c *=*"] == "deny"
+    and $bash["*git --work-tree=* -c *=*"] == "deny"
+    and $bash["*git --work-tree * -c *=*"] == "deny"
     and $bash["*git --config-env=*"] == "deny"
     and $bash["*git * --config-env=*"] == "deny"
+    and $bash["*git *alias.*=!*"] == "deny"
+    and $bash["*git *clean.requireForce=false*"] == "deny"
     and $bash["*git *config *alias.* *!*"] == "deny"
     and $bash["*git *config *core.sshCommand ?*"] == "deny"
+    and (($keys | index("*git *config *alias.* *!*")) > ($keys | index("git config --get*")))
+    and (($keys | index("*git *config *alias.* *!*")) > ($keys | index("*/git config --get*")))
+    and (($keys | index("*git *config *core.sshCommand ?*")) > ($keys | index("git config --get*")))
+    and (($keys | index("*git *config *core.sshCommand ?*")) > ($keys | index("*/git config --get*")))
     and $bash["*git *send-pack *--for*"] == "deny"
     and $bash["*git *send-pack * +*"] == "deny"
     and (($keys | index("*git *send-pack *--for*")) > ($keys | index("*git *send-pack *")))
@@ -447,12 +653,15 @@ setup() {
     and $bash["*git *push *--mir*"] == "deny"
     and $bash["*git *reset *--har*"] == "deny"
     and $bash["*git *clean -*f*"] == "deny"
-    and $bash["*git *grep *--op*"] == "deny"
     and $bash["*git *bisect *run*"] == "deny"
-    and $bash["*git *rebase *-x*"] == "deny"
+    and $bash["*git *rebase -x*"] == "deny"
+    and $bash["*git *rebase * -x*"] == "deny"
+    and ($bash | has("*git *rebase *-x*") | not)
     and $bash["*git *archive *--rem*"] == "deny"
     and $bash["*gh *repo delete*"] == "deny"
     and $bash["*gh *api *DELETE*"] == "deny"
+    and (($keys | index("*gh *api *DELETE*")) > ($keys | index("gh codespace ssh*")))
+    and (($keys | index("*gh *api *delete*")) > ($keys | index("*/gh codespace ssh*")))
     and $bash["*sudo *"] == "deny"
     and $bash["*doas *"] == "deny"
     and $bash["*rm *-*r* /"] == "deny"
