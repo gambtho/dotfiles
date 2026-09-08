@@ -24,16 +24,22 @@ root=$(git rev-parse --show-toplevel)
 cd "$root"
 
 is_direct_bin_shell() {
-  local path="$1" name
-  # Direct executables (bin/<name>) plus the sourced library slices under
+  local path="$1" name first_line
+  # Direct Bash executables (bin/<name>) plus the sourced library slices under
   # bin/lib/ — a lib file that escaped the shell gates could drift unchecked
-  # while every installer still sources it.
+  # while every installer still sources it. Extensionless executables are
+  # classified by shebang so Python entry points do not reach Bash tooling.
   [[ "$path" == bin/* ]] || return 1
   case "${path#bin/}" in
     */*) [[ "$path" == bin/lib/*.sh ]] && return 0 ;;
     *)
       name=${path#bin/}
-      [[ "$name" != *.* || "$name" == *.sh ]] && return 0
+      [[ "$name" == *.sh ]] && return 0
+      [[ "$name" == *.* ]] && return 1
+      IFS= read -r first_line <"$path" || return 1
+      case "$first_line" in
+        '#!/usr/bin/env bash' | '#!/bin/bash' | '#!/usr/bin/bash') return 0 ;;
+      esac
       ;;
   esac
   return 1

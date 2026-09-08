@@ -75,6 +75,15 @@ list_files() {
   [[ "$output" != *"bin/install"* ]]
 }
 
+@test "bash gates exclude extensionless Python entry points" {
+  local class
+  for class in bash shellcheck shfmt; do
+    list_files "$class"
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"bin/validate-pi-permission-config"* ]]
+  done
+}
+
 @test "shellcheck discovery includes repository shell entry points" {
   list_files shellcheck
 
