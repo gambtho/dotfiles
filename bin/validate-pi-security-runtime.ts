@@ -541,6 +541,9 @@ try {
 
   for (const agentName of ["rush", "deep", "review"] as const) {
     expectState(`${agentName} write tool`, manager.getToolPermission("write", agentName), "deny");
+    expectState(`${agentName} edit tool`, manager.getToolPermission("edit", agentName), "deny");
+    checkPath(manager, "path_read", join(homedir(), ".ssh", "config"), "deny", agentName);
+    checkPath(manager, "path_write", join(homedir(), ".ssh", "config"), "deny", agentName);
     checkPath(manager, "path_write", join(repoRoot, "README.md"), "allow", agentName);
     checkBash(manager, "git status", "allow", agentName);
     checkBash(manager, "git branch --show-current", "allow", agentName);
@@ -553,7 +556,7 @@ try {
     checkBash(manager, "git pull --ff-only", "deny", agentName);
     checkBash(manager, "git push origin main", "deny", agentName);
     checkBash(manager, "git reset --hard HEAD", "deny", agentName);
-    checkBash(manager, "unknown-reader --version", "ask", agentName);
+    checkBash(manager, "unknown-reader --version", "allow", agentName);
     checkBash(manager, "gh pr view 1", "allow", agentName);
     checkBash(manager, "make check", "allow", agentName);
     checkBash(manager, "gh repo delete owner/repo", "deny", agentName);

@@ -76,16 +76,17 @@ agent_frontmatter() {
   [ "$status" -eq 0 ]
 }
 
-@test "Pi read-only agents inspect and verify silently but deny mutation" {
+@test "Pi read-oriented agents restrict direct tools and recognizable mutation" {
   local agent actual
   for agent in rush deep review; do
     actual=$(agent_frontmatter "$agent")
     run jq -e '
-      .permission.path_write == "allow"
+      (.permission | has("path_write") | not)
       and .permission.write == "deny"
       and .permission.edit == "deny"
-      and .permission.bash["*"] == "ask"
+      and .permission.bash["*"] == "allow"
       and .permission.bash["*git *"] == "deny"
+      and .permission.bash["*$*"] == "deny"
       and (.permission.bash as $bash
         | all([
             "git status*",

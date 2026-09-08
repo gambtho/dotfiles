@@ -149,6 +149,37 @@ const RELAXED_PIPELINE_CASES: PipelineCase[] = [
   },
 ];
 
+for (const agentName of ["rush", "deep", "review"] as const) {
+  RELAXED_PIPELINE_CASES.push(
+    {
+      label: `${agentName} nl inspection`,
+      command: "nl -ba ai/pi/install.sh",
+      agentName,
+      expected: "allow",
+    },
+    {
+      label: `${agentName} ai check`,
+      command: "make ai-check",
+      agentName,
+      expected: "allow",
+    },
+    {
+      label: `${agentName} validator`,
+      command: "bash bin/validate-ai --verbose",
+      agentName,
+      expected: "allow",
+    },
+    {
+      label: `${agentName} protected redirect`,
+      command: "printf x > ~/.ssh/config",
+      agentName,
+      expected: "deny",
+      surface: "path_write",
+      pattern: "~/.ssh/*",
+    },
+  );
+}
+
 for (const shell of ["sh", "bash", "zsh", "dash", "ksh"] as const) {
   RELAXED_PIPELINE_CASES.push(
     {

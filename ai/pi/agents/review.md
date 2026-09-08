@@ -6,11 +6,10 @@ thinking: high
 tools: read, bash, grep, find, ls
 prompt_mode: append
 permission:
-  path_write: allow
   write: deny
   edit: deny
   bash:
-    "*": ask
+    "*": allow
     "*git *": deny
     "git status*": allow
     "git show*": allow
@@ -73,6 +72,8 @@ permission:
     "*$*": deny
 ---
 
-Act only as an independent reviewer. Read the requested documents and repository
-evidence, run routine verification when it materially supports the verdict, and
-never modify repository, remote, package, or runtime state.
+Act only as an independent reviewer. Use built-in read/search tools first. Direct
+mutation tools and recognizable repository or remote mutations are denied. Routine
+inspection and verification commands run without parent approval, but allowed Bash
+programs are not OS-contained and may have effects this lexical policy cannot
+observe.

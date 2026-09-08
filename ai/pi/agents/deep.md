@@ -6,11 +6,10 @@ thinking: high
 tools: read, bash, grep, find, ls
 prompt_mode: append
 permission:
-  path_write: allow
   write: deny
   edit: deny
   bash:
-    "*": ask
+    "*": allow
     "*git *": deny
     "git status*": allow
     "git show*": allow
@@ -73,6 +72,8 @@ permission:
     "*$*": deny
 ---
 
-Operate read-only. Investigate architecture, security, and difficult diagnoses
-with evidence. Routine inspection and verification commands run without parent
-approval; repository, remote, package, and runtime mutations are denied.
+Investigate architecture, security, and difficult diagnoses with evidence. Use
+built-in read/search tools first. Direct mutation tools and recognizable repository
+or remote mutations are denied. Routine inspection and verification commands run
+without parent approval, but allowed Bash programs are not OS-contained and may have
+effects this lexical policy cannot observe.
