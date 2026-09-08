@@ -311,10 +311,38 @@ try {
   checkBash(manager, "/usr/bin/git send-pack origin HEAD:main", "ask");
   checkBash(manager, "git send-pack --force origin HEAD:main", "deny");
   checkBash(manager, "git send-pack origin +HEAD:main", "deny");
-  checkBash(manager, "git submodule add https://example.com/repo.git vendor/repo", "allow");
+  const gitAttentionCommands = [
+    "git checkout feature/example",
+    "git checkout -B feature/example HEAD",
+    "git checkout -f feature/example",
+    "git checkout -- README.md",
+    "/usr/bin/git checkout feature/example",
+    "git -C . checkout -B feature/example HEAD",
+    "/usr/bin/git -C . checkout -f feature/example",
+    "git filter-branch -- --all",
+    "/usr/bin/git filter-repo --force",
+    "git -C . filter-repo --force",
+    "git daemon --reuseaddr",
+    "git fast-import <export.stream",
+    "git svn fetch",
+    "git p4 sync",
+    "git gc --prune=now",
+    "git -C . gc --aggressive --prune now",
+    "git prune",
+    "/usr/bin/git -C . prune --expire now",
+    "git replace HEAD HEAD~1",
+    "git replace --graft HEAD HEAD~1",
+    "git submodule add https://example.com/repo.git vendor/repo",
+    "/usr/bin/git -C . submodule add https://example.com/repo.git vendor/repo",
+  ];
+  for (const command of gitAttentionCommands) checkBash(manager, command, "ask");
+  checkBash(manager, "git checkout-index --all", "allow");
+  checkBash(manager, "git gc", "allow");
   checkBash(manager, "git maintenance run --task=prefetch", "allow");
   checkBash(manager, "git credential fill", "ask");
   checkBash(manager, "/usr/bin/git credential approve", "ask");
+  checkBash(manager, "git -C . credential reject", "ask");
+  checkBash(manager, "git --git-dir=.git credential fill", "ask");
   checkBash(manager, "git config --get user.name", "allow");
   checkBash(manager, "git config --get alias.x", "allow");
   checkBash(manager, "git config --get core.sshCommand", "allow");
@@ -322,8 +350,20 @@ try {
   checkBash(manager, "git config --list", "allow");
   checkBash(manager, "git config -l", "allow");
   checkBash(manager, "/usr/bin/git config --get user.email", "allow");
+  checkBash(manager, "git -C . config --get user.email", "allow");
+  checkBash(manager, "git --no-pager config --list", "allow");
+  checkBash(manager, "git --git-dir=.git config --get user.name", "allow");
+  checkBash(manager, "git --git-dir .git config --get user.name", "allow");
+  checkBash(manager, "git --work-tree=. config --get user.name", "allow");
+  checkBash(manager, "git --work-tree . config --get user.name", "allow");
+  checkBash(manager, "git commit -m 'update config docs'", "allow");
+  checkBash(manager, "git log --grep 'credential handling'", "allow");
+  checkBash(manager, "git diff -- config ai/pi/config/permission-system.json", "allow");
   checkBash(manager, "git config user.name Example", "ask");
   checkBash(manager, "git -C . config user.email example@example.com", "ask");
+  checkBash(manager, "/usr/bin/git --no-pager config user.name Example", "ask");
+  checkBash(manager, "git --git-dir .git config user.name Example", "ask");
+  checkBash(manager, "git --work-tree=. config user.name Example", "ask");
   checkBash(manager, "git config alias.x '!printf bypass'", "deny");
   checkBash(manager, "git config alias.x='!printf bypass'", "deny");
   checkBash(manager, "git -C . config alias.x '!printf bypass'", "deny");
@@ -379,6 +419,18 @@ try {
   checkBash(manager, "/usr/bin/git --work-tree=. restore README.md", "ask");
   checkBash(manager, "git -c user.name=example restore README.md", "deny");
   checkBash(manager, "/usr/bin/git -c user.name=example restore README.md", "deny");
+  checkBash(manager, "git --git-dir .git restore README.md", "ask");
+  checkBash(manager, "/usr/bin/git --git-dir .git restore README.md", "ask");
+  checkBash(manager, "git --work-tree . restore README.md", "ask");
+  checkBash(manager, "/usr/bin/git --work-tree . restore README.md", "ask");
+  checkBash(manager, "git --git-dir .git commit -m 'restore README wording'", "allow");
+  checkBash(manager, "/usr/bin/git --work-tree . commit -m 'restore README wording'", "allow");
+  checkBash(manager, "git --git-dir=.git commit -m 'restore README wording'", "allow");
+  checkBash(manager, "git --work-tree=. commit -m 'restore README wording'", "allow");
+  checkBash(manager, "git --git-dir .git commit --amend --no-edit", "ask");
+  checkBash(manager, "/usr/bin/git --work-tree . commit --amend --no-edit", "ask");
+  checkBash(manager, "git --git-dir=.git commit --amend --no-edit", "ask");
+  checkBash(manager, "git --work-tree=. commit --amend --no-edit", "ask");
   checkBash(manager, "git --config-env=user.name=GIT_USER restore README.md", "deny");
   checkBash(manager, "/usr/bin/git --config-env=user.name=GIT_USER restore README.md", "deny");
   checkBash(manager, "gh auth status", "allow");
@@ -392,6 +444,34 @@ try {
   checkBash(manager, "gh pr merge 42", "ask");
   checkBash(manager, "gh issue close 42", "ask");
   checkBash(manager, "/usr/bin/gh pr create --title example", "allow");
+  const ghAttentionCommands = [
+    "gh api repos/o/r --method POST",
+    "gh api repos/o/r --method PUT",
+    "gh api repos/o/r --method PATCH",
+    "gh api repos/o/r --method=post",
+    "gh api repos/o/r -X POST",
+    "gh api repos/o/r -X PUT",
+    "gh api repos/o/r -X PATCH",
+    "/usr/bin/gh api repos/o/r -X GET",
+    "gh api repos/o/r -f name=value",
+    "gh api repos/o/r -F name=@value.txt",
+    "gh api repos/o/r --field name=value",
+    "gh api repos/o/r --field=name=value",
+    "gh api repos/o/r --raw-field name=value",
+    "gh api repos/o/r --raw-field=name=value",
+    "gh api repos/o/r --input payload.json",
+    "gh api repos/o/r --input=payload.json",
+    "gh secret set EXAMPLE",
+    "/usr/bin/gh secret delete EXAMPLE",
+    "gh release create v1.0.0",
+    "gh workflow run checks.yml",
+    "gh repo create example",
+    "gh repo fork owner/repo",
+    "gh cache delete 123",
+    "gh auth login",
+    "gh auth refresh",
+  ];
+  for (const command of ghAttentionCommands) checkBash(manager, command, "ask");
   checkBash(manager, "curl https://example.com", "allow");
   checkBash(manager, "/usr/bin/curl https://example.com", "allow");
   checkBash(manager, "curl -fsS http://127.0.0.1:9222/json/version", "allow");
@@ -400,6 +480,9 @@ try {
   checkBash(manager, "curl http://127.0.0.1:9222 http://example.com", "allow");
   checkBash(manager, "curl http://localhost.evil.example/", "allow");
   checkBash(manager, "curl http://localhost@evil.example/", "allow");
+  checkBash(manager, "curl ftp://example.com/pub/archive.tar.gz", "ask");
+  checkBash(manager, "/usr/bin/curl ftps://example.com/private/archive.tar.gz", "ask");
+  checkBash(manager, "curl ftp://user:password@example.com/private/archive.tar.gz", "ask");
   const curlAskCommands = [
     "curl --data payload https://example.com/items",
     "curl --data=payload https://example.com/items",
@@ -470,8 +553,14 @@ try {
   await checkBashGate("git send-pack origin +HEAD:main", "deny");
   await checkBashGate("git credential fill", "ask");
   await checkBashGate("gh auth token", "ask");
+  await checkBashGate("git checkout -B feature/example HEAD", "ask");
+  await checkBashGate("git filter-repo --force", "ask");
+  await checkBashGate("gh api repos/o/r --method PATCH", "ask");
   await checkBashGate("git config user.name Example", "ask");
   await checkBashGate("git config --get user.name", "allow");
+  await checkBashGate("git commit -m 'update config docs'", "allow");
+  await checkBashGate("git log --grep 'credential handling'", "allow");
+  await checkBashGate("git diff -- config ai/pi/config/permission-system.json", "allow");
   await checkBashGate("git config alias.x '!printf bypass'", "deny");
   checkBash(manager, "git show --ext-diff HEAD", "ask");
   checkBash(manager, "git show --textconv HEAD:file", "ask");

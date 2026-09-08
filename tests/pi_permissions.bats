@@ -149,13 +149,55 @@ setup() {
         "*/git --no-pager restore *",
         "git --git-dir=* restore *",
         "*/git --git-dir=* restore *",
+        "git --git-dir * restore *",
+        "*/git --git-dir * restore *",
         "git --work-tree=* restore *",
-        "*/git --work-tree=* restore *"
+        "*/git --work-tree=* restore *",
+        "git --work-tree * restore *",
+        "*/git --work-tree * restore *"
       ]
       | all(.[]; . as $pattern | $bash[$pattern] == "ask")
     )
-    and $bash["git -C * commit *"] == "allow"
-    and $bash["*/git -C * commit *"] == "allow"
+    and (
+      [
+        "git -C * commit *",
+        "*/git -C * commit *",
+        "git --git-dir=* commit *",
+        "*/git --git-dir=* commit *",
+        "git --git-dir * commit *",
+        "*/git --git-dir * commit *",
+        "git --work-tree=* commit *",
+        "*/git --work-tree=* commit *",
+        "git --work-tree * commit *",
+        "*/git --work-tree * commit *"
+      ]
+      | all(.[]; . as $pattern | $bash[$pattern] == "allow")
+    )
+    and (
+      [
+        "git -C * commit --am*",
+        "git -C * commit * --am*",
+        "*/git -C * commit --am*",
+        "*/git -C * commit * --am*",
+        "git --git-dir=* commit --am*",
+        "git --git-dir=* commit * --am*",
+        "*/git --git-dir=* commit --am*",
+        "*/git --git-dir=* commit * --am*",
+        "git --git-dir * commit --am*",
+        "git --git-dir * commit * --am*",
+        "*/git --git-dir * commit --am*",
+        "*/git --git-dir * commit * --am*",
+        "git --work-tree=* commit --am*",
+        "git --work-tree=* commit * --am*",
+        "*/git --work-tree=* commit --am*",
+        "*/git --work-tree=* commit * --am*",
+        "git --work-tree * commit --am*",
+        "git --work-tree * commit * --am*",
+        "*/git --work-tree * commit --am*",
+        "*/git --work-tree * commit * --am*"
+      ]
+      | all(.[]; . as $pattern | $bash[$pattern] == "ask")
+    )
     and ($bash | has("gh *") | not)
     and ($bash | has("*/gh *") | not)
     and $bash["curl *"] == "allow"
@@ -213,7 +255,9 @@ setup() {
         "*curl *--cert *",
         "*curl *-E *",
         "*curl *--key *",
-        "*curl *--netrc*"
+        "*curl *--netrc*",
+        "*curl *ftp://*",
+        "*curl *ftps://*"
       ]
       | all(.[];
           . as $pattern
@@ -236,18 +280,168 @@ setup() {
     and $bash.export == "ask"
     and $bash["declare *-x*"] == "ask"
     and $bash["git status *"] == "allow"
-    and $bash["*git *config *"] == "ask"
-    and $bash["*git *config --get*"] == "allow"
-    and $bash["*git *config --get-regexp*"] == "allow"
-    and $bash["*git *config --list*"] == "allow"
-    and $bash["*git *config -l*"] == "allow"
-    and (($keys | index("*git *config --get*")) > ($keys | index("*git *config *")))
-    and (($keys | index("*git *config --get-regexp*")) > ($keys | index("*git *config *")))
-    and (($keys | index("*git *config --list*")) > ($keys | index("*git *config *")))
-    and (($keys | index("*git *config -l*")) > ($keys | index("*git *config *")))
-    and $bash["*git *credential *"] == "ask"
+    and ($bash | has("*git *config *") | not)
+    and ($bash | has("*git *credential *") | not)
+    and (
+      [
+        "git config ",
+        "*/git config ",
+        "git -C * config ",
+        "*/git -C * config ",
+        "git --no-pager config ",
+        "*/git --no-pager config ",
+        "git --git-dir=* config ",
+        "*/git --git-dir=* config ",
+        "git --git-dir * config ",
+        "*/git --git-dir * config ",
+        "git --work-tree=* config ",
+        "*/git --work-tree=* config ",
+        "git --work-tree * config ",
+        "*/git --work-tree * config "
+      ]
+      | all(.[];
+          . as $prefix
+          | $bash["\($prefix)*"] == "ask"
+          and $bash["\($prefix)--get*"] == "allow"
+          and $bash["\($prefix)--get-regexp*"] == "allow"
+          and $bash["\($prefix)--list*"] == "allow"
+          and $bash["\($prefix)-l*"] == "allow"
+          and (($keys | index("\($prefix)--get*")) > ($keys | index("\($prefix)*")))
+        )
+    )
+    and (
+      [
+        "git credential *",
+        "*/git credential *",
+        "git -C * credential *",
+        "*/git -C * credential *",
+        "git --no-pager credential *",
+        "*/git --no-pager credential *",
+        "git --git-dir=* credential *",
+        "*/git --git-dir=* credential *",
+        "git --git-dir * credential *",
+        "*/git --git-dir * credential *",
+        "git --work-tree=* credential *",
+        "*/git --work-tree=* credential *",
+        "git --work-tree * credential *",
+        "*/git --work-tree * credential *"
+      ]
+      | all(.[]; . as $pattern | $bash[$pattern] == "ask")
+    )
+    and (
+      [
+        "git checkout *",
+        "*/git checkout *",
+        "git -C * checkout *",
+        "*/git -C * checkout *",
+        "git filter-branch *",
+        "*/git filter-branch *",
+        "git -C * filter-branch *",
+        "*/git -C * filter-branch *",
+        "git filter-repo *",
+        "*/git filter-repo *",
+        "git -C * filter-repo *",
+        "*/git -C * filter-repo *",
+        "git daemon *",
+        "*/git daemon *",
+        "git -C * daemon *",
+        "*/git -C * daemon *",
+        "git fast-import *",
+        "*/git fast-import *",
+        "git -C * fast-import *",
+        "*/git -C * fast-import *",
+        "git svn *",
+        "*/git svn *",
+        "git -C * svn *",
+        "*/git -C * svn *",
+        "git p4 *",
+        "*/git p4 *",
+        "git -C * p4 *",
+        "*/git -C * p4 *",
+        "git gc *--prune*",
+        "*/git gc *--prune*",
+        "git -C * gc *--prune*",
+        "*/git -C * gc *--prune*",
+        "git prune *",
+        "*/git prune *",
+        "git -C * prune *",
+        "*/git -C * prune *",
+        "git replace *",
+        "*/git replace *",
+        "git -C * replace *",
+        "*/git -C * replace *",
+        "git submodule add *",
+        "*/git submodule add *",
+        "git -C * submodule add *",
+        "*/git -C * submodule add *"
+      ]
+      | all(.[]; . as $pattern | $bash[$pattern] == "ask")
+    )
     and $bash["*git *send-pack *"] == "ask"
     and $bash["*gh *auth token*"] == "ask"
+    and (
+      [
+        "gh api *--method POST*",
+        "*/gh api *--method POST*",
+        "gh api *--method PUT*",
+        "*/gh api *--method PUT*",
+        "gh api *--method PATCH*",
+        "*/gh api *--method PATCH*",
+        "gh api *--method post*",
+        "*/gh api *--method post*",
+        "gh api *--method put*",
+        "*/gh api *--method put*",
+        "gh api *--method patch*",
+        "*/gh api *--method patch*",
+        "gh api *--method=POST*",
+        "*/gh api *--method=POST*",
+        "gh api *--method=PUT*",
+        "*/gh api *--method=PUT*",
+        "gh api *--method=PATCH*",
+        "*/gh api *--method=PATCH*",
+        "gh api *--method=post*",
+        "*/gh api *--method=post*",
+        "gh api *--method=put*",
+        "*/gh api *--method=put*",
+        "gh api *--method=patch*",
+        "*/gh api *--method=patch*",
+        "gh api *-X *",
+        "*/gh api *-X *",
+        "gh api *-f *",
+        "*/gh api *-f *",
+        "gh api *-F *",
+        "*/gh api *-F *",
+        "gh api *--field *",
+        "*/gh api *--field *",
+        "gh api *--field=*",
+        "*/gh api *--field=*",
+        "gh api *--raw-field *",
+        "*/gh api *--raw-field *",
+        "gh api *--raw-field=*",
+        "*/gh api *--raw-field=*",
+        "gh api *--input *",
+        "*/gh api *--input *",
+        "gh api *--input=*",
+        "*/gh api *--input=*",
+        "gh secret *",
+        "*/gh secret *",
+        "gh release create*",
+        "*/gh release create*",
+        "gh workflow run*",
+        "*/gh workflow run*",
+        "gh repo create*",
+        "*/gh repo create*",
+        "gh repo fork*",
+        "*/gh repo fork*",
+        "gh cache delete*",
+        "*/gh cache delete*",
+        "gh auth login*",
+        "*/gh auth login*",
+        "gh auth refresh*",
+        "*/gh auth refresh*"
+      ]
+      | all(.[]; . as $pattern | $bash[$pattern] == "ask")
+    )
     and $bash["git show *--ext-d*"] == "ask"
     and $bash["git show *--textc*"] == "ask"
     and $bash["git diff *--ext-d*"] == "ask"

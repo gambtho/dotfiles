@@ -18,6 +18,7 @@ libsqlite3-dev
 libssl-dev
 libyaml-dev
 pass
+python3-jsonschema
 ripgrep
 shellcheck
 shfmt

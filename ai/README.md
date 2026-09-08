@@ -134,7 +134,7 @@ When retiring a legacy `pi-sandbox` installation, the installer backs up and res
 
 ## Installation and rollout
 
-The composed Linux/WSL APT manifests install `ripgrep` for Pi search workflows. Pi does not install or require an OS sandbox runtime.
+Pi permission validation requires Python 3 with the `jsonschema` module. The composed Linux/WSL APT manifests install `python3-jsonschema`; mise-managed Python installations, including the macOS path, receive `jsonschema` through `languages/python/default-python-packages.symlink`. The manifests also install `ripgrep` for Pi search workflows. Pi does not install or require an OS sandbox runtime.
 
 Preview without mutation:
 

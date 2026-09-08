@@ -258,3 +258,44 @@ The CI workflow now selects Node 26 through `actions/setup-node@v4` before `make
 RED evidence was observed before the policy update: focused Bats failed the Git policy invariant, and the exact installed pipeline reported `pipeline no-pager git restore asks: expected terminal block, received allow`. Final focused and broad verification exited `0`: `bats tests/pi_permissions.bats` passed all 14 cases; `actionlint .github/workflows/check.yml` emitted no output; `make check` passed all 522 Bats and 9 Python tests plus syntax, lint, formatting, and AI-resource gates; the runtime validator passed; verbose `validate-ai` reported 5 prompts, 7 skills, 0 errors, and 0 warnings; and `git diff --check` emitted no output.
 
 The local polish pass found no safe auto-fix or unresolved correctness concern. Deferred minors remained untouched, and no subagent or external reviewer was used.
+
+## Final review fix wave
+
+This wave restores the operation-specific attention rules that were unintentionally lost with the generic Git/GitHub asks while retaining unmatched Bash `allow`. Git checkout and the enumerated history/service/bridge/maintenance/submodule operations now ask through direct, slash-qualified, and applicable `-C` forms. Mutating GitHub API methods and data flags plus secret, release, workflow, repository, cache, and authentication operations also ask. The pre-existing force/history, destructive API, privilege, protected-path, and catastrophic-deletion denies remain byte-for-byte unchanged and later than the new asks; a deny-map comparison preserved all 47 Bash deny entries in their original order.
+
+The unanchored `*git *config *` and `*git *credential *` prompts are gone. Exact direct, slash-qualified, `-C`, `--no-pager`, `--git-dir`, and `--work-tree` prefixes retain actual config/credential prompts, with the existing config read forms allowed later and executable config denies later still. Full-pipeline regressions now allow commit/log/diff text containing `config` or `credential` while asserting the exact matched patterns for real config writes and credential commands.
+
+FTP and FTPS curl URLs ask after both broad curl allows, including a credential-bearing FTP URL. Space-separated `--git-dir PATH restore` and `--work-tree PATH restore` forms now ask directly and through slash-qualified executables. Later matching commit allows prevent wildcard spillover into ordinary restore-themed commit messages for both separated and equals forms, and still-later prefix-specific amend asks preserve history-rewrite attention.
+
+Provisioning now declares `python3-jsonschema` in the Linux base APT manifest and `jsonschema` in the mise-managed default Python packages. Active Pi guidance documents the Python module prerequisite. Missing-module installation errors use the repository error logger and give platform-neutral guidance to install the module for the selected `python3`.
+
+### RED evidence
+
+Tests were changed before policy or provisioning code:
+
+- `bats tests/pi_permissions.bats` exited `1`; 13/14 tests passed and `Pi permission Bash policy allows local Git while guarding risky operations` failed.
+- `bats --filter 'Pi validation dependencies|mise-managed Python|missing jsonschema' tests/linux_packages.bats tests/ai_installers.bats` exited `1`; all three new/updated provisioning assertions failed.
+- `bin/validate-pi-security-runtime` exited `1` at the first new gate case: `pipeline curl FTP credential URL asks: expected terminal block, received allow`.
+
+These failures characterized the old policy/provisioning state before implementation. The complete added manager and pipeline matrices remained enabled while implementing the fix.
+
+### GREEN and final evidence
+
+Focused verification passed:
+
+- `bats tests/pi_permissions.bats`: `1..14`, all 14 passed.
+- The three filtered provisioning/installer cases: `1..3`, all 3 passed.
+- `bats tests/ai_installers.bats`: `1..47`, all 47 passed.
+- `bats tests/linux_packages.bats tests/repository_hygiene.bats`: `1..33`, all 33 passed.
+- `bin/validate-pi-security-runtime`: exact schema, deterministic manager, and full gate pipeline passed.
+
+The corrected exact gate-pipeline matrix is 75 cases: 25 silent allows, 44 asks that each prompt once and terminate blocked after the denial spy, and 6 hard denies that block without prompting. This supersedes the earlier 41-case rollout count, which predated the prior restore/shell additions and this final wave.
+
+Broad verification also passed:
+
+- Aggregate relevant Bats: `1..121`, all 121 passed.
+- `make check`: all 523 Bats and 9 Python tests passed, followed by syntax, ShellCheck, shfmt, and verbose AI-resource validation; AI validation reported 5 prompts, 7 skills, 0 errors, and 0 warnings.
+- Focused `actionlint`, `shellcheck -x -S warning -e SC1091 ai/pi/install.sh`, `shfmt -d -i 2 -ci` over the changed shell/Bats files, and `git diff --check` emitted no output.
+- A credential-free isolated install used a temporary absolute `PI_CODING_AGENT_DIR`, separate HOME/XDG/npm roots, `MISE_SKIP_RESHIM=1`, an empty environment with an explicit tool path, and trap cleanup. Pi 0.85.1 and permission-system 29.2.0 installed; validation passed with both package roots supplied explicitly; the runtime policy equaled the rendered tracked policy; modes were `0700`/`0644`; no `auth.json` existed anywhere in the smoke root; and cleanup was confirmed. npm again reported the known 3 moderate/2 high audit findings and install-script allowlist notices in only the temporary package graph.
+
+The local `polish-core --fix` review was performed without dispatching subagents or reviewers. It tightened the new Git subcommand patterns so similarly prefixed commands such as `checkout-index` retain the unmatched allow and found no remaining high-confidence fix. Self-review against all five final findings found no generic Git/GitHub catch-all, no attached curl expansion, no `-b`/`-E` change, no new runtime operations, and no changed hard deny.

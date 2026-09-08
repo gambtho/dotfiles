@@ -195,8 +195,10 @@ SCRIPT
 
   after=$(snapshot_tree "$TEST_ROOT")
   [ "$status" -ne 0 ]
+  [[ "$output" == *"ERROR"* ]]
   [[ "$output" == *"Python jsonschema is required for Pi permission validation"* ]]
-  [[ "$output" == *"python3-jsonschema"* ]]
+  [[ "$output" == *"install the Python jsonschema module for this python3"* ]]
+  [[ "$output" != *"python3-jsonschema"* ]]
   [[ "$output" != *"fails the exact installed schema"* ]]
   [ "$before" = "$after" ]
   [ ! -e "$agent_dir" ]

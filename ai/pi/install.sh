@@ -28,13 +28,10 @@ usage() {
 }
 
 require_permission_validation_dependencies() {
-  command_exists python3 || {
-    log_warning "Python 3 is required for Pi permission validation; install python3 and rerun the installer."
-    return 1
-  }
+  command_exists python3 ||
+    log_error "Python 3 is required for Pi permission validation; install python3 and rerun the installer."
   if ! python3 -c 'import jsonschema' >/dev/null 2>&1; then
-    log_warning "Python jsonschema is required for Pi permission validation; install python3-jsonschema for this python3 and rerun the installer."
-    return 1
+    log_error "Python jsonschema is required for Pi permission validation; install the Python jsonschema module for this python3 and rerun the installer."
   fi
 }
 
