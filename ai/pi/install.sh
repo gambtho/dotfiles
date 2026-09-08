@@ -5,6 +5,8 @@ set -euo pipefail
 source "$(dirname "$0")/../../bin/common.sh"
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd -P)"
+# shellcheck source=bin/lib/artifacts.sh
+source "$ROOT/bin/lib/artifacts.sh"
 # shellcheck source=config/versions.env
 source "$ROOT/config/versions.env"
 # shellcheck source=ai/pi/cleanup-legacy.sh
@@ -23,6 +25,14 @@ managed_extensions=(herdr-agent-state.ts herdr-prompt-state.ts worktree-guard.ts
 
 usage() {
   printf 'usage: %s [--check]\n' "$0"
+}
+
+require_permission_validation_dependencies() {
+  command_exists python3 ||
+    log_error "Python 3 is required for Pi permission validation; install python3 and rerun the installer."
+  if ! python3 -c 'import jsonschema' >/dev/null 2>&1; then
+    log_error "Python jsonschema is required for Pi permission validation; install the Python jsonschema module for this python3 and rerun the installer."
+  fi
 }
 
 resolve_pi_paths() {
@@ -152,6 +162,218 @@ backup_regular_contents() {
   printf '%s\n' "$backup"
 }
 
+permission_runtime_controls_are_valid() {
+  local destination=$1
+  jq -e '
+    type == "object"
+    and (.debugLog | type) == "boolean"
+    and (.permissionReviewLog | type) == "boolean"
+    and (.yoloMode | type) == "boolean"
+  ' "$destination" >/dev/null 2>&1
+}
+
+permission_candidate_contents() {
+  local source=$1 destination=$2 rendered
+  rendered=$(rendered_baseline_contents "$source") || return 1
+  if [[ ! -f "$destination" ]] ||
+    ! permission_runtime_controls_are_valid "$destination"; then
+    printf '%s\n' "$rendered"
+    return
+  fi
+  jq -s '
+    .[0] as $baseline | .[1] as $runtime
+    | $baseline + {
+        debugLog: $runtime.debugLog,
+        permissionReviewLog: $runtime.permissionReviewLog,
+        yoloMode: $runtime.yoloMode
+      }
+  ' <(printf '%s\n' "$rendered") "$destination"
+}
+
+permission_destination_is_unchanged() {
+  local destination=$1 kind=$2 expected_target=$3 expected_hash=$4 actual_hash
+  case "$kind" in
+    absent)
+      [[ ! -e "$destination" && ! -L "$destination" ]]
+      ;;
+    file)
+      [[ -f "$destination" && ! -L "$destination" ]] || return 1
+      actual_hash=$(sha256_file "$destination") || return 1
+      [[ "$actual_hash" == "$expected_hash" ]]
+      ;;
+    symlink)
+      [[ -L "$destination" ]] || return 1
+      [[ "$(readlink "$destination")" == "$expected_target" ]] || return 1
+      if [[ "$expected_hash" == absent ]]; then
+        [[ ! -e "$destination" ]]
+      else
+        [[ -f "$destination" ]] || return 1
+        actual_hash=$(sha256_file "$destination") || return 1
+        [[ "$actual_hash" == "$expected_hash" ]]
+      fi
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+validate_permission_before_publish_test_hook() {
+  local hook=${PI_AI_TEST_PERMISSION_BEFORE_PUBLISH:-}
+  local root_real hook_real home_real
+  [[ -n "$hook" ]] || return 0
+  if [[ -z ${BATS_TEST_TMPDIR:-} || -z ${BATS_TEST_NAME:-} ||
+    -z ${BATS_TEST_FILENAME:-} ]]; then
+    log_warning "Permission reconciliation test hook is unavailable outside Bats."
+    return 1
+  fi
+  if [[ ! -d "$BATS_TEST_TMPDIR" || -L "$BATS_TEST_TMPDIR" ||
+    ! -d "$hook" || -L "$hook" || ! -d "$HOME" || -L "$HOME" ]]; then
+    log_warning "Permission reconciliation test hook requires real Bats directories."
+    return 1
+  fi
+  root_real=$(cd "$BATS_TEST_TMPDIR" && pwd -P)
+  hook_real=$(cd "$hook" && pwd -P)
+  home_real=$(cd "$HOME" && pwd -P)
+  if [[ "$hook_real" != "$root_real/"* || "$home_real" != "$root_real/"* ]]; then
+    log_warning "Permission reconciliation test hook must stay below the Bats test root."
+    return 1
+  fi
+}
+
+run_permission_before_publish_test_hook() {
+  local phase=$1 hook=${PI_AI_TEST_PERMISSION_BEFORE_PUBLISH:-}
+  local hook_real attempt suffix
+  [[ -n "$hook" ]] || return 0
+  validate_permission_before_publish_test_hook || return 1
+  hook_real=$(cd "$hook" && pwd -P)
+
+  case "$phase" in
+    before-compare) suffix='' ;;
+    before-publish) suffix='-before-publish' ;;
+    *)
+      log_warning "Unknown permission reconciliation test-hook phase: $phase"
+      return 1
+      ;;
+  esac
+
+  : >"$hook_real/ready$suffix"
+  chmod 0600 "$hook_real/ready$suffix"
+  for ((attempt = 0; attempt < 1000; attempt++)); do
+    if [[ -f "$hook_real/continue$suffix" && ! -L "$hook_real/continue$suffix" ]]; then
+      return 0
+    fi
+    sleep 0.01
+  done
+  log_warning "Permission reconciliation test hook timed out during $phase."
+  return 1
+}
+
+reconcile_permission_policy() {
+  local source=$1 destination=$2 package_root=$3 schema
+  local kind=absent link_target='' snapshot_hash=absent candidate candidate_hash backup=''
+  local rendered
+  schema="$package_root/schemas/permissions.schema.json"
+
+  jq empty "$source" >/dev/null
+  if [[ -L "$destination" ]]; then
+    if ! is_recognized_source_link "$destination" 'ai/pi/config/permission-system.json'; then
+      log_warning "Refusing foreign mutable symlink for Pi permission policy at $destination"
+      return 1
+    fi
+    kind=symlink
+    link_target=$(readlink "$destination")
+    if [[ -e "$destination" ]]; then
+      [[ -f "$destination" ]] || {
+        log_warning "Refusing non-file Pi permission policy link at $destination"
+        return 1
+      }
+      snapshot_hash=$(sha256_file "$destination")
+    fi
+  elif [[ -e "$destination" ]]; then
+    [[ -f "$destination" ]] || {
+      log_warning "Refusing non-file mutable destination for Pi permission policy at $destination"
+      return 1
+    }
+    kind='file'
+    snapshot_hash=$(sha256_file "$destination")
+  fi
+
+  if [[ "$kind" != absent && "$snapshot_hash" != absent ]] &&
+    jq -e 'type == "object" and .yoloMode == true' "$destination" >/dev/null 2>&1; then
+    log_warning "Refusing to replace the Pi permission policy while YOLO mode is active; disable YOLO in /permission-system and rerun the installer."
+    return 1
+  fi
+
+  rendered=$(permission_candidate_contents "$source" "$destination") || return 1
+  if [[ "$MODE" == check ]]; then
+    if [[ "$kind" == file ]] && cmp -s <(printf '%s\n' "$rendered") "$destination"; then
+      log_info "Pi permission policy already matches the authoritative tracked policy at $destination"
+    else
+      log_info "[dry-run] Would validate, back up if needed, and publish the authoritative Pi permission policy at $destination"
+    fi
+    return 0
+  fi
+
+  candidate=$(mktemp "${destination}.candidate.XXXXXX")
+  if ! printf '%s\n' "$rendered" >"$candidate"; then
+    rm -f "$candidate"
+    return 1
+  fi
+  if [[ ! -d "$package_root" || -L "$package_root" ||
+    ! -f "$schema" || -L "$schema" ]]; then
+    log_warning "Cannot validate the Pi permission policy: exact installed schema is unavailable at $schema"
+    rm -f "$candidate"
+    return 1
+  fi
+  if ! "$ROOT/bin/validate-pi-permission-config" \
+    --schema "$schema" --config "$candidate"; then
+    log_warning "Refusing to publish a Pi permission policy that fails the exact installed schema."
+    rm -f "$candidate"
+    return 1
+  fi
+
+  if ! run_permission_before_publish_test_hook before-compare; then
+    rm -f "$candidate"
+    return 1
+  fi
+  if ! permission_destination_is_unchanged \
+    "$destination" "$kind" "$link_target" "$snapshot_hash"; then
+    log_warning "Pi permission policy changed during reconciliation; preserving the runtime change and refusing publication."
+    rm -f "$candidate"
+    return 1
+  fi
+  if [[ "$kind" == file ]] && cmp -s "$candidate" "$destination"; then
+    rm -f "$candidate"
+    log_info "Pi permission policy already matches the authoritative tracked policy at $destination"
+    return 0
+  fi
+
+  candidate_hash=$(sha256_file "$candidate")
+  if [[ "$kind" != absent && "$snapshot_hash" != absent ]]; then
+    backup=$(backup_regular_contents "$destination" "$destination") || {
+      rm -f "$candidate"
+      return 1
+    }
+  fi
+  if ! run_permission_before_publish_test_hook before-publish; then
+    rm -f "$candidate"
+    return 1
+  fi
+  if ! permission_destination_is_unchanged \
+    "$destination" "$kind" "$link_target" "$snapshot_hash"; then
+    log_warning "Pi permission policy changed during reconciliation; preserving the runtime change and refusing publication."
+    rm -f "$candidate"
+    return 1
+  fi
+  if ! atomic_publish_file "$candidate" "$destination" 0644; then
+    rm -f "$candidate"
+    return 1
+  fi
+  rm -f "$candidate"
+  log_success "Published authoritative Pi permission policy ($snapshot_hash -> $candidate_hash) at $destination${backup:+; backup: $backup}"
+}
+
 reconcile_mutable_file() {
   local source=$1 destination=$2 label=$3 file_mode=$4 legacy_suffix="${5:-}"
   local parent rendered backup candidate
@@ -253,6 +475,16 @@ reset_permission_policy_for_sandbox_retirement() {
   jq -e --arg source "$sandbox_source" '
     [.packages[] | if type == "string" then . else .source end] | index($source) != null
   ' "$settings" >/dev/null || return 0
+
+  if [[ -L "$destination" ]]; then
+    if ! is_recognized_source_link "$destination" 'ai/pi/config/permission-system.json'; then
+      log_warning "Refusing foreign mutable symlink for Pi permission policy at $destination"
+      return 1
+    fi
+  elif [[ -e "$destination" && ! -f "$destination" ]]; then
+    log_warning "Refusing non-file mutable destination for Pi permission policy at $destination"
+    return 1
+  fi
 
   rendered=$(rendered_baseline_contents "$source")
   if [[ -f "$destination" ]] && cmp -s <(printf '%s\n' "$rendered") "$destination"; then
@@ -489,9 +721,16 @@ install_pi() {
     "@earendil-works/pi-coding-agent@$PI_VERSION"
 }
 
+permission_package_artifacts_are_complete() {
+  local package_root=$1
+  local schema="$package_root/schemas/permissions.schema.json"
+  local manager="$package_root/src/permission-manager.ts"
+  [[ -f "$schema" && ! -L "$schema" && -f "$manager" && ! -L "$manager" ]]
+}
+
 ensure_pinned_npm_packages() {
   local pi_binary="$HOME/.local/bin/pi" specifications package_name package_version
-  local package_manifest installed_version source settings_source="$PI_AGENT_DIR/settings.json"
+  local package_manifest package_root installed_version source settings_source="$PI_AGENT_DIR/settings.json"
   [[ "$MODE" == check ]] && settings_source="$ROOT/ai/pi/settings.json"
   if ! specifications=$(jq -r '
     .packages[]
@@ -507,22 +746,32 @@ ensure_pinned_npm_packages() {
 
   while IFS=$'\t' read -r package_name package_version; do
     [[ -n "$package_name" && -n "$package_version" ]] || continue
-    package_manifest="$PI_AGENT_DIR/npm/node_modules/$package_name/package.json"
+    package_root="$PI_AGENT_DIR/npm/node_modules/$package_name"
+    package_manifest="$package_root/package.json"
     installed_version=""
     if [[ -f "$package_manifest" && ! -L "$package_manifest" ]]; then
       installed_version=$(jq -r '.version // empty' "$package_manifest" 2>/dev/null || true)
     fi
-    [[ "$installed_version" == "$package_version" ]] && continue
+    if [[ "$installed_version" == "$package_version" ]] &&
+      { [[ "$package_name" != @gotgenes/pi-permission-system ]] ||
+        permission_package_artifacts_are_complete "$package_root"; }; then
+      continue
+    fi
 
     source="npm:$package_name@$package_version"
     if [[ "$MODE" == check ]]; then
-      log_info "[dry-run] Would install missing or mismatched pinned Pi package $source"
+      log_info "[dry-run] Would install missing, mismatched, or incomplete pinned Pi package $source"
       continue
     fi
     PI_CODING_AGENT_DIR="$PI_AGENT_DIR" "$pi_binary" install "$source"
     if [[ ! -f "$package_manifest" || -L "$package_manifest" ]] ||
       [[ "$(jq -r '.version // empty' "$package_manifest" 2>/dev/null || true)" != "$package_version" ]]; then
       log_warning "Pi did not install the expected package version for $source"
+      return 1
+    fi
+    if [[ "$package_name" == @gotgenes/pi-permission-system ]] &&
+      ! permission_package_artifacts_are_complete "$package_root"; then
+      log_warning "Pi installed an incomplete Pi permission package for $source; expected regular files at $package_root/schemas/permissions.schema.json and $package_root/src/permission-manager.ts"
       return 1
     fi
   done <<<"$specifications"
@@ -549,6 +798,8 @@ main() {
   esac
 
   resolve_pi_paths
+  validate_permission_before_publish_test_hook
+  require_permission_validation_dependencies
   assert_safe_pi_source
   migrate_pi_security_stack "$MODE" "$PI_AGENT_DIR" "$AMP_SETTINGS_PATH" \
     "${MANAGED_SOURCE_ROOTS[@]}"
@@ -577,17 +828,21 @@ main() {
   fi
 
   # Establish the permission boundary before removing pi-sandbox from the
-  # runtime package inventory. Any unsafe or malformed policy aborts first.
+  # runtime package inventory. Legacy sandbox retirement resets first; normal
+  # policy publication waits for the exact pinned package schema.
   reconcile_private_runtime_directory "$PI_AGENT_DIR/extensions/pi-permission-system"
-  reconcile_mutable_file "$ROOT/ai/pi/config/permission-system.json" \
-    "$PI_AGENT_DIR/extensions/pi-permission-system/config.json" \
-    "Pi permission policy" 0644
   reset_permission_policy_for_sandbox_retirement \
     "$ROOT/ai/pi/config/permission-system.json" \
     "$PI_AGENT_DIR/extensions/pi-permission-system/config.json" \
     "$PI_AGENT_DIR/settings.json"
 
   reconcile_pi_settings "$ROOT/ai/pi/settings.json" "$PI_AGENT_DIR/settings.json"
+  ensure_pinned_npm_packages
+  reconcile_permission_policy \
+    "$ROOT/ai/pi/config/permission-system.json" \
+    "$PI_AGENT_DIR/extensions/pi-permission-system/config.json" \
+    "$PI_AGENT_DIR/npm/node_modules/@gotgenes/pi-permission-system"
+
   reconcile_authored_links
   reconcile_mutable_file "$ROOT/ai/pi/config/modes.json" "$PI_AGENT_DIR/modes.json" \
     "Pi modes" 0644 'ai/pi/modes.json'
@@ -598,8 +853,6 @@ main() {
   remove_retired_sandbox_exclusion "$PI_AGENT_DIR/subagents.json"
   reconcile_mutable_file "$ROOT/ai/pi/config/web-search.json" "$WEB_CONFIG_PATH" \
     "Pi web access settings" 0600
-
-  ensure_pinned_npm_packages
   if [[ "$MODE" == check ]]; then
     log_info "[dry-run] Would reconcile Pi packages from settings.json"
     return 0

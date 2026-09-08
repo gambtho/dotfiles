@@ -2,7 +2,7 @@
 
 ## Status
 
-**Superseded on 2026-09-02.** This document records the original rollout design; its `pi-sandbox` and Bubblewrap requirements are historical and are not the active security model. See `ai/README.md` for the current permission-only model.
+**Superseded on 2026-09-02.** This document records the original rollout design; its `pi-sandbox`, Bubblewrap, and preserve-drift permission-policy requirements are historical and are not the active security model. See `ai/README.md` for operator guidance and `ai/pi/permissive-permission-policy-design.md` for the current permission-only design.
 
 Originally approved after independent `/second-opinion` review and follow-up package analysis on 2026-09-01. The user accepted the review findings and selected a parent-only sandbox after verification showed that `pi-sandbox` is unsafe to bind into concurrent in-process child sessions. Amended on 2026-09-02 to use a relaxed-but-guarded parent Bash policy after the original unmatched-command fallback caused excessive approval prompts.
 
@@ -76,19 +76,19 @@ This layer cannot classify arbitrary shell commands or extension-internal proces
 
 `@gotgenes/pi-permission-system` replaces `pi-amplike` permissions. It decides whether model-facing tool calls are allowed, denied, or require a user decision. It is a policy and attention-routing layer, not process isolation.
 
-The global baseline uses a balanced posture:
+The original permission-layer baseline used a selective allow/ask/deny posture:
 
 - universal fallback: `ask`;
 - built-in read/search tools: `allow`;
 - built-in `edit` and `write`: `allow`, subject to the worktree guard and path policy;
 - known workflow tools (`subagent`, `get_subagent_result`, `steer_subagent`, `handoff`, `session_query`, `plan`, Ralph tools, clipboard, and web research): `allow`;
 - `lsp_diagnostics`: `allow`;
-- `lsp_fix`: `allow`, subject to the worktree guard for mutations in primary checkouts;
+- `lsp_fix`: `ask`;
 - skills: `allow`;
 - unknown extension tools and MCP operations: `ask`;
 - paths outside the current working directory: `ask`, except Pi infrastructure reads handled by the package;
 - sensitive files and credential roots: `deny` across path-aware tools;
-- Bash: allow unmatched parent commands, Git operations that do not match explicit hard denies, and reader/output commands containing unresolved `$` expansion; ask for GitHub mutation not specifically allowed, remote shell/network commands, deletion, opaque wrappers, and direct environment dumps; deny root deletion, force operations, privilege escalation, subprocess-capable search flags, and explicitly forbidden credential paths. Risky command-family rules cover both bare and absolute executable spellings.
+- Bash: allow unmatched parent commands, common local Git subcommands, default/`origin` fetch, and argument-free `git pull --ff-only`; ask for unknown Git operations, other remote and selected destructive Git operations, GitHub mutation, remote shell/network commands, recursive deletion, opaque wrappers, direct environment dumps, and common reader/output commands containing unresolved `$` expansion; deny root deletion, force operations, privilege escalation, subprocess-capable search flags, and explicitly forbidden credential paths. Risky command-family rules cover both bare and absolute executable spellings.
 
 Within a permission map, broad rules precede specific exceptions because the package uses last-match-wins semantics.
 
@@ -222,6 +222,8 @@ The following are intentionally documented residuals:
 
 ## Mutable configuration boundary
 
+**Superseded permission-policy decision.** The original generic preserve-drift rules below still describe modes, models, subagent settings, web settings, and other runtime-owned mutable baselines. They no longer govern `permission-system.json`: normal installation republishes its repository-owned permission map, preserves only valid runtime `yoloMode`, `debugLog`, and `permissionReviewLog` controls, refuses active YOLO, and validates against the exact installed schema before publication. `PI_AI_RESET_MUTABLE_CONFIG=1` does not replace those three controls. The sole transitional exception is legacy `pi-sandbox` retirement, which backs up and safely resets active YOLO to the tracked non-YOLO policy before package-schema availability so the old containment package is not removed first. See the current design and `ai/README.md` for authoritative behavior.
+
 ### Problem
 
 The installer currently symlinks tracked `settings.json` and `modes.json` plus the entire `ai/pi/extensions` directory into `~/.pi/agent`.
@@ -325,7 +327,7 @@ This removes duplicate broken guidance without treating the entire user skill di
 
 The current machine already provides Ruff, rust-analyzer, gopls, and RuboCop. Missing language servers are reported rather than installed automatically.
 
-`lsp_diagnostics` and `lsp_fix` are available by default in the parent. A primary-checkout `lsp_fix` request with `write=true` is blocked by the worktree guard even though the permission layer allows the tool, including when an explicit `root` makes a relative `path` target the primary checkout.
+`lsp_diagnostics` is available by default in the parent. `lsp_fix` remains available but always goes through the permission system; `write=false` is the expected default. A primary-checkout `write=true` request is blocked by the worktree guard even if approved at the permission layer, including when an explicit `root` makes a relative `path` target the primary checkout.
 
 The named child agent allowlists do not include LSP tools initially, so LSP initialization remains parent-only. LSP results are intermediate feedback; repository-native format, lint, type-check, build, and test commands remain authoritative.
 
@@ -574,7 +576,7 @@ Machine-local package caches, backups, logs, and quarantined skill data may rema
 | Stale managed extension link breaks startup | Manifest-based pruning restricted to repository-owned symlinks |
 | Sandbox blocks unattended work | Reviewed parent allowlists, bounded timeout, representative preflight command, blocked-state reporting |
 | Sandbox gives false confidence | Document extension-process, child, and in-CWD mutation boundaries; retain worktrees and direct-tool guard |
-| LSP fixer bypasses worktree policy | Explicit worktree-guard handling of `lsp_fix write=true` in primary checkouts |
+| LSP fixer bypasses worktree policy | Permission ask plus explicit worktree-guard handling of `lsp_fix write=true` |
 | Web extension leaks cookies or remote content | Cookies, hosted fetches, cloning, media, and curator automation disabled by baseline |
 | Broken Brave guidance remains discoverable | Narrow identity-checked quarantine that preserves all sibling skills |
 | Mode and agent routing drift | Canonical tracked pins plus parity tests; document runtime `/mode` limitation |

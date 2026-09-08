@@ -21,7 +21,36 @@ snapshot_home() {
   snapshot_tree "$HOME"
 }
 
+write_permission_test_schema() {
+  cat >"$TEST_ROOT/permission-system-schema.json" <<'JSON'
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["debugLog", "permissionReviewLog", "yoloMode", "permission"],
+  "properties": {
+    "debugLog": {"type": "boolean"},
+    "permissionReviewLog": {"type": "boolean"},
+    "yoloMode": {"type": "boolean"},
+    "permission": {
+      "type": "object",
+      "required": ["bash"],
+      "properties": {
+        "bash": {
+          "type": "object",
+          "required": ["*"],
+          "additionalProperties": {"enum": ["allow", "ask", "deny"]}
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}
+JSON
+}
+
 stub_existing_pi() {
+  write_permission_test_schema
   mkdir -p "$HOME/.local/bin"
   cat >"$HOME/.local/bin/pi" <<'SCRIPT'
 #!/usr/bin/env bash
@@ -39,6 +68,15 @@ else
     mkdir -p "$package_root"
     printf '{"name":"%s","version":"%s"}\n' "$package_name" "$package_version" \
       >"$package_root/package.json"
+    if [[ "$package_name" == @gotgenes/pi-permission-system ]]; then
+      mkdir -p "$package_root/schemas" "$package_root/src"
+      cp "$TEST_ROOT/permission-system-schema.json" \
+        "$package_root/schemas/permissions.schema.json"
+      if [[ "${PI_TEST_OMIT_PERMISSION_MANAGER:-0}" != 1 ]]; then
+        printf 'export class PermissionManager {}\n' \
+          >"$package_root/src/permission-manager.ts"
+      fi
+    fi
   fi
 fi
 SCRIPT
@@ -52,7 +90,13 @@ seed_mutable_pi_drift() {
   printf '{"theme":"custom","unknown":true,"packages":["old"]}\n' >"$agent_dir/settings.json"
   printf '{"custom":"modes"}\n' >"$agent_dir/modes.json"
   printf '{"custom":"models"}\n' >"$agent_dir/models.json"
-  printf '{"yoloMode":false,"permission":{"bash":{"*":"ask"}},"custom":"permission"}\n' \
+  jq '
+    .debugLog = true
+    | .permissionReviewLog = true
+    | .yoloMode = false
+    | .permission.bash["*"] = "ask"
+    | .custom = "permission"
+  ' "$REPO_ROOT/ai/pi/config/permission-system.json" \
     >"$agent_dir/extensions/pi-permission-system/config.json"
   printf '{"custom":"sandbox"}\n' >"$agent_dir/sandbox.json"
   printf '{"custom":"subagents"}\n' >"$agent_dir/subagents.json"
@@ -83,6 +127,7 @@ run_security_migration() {
 }
 
 stub_pi_install() {
+  write_permission_test_schema
   cat >"$STUB_BIN/npm" <<'SCRIPT'
 #!/usr/bin/env bash
 set -e
@@ -102,6 +147,15 @@ else
     mkdir -p "\$package_root"
     printf '{"name":"%s","version":"%s"}\\n' "\$package_name" "\$package_version" \\
       >"\$package_root/package.json"
+    if [[ "\$package_name" == @gotgenes/pi-permission-system ]]; then
+      mkdir -p "\$package_root/schemas" "\$package_root/src"
+      cp "\$TEST_ROOT/permission-system-schema.json" \
+        "\$package_root/schemas/permissions.schema.json"
+      if [[ "\${PI_TEST_OMIT_PERMISSION_MANAGER:-0}" != 1 ]]; then
+        printf 'export class PermissionManager {}\\n' \
+          >"\$package_root/src/permission-manager.ts"
+      fi
+    fi
   fi
 fi
 PI
@@ -126,6 +180,28 @@ SCRIPT
   after=$(snapshot_tree "$TEST_ROOT")
   [ "$status" -eq 0 ]
   [ "$before" = "$after" ]
+}
+
+@test "Pi installer reports missing jsonschema before mutation" {
+  export PI_VERSION
+  stub_existing_pi
+  stub_command python3 'exec /usr/bin/python3 -S "$@"'
+  local agent_dir="$TEST_ROOT/missing-jsonschema-agent"
+  local before after
+  before=$(snapshot_tree "$TEST_ROOT")
+
+  run env HOME="$HOME" PATH="$PATH" PI_VERSION="$PI_VERSION" \
+    PI_CODING_AGENT_DIR="$agent_dir" bash "$REPO_ROOT/ai/pi/install.sh"
+
+  after=$(snapshot_tree "$TEST_ROOT")
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"ERROR"* ]]
+  [[ "$output" == *"Python jsonschema is required for Pi permission validation"* ]]
+  [[ "$output" == *"install the Python jsonschema module for this python3"* ]]
+  [[ "$output" != *"python3-jsonschema"* ]]
+  [[ "$output" != *"fails the exact installed schema"* ]]
+  [ "$before" = "$after" ]
+  [ ! -e "$agent_dir" ]
 }
 
 @test "Pi check mode reports every managed destination" {
@@ -419,6 +495,82 @@ EOF
   [ "$(tail -1 "$HOME/pi-invocations")" = "update --extensions" ]
 }
 
+@test "Pi installer repairs a matching permission package with a missing required artifact" {
+  export PI_VERSION
+  stub_existing_pi
+  local package_root="$HOME/.pi/agent/npm/node_modules/@gotgenes/pi-permission-system"
+  local missing
+  mkdir -p "$package_root/schemas" "$package_root/src"
+  printf '{"name":"@gotgenes/pi-permission-system","version":"%s"}\n' \
+    "$PI_PERMISSION_SYSTEM_VERSION" >"$package_root/package.json"
+
+  for missing in schemas/permissions.schema.json src/permission-manager.ts; do
+    cp "$TEST_ROOT/permission-system-schema.json" \
+      "$package_root/schemas/permissions.schema.json"
+    printf 'export class PermissionManager {}\n' \
+      >"$package_root/src/permission-manager.ts"
+    rm "$package_root/$missing"
+    : >"$HOME/pi-invocations"
+
+    run env HOME="$HOME" PATH="$PATH" PI_VERSION="$PI_VERSION" \
+      bash "$REPO_ROOT/ai/pi/install.sh"
+
+    [ "$status" -eq 0 ]
+    [ -f "$package_root/schemas/permissions.schema.json" ]
+    [ -f "$package_root/src/permission-manager.ts" ]
+    [ "$(grep -Fxc "install npm:@gotgenes/pi-permission-system@$PI_PERMISSION_SYSTEM_VERSION" \
+      "$HOME/pi-invocations")" -eq 1 ]
+  done
+}
+
+@test "Pi installer fails when permission package reinstall remains incomplete" {
+  export PI_VERSION
+  stub_existing_pi
+  local package_root="$HOME/.pi/agent/npm/node_modules/@gotgenes/pi-permission-system"
+  mkdir -p "$package_root/schemas"
+  printf '{"name":"@gotgenes/pi-permission-system","version":"%s"}\n' \
+    "$PI_PERMISSION_SYSTEM_VERSION" >"$package_root/package.json"
+  cp "$TEST_ROOT/permission-system-schema.json" \
+    "$package_root/schemas/permissions.schema.json"
+
+  run env HOME="$HOME" PATH="$PATH" PI_VERSION="$PI_VERSION" \
+    PI_TEST_OMIT_PERMISSION_MANAGER=1 bash "$REPO_ROOT/ai/pi/install.sh"
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"incomplete Pi permission package"* ]]
+  [[ "$output" == *"src/permission-manager.ts"* ]]
+  [ "$(grep -Fxc "install npm:@gotgenes/pi-permission-system@$PI_PERMISSION_SYSTEM_VERSION" \
+    "$HOME/pi-invocations")" -eq 1 ]
+  [ ! -e "$package_root/src/permission-manager.ts" ]
+}
+
+@test "Pi installer hashes permission policy with the macOS shasum fallback" {
+  export PI_VERSION
+  stub_existing_pi
+  local fallback_bin="$TEST_ROOT/fallback-bin"
+  local command name
+  mkdir -p "$fallback_bin"
+  for command in /usr/bin/*; do
+    name=${command##*/}
+    [[ "$name" == sha256sum || "$name" == shasum ]] && continue
+    ln -s "$command" "$fallback_bin/$name"
+  done
+  cat >"$fallback_bin/shasum" <<'SCRIPT'
+#!/bin/bash
+printf '%s\n' "$*" >>"$HOME/shasum-invocations"
+[[ "$1" == -a && "$2" == 256 ]] || exit 2
+printf '%064d  %s\n' 0 "$3"
+SCRIPT
+  chmod +x "$fallback_bin/shasum"
+
+  run env HOME="$HOME" PATH="$fallback_bin" PI_VERSION="$PI_VERSION" \
+    bash "$REPO_ROOT/ai/pi/install.sh"
+
+  [ "$status" -eq 0 ]
+  [ -s "$HOME/shasum-invocations" ]
+  grep -Fq -- '-a 256 ' "$HOME/shasum-invocations"
+}
+
 @test "Pi filters Amp permissions subagents and legacy web resources" {
   run jq -e '
     [.packages[] | objects | select(.source == "npm:pi-amplike")][0] as $amp
@@ -472,7 +624,7 @@ EOF
   [ "$status" -eq 0 ]
 }
 
-@test "Pi installer preserves differing mutable files and skips identical baselines" {
+@test "Pi installer publishes authoritative permission policy while preserving runtime controls" {
   export PI_VERSION
   stub_existing_pi
   seed_mutable_pi_drift "$HOME/.pi/agent" "$XDG_CONFIG_HOME/pi/web-search.json"
@@ -489,18 +641,350 @@ EOF
   [ "$status" -eq 0 ]
   [ "$(jq -r .custom "$HOME/.pi/agent/modes.json")" = modes ]
   [ "$(jq -r .custom "$HOME/.pi/agent/models.json")" = models ]
-  [ "$(jq -r .custom "$HOME/.pi/agent/extensions/pi-permission-system/config.json")" = permission ]
+  run jq -s -e --arg agent_dir "$HOME/.pi/agent" '
+    .[0] as $runtime
+    | (.[1] | walk(
+        if type == "object" then
+          with_entries(.key |= gsub("__PI_AGENT_DIR__"; $agent_dir))
+        elif type == "string" then
+          gsub("__PI_AGENT_DIR__"; $agent_dir)
+        else
+          .
+        end
+      )) as $baseline
+    | $runtime.permission == $baseline.permission
+    and $runtime.debugLog == true
+    and $runtime.permissionReviewLog == true
+    and $runtime.yoloMode == false
+    and ($runtime | has("custom") | not)
+  ' "$HOME/.pi/agent/extensions/pi-permission-system/config.json" \
+    "$REPO_ROOT/ai/pi/config/permission-system.json"
+  [ "$status" -eq 0 ]
   [ "$(jq -r .custom "$HOME/.pi/agent/sandbox.json")" = sandbox ]
   [ "$(jq -r .custom "$HOME/.pi/agent/subagents.json")" = subagents ]
   [ "$(jq -r .custom "$XDG_CONFIG_HOME/pi/web-search.json")" = web ]
   [[ "$install_output" == *preserved* ]]
   [[ "$install_output" == *PI_AI_RESET_MUTABLE_CONFIG=1* ]]
-  [ "$(find "$HOME" -name '*.backup*' | wc -l)" -eq 0 ]
+  [ "$(find "$HOME/.pi/agent/extensions/pi-permission-system" -name 'config.json.backup*' | wc -l)" -eq 1 ]
+  [ "$(find "$HOME" -name '*.backup*' | wc -l)" -eq 1 ]
 
   run env HOME="$HOME" PATH="$PATH" PI_VERSION="$PI_VERSION" \
     bash "$REPO_ROOT/ai/pi/install.sh"
   [ "$status" -eq 0 ]
-  [ "$(find "$HOME" -name '*.backup*' | wc -l)" -eq 0 ]
+  [ "$(find "$HOME/.pi/agent/extensions/pi-permission-system" -name 'config.json.backup*' | wc -l)" -eq 1 ]
+  [ "$(find "$HOME" -name '*.backup*' | wc -l)" -eq 1 ]
+}
+
+@test "Pi installer refuses active YOLO permission policy replacement even during reset" {
+  export PI_VERSION
+  stub_existing_pi
+  local permission="$HOME/.pi/agent/extensions/pi-permission-system/config.json"
+
+  run env HOME="$HOME" PATH="$PATH" PI_VERSION="$PI_VERSION" \
+    bash "$REPO_ROOT/ai/pi/install.sh"
+  [ "$status" -eq 0 ]
+
+  local candidate="$TEST_ROOT/active-yolo.json" before after
+  jq '.yoloMode = true' "$permission" >"$candidate"
+  mv "$candidate" "$permission"
+  before=$(snapshot_home)
+
+  run env HOME="$HOME" PATH="$PATH" PI_VERSION="$PI_VERSION" \
+    PI_AI_RESET_MUTABLE_CONFIG=1 bash "$REPO_ROOT/ai/pi/install.sh"
+
+  after=$(snapshot_home)
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"disable YOLO"* ]]
+  [ "$before" = "$after" ]
+  run jq -e '.yoloMode == true' "$permission"
+  [ "$status" -eq 0 ]
+}
+
+@test "Pi installer validates the permission policy candidate before backup or publication" {
+  export PI_VERSION
+  stub_existing_pi
+  local permission="$HOME/.pi/agent/extensions/pi-permission-system/config.json"
+  local package_root="$HOME/.pi/agent/npm/node_modules/@gotgenes/pi-permission-system"
+  local original="$TEST_ROOT/original-permission.json"
+  mkdir -p "$package_root/schemas"
+  printf '{"name":"@gotgenes/pi-permission-system","version":"%s"}\n' \
+    "$PI_PERMISSION_SYSTEM_VERSION" >"$package_root/package.json"
+  mkdir -p "$package_root/src"
+  printf 'export class PermissionManager {}\n' >"$package_root/src/permission-manager.ts"
+  cat >"$package_root/schemas/permissions.schema.json" <<'JSON'
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "permission": {
+      "type": "object",
+      "properties": {
+        "bash": {
+          "type": "object",
+          "properties": {"*": {"const": "deny"}}
+        }
+      }
+    }
+  }
+}
+JSON
+  seed_mutable_pi_drift "$HOME/.pi/agent" "$XDG_CONFIG_HOME/pi/web-search.json"
+  cp "$permission" "$original"
+
+  run env HOME="$HOME" PATH="$PATH" PI_VERSION="$PI_VERSION" \
+    bash "$REPO_ROOT/ai/pi/install.sh"
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"permission schema"* ]]
+  cmp "$original" "$permission"
+  [ "$(find "$(dirname "$permission")" -name 'config.json.backup*' | wc -l)" -eq 0 ]
+}
+
+@test "Pi installer migrates invalid runtime permission policy controls without preserving them" {
+  export PI_VERSION
+  stub_existing_pi
+  local permission="$HOME/.pi/agent/extensions/pi-permission-system/config.json"
+  local original="$TEST_ROOT/invalid-runtime-permission.json"
+  mkdir -p "$(dirname "$permission")"
+  printf '{"debugLog":"yes","permissionReviewLog":null,"yoloMode":false,"permission":{"bash":{"*":"ask"}},"custom":"invalid"}\n' \
+    >"$permission"
+  cp "$permission" "$original"
+
+  run env HOME="$HOME" PATH="$PATH" PI_VERSION="$PI_VERSION" \
+    bash "$REPO_ROOT/ai/pi/install.sh"
+
+  [ "$status" -eq 0 ]
+  cmp "$original" "$permission.backup"
+  run jq -e '
+    .debugLog == false
+    and .permissionReviewLog == false
+    and .yoloMode == false
+    and .permission.bash["*"] == "allow"
+    and (has("custom") | not)
+  ' "$permission"
+  [ "$status" -eq 0 ]
+  [ "$(find "$(dirname "$permission")" -name 'config.json.backup*' | wc -l)" -eq 1 ]
+}
+
+@test "Pi installer preserves a concurrent runtime permission policy change" {
+  export PI_VERSION
+  stub_existing_pi
+  local permission="$HOME/.pi/agent/extensions/pi-permission-system/config.json"
+
+  run env HOME="$HOME" PATH="$PATH" PI_VERSION="$PI_VERSION" \
+    bash "$REPO_ROOT/ai/pi/install.sh"
+  [ "$status" -eq 0 ]
+
+  local drift="$TEST_ROOT/permission-drift.json"
+  jq '.permission.bash["*"] = "ask"' "$permission" >"$drift"
+  mv "$drift" "$permission"
+
+  local hook="$BATS_TEST_TMPDIR/permission-before-publish"
+  local output_file="$BATS_TEST_TMPDIR/concurrent-runtime-output"
+  local pid attempt concurrent_status race_output
+  mkdir -p "$hook"
+  env HOME="$HOME" PATH="$PATH" PI_VERSION="$PI_VERSION" \
+    BATS_TEST_TMPDIR="$BATS_TEST_TMPDIR" BATS_TEST_NAME="$BATS_TEST_NAME" \
+    BATS_TEST_FILENAME="$BATS_TEST_FILENAME" \
+    PI_AI_TEST_PERMISSION_BEFORE_PUBLISH="$hook" \
+    bash "$REPO_ROOT/ai/pi/install.sh" >"$output_file" 2>&1 &
+  pid=$!
+
+  for attempt in $(seq 1 500); do
+    [[ -e "$hook/ready" ]] && break
+    sleep 0.01
+  done
+  if [[ ! -e "$hook/ready" ]]; then
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    false
+  fi
+
+  jq '.debugLog = true | .custom = "concurrent"' "$permission" >"$drift"
+  mv "$drift" "$permission"
+  touch "$hook/continue"
+  if wait "$pid"; then
+    concurrent_status=0
+  else
+    concurrent_status=$?
+  fi
+  race_output=$(<"$output_file")
+
+  [ "$concurrent_status" -ne 0 ]
+  [[ "$race_output" == *"changed during reconciliation"* ]]
+  run jq -e '
+    .debugLog == true
+    and .custom == "concurrent"
+    and .permission.bash["*"] == "ask"
+  ' "$permission"
+  [ "$status" -eq 0 ]
+  [ "$(find "$(dirname "$permission")" -name 'config.json.backup*' | wc -l)" -eq 0 ]
+}
+
+@test "Pi installer preserves a runtime permission change after backup" {
+  export PI_VERSION
+  stub_existing_pi
+  local permission="$HOME/.pi/agent/extensions/pi-permission-system/config.json"
+
+  run env HOME="$HOME" PATH="$PATH" PI_VERSION="$PI_VERSION" \
+    bash "$REPO_ROOT/ai/pi/install.sh"
+  [ "$status" -eq 0 ]
+
+  local drift="$TEST_ROOT/post-backup-permission-drift.json"
+  jq '.permission.bash["*"] = "ask"' "$permission" >"$drift"
+  mv "$drift" "$permission"
+
+  local hook="$BATS_TEST_TMPDIR/permission-before-publish-after-backup"
+  local output_file="$BATS_TEST_TMPDIR/post-backup-runtime-output"
+  local pid attempt concurrent_status race_output
+  mkdir -p "$hook"
+  env HOME="$HOME" PATH="$PATH" PI_VERSION="$PI_VERSION" \
+    BATS_TEST_TMPDIR="$BATS_TEST_TMPDIR" BATS_TEST_NAME="$BATS_TEST_NAME" \
+    BATS_TEST_FILENAME="$BATS_TEST_FILENAME" \
+    PI_AI_TEST_PERMISSION_BEFORE_PUBLISH="$hook" \
+    bash "$REPO_ROOT/ai/pi/install.sh" >"$output_file" 2>&1 &
+  pid=$!
+
+  for ((attempt = 0; attempt < 500; attempt++)); do
+    [[ -e "$hook/ready" ]] && break
+    sleep 0.01
+  done
+  if [[ ! -e "$hook/ready" ]]; then
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    false
+  fi
+  touch "$hook/continue"
+
+  for ((attempt = 0; attempt < 500; attempt++)); do
+    [[ -e "$hook/ready-before-publish" ]] && break
+    sleep 0.01
+  done
+  if [[ ! -e "$hook/ready-before-publish" ]]; then
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    false
+  fi
+
+  jq '.debugLog = true | .custom = "post-backup-concurrent"' "$permission" >"$drift"
+  mv "$drift" "$permission"
+  touch "$hook/continue-before-publish"
+  if wait "$pid"; then
+    concurrent_status=0
+  else
+    concurrent_status=$?
+  fi
+  race_output=$(<"$output_file")
+
+  [ "$concurrent_status" -ne 0 ]
+  [[ "$race_output" == *"changed during reconciliation"* ]]
+  run jq -e '
+    .debugLog == true
+    and .custom == "post-backup-concurrent"
+    and .permission.bash["*"] == "ask"
+  ' "$permission"
+  [ "$status" -eq 0 ]
+  [ "$(find "$(dirname "$permission")" -name 'config.json.backup*' | wc -l)" -eq 1 ]
+}
+
+@test "Pi installer confines the permission policy race hook to Bats temporary paths" {
+  export PI_VERSION
+  stub_existing_pi
+  local hook="$BATS_TEST_TMPDIR/non-bats-hook"
+  local non_bats_agent="$TEST_ROOT/non-bats-hook-agent"
+  local before after
+  mkdir -p "$hook"
+  before=$(snapshot_tree "$TEST_ROOT")
+
+  run env -u BATS_TEST_TMPDIR -u BATS_TEST_NAME -u BATS_TEST_FILENAME \
+    HOME="$HOME" PATH="$PATH" PI_VERSION="$PI_VERSION" \
+    PI_CODING_AGENT_DIR="$non_bats_agent" \
+    PI_AI_TEST_PERMISSION_BEFORE_PUBLISH="$hook" \
+    bash "$REPO_ROOT/ai/pi/install.sh"
+
+  after=$(snapshot_tree "$TEST_ROOT")
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"unavailable outside Bats"* ]]
+  [ "$before" = "$after" ]
+  [ ! -e "$hook/ready" ]
+  [ ! -e "$non_bats_agent" ]
+
+  local permission="$HOME/.pi/agent/extensions/pi-permission-system/config.json"
+  local drift="$TEST_ROOT/hook-policy-drift.json"
+  run env HOME="$HOME" PATH="$PATH" PI_VERSION="$PI_VERSION" \
+    bash "$REPO_ROOT/ai/pi/install.sh"
+  [ "$status" -eq 0 ]
+  jq '.permission.bash["*"] = "ask"' "$permission" >"$drift"
+  mv "$drift" "$permission"
+
+  local outside_hook
+  outside_hook="$(dirname "$BATS_TEST_TMPDIR")/outside-permission-hook-${BATS_TEST_NUMBER:-0}"
+  mkdir -p "$outside_hook"
+  run env HOME="$HOME" PATH="$PATH" PI_VERSION="$PI_VERSION" \
+    BATS_TEST_TMPDIR="$BATS_TEST_TMPDIR" BATS_TEST_NAME="$BATS_TEST_NAME" \
+    BATS_TEST_FILENAME="$BATS_TEST_FILENAME" \
+    PI_AI_TEST_PERMISSION_BEFORE_PUBLISH="$outside_hook" \
+    bash "$REPO_ROOT/ai/pi/install.sh"
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"below the Bats test root"* ]]
+  [ ! -e "$outside_hook/ready" ]
+  run jq -e '.permission.bash["*"] == "ask"' "$permission"
+  [ "$status" -eq 0 ]
+}
+
+@test "Pi installer converts a recognized permission policy link after validation" {
+  export PI_VERSION
+  stub_existing_pi
+  local agent_dir="$TEST_ROOT/recognized-permission-agent"
+  local permission="$agent_dir/extensions/pi-permission-system/config.json"
+  mkdir -p "$(dirname "$permission")"
+  ln -s "$REPO_ROOT/ai/pi/config/permission-system.json" "$permission"
+
+  run env HOME="$HOME" PATH="$PATH" PI_VERSION="$PI_VERSION" \
+    PI_CODING_AGENT_DIR="$agent_dir" bash "$REPO_ROOT/ai/pi/install.sh"
+
+  [ "$status" -eq 0 ]
+  [ -f "$permission" ]
+  [ ! -L "$permission" ]
+  [ -f "$permission.backup" ]
+  [ "$(stat -c '%a' "$permission")" = 644 ]
+  run jq -e --arg auth "$agent_dir/auth.json" '
+    .yoloMode == false
+    and .permission.path_read[$auth] == "deny"
+    and .permission.path_write[$auth] == "deny"
+  ' "$permission"
+  [ "$status" -eq 0 ]
+}
+
+@test "Pi installer refuses foreign permission policy symlinks and invalid destination types" {
+  export PI_VERSION
+  stub_existing_pi
+  local foreign="$TEST_ROOT/foreign-permission-config.json"
+  local symlink_agent="$TEST_ROOT/foreign-permission-config-agent"
+  local symlink_permission="$symlink_agent/extensions/pi-permission-system/config.json"
+  mkdir -p "$(dirname "$symlink_permission")"
+  printf '{"foreign":true}\n' >"$foreign"
+  ln -s "$foreign" "$symlink_permission"
+
+  run env HOME="$HOME" PATH="$PATH" PI_VERSION="$PI_VERSION" \
+    PI_CODING_AGENT_DIR="$symlink_agent" bash "$REPO_ROOT/ai/pi/install.sh"
+
+  [ "$status" -ne 0 ]
+  assert_symlink_target "$symlink_permission" "$foreign"
+  [ "$(jq -r .foreign "$foreign")" = true ]
+
+  local invalid_agent="$TEST_ROOT/invalid-permission-config-agent"
+  local invalid_permission="$invalid_agent/extensions/pi-permission-system/config.json"
+  mkdir -p "$invalid_permission"
+  printf 'preserve\n' >"$invalid_permission/marker"
+
+  run env HOME="$HOME" PATH="$PATH" PI_VERSION="$PI_VERSION" \
+    PI_CODING_AGENT_DIR="$invalid_agent" bash "$REPO_ROOT/ai/pi/install.sh"
+
+  [ "$status" -ne 0 ]
+  [ -d "$invalid_permission" ]
+  [ "$(cat "$invalid_permission/marker")" = preserve ]
 }
 
 @test "Pi mutable reset backs up once and publishes tracked baselines" {

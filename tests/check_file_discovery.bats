@@ -11,6 +11,31 @@ setup() {
   printf '#!/usr/bin/env bash\ntrue\n' >"$UNTRACKED_FILE"
   printf '#!/usr/bin/env bash\nfalse\n' >"$IGNORED_FILE"
 
+  DIRECT_SH_FILE="$REPO_ROOT/bin/probe-direct-sh-$BATS_TEST_NUMBER"
+  SPACED_SHELL_FILE="$REPO_ROOT/bin/probe-spaced-shell-$BATS_TEST_NUMBER"
+  ENV_SPLIT_SHELL_FILE="$REPO_ROOT/bin/probe-env-split-shell-$BATS_TEST_NUMBER"
+  CUSTOM_SHELL_FILE="$REPO_ROOT/bin/probe-custom-shell-$BATS_TEST_NUMBER"
+  ENV_CUSTOM_SHELL_FILE="$REPO_ROOT/bin/probe-env-custom-shell-$BATS_TEST_NUMBER"
+  PYTHON_FILE="$REPO_ROOT/bin/probe-python-$BATS_TEST_NUMBER"
+  ENV_SEPARATOR_PYTHON_FILE="$REPO_ROOT/bin/probe-env-separator-python-$BATS_TEST_NUMBER"
+  ENV_IGNORE_PYTHON_FILE="$REPO_ROOT/bin/probe-env-ignore-python-$BATS_TEST_NUMBER"
+  ENV_ASSIGN_PYTHON_FILE="$REPO_ROOT/bin/probe-env-assign-python-$BATS_TEST_NUMBER"
+  FISH_FILE="$REPO_ROOT/bin/probe-fish-$BATS_TEST_NUMBER"
+  UNKNOWN_FILE="$REPO_ROOT/bin/probe-unknown-$BATS_TEST_NUMBER"
+  EMPTY_FILE="$REPO_ROOT/bin/probe-empty-$BATS_TEST_NUMBER"
+  printf '#!/bin/sh\ntrue\n' >"$DIRECT_SH_FILE"
+  printf '#!  /usr/bin/zsh -f\ntrue\n' >"$SPACED_SHELL_FILE"
+  printf '#!/usr/bin/env -S bash -e\ntrue\n' >"$ENV_SPLIT_SHELL_FILE"
+  printf '#!/usr/bin/custom-shell\n' >"$CUSTOM_SHELL_FILE"
+  printf '#!/usr/bin/env custom-shell\n' >"$ENV_CUSTOM_SHELL_FILE"
+  printf '#!/usr/bin/env python3\n' >"$PYTHON_FILE"
+  printf '#!/usr/bin/env -- python3\n' >"$ENV_SEPARATOR_PYTHON_FILE"
+  printf '#!/usr/bin/env -i python3\n' >"$ENV_IGNORE_PYTHON_FILE"
+  printf '#!/usr/bin/env MODE=check python3\n' >"$ENV_ASSIGN_PYTHON_FILE"
+  printf '#!/usr/bin/fish\n' >"$FISH_FILE"
+  printf 'unrecognized extensionless content\n' >"$UNKNOWN_FILE"
+  : >"$EMPTY_FILE"
+
   # Probes for a tools/ subdirectory. tools/herdr hosts the real Herdr
   # installer, but this fixture writes its own probe files there rather than
   # relying on that installer's actual layout — that keeps the gate honest if
@@ -41,6 +66,11 @@ setup() {
 
 teardown() {
   rm -f -- "$UNTRACKED_FILE" "$IGNORED_FILE" \
+    "$DIRECT_SH_FILE" "$SPACED_SHELL_FILE" "$ENV_SPLIT_SHELL_FILE" \
+    "$CUSTOM_SHELL_FILE" "$ENV_CUSTOM_SHELL_FILE" "$PYTHON_FILE" \
+    "$ENV_SEPARATOR_PYTHON_FILE" "$ENV_IGNORE_PYTHON_FILE" "$ENV_ASSIGN_PYTHON_FILE" \
+    "$FISH_FILE" \
+    "$UNKNOWN_FILE" "$EMPTY_FILE" \
     "$TOOL_INSTALL_FILE" "$TOOL_EXEC_FILE" "$TOOL_SUB_FILE" "$TOOL_ZSH_FILE" \
     "$TOOL_YAML_FILE" "$TOOL_CONF_FILE" "$TOOL_UNIT_FILE"
   rmdir "$IGNORED_DIR" 2>/dev/null || true
@@ -73,6 +103,59 @@ list_files() {
   [[ "$output" == *"core/shell/zshrc.symlink"* ]]
   [[ "$output" == *"core/path.zsh"* ]]
   [[ "$output" != *"bin/install"* ]]
+}
+
+@test "bash gates recognize direct /bin/sh shebangs" {
+  local class
+  for class in bash shellcheck shfmt; do
+    list_files "$class"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"${DIRECT_SH_FILE#"$REPO_ROOT/"}"* ]]
+  done
+}
+
+@test "bash gates recognize spaced direct shell shebangs" {
+  local class
+  for class in bash shellcheck shfmt; do
+    list_files "$class"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"${SPACED_SHELL_FILE#"$REPO_ROOT/"}"* ]]
+  done
+}
+
+@test "bash gates recognize env -S shell shebangs" {
+  local class
+  for class in bash shellcheck shfmt; do
+    list_files "$class"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"${ENV_SPLIT_SHELL_FILE#"$REPO_ROOT/"}"* ]]
+  done
+}
+
+@test "bash gates exclude extensionless entry points with known incompatible interpreters" {
+  local class
+  for class in bash shellcheck shfmt; do
+    list_files "$class"
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"${PYTHON_FILE#"$REPO_ROOT/"}"* ]]
+    [[ "$output" != *"${ENV_SEPARATOR_PYTHON_FILE#"$REPO_ROOT/"}"* ]]
+    [[ "$output" != *"${ENV_IGNORE_PYTHON_FILE#"$REPO_ROOT/"}"* ]]
+    [[ "$output" != *"${ENV_ASSIGN_PYTHON_FILE#"$REPO_ROOT/"}"* ]]
+    [[ "$output" != *"${FISH_FILE#"$REPO_ROOT/"}"* ]]
+    [[ "$output" != *"bin/validate-pi-permission-config"* ]]
+  done
+}
+
+@test "bash gates include ambiguous explicit and empty extensionless entries" {
+  local class
+  for class in bash shellcheck shfmt; do
+    list_files "$class"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"${CUSTOM_SHELL_FILE#"$REPO_ROOT/"}"* ]]
+    [[ "$output" == *"${ENV_CUSTOM_SHELL_FILE#"$REPO_ROOT/"}"* ]]
+    [[ "$output" == *"${UNKNOWN_FILE#"$REPO_ROOT/"}"* ]]
+    [[ "$output" == *"${EMPTY_FILE#"$REPO_ROOT/"}"* ]]
+  done
 }
 
 @test "shellcheck discovery includes repository shell entry points" {

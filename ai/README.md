@@ -49,24 +49,25 @@ Interactive browser automation remains opt-in rather than a default dependency.
 
 Each `subagent` invocation supplies one self-contained `prompt`, a 3–5 word `description`, and a `subagent_type`. Parallel work uses sibling calls with `run_in_background: true`; record each returned ID and poll with `get_subagent_result({ agent_id, wait: false })`. An explicit `model` is reserved for a user request or deliberate cross-family review.
 
-`rush`, `deep`, and `review` omit write/edit tools, allow routine inspection and verification silently, and hard-deny repository or remote mutation instead of forwarding approval prompts that a headless child cannot answer. `smart` otherwise inherits the balanced global policy. Every named child hard-denies Bash commands containing unresolved `$` expansion so a curated reader cannot hide a sensitive operand from path extraction. Children cannot recursively dispatch more children.
+`rush`, `deep`, and `review` omit write/edit tools and allow routine inspection and verification silently. Their explicit rules deny selected repository and remote mutations; other recognized risky operations follow the composed permission policy instead of an absolute read-only guarantee. `smart` otherwise inherits the permissive global attention policy. Every named child hard-denies Bash commands containing unresolved `$` expansion so a curated reader cannot hide a sensitive operand from path extraction. Children cannot recursively dispatch more children.
 
 ## Permission and containment model
 
-`ai/pi/config/permission-system.json` is a relaxed-but-guarded baseline:
+`ai/pi/config/permission-system.json` is a permissive attention and tripwire layer, not a sandbox:
 
-- routine tools, unmatched parent Bash commands, Git commands except explicit hard denies, PR/issue creation and editing, `lsp_fix`, and loopback HTTP probes are allowed;
-- unknown tools, PR merges and issue closure, remote shell/network commands, non-Git deletion, opaque shell wrappers, and arbitrary external paths ask;
-- policy denies recognized credential and browser-profile path access, catastrophic deletion, force operations, subprocess-capable search flags, and privilege escalation; worktree guard separately denies direct model-facing write, edit, and mutating LSP operations in primary checkouts;
-- parent reader/output commands may use unresolved `$` expansion silently, while direct environment-dump commands still ask and named children hard-deny all unresolved shell-variable indirection; use `NAME=value command` rather than the opaque `env NAME=value command` wrapper so ordinary scoped commands remain inspectable and silent;
-- reads under `~/.pi`, global skill directories, plugin skill directories, and established Dotfiles/FlyGD Wingman worktree roots bypass the external-directory prompt, while skill/package writes and unrelated external locations remain gated;
+- routine tools, unmatched parent Bash commands, local Git subcommands, normal fetch/push, explicitly fast-forward-only pulls, read-only GitHub API calls, PR/issue creation and editing, `lsp_fix`, ordinary `curl` GETs/downloads, and loopback HTTP probes are allowed;
+- unknown extension tools and MCP targets, non-fast-forward pulls, selected destructive Git operations, PR merges and issue closure, recognizable remote shell/network commands, and recognizable deletion ask;
+- bounded lexical `curl` tripwires ask for `--data`, `--data-raw`, `--data-binary`, `--data-urlencode`, or separate-token `-d`; `--form`/`-F`; `--upload-file`/`-T`; explicit `POST`, `PUT`, `PATCH`, or `DELETE` through `--request`/`-X`; and recognized authorization, user, cookie, certificate, key, or netrc arguments; uppercase `Authorization:` and lowercase `authorization:` literals are covered, while arbitrary mixed-case header spellings, aliases, interpreters, generated arguments, attached short-option values, and semantically equivalent requests are outside that coverage;
+- policy denies recognized credential and browser-profile path access, persistent Git config writes, Git options that execute subprocesses, catastrophic deletion, force operations, subprocess-capable search flags, and privilege escalation; worktree guard separately denies direct model-facing write, edit, and mutating LSP operations in primary checkouts;
+- common reader/output commands containing unresolved `$` expansion and direct environment-dump commands ask, while named children hard-deny all unresolved shell-variable indirection; use `NAME=value command` rather than the opaque `env NAME=value command` wrapper so ordinary scoped commands remain inspectable and silent;
+- external-directory read and write catch-alls allow ambiguous external paths to avoid false prompts; explicit protected-path denies remain later tripwires, not containment;
 - `/permission-system` can enable temporary YOLO, which converts asks to allows but preserves explicit denies.
 
 ### Important containment boundaries
 
-Parent and child commands are not OS-contained. Gotgenes children inherit permission-system and worktree-guard, with restrictive agent policy and complete tool allowlists providing additional controls. Named children deny unresolved variable indirection, but parent reader commands allow it for low-friction diagnostics; neither parent nor child Bash is a safe execution boundary for untrusted commands.
+Parent and child Bash processes are not OS-contained. They retain the invoking user's ambient filesystem, environment, network, and subprocess authority. Path and command rules reduce accidental access and route attention; they do not contain hostile or interpreter-generated behavior.
 
-Permission-system gates model-facing calls; an allowed unmatched process can still read inherited environment variables, access files available to the user, open network connections, and spawn subprocesses. Path rules do not recursively constrain operations performed inside an allowed shell command or extension:
+Gotgenes children inherit permission-system and worktree-guard, with restrictive agent policy and complete tool allowlists providing additional controls. Named children deny unresolved variable indirection, while common parent reader commands ask; neither parent nor child Bash is a safe execution boundary for untrusted commands. Path rules do not recursively constrain operations performed inside an allowed shell command or extension:
 
 - `/code run` executes through extension-internal `pi.exec()`.
 - LSP server subprocesses are extension-internal. Permission-system still gates the model-facing LSP call, and worktree-guard blocks a mutating fix targeting a primary checkout.
@@ -114,23 +115,23 @@ Immutable guidance, keybindings, named agents, and the two authored extensions a
 | `ai/pi/settings.json` | `~/.pi/agent/settings.json` | merges only `.packages`; preserves every other runtime key |
 | `ai/pi/config/modes.json` | `~/.pi/agent/modes.json` | installs when missing; preserves drift |
 | `ai/pi/config/models.json` | `~/.pi/agent/models.json` | temporarily corrects Copilot Astra's API transport; installs when missing and preserves drift |
-| `ai/pi/config/permission-system.json` | `~/.pi/agent/extensions/pi-permission-system/config.json` | renders the active agent auth path; preserves drift |
+| `ai/pi/config/permission-system.json` | `~/.pi/agent/extensions/pi-permission-system/config.json` | repository-owned permission map is republished on `make ai`; valid runtime `yoloMode`, `debugLog`, and `permissionReviewLog` values are preserved; publication refuses active YOLO |
 | `ai/pi/config/subagents.json` | `~/.pi/agent/subagents.json` | installs when missing; preserves drift |
 | `ai/pi/config/web-search.json` | `$PI_CODING_AGENT_DIR/web-search.json`, `$XDG_CONFIG_HOME/pi/web-search.json`, or `~/.pi/web-search.json` | installs when missing; preserves drift |
 
-Use runtime commands such as `/permission-system` and `/subagents:settings` for intentional machine-local changes. To back up differing files and restore every tracked baseline explicitly:
+Use runtime commands such as `/permission-system` and `/subagents:settings` for intentional machine-local changes. Runtime permission-map or stable-field edits are temporary and are replaced by the next `make ai`; the three `/permission-system` runtime controls survive publication. To back up differing files and reset the other runtime-owned mutable baselines explicitly:
 
 ```bash
 PI_AI_RESET_MUTABLE_CONFIG=1 make ai
 ```
 
-Authentication, sessions, trust decisions, upstream-generated model catalogs, package caches, permission logs, grants, and runtime credentials remain machine-local and untracked. The tracked `models.json` is a narrow temporary override, not a copy of the generated catalog.
+`PI_AI_RESET_MUTABLE_CONFIG=1` no longer replaces permission-system `yoloMode`, `debugLog`, or `permissionReviewLog`. During normal authoritative reconciliation, the same active-YOLO refusal applies with or without reset. Authentication, sessions, trust decisions, upstream-generated model catalogs, package caches, permission logs, grants, and runtime credentials remain machine-local and untracked. The tracked `models.json` is a narrow temporary override, not a copy of the generated catalog.
 
-When retiring a legacy `pi-sandbox` installation, the installer backs up and resets the permission policy to the tracked non-YOLO, unmatched-Bash-allows baseline, then removes the retired `pi-sandbox` child exclusion before reconciling packages. A previous `~/.pi/agent/sandbox.json` and cached package checkout are preserved as inactive machine-local state; neither is loaded once the package source is absent from `settings.json`. They may be deleted manually after restarting Pi if rollback is not needed.
+When retiring a legacy `pi-sandbox` installation, the installer backs up and resets the permission policy to the tracked non-YOLO, unmatched-Bash-allows baseline, then removes the retired `pi-sandbox` child exclusion before reconciling packages. This transitional retirement path is the only exception to normal authoritative publication: it safely resets active YOLO and publishes the tracked baseline before the package schema is available so a permission layer remains present while the old containment package is retired. Normal reconciliation refuses active YOLO and validates the candidate against the exact installed schema before publication. A previous `~/.pi/agent/sandbox.json` and cached package checkout are preserved as inactive machine-local state; neither is loaded once the package source is absent from `settings.json`. They may be deleted manually after restarting Pi if rollback is not needed.
 
 ## Installation and rollout
 
-The composed Linux/WSL APT manifests install `ripgrep` for Pi search workflows. Pi does not install or require an OS sandbox runtime.
+Pi permission validation requires Python 3 with the `jsonschema` module. The composed Linux/WSL APT manifests install `python3-jsonschema`; mise-managed Python installations, including the macOS path, receive `jsonschema` through `languages/python/default-python-packages.symlink`. The manifests also install `ripgrep` for Pi search workflows. Pi does not install or require an OS sandbox runtime.
 
 Preview without mutation:
 
@@ -144,9 +145,11 @@ Apply from the canonical checkout:
 make ai
 ```
 
-The installer refuses a production-agent-dir apply—including one reached through a resolved path alias—when invoked from a different linked implementation worktree while the canonical checkout exists. Before integration, use an **isolated pre-integration smoke** with an absolute temporary `PI_CODING_AGENT_DIR`, separate XDG paths, a temporary owner-readable authentication copy, and `$SMOKE_HOME/.dotfiles` linked to the reviewed checkout so the local `my` package remains available. Delete the smoke directory afterward. After integration, run `make ai` again from the canonical checkout and inspect its identity-aware migration report.
+The installer refuses a production-agent-dir apply—including one reached through a resolved path alias—when invoked from a different linked implementation worktree while the canonical checkout exists. Before integration, use an **isolated pre-integration smoke** with an absolute temporary `PI_CODING_AGENT_DIR`, separate HOME and XDG paths, and `DOTFILES` pointed at the reviewed checkout so the local `my` package remains available. Package installation and the exact installed-runtime gate pipeline do not require Copilot authentication. An agent command must not read or copy production `auth.json`; defer interactive model-facing smoke to the canonical rollout unless the operator provisions isolated credentials outside the agent command. Delete the smoke directory afterward. After integration, run `make ai` again from the canonical checkout and inspect its identity-aware migration report.
 
-The installer explicitly bootstraps any missing or mismatched version-pinned npm packages before running `pi update --extensions`. Pi intentionally skips pinned npm sources during ordinary updates, so update alone is not a first-install mechanism. The installer verifies exact package versions and confirms that Pi preserved the tracked package inventory.
+The installer explicitly bootstraps any missing or mismatched version-pinned npm packages before running `pi update --extensions`. A matching permission-system version is accepted only when its schema and manager artifacts are also present; one incomplete installation attempt is retried and then fails clearly if it remains partial. Pi intentionally skips pinned npm sources during ordinary updates, so update alone is not a first-install mechanism. The installer verifies exact package versions and confirms that Pi preserved the tracked package inventory.
+
+Permission publication uses best-effort compare-before-publish: it checks the runtime file identity before backup and again after backup immediately before the atomic rename. Because the permission-system UI writer shares no lock with the installer, an unavoidable race remains between the final check and rename; the extra check narrows but cannot eliminate it.
 
 The migration converts the old whole-extension link to a real directory, preserves unrelated extension entries, and publishes only the two authored links. It removes only exact managed Amp settings links and only the `.permissions` key from valid Amp state. The exact legacy Brave `brave-search` directory is moved intact below `disabled-skills`; sibling skills, mismatches, and collisions are preserved.
 
@@ -174,16 +177,23 @@ make ai-check
 make check
 ```
 
-After isolated or production package installation, validate against the exact installed permission schema and evaluator:
+After isolated or production package installation, validate the tracked policy candidate against the selected installed permission schema and evaluator. This command does not validate whichever config is currently active in a running Pi session. Select isolated smoke roots explicitly, for example:
 
 ```bash
-PI_CODING_AGENT_DIR="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}" \
-  bin/validate-pi-security-runtime
+SMOKE_AGENT_DIR=/absolute/path/to/smoke-home/.pi/agent
+SMOKE_PI_PACKAGE_ROOT=/absolute/path/to/smoke-home/.local/lib/node_modules/@earendil-works/pi-coding-agent
+bin/validate-pi-security-runtime \
+  --package-root "$SMOKE_AGENT_DIR/npm/node_modules/@gotgenes/pi-permission-system" \
+  --pi-package-root "$SMOKE_PI_PACKAGE_ROOT"
 ```
+
+For the normal installed roots, putting the intended `pi` first on `PATH` and setting `PI_CODING_AGENT_DIR` selects the same two dependencies implicitly.
 
 ## Emergency rollback
 
-Rollback is coupled and non-YOLO. Choose the last commit before this rollout as `PRE_ROLLOUT`, revert the rollout commits, and **do not run the reverted old installer**, because it would recreate the whole-directory extension link.
+For a permission-policy-only rollback, stop Pi and restore the exact permission-config backup path printed by the publishing installer (a sibling of `~/.pi/agent/extensions/pi-permission-system/config.json` named `config.json.backup...`). Confirm the restored config has `yoloMode: false`, preserve the permission directory's `0700` mode and config file's `0644` mode, then restart Pi. Revert or amend the tracked policy before the next `make ai`, or authoritative reconciliation will republish it. If publication reported no backup, the installed policy was already identical or no prior runtime policy existed.
+
+The broader original security-stack rollback is coupled and non-YOLO. Choose the last commit before that rollout as `PRE_ROLLOUT`, revert the rollout commits, and **do not run the reverted old installer**, because it would recreate the whole-directory extension link.
 
 1. Extract the reverted `ai/pi/permissions.json` and copy it to `${XDG_CONFIG_HOME:-$HOME/.config}/amp/settings.json` as a regular file.
 2. Merge `.packages` from the reverted `ai/pi/settings.json` into the current regular `~/.pi/agent/settings.json`, preserving all other settings.

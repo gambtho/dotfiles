@@ -28,16 +28,23 @@ compose_packages() {
   done
 }
 
-@test "every Linux profile includes ripgrep without retired Pi sandbox dependencies" {
+@test "every Linux profile includes Pi validation dependencies without retired sandbox packages" {
   local os profile
   for os in Ubuntu WSL; do
     for profile in personal work server; do
       compose_packages "$os" "$profile"
       [ "$status" -eq 0 ]
       printf '%s\n' "$output" | grep -Fxq ripgrep
+      printf '%s\n' "$output" | grep -Fxq python3-jsonschema
       ! printf '%s\n' "$output" | grep -Eq '^(bubblewrap|socat)$'
     done
   done
+}
+
+@test "mise-managed Python installs the Pi schema validator module" {
+  run grep -Fx jsonschema "$REPO_ROOT/languages/python/default-python-packages.symlink"
+
+  [ "$status" -eq 0 ]
 }
 
 @test "work package composition includes vendor tooling once" {
