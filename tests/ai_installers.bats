@@ -174,6 +174,26 @@ SCRIPT
   [ "$before" = "$after" ]
 }
 
+@test "Pi installer reports missing jsonschema before mutation" {
+  export PI_VERSION
+  stub_existing_pi
+  stub_command python3 'exec /usr/bin/python3 -S "$@"'
+  local agent_dir="$TEST_ROOT/missing-jsonschema-agent"
+  local before after
+  before=$(snapshot_tree "$TEST_ROOT")
+
+  run env HOME="$HOME" PATH="$PATH" PI_VERSION="$PI_VERSION" \
+    PI_CODING_AGENT_DIR="$agent_dir" bash "$REPO_ROOT/ai/pi/install.sh"
+
+  after=$(snapshot_tree "$TEST_ROOT")
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Python jsonschema is required for Pi permission validation"* ]]
+  [[ "$output" == *"python3-jsonschema"* ]]
+  [[ "$output" != *"fails the exact installed schema"* ]]
+  [ "$before" = "$after" ]
+  [ ! -e "$agent_dir" ]
+}
+
 @test "Pi check mode reports every managed destination" {
   local agent_dir="$TEST_ROOT/custom-agent"
 

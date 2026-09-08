@@ -25,6 +25,17 @@ usage() {
   printf 'usage: %s [--check]\n' "$0"
 }
 
+require_permission_validation_dependencies() {
+  command_exists python3 || {
+    log_warning "Python 3 is required for Pi permission validation; install python3 and rerun the installer."
+    return 1
+  }
+  if ! python3 -c 'import jsonschema' >/dev/null 2>&1; then
+    log_warning "Python jsonschema is required for Pi permission validation; install python3-jsonschema for this python3 and rerun the installer."
+    return 1
+  fi
+}
+
 resolve_pi_paths() {
   if [[ -n "${PI_CODING_AGENT_DIR:-}" && "$PI_CODING_AGENT_DIR" != /* ]]; then
     log_warning "PI_CODING_AGENT_DIR must be absolute: $PI_CODING_AGENT_DIR"
@@ -758,6 +769,7 @@ main() {
 
   resolve_pi_paths
   validate_permission_before_publish_test_hook
+  require_permission_validation_dependencies
   assert_safe_pi_source
   migrate_pi_security_stack "$MODE" "$PI_AGENT_DIR" "$AMP_SETTINGS_PATH" \
     "${MANAGED_SOURCE_ROOTS[@]}"
