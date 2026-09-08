@@ -101,8 +101,8 @@ setup() {
       and (($rules | keys_unsorted | index("*.env.example"))
         > ($rules | keys_unsorted | index("*.env.*")))
     )
-    and .permission.external_directory_read["*"] == "ask"
-    and .permission.external_directory_write["*"] == "ask"
+    and .permission.external_directory_read["*"] == "allow"
+    and .permission.external_directory_write["*"] == "allow"
     and .permission.external_directory_read["~/.agents/skills/*"] == "allow"
     and (.permission.external_directory_write | has("~/.agents/skills/*") | not)
     and .permission.external_directory_read["/mnt/c/dev/flygd-wingman-*"] == "allow"
@@ -114,9 +114,10 @@ setup() {
 @test "Pi permission Bash policy allows local Git while guarding risky operations" {
   run jq -e '
     .permission.bash as $bash
+    | ($bash | keys_unsorted) as $keys
     | $bash["*"] == "allow"
-    and $bash["git *"] == "ask"
-    and $bash["*/git *"] == "ask"
+    and ($bash | has("git *") | not)
+    and ($bash | has("*/git *") | not)
     and $bash["git branch *"] == "allow"
     and ($bash | has("*/git branch *") | not)
     and $bash["git worktree *"] == "allow"
@@ -136,13 +137,57 @@ setup() {
     and $bash["*git *branch * -D*"] == "ask"
     and $bash["*git *worktree remove * -f*"] == "ask"
     and $bash["*git *commit * --am*"] == "ask"
-    and $bash["gh *"] == "ask"
-    and $bash["*/gh *"] == "ask"
-    and $bash["curl *"] == "ask"
-    and $bash["*/curl *"] == "ask"
+    and ($bash | has("gh *") | not)
+    and ($bash | has("*/gh *") | not)
+    and $bash["curl *"] == "allow"
+    and $bash["*/curl *"] == "allow"
     and $bash["curl *http://127.0.0.1:*"] == "allow"
     and $bash["curl *http://localhost:*"] == "allow"
-    and $bash["curl *https://*"] == "ask"
+    and (
+      [
+        "*curl *--data *",
+        "*curl *--data=*",
+        "*curl *--data-raw *",
+        "*curl *--data-binary *",
+        "*curl *--data-urlencode *",
+        "*curl *-d *",
+        "*curl *--form *",
+        "*curl *-F *",
+        "*curl *--upload-file *",
+        "*curl *-T *",
+        "*curl *--request POST*",
+        "*curl *--request PUT*",
+        "*curl *--request PATCH*",
+        "*curl *--request DELETE*",
+        "*curl *--request post*",
+        "*curl *--request put*",
+        "*curl *--request patch*",
+        "*curl *--request delete*",
+        "*curl *-X POST*",
+        "*curl *-X PUT*",
+        "*curl *-X PATCH*",
+        "*curl *-X DELETE*",
+        "*curl *-X post*",
+        "*curl *-X put*",
+        "*curl *-X patch*",
+        "*curl *-X delete*",
+        "*curl *Authorization:*",
+        "*curl *--user *",
+        "*curl *-u *",
+        "*curl *--cookie *",
+        "*curl *-b *",
+        "*curl *--cert *",
+        "*curl *-E *",
+        "*curl *--key *",
+        "*curl *--netrc*"
+      ]
+      | all(.[];
+          . as $pattern
+          | $bash[$pattern] == "ask"
+          and (($keys | index($pattern)) > ($keys | index("curl *")))
+          and (($keys | index($pattern)) > ($keys | index("*/curl *")))
+        )
+    )
     and $bash["wget *"] == "ask"
     and $bash["ssh *"] == "ask"
     and $bash["scp *"] == "ask"

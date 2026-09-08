@@ -85,11 +85,90 @@ const BASELINE_PIPELINE_CASES: PipelineCase[] = [
   },
 ];
 
+const RELAXED_PIPELINE_CASES: PipelineCase[] = [
+  {
+    label: "referenced skill script",
+    command: "node ~/.agents/skills/impeccable/scripts/load-context.mjs",
+    expected: "allow",
+  },
+  {
+    label: "Pi metadata jq read",
+    command:
+      "jq -r '.version' ~/.pi/agent/npm/node_modules/@gotgenes/pi-permission-system/package.json",
+    expected: "allow",
+  },
+  {
+    label: "external git diff",
+    command:
+      "git diff --no-index ai/pi/config/permission-system.json ~/.pi/agent/extensions/pi-permission-system/config.json",
+    expected: "allow",
+  },
+  {
+    label: "ordinary curl GET",
+    command: "curl https://example.com/data.json",
+    expected: "allow",
+  },
+  {
+    label: "slash-qualified curl GET",
+    command: "/usr/bin/curl https://example.com/data.json",
+    expected: "allow",
+  },
+  {
+    label: "curl data asks",
+    command: "curl --data payload https://example.com/items",
+    expected: "ask",
+    surface: "bash",
+  },
+  {
+    label: "curl upload asks",
+    command: "curl https://example.com/items -T artifact.zip",
+    expected: "ask",
+    surface: "bash",
+  },
+  {
+    label: "curl mutating method asks",
+    command: "curl -X DELETE https://example.com/items/1",
+    expected: "ask",
+    surface: "bash",
+  },
+  {
+    label: "curl authorization asks",
+    command: "curl -H 'Authorization: Bearer example' https://example.com/private",
+    expected: "ask",
+    surface: "bash",
+  },
+  {
+    label: "git switch subcommand c is not global config",
+    command: "git switch -c feature/example",
+    expected: "allow",
+  },
+  {
+    label: "shell script invocation",
+    command: "bash bin/validate-ai --verbose",
+    expected: "allow",
+  },
+];
+
+for (const shell of ["sh", "bash", "zsh", "dash", "ksh"] as const) {
+  RELAXED_PIPELINE_CASES.push({
+    label: `bare ${shell} receiving shell asks`,
+    command: shell,
+    expected: "ask",
+    surface: "bash",
+    pattern: shell,
+  });
+}
+
 const url = (root: string, path: string) =>
   pathToFileURL(`${root}/src/${path}`).href;
 
 function fail(testCase: PipelineCase, message: string): never {
   throw new Error(`pipeline ${testCase.label}: ${message}`);
+}
+
+function toolCallIdFor(testCase: PipelineCase): string {
+  const labelSlug = testCase.label.toLowerCase().replaceAll(/[^a-z0-9]+/g, "-");
+  return `pipeline-${labelSlug.replaceAll(/^-|-$/g, "")}`;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -198,7 +277,8 @@ export async function runPermissionPipelineChecks({
     { resolveToolPreviewLimits: () => unknown },
   ];
 
-  for (const [index, testCase] of BASELINE_PIPELINE_CASES.entries()) {
+  const cases = [...BASELINE_PIPELINE_CASES, ...RELAXED_PIPELINE_CASES];
+  for (const testCase of cases) {
     const manager = new PermissionManager({ agentDir });
     manager.configureForCwd(repoRoot);
     const sessionRules = new SessionRules();
@@ -246,7 +326,7 @@ export async function runPermissionPipelineChecks({
         toolName: "bash",
         agentName: testCase.agentName ?? null,
         input: { command: testCase.command },
-        toolCallId: `pipeline-${index}`,
+        toolCallId: toolCallIdFor(testCase),
         cwd: repoRoot,
       },
       runner,

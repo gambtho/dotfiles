@@ -6,7 +6,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { runPermissionPipelineChecks } from "./pi-permission-pipeline-checks.ts";
@@ -84,14 +84,35 @@ if (packageJson.version !== "29.2.0") {
   throw new Error(`expected pi-permission-system 29.2.0, received ${packageJson.version ?? "unknown"}`);
 }
 
-const temporaryRoot = mkdtempSync(join(tmpdir(), "pi-permission-validation-"));
-const agentDir = join(temporaryRoot, "agent");
+const temporaryRoot = mkdtempSync(join(homedir(), ".pi-permission-validation-"));
+const homeDir = join(temporaryRoot, "home");
+const agentDir = join(homeDir, ".pi", "agent");
 const configDir = join(agentDir, "extensions", "pi-permission-system");
 const agentsDir = join(agentDir, "agents");
+const originalHome = process.env.HOME;
+process.env.HOME = homeDir;
 
 try {
   mkdirSync(configDir, { recursive: true });
   mkdirSync(agentsDir, { recursive: true });
+  const skillScriptDir = join(
+    homeDir,
+    ".agents",
+    "skills",
+    "impeccable",
+    "scripts",
+  );
+  mkdirSync(skillScriptDir, { recursive: true });
+  writeFileSync(join(skillScriptDir, "load-context.mjs"), "");
+  const permissionMetadataDir = join(
+    agentDir,
+    "npm",
+    "node_modules",
+    "@gotgenes",
+    "pi-permission-system",
+  );
+  mkdirSync(permissionMetadataDir, { recursive: true });
+  writeFileSync(join(permissionMetadataDir, "package.json"), '{"version":"29.2.0"}\n');
 
   const baseline = JSON.parse(
     readFileSync(join(repoRoot, "ai", "pi", "config", "permission-system.json"), "utf8"),
@@ -241,17 +262,17 @@ try {
   checkBash(manager, "typeset -x", "ask");
   checkBash(manager, "command env", "ask");
   checkBash(manager, "git status", "allow");
-  checkBash(manager, "/tmp/git status", "ask");
-  checkBash(manager, "/tmp/git branch --show-current", "ask");
-  checkBash(manager, "/tmp/git worktree list --porcelain", "ask");
+  checkBash(manager, "/tmp/git status", "allow");
+  checkBash(manager, "/tmp/git branch --show-current", "allow");
+  checkBash(manager, "/tmp/git worktree list --porcelain", "allow");
   checkBash(manager, "git branch --show-current", "allow");
   checkBash(manager, "git branch feature/example", "allow");
   checkBash(manager, "git worktree add /tmp/example -b feature/example", "allow");
-  checkBash(manager, "/usr/bin/git worktree list", "ask");
+  checkBash(manager, "/usr/bin/git worktree list", "allow");
   checkBash(manager, "git worktree remove /tmp/example", "allow");
   checkBash(manager, "git add README.md", "allow");
   checkBash(manager, "git commit -am message", "allow");
-  checkBash(manager, "/usr/bin/git commit -am message", "ask");
+  checkBash(manager, "/usr/bin/git commit -am message", "allow");
   checkBash(manager, "git fetch", "allow");
   checkBash(manager, "git fetch origin", "allow");
   checkBash(manager, "git fetch upstream", "allow");
@@ -266,26 +287,33 @@ try {
   checkBash(manager, "git pull --ff-only --re''base origin main", "ask");
   checkBash(manager, "git pull --ff-only -qr origin main", "ask");
   await checkBashGate("cd docs/private && git pull --ff-only", "allow");
-  checkBash(manager, "git -C . fetch origin", "ask");
-  checkBash(manager, "git -C . pull --ff-only origin main", "ask");
+  checkBash(manager, "git -C . fetch origin", "allow");
+  checkBash(manager, "git -C . pull --ff-only origin main", "allow");
   checkBash(manager, "git push origin main", "allow");
   checkBash(manager, "git push origin --delete old-branch", "ask");
   checkBash(manager, "git push origin :old-branch", "ask");
   checkBash(manager, "git push --all origin", "ask");
   checkBash(manager, "git clone https://example.com/repo.git", "ask");
-  checkBash(manager, "git --git-dir=.git push origin main", "ask");
-  checkBash(manager, "git -C . fetch origin status", "ask");
-  checkBash(manager, "git -C . -c 'alias.x=!printf bypass' x status", "ask");
-  checkBash(manager, "git -c core.sshCommand=false fetch origin", "ask");
-  checkBash(manager, "git send-pack origin HEAD:main", "ask");
-  checkBash(manager, "git submodule add https://example.com/repo.git vendor/repo", "ask");
-  checkBash(manager, "git maintenance run --task=prefetch", "ask");
-  checkBash(manager, "git credential fill", "ask");
-  checkBash(manager, "git -c 'alias.x=!printf bypass' x", "ask");
-  checkBash(manager, "git statusx", "ask");
-  checkBash(manager, "git branchx feature/example", "ask");
-  checkBash(manager, "git commitx -am message", "ask");
+  checkBash(manager, "git --git-dir=.git push origin main", "allow");
+  checkBash(manager, "git -C . fetch origin status", "allow");
+  checkBash(manager, "git -C . -c 'alias.x=!printf bypass' x status", "deny");
+  checkBash(manager, "git -C . -c core.sshCommand=false fetch origin", "deny");
+  checkBash(manager, "git -C . --config-env=alias.x=GIT_ALIAS x", "deny");
+  checkBash(manager, "git -c core.sshCommand=false fetch origin", "deny");
+  checkBash(manager, "/usr/bin/git -c core.sshCommand=false fetch origin", "deny");
+  checkBash(manager, "git --config-env=alias.x=GIT_ALIAS x", "deny");
+  checkBash(manager, "/usr/bin/git --config-env=alias.x=GIT_ALIAS x", "deny");
+  checkBash(manager, "git send-pack origin HEAD:main", "allow");
+  checkBash(manager, "git submodule add https://example.com/repo.git vendor/repo", "allow");
+  checkBash(manager, "git maintenance run --task=prefetch", "allow");
+  checkBash(manager, "git credential fill", "allow");
+  checkBash(manager, "git -c 'alias.x=!printf bypass' x", "deny");
+  checkBash(manager, "git statusx", "allow");
+  checkBash(manager, "git branchx feature/example", "allow");
+  checkBash(manager, "git commitx -am message", "allow");
   checkBash(manager, "git switch my-feature", "allow");
+  checkBash(manager, "git switch -c feature/example", "allow");
+  checkBash(manager, "git -C . switch -c feature/example", "allow");
   checkBash(manager, "git rm docs/my-file.md", "allow");
   checkBash(manager, "git worktree remove /tmp/my-feature", "allow");
   checkBash(manager, "git branch -D feature/example", "ask");
@@ -323,15 +351,66 @@ try {
   checkBash(manager, "gh issue edit 42 --state closed", "ask");
   checkBash(manager, "gh pr merge 42", "ask");
   checkBash(manager, "gh issue close 42", "ask");
-  checkBash(manager, "/usr/bin/gh pr create --title example", "ask");
-  checkBash(manager, "curl https://example.com", "ask");
-  checkBash(manager, "/usr/bin/curl https://example.com", "ask");
+  checkBash(manager, "/usr/bin/gh pr create --title example", "allow");
+  checkBash(manager, "curl https://example.com", "allow");
+  checkBash(manager, "/usr/bin/curl https://example.com", "allow");
   checkBash(manager, "curl -fsS http://127.0.0.1:9222/json/version", "allow");
   checkBash(manager, "curl --max-time 2 http://localhost:8765/health", "allow");
-  checkBash(manager, "curl https://example.com http://127.0.0.1:9222", "ask");
-  checkBash(manager, "curl http://127.0.0.1:9222 http://example.com", "ask");
-  checkBash(manager, "curl http://localhost.evil.example/", "ask");
-  checkBash(manager, "curl http://localhost@evil.example/", "ask");
+  checkBash(manager, "curl https://example.com http://127.0.0.1:9222", "allow");
+  checkBash(manager, "curl http://127.0.0.1:9222 http://example.com", "allow");
+  checkBash(manager, "curl http://localhost.evil.example/", "allow");
+  checkBash(manager, "curl http://localhost@evil.example/", "allow");
+  const curlAskCommands = [
+    "curl --data payload https://example.com/items",
+    "curl --data=payload https://example.com/items",
+    "curl --data-raw payload https://example.com/items",
+    "curl --data-binary @payload https://example.com/items",
+    "curl --data-urlencode name=value https://example.com/items",
+    "curl -d payload https://example.com/items",
+    "curl --form artifact=@file https://example.com/items",
+    "curl -F artifact=@file https://example.com/items",
+    "curl --upload-file artifact.zip https://example.com/items",
+    "curl -T artifact.zip https://example.com/items",
+    "curl --request POST https://example.com/items",
+    "curl --request PUT https://example.com/items",
+    "curl --request PATCH https://example.com/items",
+    "curl --request DELETE https://example.com/items/1",
+    "curl --request post https://example.com/items",
+    "curl --request put https://example.com/items",
+    "curl --request patch https://example.com/items",
+    "curl --request delete https://example.com/items/1",
+    "curl -X POST https://example.com/items",
+    "curl -X PUT https://example.com/items",
+    "curl -X PATCH https://example.com/items",
+    "curl -X DELETE https://example.com/items/1",
+    "curl -X post https://example.com/items",
+    "curl -X put https://example.com/items",
+    "curl -X patch https://example.com/items",
+    "curl -X delete https://example.com/items/1",
+    "curl -H 'Authorization: Bearer example' https://example.com/private",
+    "curl --header 'Authorization: Bearer example' https://example.com/private",
+    "curl --user name:password https://example.com/private",
+    "curl -u name:password https://example.com/private",
+    "curl --cookie session=example https://example.com/private",
+    "curl -b session=example https://example.com/private",
+    "curl --cert client.pem https://example.com/private",
+    "curl -E client.pem https://example.com/private",
+    "curl --key client.key https://example.com/private",
+    "curl --netrc https://example.com/private",
+  ];
+  for (const command of curlAskCommands) checkBash(manager, command, "ask");
+  await checkBashGate(
+    "/usr/bin/curl https://example.com/items --data payload",
+    "ask",
+  );
+  await checkBashGate(
+    "curl https://example.com/one https://example.com/two -T artifact.zip",
+    "ask",
+  );
+  await checkBashGate(
+    "printf ready && curl https://example.com/items -X DELETE",
+    "ask",
+  );
   checkBash(manager, "rm -f /tmp/example", "ask");
   checkBash(manager, "rm -rf /tmp/example", "ask");
   checkBash(manager, "rm -rf important /tmp/example", "ask");
@@ -340,7 +419,7 @@ try {
   checkBash(manager, "/bin/rm -rf .", "ask");
   checkBash(manager, "nc example.com 443", "ask");
   checkBash(manager, '/bin/cat "$SECRET_PATH"', "ask");
-  await checkBashGate("cd . && curl https://example.com", "ask");
+  await checkBashGate("cd . && curl https://example.com", "allow");
   await checkBashGate("env gh pr create --title example", "ask");
   await checkBashGate("sh -c 'git push origin main'", "ask");
   checkBash(manager, "git show --ext-diff HEAD", "ask");
@@ -354,6 +433,14 @@ try {
   checkBash(manager, "yq -i '.x = 1' config.yaml", "ask");
   checkBash(manager, 'cat "$SECRET_PATH"', "ask");
   checkBash(manager, "sudo true", "deny");
+  await checkBashGate("rm -rf ./build", "ask");
+  await checkBashGate("rm -rf /", "deny");
+  await checkBashGate("sudo true", "deny");
+  await checkBashGate("doas true", "deny");
+  await checkBashGate("git reset --hard HEAD~1", "deny");
+  await checkBashGate("git clean -ffdx", "deny");
+  await checkBashGate("git push --force origin main", "deny");
+  await checkBashGate("gh repo delete owner/name --yes", "deny");
   const destructiveCommands = [
     "git push origin main --force",
     "git push -f origin main",
@@ -411,12 +498,12 @@ try {
   }
   const trustedSkillPath = join(homedir(), ".agents", "skills", "impeccable", "SKILL.md");
   checkPath(manager, "external_directory_read", trustedSkillPath, "allow");
-  checkPath(manager, "external_directory_write", trustedSkillPath, "ask");
+  checkPath(manager, "external_directory_write", trustedSkillPath, "allow");
   const wingmanWorktreePath = "/mnt/c/dev/flygd-wingman-worktrees/example/README.md";
   checkPath(manager, "external_directory_read", wingmanWorktreePath, "allow");
   checkPath(manager, "external_directory_write", wingmanWorktreePath, "allow");
-  checkPath(manager, "external_directory_read", "/opt/pi-security-test/file", "ask");
-  checkPath(manager, "external_directory_write", "/opt/pi-security-test/file", "ask");
+  checkPath(manager, "external_directory_read", "/opt/pi-security-test/file", "allow");
+  checkPath(manager, "external_directory_write", "/opt/pi-security-test/file", "allow");
 
   for (const agentName of ["rush", "deep", "review"] as const) {
     expectState(`${agentName} write tool`, manager.getToolPermission("write", agentName), "deny");
@@ -469,5 +556,7 @@ try {
 
   console.log("Pi permission schema and deterministic engine validation passed.");
 } finally {
+  if (originalHome === undefined) delete process.env.HOME;
+  else process.env.HOME = originalHome;
   rmSync(temporaryRoot, { recursive: true, force: true });
 }
