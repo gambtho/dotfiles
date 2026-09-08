@@ -9,6 +9,7 @@ import {
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { runPermissionPipelineChecks } from "./pi-permission-pipeline-checks.ts";
 
 type PermissionState = "allow" | "ask" | "deny";
 
@@ -210,6 +211,8 @@ try {
   if (issues.length > 0) {
     throw new Error(`permission config issues:\n${issues.map((issue) => `- ${issue}`).join("\n")}`);
   }
+
+  await runPermissionPipelineChecks({ packageRoot, agentDir, repoRoot });
 
   expectState(
     "read tool",
