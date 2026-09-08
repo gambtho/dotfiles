@@ -134,3 +134,33 @@ Exit: `0`, no output.
 - Kept `RELAXED_PIPELINE_CASES` separate from baseline ownership and replaced index-derived tool-call IDs with stable label-derived IDs.
 - Did not modify named-agent definitions, sandbox code, upstream packages, or dependencies.
 - The required polish pass found no safe auto-fixes or unresolved correctness findings. Review was performed locally because this unit explicitly forbids subagents and external reviewers.
+
+## Tasks 2-3 fix round 1 evidence
+
+The inherited four-file fix diff was retained and reviewed in place. Its first focused Bats run exited `1` with 9/10 passing; only `tracked Pi runtime baselines contain no credential fields` failed because the new `*git *credential *` Bash command-pattern key matched the generic sensitive-field-name scan. Since `.permission.bash` is a schema-constrained pattern-to-action map rather than a credential store, the scan now excludes only that map while continuing to inspect all actual runtime configuration fields.
+
+The completed fix round:
+
+- asks for decomposed `sh`, `bash`, `zsh`, `dash`, and `ksh` stdin modes (`-s...` and `-`) while the full pipeline continues to allow `bash bin/validate-ai --verbose`;
+- denies key-agnostic post-`-C` Git `-c key=value` forms without reinstating the broad `*git * -c *=*` collision, and verifies both ordinary and post-`-C` `switch -c` forms remain allowed;
+- asks ordinary `git send-pack` and denies its `--force` and `+refspec` forms;
+- asks `git credential` and `gh auth token` while allowing `gh auth status`;
+- asks non-read `git config`, allows the retained read forms, and keeps later alias and `core.sshCommand` executable-value denials. The `core.sshCommand` deny requires an actual value so `git config --get core.sshCommand` remains allowed.
+
+Final commands all exited `0`:
+
+```bash
+bats tests/pi_permissions.bats
+bin/validate-pi-security-runtime
+bash bin/validate-ai
+git diff --check
+```
+
+Exact result summary:
+
+- Bats: `1..10`, all 10 cases `ok`.
+- Runtime: `Pi permission schema and deterministic engine validation passed.`
+- AI validation: 5 prompts, 7 skills, 0 errors, 0 warnings, `PASSED`.
+- Diff check: no output.
+
+The final local polish/self-review found no additional safe fix or unresolved correctness issue. No subagent or external reviewer was used, and the ruled-out curl syntax expansion and deferred minor findings were not changed.

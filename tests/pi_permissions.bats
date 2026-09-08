@@ -143,6 +143,21 @@ setup() {
     and $bash["*/curl *"] == "allow"
     and $bash["curl *http://127.0.0.1:*"] == "allow"
     and $bash["curl *http://localhost:*"] == "allow"
+    and $bash.sh == "ask"
+    and $bash["sh -s*"] == "ask"
+    and $bash["sh -"] == "ask"
+    and $bash.bash == "ask"
+    and $bash["bash -s*"] == "ask"
+    and $bash["bash -"] == "ask"
+    and $bash.zsh == "ask"
+    and $bash["zsh -s*"] == "ask"
+    and $bash["zsh -"] == "ask"
+    and $bash.dash == "ask"
+    and $bash["dash -s*"] == "ask"
+    and $bash["dash -"] == "ask"
+    and $bash.ksh == "ask"
+    and $bash["ksh -s*"] == "ask"
+    and $bash["ksh -"] == "ask"
     and (
       [
         "*curl *--data *",
@@ -202,6 +217,18 @@ setup() {
     and $bash.export == "ask"
     and $bash["declare *-x*"] == "ask"
     and $bash["git status *"] == "allow"
+    and $bash["*git *config *"] == "ask"
+    and $bash["*git *config --get*"] == "allow"
+    and $bash["*git *config --get-regexp*"] == "allow"
+    and $bash["*git *config --list*"] == "allow"
+    and $bash["*git *config -l*"] == "allow"
+    and (($keys | index("*git *config --get*")) > ($keys | index("*git *config *")))
+    and (($keys | index("*git *config --get-regexp*")) > ($keys | index("*git *config *")))
+    and (($keys | index("*git *config --list*")) > ($keys | index("*git *config *")))
+    and (($keys | index("*git *config -l*")) > ($keys | index("*git *config *")))
+    and $bash["*git *credential *"] == "ask"
+    and $bash["*git *send-pack *"] == "ask"
+    and $bash["*gh *auth token*"] == "ask"
     and $bash["git show *--ext-d*"] == "ask"
     and $bash["git show *--textc*"] == "ask"
     and $bash["git diff *--ext-d*"] == "ask"
@@ -217,6 +244,16 @@ setup() {
     and ($bash | has("*$*") | not)
     and $bash["*cat *$*"] == "ask"
     and $bash["*rg *$*"] == "ask"
+    and ($bash | has("*git * -c *=*") | not)
+    and $bash["*git -C * -c *=*"] == "deny"
+    and $bash["*git *config *alias.* *!*"] == "deny"
+    and $bash["*git *config *core.sshCommand ?*"] == "deny"
+    and (($keys | index("*git *config *alias.* *!*")) > ($keys | index("*git *config --get*")))
+    and (($keys | index("*git *config *core.sshCommand ?*")) > ($keys | index("*git *config --get*")))
+    and $bash["*git *send-pack *--for*"] == "deny"
+    and $bash["*git *send-pack * +*"] == "deny"
+    and (($keys | index("*git *send-pack *--for*")) > ($keys | index("*git *send-pack *")))
+    and (($keys | index("*git *send-pack * +*")) > ($keys | index("*git *send-pack *")))
     and $bash["*git *push *--for*"] == "deny"
     and $bash["*git *push -f*"] == "deny"
     and $bash["*git *push -qf*"] == "deny"
@@ -292,7 +329,8 @@ setup() {
 
 @test "tracked Pi runtime baselines contain no credential fields" {
   run jq -s -e '
-    [paths(objects) as $path
+    map(del(.permission.bash))
+    | [paths(objects) as $path
       | (getpath($path) | keys[]) as $key
       | select($key | test("(api[_-]?key|token|secret|password|credential)"; "i"))]
     | length == 0
