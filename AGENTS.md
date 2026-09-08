@@ -28,7 +28,7 @@ ai/
     package.json              # Pi resource manifest
 ```
 
-Run `make ai` or `bash ai/pi/install.sh`. The installer links immutable authored resources, publishes runtime-mutated settings and security configuration as regular machine-local files, reconciles packages, and leaves authentication, sessions, trust decisions, package caches, logs, and generated model catalogs machine-local. Tracked baselines such as `ai/pi/config/modes.json`, `ai/pi/config/models.json`, and `ai/pi/config/permission-system.json` are first-install/reset inputs, not live runtime files.
+Run `make ai` or `bash ai/pi/install.sh`. The installer links immutable authored resources, publishes runtime-mutated settings and security configuration as regular machine-local files, reconciles packages, and leaves authentication, sessions, trust decisions, package caches, logs, and generated model catalogs machine-local. Tracked mutable baselines such as `ai/pi/config/modes.json`, `ai/pi/config/models.json`, `ai/pi/config/subagents.json`, and `ai/pi/config/web-search.json` remain first-install/reset inputs whose runtime drift is preserved. `ai/pi/config/permission-system.json` is different: its repository-owned permission map and stable fields are republished on `make ai` while valid runtime `yoloMode`, `debugLog`, and `permissionReviewLog` controls are preserved.
 
 Pi authenticates directly to the GitHub Copilot subscription through `/login`. Select any enabled Copilot model with `/model`; press Ctrl+S in the picker to save it as the startup default.
 

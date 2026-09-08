@@ -2,7 +2,7 @@
 
 ## Status
 
-**Superseded on 2026-09-02.** This document records the original rollout design; its `pi-sandbox` and Bubblewrap requirements are historical and are not the active security model. See `ai/README.md` for the current permission-only model.
+**Superseded on 2026-09-02.** This document records the original rollout design; its `pi-sandbox`, Bubblewrap, and preserve-drift permission-policy requirements are historical and are not the active security model. See `ai/README.md` for operator guidance and `ai/pi/permissive-permission-policy-design.md` for the current permission-only design.
 
 Originally approved after independent `/second-opinion` review and follow-up package analysis on 2026-09-01. The user accepted the review findings and selected a parent-only sandbox after verification showed that `pi-sandbox` is unsafe to bind into concurrent in-process child sessions. Amended on 2026-09-02 to use a relaxed-but-guarded parent Bash policy after the original unmatched-command fallback caused excessive approval prompts.
 
@@ -221,6 +221,8 @@ The following are intentionally documented residuals:
 - Permission review logging is disabled by default because values are redacted only when their input key is recognized as sensitive. An operator who enables it for diagnosis must avoid inline secrets in Bash commands and disable it again afterward.
 
 ## Mutable configuration boundary
+
+**Superseded permission-policy decision.** The original generic preserve-drift rules below still describe modes, models, subagent settings, web settings, and other runtime-owned mutable baselines. They no longer govern `permission-system.json`: normal installation republishes its repository-owned permission map, preserves only valid runtime `yoloMode`, `debugLog`, and `permissionReviewLog` controls, refuses active YOLO, and validates against the exact installed schema before publication. `PI_AI_RESET_MUTABLE_CONFIG=1` does not replace those three controls. The sole transitional exception is legacy `pi-sandbox` retirement, which backs up and safely resets active YOLO to the tracked non-YOLO policy before package-schema availability so the old containment package is not removed first. See the current design and `ai/README.md` for authoritative behavior.
 
 ### Problem
 

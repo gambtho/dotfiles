@@ -187,7 +187,9 @@ Publication must:
 8. Report the old and new policy identities without logging sensitive command payloads.
 9. Leave authentication, sessions, trust, logs, grants, model selection, and unrelated mutable settings untouched.
 
-Runtime permission-map edits are temporary machine-local overrides until the next `make ai`; the three UI-owned runtime controls survive reconciliation. Documentation must state both behaviors. If further durable machine-local overlays are needed later, they require an explicit supported merge design rather than silent whole-file drift.
+The approved implementation has one bounded transitional exception: when positively identified legacy `pi-sandbox` state is being retired, the installer backs up and resets even an active-YOLO permission file to the tracked non-YOLO baseline before package-schema availability. This preserves a permission layer before removing the old containment package. It is not used by normal authoritative reconciliation, which refuses active YOLO and validates first.
+
+Runtime permission-map edits are temporary machine-local overrides until the next `make ai`; the three UI-owned runtime controls survive reconciliation, including when `PI_AI_RESET_MUTABLE_CONFIG=1` is set. Documentation must state both behaviors. If further durable machine-local overlays are needed later, they require an explicit supported merge design rather than silent whole-file drift.
 
 Check mode should report drift. Whether drift makes `make ai-check` nonzero should follow existing repository check-mode conventions; at minimum, CI and tests must compare the tracked rendered policy with an isolated installed runtime result.
 

@@ -180,3 +180,40 @@ TDD evidence:
 - Focused tests subsequently passed with eight cases covering publication/controls/idempotence, YOLO, candidate validation, invalid-runtime migration, concurrency, hook confinement, recognized-link migration, and foreign/invalid destinations.
 
 Local polish removed duplicated schema JSON from the two Pi stubs by generating one Bats fixture and copying it when the permission package is installed. No subagent or external reviewer was used, as required for this task.
+
+## Task 7 documentation and rollout verification
+
+Active guidance now describes permission-system as an attention/tripwire layer rather than containment, gives ordinary `curl` and bounded upload/authentication/mutation behavior, and distinguishes the authoritative permission map from mutable baselines that preserve drift. It also documents generated-backup rollback, the three controls that survive `PI_AI_RESET_MUTABLE_CONFIG=1`, and the bounded legacy `pi-sandbox` retirement exception. The current design records that approved exception; the historical design points its superseded preserve-drift decision to current behavior.
+
+### Repository gates
+
+The required repository gates produced these results:
+
+- `bash bin/validate-ai --verbose`: exit `0`; 5 prompts, 7 skills, 0 errors, 0 warnings, `PASSED`.
+- `bats tests/pi_permissions.bats`: exit `0`; `1..13`, all 13 tests passed.
+- `bats tests/pi_modes.bats`: exit `0`; `1..11`, all 11 tests passed.
+- `bats tests/ai_installers.bats`: exit `0`; `1..43`, all 43 tests passed.
+- `bin/validate-pi-security-runtime`: exit `0`; exact installed package schema, deterministic manager, and gate pipeline passed.
+- `make ai-check`: exit `0`; dry-run reported authoritative permission publication and performed no apply.
+- The first `make check` exposed a branch-caused syntax-discovery defect: the newly added extensionless Python validator was sent to `bash -n` because `bin/list-check-files` treated every extensionless `bin/` entry as Bash. A focused test failed RED (`1..1`, 1 failure), shebang-aware discovery fixed the classification, and the focused test plus the complete discovery suite passed GREEN (`1..1` and `1..12`).
+- The repeated `make check`: exit `0`; all 513 Bats tests and all 8 Python unit tests passed, followed by AI validation with 5 prompts, 7 skills, 0 errors, and 0 warnings. Syntax, ShellCheck, and shfmt gates also exited `0`.
+
+No Bats skip was reported and no platform-specific repository gate from the brief was omitted. Verification ran on the configured Linux host.
+
+### Isolated installed-runtime evidence
+
+Both isolated attempts used a `/tmp/pi-permission-smoke.XXXXXX` root, an absolute temporary `PI_CODING_AGENT_DIR`, temporary HOME/XDG paths, `DOTFILES` pointing to this reviewed worktree, and an EXIT/signal cleanup trap. No apply targeted the production agent directory. The first attempt stopped after Pi installation when mise's npm wrapper tried to reshim against an untrusted production mise config under the overridden HOME; the trap removed the complete temporary root. The successful rerun set the wrapper's documented `MISE_SKIP_RESHIM=1` control and otherwise used the required installation pattern.
+
+The successful isolated run established:
+
+- Pi `0.85.1` and `@gotgenes/pi-permission-system` `29.2.0` were installed into the temporary root.
+- No `auth.json` was read, copied, or installed.
+- `bin/validate-pi-security-runtime`, using the isolated Pi binary and permission package, exited `0`.
+- The installed runtime `.permission` object exactly matched the tracked policy rendered with the isolated agent path.
+- Runtime controls were `yoloMode=false`, `debugLog=false`, and `permissionReviewLog=false`.
+- The private permission runtime directory was mode `0700`; `config.json` was mode `0644`.
+- The exact package gate pipeline exercised 41 tool-call cases: 17 silent allows, 20 intentional asks that reached the prompt spy and terminated blocked after denial, and 4 hard denies that blocked without prompting. These include the representative skill-script, Pi-metadata, external Git diff, named-agent validation, ordinary `curl`, curl authority/mutation, protected redirect, deletion, and privilege cases.
+- npm reported 5 dependency audit findings (3 moderate, 2 high) and install-script allowlist notices in the temporary pinned package graph. Pin changes or audit remediation are outside this policy rollout; all temporary package state was removed.
+- The trap confirmed cleanup of the failed and successful smoke roots, and no repository package cache, permission log, debug log, or credential artifact was created.
+
+Interactive model-facing main/named-agent smoke is intentionally deferred to the canonical rollout. The credential tripwire forbids an agent command from reading or copying production `auth.json`; it was not weakened or bypassed, and YOLO was never enabled. The exact installed-package pipeline provides the pre-integration policy evidence without credentials, while post-integration operator smoke remains necessary to prove Copilot-backed session UX.
