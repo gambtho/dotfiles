@@ -338,6 +338,20 @@ setup() {
   [ "$status" -eq 0 ]
 }
 
+@test "Pi permission config validator accepts valid config and rejects invalid config" {
+  local schema="$TEST_ROOT/schema.json" valid="$TEST_ROOT/valid.json" invalid="$TEST_ROOT/invalid.json"
+  printf '%s\n' '{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","required":["permission"],"properties":{"permission":{"type":"object"}}}' >"$schema"
+  printf '%s\n' '{"permission":{}}' >"$valid"
+  printf '%s\n' '[]' >"$invalid"
+
+  run "$REPO_ROOT/bin/validate-pi-permission-config" --schema "$schema" --config "$valid"
+  [ "$status" -eq 0 ]
+
+  run "$REPO_ROOT/bin/validate-pi-permission-config" --schema "$schema" --config "$invalid"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"permission schema"* ]]
+}
+
 @test "Pi runtime validator fails clearly when permission package is absent" {
   run "$REPO_ROOT/bin/validate-pi-security-runtime" \
     --package-root "$TEST_ROOT/missing-permission-package"

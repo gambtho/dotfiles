@@ -64,30 +64,9 @@ if [[ ! -f "$pi_core_entry" ]]; then
   exit 1
 fi
 
-python3 - "$schema_file" "$config_file" <<'PY'
-import json
-import sys
-
-try:
-    from jsonschema import Draft202012Validator
-except ImportError:
-    print("error: Python jsonschema is required for Pi permission validation", file=sys.stderr)
-    raise SystemExit(1)
-
-schema_path, config_path = sys.argv[1:]
-with open(schema_path, encoding="utf-8") as stream:
-    schema = json.load(stream)
-with open(config_path, encoding="utf-8") as stream:
-    config = json.load(stream)
-
-Draft202012Validator.check_schema(schema)
-errors = sorted(Draft202012Validator(schema).iter_errors(config), key=lambda item: list(item.path))
-if errors:
-    for error in errors:
-        location = ".".join(str(part) for part in error.path) or "<root>"
-        print(f"error: permission schema {location}: {error.message}", file=sys.stderr)
-    raise SystemExit(1)
-PY
+"$ROOT/bin/validate-pi-permission-config" \
+  --schema "$schema_file" \
+  --config "$config_file"
 
 # Managed extensions omit Pi peer dependencies and normally receive them from
 # Pi's extension loader. Reproduce that host alias while retaining jiti's
