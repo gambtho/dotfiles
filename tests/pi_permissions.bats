@@ -23,7 +23,7 @@ setup() {
   done
 }
 
-@test "Pi permission policy starts balanced without unredacted review logging" {
+@test "Pi permission policy uses permissive defaults with safety tripwires" {
   run jq -e '
     .debugLog == false
     and .permissionReviewLog == false
@@ -137,6 +137,13 @@ setup() {
     and $bash["*git *branch * -D*"] == "ask"
     and $bash["*git *worktree remove * -f*"] == "ask"
     and $bash["*git *commit * --am*"] == "ask"
+    and ($bash | has("*git *restore *") | not)
+    and $bash["git restore *"] == "ask"
+    and $bash["*/git restore *"] == "ask"
+    and $bash["git -C * restore *"] == "ask"
+    and $bash["*/git -C * restore *"] == "ask"
+    and $bash["git -C * commit *"] == "allow"
+    and $bash["*/git -C * commit *"] == "allow"
     and ($bash | has("gh *") | not)
     and ($bash | has("*/gh *") | not)
     and $bash["curl *"] == "allow"
@@ -381,6 +388,24 @@ setup() {
   run "$REPO_ROOT/bin/validate-pi-permission-config" --schema "$schema" --config "$malformed"
   [ "$status" -ne 0 ]
   [[ "$output" == "error: permission schema $malformed:"* ]]
+  [[ "$output" != *"Traceback"* ]]
+}
+
+@test "Pi permission config validator reports invalid UTF-8 without a traceback" {
+  local schema="$TEST_ROOT/schema.json" config="$TEST_ROOT/config.json"
+  printf '%s\n' '{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object"}' >"$schema"
+  printf '\xff' >"$config"
+
+  run "$REPO_ROOT/bin/validate-pi-permission-config" --schema "$schema" --config "$config"
+  [ "$status" -ne 0 ]
+  [[ "$output" == "error: permission schema $config:"* ]]
+  [[ "$output" != *"Traceback"* ]]
+
+  printf '\xff' >"$schema"
+  printf '{}\n' >"$config"
+  run "$REPO_ROOT/bin/validate-pi-permission-config" --schema "$schema" --config "$config"
+  [ "$status" -ne 0 ]
+  [[ "$output" == "error: permission schema $schema:"* ]]
   [[ "$output" != *"Traceback"* ]]
 }
 

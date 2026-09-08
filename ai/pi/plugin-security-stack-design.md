@@ -76,7 +76,7 @@ This layer cannot classify arbitrary shell commands or extension-internal proces
 
 `@gotgenes/pi-permission-system` replaces `pi-amplike` permissions. It decides whether model-facing tool calls are allowed, denied, or require a user decision. It is a policy and attention-routing layer, not process isolation.
 
-The global baseline uses a balanced posture:
+The original permission-layer baseline used a selective allow/ask/deny posture:
 
 - universal fallback: `ask`;
 - built-in read/search tools: `allow`;

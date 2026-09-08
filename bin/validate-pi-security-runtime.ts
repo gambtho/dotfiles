@@ -363,7 +363,12 @@ try {
   checkBash(manager, "git -C . worktree remove --force /tmp/example", "ask");
   checkBash(manager, "git commit --amend --no-edit", "ask");
   checkBash(manager, "git -C . commit --amend --no-edit", "ask");
+  checkBash(manager, "git commit -m 'restore README wording'", "allow");
+  checkBash(manager, "git -C . commit -m 'restore README wording'", "allow");
   checkBash(manager, "git restore README.md", "ask");
+  checkBash(manager, "/usr/bin/git restore README.md", "ask");
+  checkBash(manager, "git -C . restore README.md", "ask");
+  checkBash(manager, "/usr/bin/git -C . restore README.md", "ask");
   checkBash(manager, "gh auth status", "allow");
   checkBash(manager, "gh auth token", "ask");
   checkBash(manager, "/usr/bin/gh auth token --hostname github.com", "ask");

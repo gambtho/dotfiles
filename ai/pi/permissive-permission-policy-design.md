@@ -181,11 +181,13 @@ Publication must:
 2. Validate the tracked candidate against the exact installed package schema.
 3. Load a valid existing runtime file and preserve its three runtime-owned booleans in the candidate.
 4. Refuse policy replacement while the existing runtime has `yoloMode: true`; an active unattended relaxation must be disabled deliberately before its policy changes.
-5. Record the existing runtime file identity, then recheck it immediately before publication and abort on concurrent modification rather than losing a UI toggle.
+5. Record the existing runtime file identity, check it before backup, then check it again after backup and immediately before atomic publication; abort on detected concurrent modification rather than losing a UI toggle.
 6. If the effective candidate differs, create one timestamped backup and publish atomically.
 7. Preserve owner-safe directory and file modes.
 8. Report the old and new policy identities without logging sensitive command payloads.
 9. Leave authentication, sessions, trust, logs, grants, model selection, and unrelated mutable settings untouched.
+
+This is best-effort compare-before-publish rather than locking: the permission-system UI writer shares no lock with the installer, so a runtime write can still race between the final identity check and the atomic rename. The second check narrows that unavoidable final race but cannot eliminate it.
 
 The approved implementation has one bounded transitional exception: when positively identified legacy `pi-sandbox` state is being retired, the installer backs up and resets even an active-YOLO permission file to the tracked non-YOLO baseline before package-schema availability. This preserves a permission layer before removing the old containment package. It is not used by normal authoritative reconciliation, which refuses active YOLO and validates first.
 

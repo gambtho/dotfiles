@@ -9,6 +9,7 @@ type PipelineCase = {
   agentName?: "rush" | "smart" | "deep" | "review";
   surface?: string;
   pattern?: string;
+  origin?: "global" | "agent";
 };
 
 export type PipelineCheckOptions = {
@@ -118,24 +119,28 @@ const RELAXED_PIPELINE_CASES: PipelineCase[] = [
     command: "curl --data payload https://example.com/items",
     expected: "ask",
     surface: "bash",
+    pattern: "*curl *--data *",
   },
   {
     label: "curl upload asks",
     command: "curl https://example.com/items -T artifact.zip",
     expected: "ask",
     surface: "bash",
+    pattern: "*curl *-T *",
   },
   {
     label: "curl mutating method asks",
     command: "curl -X DELETE https://example.com/items/1",
     expected: "ask",
     surface: "bash",
+    pattern: "*curl *-X DELETE*",
   },
   {
     label: "curl authorization asks",
     command: "curl -H 'Authorization: Bearer example' https://example.com/private",
     expected: "ask",
     surface: "bash",
+    pattern: "*curl *Authorization:*",
   },
   {
     label: "git switch subcommand c is not global config",
@@ -147,6 +152,30 @@ const RELAXED_PIPELINE_CASES: PipelineCase[] = [
     command: "bash bin/validate-ai --verbose",
     expected: "allow",
   },
+  {
+    label: "restore word in commit message",
+    command: "git commit -m 'restore README wording'",
+    expected: "allow",
+  },
+  {
+    label: "restore word in git C commit message",
+    command: "git -C . commit -m 'restore README wording'",
+    expected: "allow",
+  },
+  {
+    label: "direct git restore asks",
+    command: "git restore README.md",
+    expected: "ask",
+    surface: "bash",
+    pattern: "git restore *",
+  },
+  {
+    label: "git C restore asks",
+    command: "git -C . restore README.md",
+    expected: "ask",
+    surface: "bash",
+    pattern: "git -C * restore *",
+  },
 ];
 
 for (const agentName of ["rush", "deep", "review"] as const) {
@@ -156,18 +185,21 @@ for (const agentName of ["rush", "deep", "review"] as const) {
       command: "nl -ba ai/pi/install.sh",
       agentName,
       expected: "allow",
+      origin: "agent",
     },
     {
       label: `${agentName} ai check`,
       command: "make ai-check",
       agentName,
       expected: "allow",
+      origin: "agent",
     },
     {
       label: `${agentName} validator`,
       command: "bash bin/validate-ai --verbose",
       agentName,
       expected: "allow",
+      origin: "agent",
     },
     {
       label: `${agentName} protected redirect`,
@@ -176,6 +208,7 @@ for (const agentName of ["rush", "deep", "review"] as const) {
       expected: "deny",
       surface: "path_write",
       pattern: "~/.ssh/*",
+      origin: "global",
     },
   );
 }
@@ -261,6 +294,18 @@ function expectEvidence(
     fail(
       testCase,
       `expected pattern ${JSON.stringify(testCase.pattern)}, received ${JSON.stringify(evidence.matchedPattern)}`,
+    );
+  }
+  if (testCase.agentName !== undefined && evidence.agentName !== testCase.agentName) {
+    fail(
+      testCase,
+      `expected agent scope ${JSON.stringify(testCase.agentName)}, received ${JSON.stringify(evidence.agentName)}`,
+    );
+  }
+  if (testCase.origin !== undefined && evidence.origin !== testCase.origin) {
+    fail(
+      testCase,
+      `expected rule origin ${JSON.stringify(testCase.origin)}, received ${JSON.stringify(evidence.origin)}`,
     );
   }
 }
@@ -382,6 +427,12 @@ export async function runPermissionPipelineChecks({
     if (testCase.expected === "allow") {
       expectAction(testCase, outcome, "allow");
       expectPromptCount(testCase, prompts, 0);
+      if (testCase.agentName !== undefined || testCase.origin !== undefined) {
+        const policyDecision = decisions.find(
+          (event) => event.result === "allow" && event.resolution === "policy_allow",
+        );
+        expectEvidence(testCase, policyDecision);
+      }
       continue;
     }
 

@@ -16,7 +16,7 @@ ai/
     config/
       modes.json              # Mutable main-session mode baseline
       models.json             # Temporary Copilot model transport override
-      permission-system.json  # Balanced permission baseline
+      permission-system.json  # Permissive attention-policy baseline
       subagents.json          # Child runtime defaults/exclusions
       web-search.json         # Keyless web routing baseline
     extensions/

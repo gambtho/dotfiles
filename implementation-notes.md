@@ -72,7 +72,7 @@ Exit: `0`
 ```text
 1..10
 ok 1 Pi runtime baselines are valid JSON
-ok 2 Pi permission policy starts balanced without unredacted review logging
+ok 2 Pi permission policy uses permissive defaults with safety tripwires
 ok 3 Pi permission policy allows known workflow tools
 ok 4 Pi permission path policy protects secrets without blocking env examples
 ok 5 Pi permission Bash policy allows local Git while guarding risky operations
@@ -169,9 +169,9 @@ The final local polish/self-review found no additional safe fix or unresolved co
 
 The installer now gives the repository ownership of the rendered permission map and stable permission-system fields while preserving only the three UI-owned runtime booleans: `yoloMode`, `debugLog`, and `permissionReviewLog`. A valid active `yoloMode: true` fails with deliberate disable guidance even when mutable reset is requested. Invalid runtime controls are treated as migration input: the original is backed up and the validated non-YOLO tracked baseline is published without preserving malformed values.
 
-Publication waits until tracked package inventory reconciliation and pinned npm package installation have made the exact permission-system schema available. The effective candidate is staged beside the destination, checked through `bin/validate-pi-permission-config`, compared with the runtime's snapshotted SHA-256 identity immediately before publication, backed up once when needed, and atomically installed as mode `0644` beneath the existing mode-`0700` runtime directory. Recognized tracked links are migrated; foreign links and invalid destination types fail without being followed or replaced. The earlier sandbox-retirement reset remains ahead of package-inventory removal.
+Publication waits until tracked package inventory reconciliation and pinned npm package installation have made the exact permission-system schema and manager artifacts available. The effective candidate is staged beside the destination, checked through `bin/validate-pi-permission-config`, compared with the runtime's snapshotted SHA-256 identity before backup and again after backup immediately before publication, and atomically installed as mode `0644` beneath the existing mode-`0700` runtime directory. This is best-effort compare-before-publish: the UI writer shares no lock, so an unavoidable race remains between the final identity check and rename. Recognized tracked links are migrated; foreign links and invalid destination types fail without being followed or replaced. The earlier sandbox-retirement reset remains ahead of package-inventory removal.
 
-The deterministic concurrency test uses only a Bats-confined directory containing `ready` and `continue` marker files. The hook is rejected before installer mutation unless Bats runtime markers are present, both test `HOME` and hook resolve below `BATS_TEST_TMPDIR`, and none of the marker contents are executed.
+The deterministic concurrency tests use only Bats-confined directories containing data-only phase marker files. The hook is rejected before installer mutation unless Bats runtime markers are present, both test `HOME` and hook resolve below `BATS_TEST_TMPDIR`, and none of the marker contents are executed.
 
 TDD evidence:
 
@@ -216,4 +216,35 @@ The successful isolated run established:
 - npm reported 5 dependency audit findings (3 moderate, 2 high) and install-script allowlist notices in the temporary pinned package graph. Pin changes or audit remediation are outside this policy rollout; all temporary package state was removed.
 - The trap confirmed cleanup of the failed and successful smoke roots, and no repository package cache, permission log, debug log, or credential artifact was created.
 
-Interactive model-facing main/named-agent smoke is intentionally deferred to the canonical rollout. The credential tripwire forbids an agent command from reading or copying production `auth.json`; it was not weakened or bypassed, and YOLO was never enabled. The exact installed-package pipeline provides the pre-integration policy evidence without credentials, while post-integration operator smoke remains necessary to prove Copilot-backed session UX.
+Interactive model-facing main/named-agent smoke is intentionally deferred to the canonical rollout. Direct lexical path checks deny obvious `auth.json` operands, and no agent command read or copied production `auth.json`; those tripwires were not weakened or bypassed, and YOLO was never enabled. The exact installed-package pipeline provides the pre-integration policy evidence without credentials, while post-integration operator smoke remains necessary to prove Copilot-backed session UX.
+
+## Consolidated final polish fix wave
+
+The final polish wave made only the evidence-backed corrections requested after rollout review:
+
+- Pi installation now reuses `bin/lib/artifacts.sh` for portable SHA-256 selection, including the `shasum -a 256` fallback used on macOS.
+- Authoritative policy publication checks the snapshotted destination identity before backup and again after backup immediately before the atomic rename. The Bats-only data marker hook exposes both phases without executing marker contents. This remains best-effort because the UI writer shares no lock; a final check/rename race is unavoidable and documented.
+- A matching permission-system package version is accepted only when regular schema and manager artifacts exist. An incomplete package is installed once and rejected with both expected paths if it remains incomplete.
+- The shared schema validator reports invalid UTF-8 as a controlled, path-prefixed error and sorts validation failures through stringified path components.
+- The installed 29.2.0 pipeline harness now asserts the observed exact patterns for primary curl data, upload, method, and authorization asks. Named-agent allow evidence asserts `agentName` plus `origin: agent`; protected-path deny evidence asserts the named scope plus `origin: global`.
+- CI installs `python3-jsonschema`, then installs the repository-pinned Pi and permission-system versions beneath `$RUNNER_TEMP` and runs the full validator with explicit absolute package roots. The cache and install prefix are temporary and no Pi runtime directory is selected.
+- Active guidance now uses attention/permission-layer terminology, scopes normal active-YOLO refusal separately from legacy retirement, restores rush's mutation-stop instruction, accurately describes selected named-agent mutation rules, and states what the runtime validator actually validates.
+- The broad restore ask was replaced by direct and slash-qualified `git restore` and `git -C … restore` tripwires. Later `git -C … commit` allows prevent ordinary commit messages containing “restore” from prompting, while later `git -C … commit --amend` asks preserve the existing history-rewrite tripwire.
+
+### RED evidence
+
+The focused installer run initially exited `1` with all four new regressions failing: a matching partial permission package was accepted, a still-partial reinstall did not fail, the no-`sha256sum` installation failed, and no post-backup test phase existed. The focused permission tests exited `1` because the broad restore key was still present and invalid UTF-8 produced a traceback. The new Python unit test failed with a missing `validation_error_sort_key`, and the installed pipeline failed because a commit message containing “restore” terminated blocked. Each focused suite passed after its minimal implementation.
+
+### Final verification
+
+All final commands exited `0`:
+
+- `make check`: all 522 Bats cases and all 9 Python unit tests passed; syntax, ShellCheck, shfmt, and AI validation gates also passed.
+- `bats tests/ai_installers.bats tests/pi_permissions.bats tests/pi_modes.bats tests/check_file_discovery.bats`: `1..88`, all 88 cases passed.
+- `bin/validate-pi-security-runtime`: exact schema, deterministic manager, reporter evidence, and full gate pipeline passed.
+- `bash bin/validate-ai --verbose`: 5 prompts, 7 skills, 0 errors, 0 warnings, `PASSED`.
+- Focused `shellcheck -x -S warning -e SC1091 ai/pi/install.sh` and `shfmt -d -i 2 -ci ai/pi/install.sh tests/ai_installers.bats tests/pi_permissions.bats`: no output.
+- A CI-equivalent temporary-prefix install added the exact Pi `0.85.1` and permission-system `29.2.0` packages with scripts disabled; validation with both absolute package roots passed. The temporary package tree and npm cache were removed afterward.
+- `git diff --check`: no output.
+
+The local polish-core fix pass removed repeated package-root derivation and found no unresolved correctness issue. No subagent or external reviewer was used. No production Pi runtime, authentication, permission controls, or package inventory was changed.

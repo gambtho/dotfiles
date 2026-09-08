@@ -33,6 +33,13 @@ def load_json(path: str):
     except json.JSONDecodeError as error:
         print(f"error: permission schema {path}: {error.msg}", file=sys.stderr)
         return LOAD_FAILED
+    except UnicodeError as error:
+        print(f"error: permission schema {path}: {error}", file=sys.stderr)
+        return LOAD_FAILED
+
+
+def validation_error_sort_key(error):
+    return tuple(str(part) for part in error.path)
 
 
 def main() -> int:
@@ -57,7 +64,7 @@ def main() -> int:
 
     errors = sorted(
         Draft202012Validator(schema).iter_errors(config),
-        key=lambda item: list(item.path),
+        key=validation_error_sort_key,
     )
     for error in errors:
         location = ".".join(str(part) for part in error.path) or "<root>"

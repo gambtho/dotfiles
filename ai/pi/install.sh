@@ -5,6 +5,8 @@ set -euo pipefail
 source "$(dirname "$0")/../../bin/common.sh"
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd -P)"
+# shellcheck source=bin/lib/artifacts.sh
+source "$ROOT/bin/lib/artifacts.sh"
 # shellcheck source=config/versions.env
 source "$ROOT/config/versions.env"
 # shellcheck source=ai/pi/cleanup-legacy.sh
@@ -191,12 +193,6 @@ permission_candidate_contents() {
   ' <(printf '%s\n' "$rendered") "$destination"
 }
 
-sha256_file() {
-  local output
-  output=$(sha256sum -- "$1") || return 1
-  printf '%s\n' "${output%% *}"
-}
-
 permission_destination_is_unchanged() {
   local destination=$1 kind=$2 expected_target=$3 expected_hash=$4 actual_hash
   case "$kind" in
@@ -249,20 +245,30 @@ validate_permission_before_publish_test_hook() {
 }
 
 run_permission_before_publish_test_hook() {
-  local hook=${PI_AI_TEST_PERMISSION_BEFORE_PUBLISH:-} hook_real attempt
+  local phase=$1 hook=${PI_AI_TEST_PERMISSION_BEFORE_PUBLISH:-}
+  local hook_real attempt suffix
   [[ -n "$hook" ]] || return 0
   validate_permission_before_publish_test_hook || return 1
   hook_real=$(cd "$hook" && pwd -P)
 
-  : >"$hook_real/ready"
-  chmod 0600 "$hook_real/ready"
+  case "$phase" in
+    before-compare) suffix='' ;;
+    before-publish) suffix='-before-publish' ;;
+    *)
+      log_warning "Unknown permission reconciliation test-hook phase: $phase"
+      return 1
+      ;;
+  esac
+
+  : >"$hook_real/ready$suffix"
+  chmod 0600 "$hook_real/ready$suffix"
   for ((attempt = 0; attempt < 1000; attempt++)); do
-    if [[ -f "$hook_real/continue" && ! -L "$hook_real/continue" ]]; then
+    if [[ -f "$hook_real/continue$suffix" && ! -L "$hook_real/continue$suffix" ]]; then
       return 0
     fi
     sleep 0.01
   done
-  log_warning "Permission reconciliation test hook timed out."
+  log_warning "Permission reconciliation test hook timed out during $phase."
   return 1
 }
 
@@ -330,7 +336,7 @@ reconcile_permission_policy() {
     return 1
   fi
 
-  if ! run_permission_before_publish_test_hook; then
+  if ! run_permission_before_publish_test_hook before-compare; then
     rm -f "$candidate"
     return 1
   fi
@@ -352,6 +358,16 @@ reconcile_permission_policy() {
       rm -f "$candidate"
       return 1
     }
+  fi
+  if ! run_permission_before_publish_test_hook before-publish; then
+    rm -f "$candidate"
+    return 1
+  fi
+  if ! permission_destination_is_unchanged \
+    "$destination" "$kind" "$link_target" "$snapshot_hash"; then
+    log_warning "Pi permission policy changed during reconciliation; preserving the runtime change and refusing publication."
+    rm -f "$candidate"
+    return 1
   fi
   if ! atomic_publish_file "$candidate" "$destination" 0644; then
     rm -f "$candidate"
@@ -708,9 +724,16 @@ install_pi() {
     "@earendil-works/pi-coding-agent@$PI_VERSION"
 }
 
+permission_package_artifacts_are_complete() {
+  local package_root=$1
+  local schema="$package_root/schemas/permissions.schema.json"
+  local manager="$package_root/src/permission-manager.ts"
+  [[ -f "$schema" && ! -L "$schema" && -f "$manager" && ! -L "$manager" ]]
+}
+
 ensure_pinned_npm_packages() {
   local pi_binary="$HOME/.local/bin/pi" specifications package_name package_version
-  local package_manifest installed_version source settings_source="$PI_AGENT_DIR/settings.json"
+  local package_manifest package_root installed_version source settings_source="$PI_AGENT_DIR/settings.json"
   [[ "$MODE" == check ]] && settings_source="$ROOT/ai/pi/settings.json"
   if ! specifications=$(jq -r '
     .packages[]
@@ -726,22 +749,32 @@ ensure_pinned_npm_packages() {
 
   while IFS=$'\t' read -r package_name package_version; do
     [[ -n "$package_name" && -n "$package_version" ]] || continue
-    package_manifest="$PI_AGENT_DIR/npm/node_modules/$package_name/package.json"
+    package_root="$PI_AGENT_DIR/npm/node_modules/$package_name"
+    package_manifest="$package_root/package.json"
     installed_version=""
     if [[ -f "$package_manifest" && ! -L "$package_manifest" ]]; then
       installed_version=$(jq -r '.version // empty' "$package_manifest" 2>/dev/null || true)
     fi
-    [[ "$installed_version" == "$package_version" ]] && continue
+    if [[ "$installed_version" == "$package_version" ]] &&
+      { [[ "$package_name" != @gotgenes/pi-permission-system ]] ||
+        permission_package_artifacts_are_complete "$package_root"; }; then
+      continue
+    fi
 
     source="npm:$package_name@$package_version"
     if [[ "$MODE" == check ]]; then
-      log_info "[dry-run] Would install missing or mismatched pinned Pi package $source"
+      log_info "[dry-run] Would install missing, mismatched, or incomplete pinned Pi package $source"
       continue
     fi
     PI_CODING_AGENT_DIR="$PI_AGENT_DIR" "$pi_binary" install "$source"
     if [[ ! -f "$package_manifest" || -L "$package_manifest" ]] ||
       [[ "$(jq -r '.version // empty' "$package_manifest" 2>/dev/null || true)" != "$package_version" ]]; then
       log_warning "Pi did not install the expected package version for $source"
+      return 1
+    fi
+    if [[ "$package_name" == @gotgenes/pi-permission-system ]] &&
+      ! permission_package_artifacts_are_complete "$package_root"; then
+      log_warning "Pi installed an incomplete Pi permission package for $source; expected regular files at $package_root/schemas/permissions.schema.json and $package_root/src/permission-manager.ts"
       return 1
     fi
   done <<<"$specifications"

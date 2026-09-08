@@ -49,7 +49,7 @@ Interactive browser automation remains opt-in rather than a default dependency.
 
 Each `subagent` invocation supplies one self-contained `prompt`, a 3–5 word `description`, and a `subagent_type`. Parallel work uses sibling calls with `run_in_background: true`; record each returned ID and poll with `get_subagent_result({ agent_id, wait: false })`. An explicit `model` is reserved for a user request or deliberate cross-family review.
 
-`rush`, `deep`, and `review` omit write/edit tools, allow routine inspection and verification silently, and hard-deny repository or remote mutation instead of forwarding approval prompts that a headless child cannot answer. `smart` otherwise inherits the balanced global policy. Every named child hard-denies Bash commands containing unresolved `$` expansion so a curated reader cannot hide a sensitive operand from path extraction. Children cannot recursively dispatch more children.
+`rush`, `deep`, and `review` omit write/edit tools and allow routine inspection and verification silently. Their explicit rules deny selected repository and remote mutations; other recognized risky operations follow the composed permission policy instead of an absolute read-only guarantee. `smart` otherwise inherits the permissive global attention policy. Every named child hard-denies Bash commands containing unresolved `$` expansion so a curated reader cannot hide a sensitive operand from path extraction. Children cannot recursively dispatch more children.
 
 ## Permission and containment model
 
@@ -128,9 +128,9 @@ Use runtime commands such as `/permission-system` and `/subagents:settings` for 
 PI_AI_RESET_MUTABLE_CONFIG=1 make ai
 ```
 
-`PI_AI_RESET_MUTABLE_CONFIG=1` no longer replaces permission-system `yoloMode`, `debugLog`, or `permissionReviewLog`. The same active-YOLO refusal applies with or without reset. Authentication, sessions, trust decisions, upstream-generated model catalogs, package caches, permission logs, grants, and runtime credentials remain machine-local and untracked. The tracked `models.json` is a narrow temporary override, not a copy of the generated catalog.
+`PI_AI_RESET_MUTABLE_CONFIG=1` no longer replaces permission-system `yoloMode`, `debugLog`, or `permissionReviewLog`. During normal authoritative reconciliation, the same active-YOLO refusal applies with or without reset. Authentication, sessions, trust decisions, upstream-generated model catalogs, package caches, permission logs, grants, and runtime credentials remain machine-local and untracked. The tracked `models.json` is a narrow temporary override, not a copy of the generated catalog.
 
-When retiring a legacy `pi-sandbox` installation, the installer backs up and resets the permission policy to the tracked non-YOLO, unmatched-Bash-allows baseline, then removes the retired `pi-sandbox` child exclusion before reconciling packages. This transitional retirement path is the only exception to normal authoritative publication: it safely resets active YOLO and publishes the tracked baseline before the package schema is available so containment is not removed first. Normal reconciliation refuses active YOLO and validates the candidate against the exact installed schema before publication. A previous `~/.pi/agent/sandbox.json` and cached package checkout are preserved as inactive machine-local state; neither is loaded once the package source is absent from `settings.json`. They may be deleted manually after restarting Pi if rollback is not needed.
+When retiring a legacy `pi-sandbox` installation, the installer backs up and resets the permission policy to the tracked non-YOLO, unmatched-Bash-allows baseline, then removes the retired `pi-sandbox` child exclusion before reconciling packages. This transitional retirement path is the only exception to normal authoritative publication: it safely resets active YOLO and publishes the tracked baseline before the package schema is available so a permission layer remains present while the old containment package is retired. Normal reconciliation refuses active YOLO and validates the candidate against the exact installed schema before publication. A previous `~/.pi/agent/sandbox.json` and cached package checkout are preserved as inactive machine-local state; neither is loaded once the package source is absent from `settings.json`. They may be deleted manually after restarting Pi if rollback is not needed.
 
 ## Installation and rollout
 
@@ -150,7 +150,9 @@ make ai
 
 The installer refuses a production-agent-dir apply—including one reached through a resolved path alias—when invoked from a different linked implementation worktree while the canonical checkout exists. Before integration, use an **isolated pre-integration smoke** with an absolute temporary `PI_CODING_AGENT_DIR`, separate HOME and XDG paths, and `DOTFILES` pointed at the reviewed checkout so the local `my` package remains available. Package installation and the exact installed-runtime gate pipeline do not require Copilot authentication. An agent command must not read or copy production `auth.json`; defer interactive model-facing smoke to the canonical rollout unless the operator provisions isolated credentials outside the agent command. Delete the smoke directory afterward. After integration, run `make ai` again from the canonical checkout and inspect its identity-aware migration report.
 
-The installer explicitly bootstraps any missing or mismatched version-pinned npm packages before running `pi update --extensions`. Pi intentionally skips pinned npm sources during ordinary updates, so update alone is not a first-install mechanism. The installer verifies exact package versions and confirms that Pi preserved the tracked package inventory.
+The installer explicitly bootstraps any missing or mismatched version-pinned npm packages before running `pi update --extensions`. A matching permission-system version is accepted only when its schema and manager artifacts are also present; one incomplete installation attempt is retried and then fails clearly if it remains partial. Pi intentionally skips pinned npm sources during ordinary updates, so update alone is not a first-install mechanism. The installer verifies exact package versions and confirms that Pi preserved the tracked package inventory.
+
+Permission publication uses best-effort compare-before-publish: it checks the runtime file identity before backup and again after backup immediately before the atomic rename. Because the permission-system UI writer shares no lock with the installer, an unavoidable race remains between the final check and rename; the extra check narrows but cannot eliminate it.
 
 The migration converts the old whole-extension link to a real directory, preserves unrelated extension entries, and publishes only the two authored links. It removes only exact managed Amp settings links and only the `.permissions` key from valid Amp state. The exact legacy Brave `brave-search` directory is moved intact below `disabled-skills`; sibling skills, mismatches, and collisions are preserved.
 
@@ -178,12 +180,17 @@ make ai-check
 make check
 ```
 
-After isolated or production package installation, validate against the exact installed permission schema and evaluator:
+After isolated or production package installation, validate the tracked policy candidate against the selected installed permission schema and evaluator. This command does not validate whichever config is currently active in a running Pi session. Select isolated smoke roots explicitly, for example:
 
 ```bash
-PI_CODING_AGENT_DIR="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}" \
-  bin/validate-pi-security-runtime
+SMOKE_AGENT_DIR=/absolute/path/to/smoke-home/.pi/agent
+SMOKE_PI_PACKAGE_ROOT=/absolute/path/to/smoke-home/.local/lib/node_modules/@earendil-works/pi-coding-agent
+bin/validate-pi-security-runtime \
+  --package-root "$SMOKE_AGENT_DIR/npm/node_modules/@gotgenes/pi-permission-system" \
+  --pi-package-root "$SMOKE_PI_PACKAGE_ROOT"
 ```
+
+For the normal installed roots, putting the intended `pi` first on `PATH` and setting `PI_CODING_AGENT_DIR` selects the same two dependencies implicitly.
 
 ## Emergency rollback
 

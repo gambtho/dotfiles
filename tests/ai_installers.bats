@@ -69,9 +69,13 @@ else
     printf '{"name":"%s","version":"%s"}\n' "$package_name" "$package_version" \
       >"$package_root/package.json"
     if [[ "$package_name" == @gotgenes/pi-permission-system ]]; then
-      mkdir -p "$package_root/schemas"
+      mkdir -p "$package_root/schemas" "$package_root/src"
       cp "$TEST_ROOT/permission-system-schema.json" \
         "$package_root/schemas/permissions.schema.json"
+      if [[ "${PI_TEST_OMIT_PERMISSION_MANAGER:-0}" != 1 ]]; then
+        printf 'export class PermissionManager {}\n' \
+          >"$package_root/src/permission-manager.ts"
+      fi
     fi
   fi
 fi
@@ -144,9 +148,13 @@ else
     printf '{"name":"%s","version":"%s"}\\n' "\$package_name" "\$package_version" \\
       >"\$package_root/package.json"
     if [[ "\$package_name" == @gotgenes/pi-permission-system ]]; then
-      mkdir -p "\$package_root/schemas"
+      mkdir -p "\$package_root/schemas" "\$package_root/src"
       cp "\$TEST_ROOT/permission-system-schema.json" \
         "\$package_root/schemas/permissions.schema.json"
+      if [[ "\${PI_TEST_OMIT_PERMISSION_MANAGER:-0}" != 1 ]]; then
+        printf 'export class PermissionManager {}\\n' \
+          >"\$package_root/src/permission-manager.ts"
+      fi
     fi
   fi
 fi
@@ -485,6 +493,82 @@ EOF
   [ "$(tail -1 "$HOME/pi-invocations")" = "update --extensions" ]
 }
 
+@test "Pi installer repairs a matching permission package with a missing required artifact" {
+  export PI_VERSION
+  stub_existing_pi
+  local package_root="$HOME/.pi/agent/npm/node_modules/@gotgenes/pi-permission-system"
+  local missing
+  mkdir -p "$package_root/schemas" "$package_root/src"
+  printf '{"name":"@gotgenes/pi-permission-system","version":"%s"}\n' \
+    "$PI_PERMISSION_SYSTEM_VERSION" >"$package_root/package.json"
+
+  for missing in schemas/permissions.schema.json src/permission-manager.ts; do
+    cp "$TEST_ROOT/permission-system-schema.json" \
+      "$package_root/schemas/permissions.schema.json"
+    printf 'export class PermissionManager {}\n' \
+      >"$package_root/src/permission-manager.ts"
+    rm "$package_root/$missing"
+    : >"$HOME/pi-invocations"
+
+    run env HOME="$HOME" PATH="$PATH" PI_VERSION="$PI_VERSION" \
+      bash "$REPO_ROOT/ai/pi/install.sh"
+
+    [ "$status" -eq 0 ]
+    [ -f "$package_root/schemas/permissions.schema.json" ]
+    [ -f "$package_root/src/permission-manager.ts" ]
+    [ "$(grep -Fxc "install npm:@gotgenes/pi-permission-system@$PI_PERMISSION_SYSTEM_VERSION" \
+      "$HOME/pi-invocations")" -eq 1 ]
+  done
+}
+
+@test "Pi installer fails when permission package reinstall remains incomplete" {
+  export PI_VERSION
+  stub_existing_pi
+  local package_root="$HOME/.pi/agent/npm/node_modules/@gotgenes/pi-permission-system"
+  mkdir -p "$package_root/schemas"
+  printf '{"name":"@gotgenes/pi-permission-system","version":"%s"}\n' \
+    "$PI_PERMISSION_SYSTEM_VERSION" >"$package_root/package.json"
+  cp "$TEST_ROOT/permission-system-schema.json" \
+    "$package_root/schemas/permissions.schema.json"
+
+  run env HOME="$HOME" PATH="$PATH" PI_VERSION="$PI_VERSION" \
+    PI_TEST_OMIT_PERMISSION_MANAGER=1 bash "$REPO_ROOT/ai/pi/install.sh"
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"incomplete Pi permission package"* ]]
+  [[ "$output" == *"src/permission-manager.ts"* ]]
+  [ "$(grep -Fxc "install npm:@gotgenes/pi-permission-system@$PI_PERMISSION_SYSTEM_VERSION" \
+    "$HOME/pi-invocations")" -eq 1 ]
+  [ ! -e "$package_root/src/permission-manager.ts" ]
+}
+
+@test "Pi installer hashes permission policy with the macOS shasum fallback" {
+  export PI_VERSION
+  stub_existing_pi
+  local fallback_bin="$TEST_ROOT/fallback-bin"
+  local command name
+  mkdir -p "$fallback_bin"
+  for command in /usr/bin/*; do
+    name=${command##*/}
+    [[ "$name" == sha256sum || "$name" == shasum ]] && continue
+    ln -s "$command" "$fallback_bin/$name"
+  done
+  cat >"$fallback_bin/shasum" <<'SCRIPT'
+#!/bin/bash
+printf '%s\n' "$*" >>"$HOME/shasum-invocations"
+[[ "$1" == -a && "$2" == 256 ]] || exit 2
+printf '%064d  %s\n' 0 "$3"
+SCRIPT
+  chmod +x "$fallback_bin/shasum"
+
+  run env HOME="$HOME" PATH="$fallback_bin" PI_VERSION="$PI_VERSION" \
+    bash "$REPO_ROOT/ai/pi/install.sh"
+
+  [ "$status" -eq 0 ]
+  [ -s "$HOME/shasum-invocations" ]
+  grep -Fq -- '-a 256 ' "$HOME/shasum-invocations"
+}
+
 @test "Pi filters Amp permissions subagents and legacy web resources" {
   run jq -e '
     [.packages[] | objects | select(.source == "npm:pi-amplike")][0] as $amp
@@ -623,6 +707,8 @@ EOF
   mkdir -p "$package_root/schemas"
   printf '{"name":"@gotgenes/pi-permission-system","version":"%s"}\n' \
     "$PI_PERMISSION_SYSTEM_VERSION" >"$package_root/package.json"
+  mkdir -p "$package_root/src"
+  printf 'export class PermissionManager {}\n' >"$package_root/src/permission-manager.ts"
   cat >"$package_root/schemas/permissions.schema.json" <<'JSON'
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -731,6 +817,72 @@ JSON
   ' "$permission"
   [ "$status" -eq 0 ]
   [ "$(find "$(dirname "$permission")" -name 'config.json.backup*' | wc -l)" -eq 0 ]
+}
+
+@test "Pi installer preserves a runtime permission change after backup" {
+  export PI_VERSION
+  stub_existing_pi
+  local permission="$HOME/.pi/agent/extensions/pi-permission-system/config.json"
+
+  run env HOME="$HOME" PATH="$PATH" PI_VERSION="$PI_VERSION" \
+    bash "$REPO_ROOT/ai/pi/install.sh"
+  [ "$status" -eq 0 ]
+
+  local drift="$TEST_ROOT/post-backup-permission-drift.json"
+  jq '.permission.bash["*"] = "ask"' "$permission" >"$drift"
+  mv "$drift" "$permission"
+
+  local hook="$BATS_TEST_TMPDIR/permission-before-publish-after-backup"
+  local output_file="$BATS_TEST_TMPDIR/post-backup-runtime-output"
+  local pid attempt concurrent_status race_output
+  mkdir -p "$hook"
+  env HOME="$HOME" PATH="$PATH" PI_VERSION="$PI_VERSION" \
+    BATS_TEST_TMPDIR="$BATS_TEST_TMPDIR" BATS_TEST_NAME="$BATS_TEST_NAME" \
+    BATS_TEST_FILENAME="$BATS_TEST_FILENAME" \
+    PI_AI_TEST_PERMISSION_BEFORE_PUBLISH="$hook" \
+    bash "$REPO_ROOT/ai/pi/install.sh" >"$output_file" 2>&1 &
+  pid=$!
+
+  for ((attempt = 0; attempt < 500; attempt++)); do
+    [[ -e "$hook/ready" ]] && break
+    sleep 0.01
+  done
+  if [[ ! -e "$hook/ready" ]]; then
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    false
+  fi
+  touch "$hook/continue"
+
+  for ((attempt = 0; attempt < 500; attempt++)); do
+    [[ -e "$hook/ready-before-publish" ]] && break
+    sleep 0.01
+  done
+  if [[ ! -e "$hook/ready-before-publish" ]]; then
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    false
+  fi
+
+  jq '.debugLog = true | .custom = "post-backup-concurrent"' "$permission" >"$drift"
+  mv "$drift" "$permission"
+  touch "$hook/continue-before-publish"
+  if wait "$pid"; then
+    concurrent_status=0
+  else
+    concurrent_status=$?
+  fi
+  race_output=$(<"$output_file")
+
+  [ "$concurrent_status" -ne 0 ]
+  [[ "$race_output" == *"changed during reconciliation"* ]]
+  run jq -e '
+    .debugLog == true
+    and .custom == "post-backup-concurrent"
+    and .permission.bash["*"] == "ask"
+  ' "$permission"
+  [ "$status" -eq 0 ]
+  [ "$(find "$(dirname "$permission")" -name 'config.json.backup*' | wc -l)" -eq 1 ]
 }
 
 @test "Pi installer confines the permission policy race hook to Bats temporary paths" {
