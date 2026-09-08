@@ -248,3 +248,13 @@ All final commands exited `0`:
 - `git diff --check`: no output.
 
 The local polish-core fix pass removed repeated package-root derivation and found no unresolved correctness issue. No subagent or external reviewer was used. No production Pi runtime, authentication, permission controls, or package inventory was changed.
+
+## Consolidated polish fix round 2/5
+
+The restore policy now recognizes direct and slash-qualified `git --no-pager restore`, `git --git-dir=… restore`, and `git --work-tree=… restore` forms with exact lexical ask rules. It does not restore the broad `*git *restore *` pattern that caught ordinary commit-message text. The manager and complete gate-pipeline matrices prove all six asks, ordinary direct/slash-qualified commit-message allows, amendment asks, and leading `git -c`/`git --config-env` denies. Bats locks the corresponding policy keys and allow/deny shape.
+
+The CI workflow now selects Node 26 through `actions/setup-node@v4` before `make check` or npm runs. The installed-pipeline gate still sources package versions from `config/versions.env`, installs beneath `$RUNNER_TEMP`, and passes explicit absolute permission-system and Pi package roots to the runtime validator.
+
+RED evidence was observed before the policy update: focused Bats failed the Git policy invariant, and the exact installed pipeline reported `pipeline no-pager git restore asks: expected terminal block, received allow`. Final focused and broad verification exited `0`: `bats tests/pi_permissions.bats` passed all 14 cases; `actionlint .github/workflows/check.yml` emitted no output; `make check` passed all 522 Bats and 9 Python tests plus syntax, lint, formatting, and AI-resource gates; the runtime validator passed; verbose `validate-ai` reported 5 prompts, 7 skills, 0 errors, and 0 warnings; and `git diff --check` emitted no output.
+
+The local polish pass found no safe auto-fix or unresolved correctness concern. Deferred minors remained untouched, and no subagent or external reviewer was used.

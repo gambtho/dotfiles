@@ -123,6 +123,7 @@ setup() {
     and $bash["git worktree *"] == "allow"
     and ($bash | has("*/git worktree *") | not)
     and $bash["git commit *"] == "allow"
+    and ($bash | has("*/git commit *") | not)
     and ($bash | has("git -C * worktree *") | not)
     and $bash["git fetch*"] == "allow"
     and $bash["*/git fetch*"] == "ask"
@@ -138,10 +139,21 @@ setup() {
     and $bash["*git *worktree remove * -f*"] == "ask"
     and $bash["*git *commit * --am*"] == "ask"
     and ($bash | has("*git *restore *") | not)
-    and $bash["git restore *"] == "ask"
-    and $bash["*/git restore *"] == "ask"
-    and $bash["git -C * restore *"] == "ask"
-    and $bash["*/git -C * restore *"] == "ask"
+    and (
+      [
+        "git restore *",
+        "*/git restore *",
+        "git -C * restore *",
+        "*/git -C * restore *",
+        "git --no-pager restore *",
+        "*/git --no-pager restore *",
+        "git --git-dir=* restore *",
+        "*/git --git-dir=* restore *",
+        "git --work-tree=* restore *",
+        "*/git --work-tree=* restore *"
+      ]
+      | all(.[]; . as $pattern | $bash[$pattern] == "ask")
+    )
     and $bash["git -C * commit *"] == "allow"
     and $bash["*/git -C * commit *"] == "allow"
     and ($bash | has("gh *") | not)
@@ -252,7 +264,10 @@ setup() {
     and $bash["*cat *$*"] == "ask"
     and $bash["*rg *$*"] == "ask"
     and ($bash | has("*git * -c *=*") | not)
+    and $bash["*git -c *"] == "deny"
     and $bash["*git -C * -c *=*"] == "deny"
+    and $bash["*git --config-env=*"] == "deny"
+    and $bash["*git * --config-env=*"] == "deny"
     and $bash["*git *config *alias.* *!*"] == "deny"
     and $bash["*git *config *core.sshCommand ?*"] == "deny"
     and (($keys | index("*git *config *alias.* *!*")) > ($keys | index("*git *config --get*")))
