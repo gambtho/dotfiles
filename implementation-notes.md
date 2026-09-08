@@ -164,3 +164,19 @@ Exact result summary:
 - Diff check: no output.
 
 The final local polish/self-review found no additional safe fix or unresolved correctness issue. No subagent or external reviewer was used, and the ruled-out curl syntax expansion and deferred minor findings were not changed.
+
+## Task 6 authoritative permission publication
+
+The installer now gives the repository ownership of the rendered permission map and stable permission-system fields while preserving only the three UI-owned runtime booleans: `yoloMode`, `debugLog`, and `permissionReviewLog`. A valid active `yoloMode: true` fails with deliberate disable guidance even when mutable reset is requested. Invalid runtime controls are treated as migration input: the original is backed up and the validated non-YOLO tracked baseline is published without preserving malformed values.
+
+Publication waits until tracked package inventory reconciliation and pinned npm package installation have made the exact permission-system schema available. The effective candidate is staged beside the destination, checked through `bin/validate-pi-permission-config`, compared with the runtime's snapshotted SHA-256 identity immediately before publication, backed up once when needed, and atomically installed as mode `0644` beneath the existing mode-`0700` runtime directory. Recognized tracked links are migrated; foreign links and invalid destination types fail without being followed or replaced. The earlier sandbox-retirement reset remains ahead of package-inventory removal.
+
+The deterministic concurrency test uses only a Bats-confined directory containing `ready` and `continue` marker files. The hook is rejected before installer mutation unless Bats runtime markers are present, both test `HOME` and hook resolve below `BATS_TEST_TMPDIR`, and none of the marker contents are executed.
+
+TDD evidence:
+
+- The first focused run (`bats --filter 'permission policy|YOLO|concurrent runtime' tests/ai_installers.bats`) exited `1`: authoritative publication, active-YOLO refusal, schema-invalid candidate refusal, and concurrent-change preservation all failed against the old installer; the pre-existing foreign-destination refusal characterization passed.
+- A strengthened hook-confinement test then failed because hook validation occurred after unrelated installer mutation; validation was moved before all installer operations and the test passed.
+- Focused tests subsequently passed with eight cases covering publication/controls/idempotence, YOLO, candidate validation, invalid-runtime migration, concurrency, hook confinement, recognized-link migration, and foreign/invalid destinations.
+
+Local polish removed duplicated schema JSON from the two Pi stubs by generating one Bats fixture and copying it when the permission package is installed. No subagent or external reviewer was used, as required for this task.
