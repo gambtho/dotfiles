@@ -111,7 +111,7 @@ setup() {
   [ "$status" -eq 0 ]
 }
 
-@test "Pi permission Bash policy allows local Git while guarding risky operations" {
+@test "Pi permission Bash policy allows Git while retaining hard denies" {
   run jq -e '
     .permission.bash as $bash
     | ($bash | keys_unsorted) as $keys
@@ -200,6 +200,15 @@ setup() {
     )
     and ($bash | has("gh *") | not)
     and ($bash | has("*/gh *") | not)
+    and $bash["gh api *"] == "allow"
+    and $bash["*/gh api *"] == "allow"
+    and $bash["*gh *api *-X*"] == "ask"
+    and $bash["*gh *api *--method*"] == "ask"
+    and $bash["*gh *api *-f*"] == "ask"
+    and $bash["*gh *api *--raw-field*"] == "ask"
+    and $bash["*gh *api *-F*"] == "ask"
+    and $bash["*gh *api *--field*"] == "ask"
+    and $bash["*gh *api *--input*"] == "ask"
     and $bash["curl *"] == "allow"
     and $bash["*/curl *"] == "allow"
     and $bash["curl *http://127.0.0.1:*"] == "allow"
@@ -275,6 +284,7 @@ setup() {
     and $bash["nc *"] == "ask"
     and $bash["*/socat *"] == "ask"
     and $bash["command *"] == "ask"
+    and $bash["command -v *"] == "allow"
     and $bash.env == "ask"
     and $bash.printenv == "ask"
     and $bash.export == "ask"
@@ -301,7 +311,7 @@ setup() {
       ]
       | all(.[];
           . as $prefix
-          | $bash["\($prefix)*"] == "ask"
+          | $bash["\($prefix)*"] == "deny"
           and $bash["\($prefix)--get*"] == "allow"
           and $bash["\($prefix)--get-regexp*"] == "allow"
           and $bash["\($prefix)--list*"] == "allow"
@@ -309,6 +319,10 @@ setup() {
           and (($keys | index("\($prefix)--get*")) > ($keys | index("\($prefix)*")))
         )
     )
+    and $bash["git config --global --get*"] == "allow"
+    and $bash["git config --local --list*"] == "allow"
+    and $bash["git config --show-origin --get-all*"] == "allow"
+    and (($keys | index("git config --global --get*")) > ($keys | index("git config *")))
     and (
       [
         "git credential *",
@@ -381,48 +395,6 @@ setup() {
     and $bash["*gh *auth token*"] == "ask"
     and (
       [
-        "gh api *--method POST*",
-        "*/gh api *--method POST*",
-        "gh api *--method PUT*",
-        "*/gh api *--method PUT*",
-        "gh api *--method PATCH*",
-        "*/gh api *--method PATCH*",
-        "gh api *--method post*",
-        "*/gh api *--method post*",
-        "gh api *--method put*",
-        "*/gh api *--method put*",
-        "gh api *--method patch*",
-        "*/gh api *--method patch*",
-        "gh api *--method=POST*",
-        "*/gh api *--method=POST*",
-        "gh api *--method=PUT*",
-        "*/gh api *--method=PUT*",
-        "gh api *--method=PATCH*",
-        "*/gh api *--method=PATCH*",
-        "gh api *--method=post*",
-        "*/gh api *--method=post*",
-        "gh api *--method=put*",
-        "*/gh api *--method=put*",
-        "gh api *--method=patch*",
-        "*/gh api *--method=patch*",
-        "gh api *-X *",
-        "*/gh api *-X *",
-        "gh api *-f *",
-        "*/gh api *-f *",
-        "gh api *-F *",
-        "*/gh api *-F *",
-        "gh api *--field *",
-        "*/gh api *--field *",
-        "gh api *--field=*",
-        "*/gh api *--field=*",
-        "gh api *--raw-field *",
-        "*/gh api *--raw-field *",
-        "gh api *--raw-field=*",
-        "*/gh api *--raw-field=*",
-        "gh api *--input *",
-        "*/gh api *--input *",
-        "gh api *--input=*",
-        "*/gh api *--input=*",
         "gh secret *",
         "*/gh secret *",
         "gh release create*",
@@ -442,12 +414,12 @@ setup() {
       ]
       | all(.[]; . as $pattern | $bash[$pattern] == "ask")
     )
-    and $bash["git show *--ext-d*"] == "ask"
-    and $bash["git show *--textc*"] == "ask"
-    and $bash["git diff *--ext-d*"] == "ask"
-    and $bash["git diff *--textc*"] == "ask"
-    and $bash["git log *--ext-d*"] == "ask"
-    and $bash["git log *--textc*"] == "ask"
+    and $bash["*git *show *--ext-d*"] == "deny"
+    and $bash["*git *show *--textc*"] == "deny"
+    and $bash["*git *diff *--ext-d*"] == "deny"
+    and $bash["*git *diff *--textc*"] == "deny"
+    and $bash["*git *log *--ext-d*"] == "deny"
+    and $bash["*git *log *--textc*"] == "deny"
     and $bash["*rg *--pre*"] == "deny"
     and $bash["*fd *--exec*"] == "deny"
     and $bash["*fd *-x*"] == "deny"
@@ -464,8 +436,6 @@ setup() {
     and $bash["*git * --config-env=*"] == "deny"
     and $bash["*git *config *alias.* *!*"] == "deny"
     and $bash["*git *config *core.sshCommand ?*"] == "deny"
-    and (($keys | index("*git *config *alias.* *!*")) > ($keys | index("*git *config --get*")))
-    and (($keys | index("*git *config *core.sshCommand ?*")) > ($keys | index("*git *config --get*")))
     and $bash["*git *send-pack *--for*"] == "deny"
     and $bash["*git *send-pack * +*"] == "deny"
     and (($keys | index("*git *send-pack *--for*")) > ($keys | index("*git *send-pack *")))
@@ -477,6 +447,10 @@ setup() {
     and $bash["*git *push *--mir*"] == "deny"
     and $bash["*git *reset *--har*"] == "deny"
     and $bash["*git *clean -*f*"] == "deny"
+    and $bash["*git *grep *--op*"] == "deny"
+    and $bash["*git *bisect *run*"] == "deny"
+    and $bash["*git *rebase *-x*"] == "deny"
+    and $bash["*git *archive *--rem*"] == "deny"
     and $bash["*gh *repo delete*"] == "deny"
     and $bash["*gh *api *DELETE*"] == "deny"
     and $bash["*sudo *"] == "deny"

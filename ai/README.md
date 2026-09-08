@@ -55,22 +55,19 @@ Each `subagent` invocation supplies one self-contained `prompt`, a 3–5 word `d
 
 `ai/pi/config/permission-system.json` is a permissive attention and tripwire layer, not a sandbox:
 
-- routine tools, unmatched parent Bash commands, local Git subcommands, normal fetch/push, explicitly fast-forward-only pulls, PR/issue creation and editing, `lsp_fix`, ordinary `curl` GETs/downloads, and loopback HTTP probes are allowed;
+- routine tools, unmatched parent Bash commands, local Git subcommands, normal fetch/push, explicitly fast-forward-only pulls, read-only GitHub API calls, PR/issue creation and editing, `lsp_fix`, ordinary `curl` GETs/downloads, and loopback HTTP probes are allowed;
 - unknown extension tools and MCP targets, non-fast-forward pulls, selected destructive Git operations, PR merges and issue closure, recognizable remote shell/network commands, and recognizable deletion ask;
-- bounded lexical `curl` tripwires ask for `--data`, `--data-raw`, `--data-binary`, `--data-urlencode`, or separate-token `-d`; `--form`/`-F`; `--upload-file`/`-T`; explicit `POST`, `PUT`, `PATCH`, or `DELETE` through `--request`/`-X`; and recognized authorization, user, cookie, certificate, key, or netrc arguments; aliases, interpreters, generated arguments, and semantically equivalent requests are outside that coverage;
-- policy denies recognized credential and browser-profile path access, catastrophic deletion, force operations, subprocess-capable search flags, and privilege escalation; worktree guard separately denies direct model-facing write, edit, and mutating LSP operations in primary checkouts;
+- bounded lexical `curl` tripwires ask for `--data`, `--data-raw`, `--data-binary`, `--data-urlencode`, or separate-token `-d`; `--form`/`-F`; `--upload-file`/`-T`; explicit `POST`, `PUT`, `PATCH`, or `DELETE` through `--request`/`-X`; and recognized authorization, user, cookie, certificate, key, or netrc arguments; aliases, interpreters, generated arguments, attached short-option values, and semantically equivalent requests are outside that coverage;
+- policy denies recognized credential and browser-profile path access, persistent Git config writes, Git options that execute subprocesses, catastrophic deletion, force operations, subprocess-capable search flags, and privilege escalation; worktree guard separately denies direct model-facing write, edit, and mutating LSP operations in primary checkouts;
 - common reader/output commands containing unresolved `$` expansion and direct environment-dump commands ask, while named children hard-deny all unresolved shell-variable indirection; use `NAME=value command` rather than the opaque `env NAME=value command` wrapper so ordinary scoped commands remain inspectable and silent;
 - external-directory read and write catch-alls allow ambiguous external paths to avoid false prompts; explicit protected-path denies remain later tripwires, not containment;
 - `/permission-system` can enable temporary YOLO, which converts asks to allows but preserves explicit denies.
 
 ### Important containment boundaries
 
-Allowed Bash processes are not OS-contained. They retain the invoking user's
-ambient filesystem, environment, network, and subprocess authority. Path and
-command rules reduce accidental access and route attention; they do not contain
-hostile or interpreter-generated behavior.
+Parent and child Bash processes are not OS-contained. They retain the invoking user's ambient filesystem, environment, network, and subprocess authority. Path and command rules reduce accidental access and route attention; they do not contain hostile or interpreter-generated behavior.
 
-Gotgenes children inherit permission-system and worktree-guard, with restrictive agent policy and complete tool allowlists providing additional controls. The variable-indirection deny closes the reviewed direct reader bypass, but neither parent nor child Bash is a safe execution boundary for untrusted commands. Path rules do not recursively constrain operations performed inside an allowed shell command or extension:
+Gotgenes children inherit permission-system and worktree-guard, with restrictive agent policy and complete tool allowlists providing additional controls. Named children deny unresolved variable indirection, while common parent reader commands ask; neither parent nor child Bash is a safe execution boundary for untrusted commands. Path rules do not recursively constrain operations performed inside an allowed shell command or extension:
 
 - `/code run` executes through extension-internal `pi.exec()`.
 - LSP server subprocesses are extension-internal. Permission-system still gates the model-facing LSP call, and worktree-guard blocks a mutating fix targeting a primary checkout.
