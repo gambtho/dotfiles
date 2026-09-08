@@ -17,6 +17,9 @@ setup() {
   CUSTOM_SHELL_FILE="$REPO_ROOT/bin/probe-custom-shell-$BATS_TEST_NUMBER"
   ENV_CUSTOM_SHELL_FILE="$REPO_ROOT/bin/probe-env-custom-shell-$BATS_TEST_NUMBER"
   PYTHON_FILE="$REPO_ROOT/bin/probe-python-$BATS_TEST_NUMBER"
+  ENV_SEPARATOR_PYTHON_FILE="$REPO_ROOT/bin/probe-env-separator-python-$BATS_TEST_NUMBER"
+  ENV_IGNORE_PYTHON_FILE="$REPO_ROOT/bin/probe-env-ignore-python-$BATS_TEST_NUMBER"
+  ENV_ASSIGN_PYTHON_FILE="$REPO_ROOT/bin/probe-env-assign-python-$BATS_TEST_NUMBER"
   FISH_FILE="$REPO_ROOT/bin/probe-fish-$BATS_TEST_NUMBER"
   UNKNOWN_FILE="$REPO_ROOT/bin/probe-unknown-$BATS_TEST_NUMBER"
   EMPTY_FILE="$REPO_ROOT/bin/probe-empty-$BATS_TEST_NUMBER"
@@ -26,6 +29,9 @@ setup() {
   printf '#!/usr/bin/custom-shell\n' >"$CUSTOM_SHELL_FILE"
   printf '#!/usr/bin/env custom-shell\n' >"$ENV_CUSTOM_SHELL_FILE"
   printf '#!/usr/bin/env python3\n' >"$PYTHON_FILE"
+  printf '#!/usr/bin/env -- python3\n' >"$ENV_SEPARATOR_PYTHON_FILE"
+  printf '#!/usr/bin/env -i python3\n' >"$ENV_IGNORE_PYTHON_FILE"
+  printf '#!/usr/bin/env MODE=check python3\n' >"$ENV_ASSIGN_PYTHON_FILE"
   printf '#!/usr/bin/fish\n' >"$FISH_FILE"
   printf 'unrecognized extensionless content\n' >"$UNKNOWN_FILE"
   : >"$EMPTY_FILE"
@@ -61,7 +67,9 @@ setup() {
 teardown() {
   rm -f -- "$UNTRACKED_FILE" "$IGNORED_FILE" \
     "$DIRECT_SH_FILE" "$SPACED_SHELL_FILE" "$ENV_SPLIT_SHELL_FILE" \
-    "$CUSTOM_SHELL_FILE" "$ENV_CUSTOM_SHELL_FILE" "$PYTHON_FILE" "$FISH_FILE" \
+    "$CUSTOM_SHELL_FILE" "$ENV_CUSTOM_SHELL_FILE" "$PYTHON_FILE" \
+    "$ENV_SEPARATOR_PYTHON_FILE" "$ENV_IGNORE_PYTHON_FILE" "$ENV_ASSIGN_PYTHON_FILE" \
+    "$FISH_FILE" \
     "$UNKNOWN_FILE" "$EMPTY_FILE" \
     "$TOOL_INSTALL_FILE" "$TOOL_EXEC_FILE" "$TOOL_SUB_FILE" "$TOOL_ZSH_FILE" \
     "$TOOL_YAML_FILE" "$TOOL_CONF_FILE" "$TOOL_UNIT_FILE"
@@ -130,6 +138,9 @@ list_files() {
     list_files "$class"
     [ "$status" -eq 0 ]
     [[ "$output" != *"${PYTHON_FILE#"$REPO_ROOT/"}"* ]]
+    [[ "$output" != *"${ENV_SEPARATOR_PYTHON_FILE#"$REPO_ROOT/"}"* ]]
+    [[ "$output" != *"${ENV_IGNORE_PYTHON_FILE#"$REPO_ROOT/"}"* ]]
+    [[ "$output" != *"${ENV_ASSIGN_PYTHON_FILE#"$REPO_ROOT/"}"* ]]
     [[ "$output" != *"${FISH_FILE#"$REPO_ROOT/"}"* ]]
     [[ "$output" != *"bin/validate-pi-permission-config"* ]]
   done
