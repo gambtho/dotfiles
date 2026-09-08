@@ -23,12 +23,21 @@ fi
 root=$(git rev-parse --show-toplevel)
 cd "$root"
 
+is_shell_name() {
+  case "${1##*/}" in
+    bash | sh | dash | ksh | zsh) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 is_direct_bin_shell() {
-  local path="$1" name first_line
-  # Direct Bash executables (bin/<name>) plus the sourced library slices under
+  local path="$1" name first_line interpreter target
+  local -a shebang_words=()
+  # Direct shell executables (bin/<name>) plus the sourced library slices under
   # bin/lib/ — a lib file that escaped the shell gates could drift unchecked
-  # while every installer still sources it. Extensionless executables are
-  # classified by shebang so Python entry points do not reach Bash tooling.
+  # while every installer still sources it. An explicit non-shell shebang is
+  # excluded; ambiguous extensionless entries stay in the shell gates so a new
+  # file cannot silently escape validation.
   [[ "$path" == bin/* ]] || return 1
   case "${path#bin/}" in
     */*) [[ "$path" == bin/lib/*.sh ]] && return 0 ;;
@@ -36,13 +45,26 @@ is_direct_bin_shell() {
       name=${path#bin/}
       [[ "$name" == *.sh ]] && return 0
       [[ "$name" == *.* ]] && return 1
-      IFS= read -r first_line <"$path" || return 1
-      case "$first_line" in
-        '#!/usr/bin/env bash' | '#!/bin/bash' | '#!/usr/bin/bash') return 0 ;;
-      esac
+
+      first_line=
+      IFS= read -r first_line <"$path" || :
+      [[ "$first_line" == '#!'* ]] || return 0
+      read -r -a shebang_words <<<"${first_line#\#!}"
+      ((${#shebang_words[@]} > 0)) || return 0
+
+      interpreter=${shebang_words[0]##*/}
+      is_shell_name "$interpreter" && return 0
+      [[ "$interpreter" == env ]] || return 1
+      ((${#shebang_words[@]} > 1)) || return 0
+
+      target=${shebang_words[1]}
+      if [[ "$target" == -S ]]; then
+        ((${#shebang_words[@]} > 2)) || return 0
+        target=${shebang_words[2]}
+      fi
+      is_shell_name "$target"
       ;;
   esac
-  return 1
 }
 
 is_repository_sh() {

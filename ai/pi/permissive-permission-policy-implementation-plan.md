@@ -887,15 +887,7 @@ DOTFILES="$PWD" \
 bash ai/pi/install.sh
 ```
 
-If the isolated interactive Pi run requires Copilot authentication, capture the real home before overriding it and install only `auth.json` with mode `0600`:
-
-```bash
-REAL_HOME=$HOME
-install -d -m 0700 "$SMOKE_HOME/.pi/agent"
-install -m 0600 "$REAL_HOME/.pi/agent/auth.json" "$SMOKE_HOME/.pi/agent/auth.json"
-```
-
-Skip the interactive smoke with an explicit note when the source authentication file is absent; never print or copy its contents into repository output. Do not point apply mode at the production agent directory from the worktree.
+Agents must not read or copy production authentication into the isolated root. Run the isolated installation and installed-package gate pipeline without credentials. Defer interactive model-facing main and named-agent smoke to the canonical rollout, where the operator provisions authentication outside agent-issued commands. Do not point apply mode at the production agent directory from the worktree.
 
 Verify:
 
@@ -905,9 +897,9 @@ PI_CODING_AGENT_DIR="$SMOKE_HOME/.pi/agent" bin/validate-pi-security-runtime
 
 Compare the installed runtime `.permission` object with the rendered tracked policy and assert the three runtime controls have expected values.
 
-- [ ] **Step 4: Exercise representative Pi calls without YOLO**
+- [ ] **Step 4: Defer model-facing calls to the canonical rollout**
 
-Start isolated Pi with the pinned package set and run the regression corpus through real main and named-agent sessions. Confirm no approval appears for:
+After the operator provisions authentication outside agent-issued commands, start canonical Pi with the pinned package set and run the regression corpus through real main and named-agent sessions without YOLO. Confirm no approval appears for:
 
 ```text
 node referenced-skill script
@@ -919,7 +911,7 @@ bash bin/validate-ai under deep
 ordinary curl GET
 ```
 
-Confirm prompts/denials still appear for the explicit tripwire matrix. Record observed surface and rule for any unexpected prompt; do not add an exception without root-cause analysis.
+Confirm prompts/denials still appear for the explicit tripwire matrix. Record observed surface and rule for any unexpected prompt; do not add an exception without root-cause analysis. The credential-free isolated installed-package pipeline remains the pre-integration proof; model-facing UX is not claimed until this operator-provisioned canonical smoke completes.
 
 - [ ] **Step 5: Clean up smoke state and inspect final diff**
 
