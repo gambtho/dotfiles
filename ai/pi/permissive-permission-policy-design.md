@@ -111,13 +111,15 @@ The main Bash surface keeps `"*": "allow"`. Existing specific asks and denies re
 
 The implementation should remove redundant allow entries only when behavioral tests prove they are unnecessary. Simplification must not reorder security-sensitive asks or denies accidentally.
 
+The main-session policy does not prompt merely because inspection or output commands contain `$`. Blanket dollar-sign asks conflate regex anchors, jq variables, and ordinary shell interpolation with sensitive operations. Removing them deliberately permits variable-based reads and output, including potentially sensitive values; explicit protected-path rules and parser gates remain, without claiming to resolve every dynamic path. Named-agent overrides are unchanged and can still deny dollar-sign commands.
+
 ### Deletion
 
 Recognizable `rm` operations continue to ask. Catastrophic root-recursive forms remain denied. Force variants and multi-path forms must be covered by behavioral tests rather than key-presence assertions alone.
 
 ### Git and GitHub
 
-Routine local Git inspection, worktree use, staging, commits, synchronization, and ordinary pushes remain allowed according to current policy intent.
+Routine local Git inspection, worktree use, staging, commits, synchronization, and ordinary pushes remain allowed according to current policy intent. Ordinary `git clone`, including slash-qualified executables, is also allowed without a clone-specific prompt. Separate config-override, protected-path, and parser restrictions still apply; this does not relax GitHub CLI clone rules or named-agent Git restrictions.
 
 Continue asking or denying, according to existing severity, for:
 

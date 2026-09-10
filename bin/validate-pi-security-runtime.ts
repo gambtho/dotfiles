@@ -252,7 +252,7 @@ try {
   );
 
   checkBash(manager, "printf hello", "allow");
-  checkBash(manager, 'printf "$HOME"', "ask");
+  checkBash(manager, 'printf "$HOME"', "allow");
   checkBash(manager, "node --version", "allow");
   checkBash(manager, "env", "ask");
   checkBash(manager, "/usr/bin/env", "ask");
@@ -293,7 +293,7 @@ try {
   checkBash(manager, "git push origin --delete old-branch", "ask");
   checkBash(manager, "git push origin :old-branch", "ask");
   checkBash(manager, "git push --all origin", "ask");
-  checkBash(manager, "git clone https://example.com/repo.git", "ask");
+  checkBash(manager, "git clone https://example.com/repo.git", "allow");
   checkBash(manager, "git --git-dir=.git push origin main", "allow");
   checkBash(manager, "git -C . fetch origin status", "allow");
   checkBash(manager, "git -C . -c 'alias.x=!printf bypass' x status", "deny");
@@ -738,7 +738,7 @@ try {
   checkBash(manager, "rm -rf /tmp/../important", "ask");
   checkBash(manager, "/bin/rm -rf .", "ask");
   checkBash(manager, "nc example.com 443", "ask");
-  checkBash(manager, '/bin/cat "$SECRET_PATH"', "ask");
+  checkBash(manager, '/bin/cat "$SECRET_PATH"', "allow");
   checkBash(manager, "command -v direnv", "allow");
   await checkBashGate("cd . && curl https://example.com", "allow");
   await checkBashGate("env gh pr create --title example", "ask");
@@ -777,7 +777,7 @@ try {
   checkBash(manager, "rg --pre cat pattern .", "deny");
   checkBash(manager, "fd --exec rm {}", "deny");
   checkBash(manager, "yq -i '.x = 1' config.yaml", "ask");
-  checkBash(manager, 'cat "$SECRET_PATH"', "ask");
+  checkBash(manager, 'cat "$SECRET_PATH"', "allow");
   checkBash(manager, "sudo true", "deny");
   await checkBashGate("rm -rf ./build", "ask");
   await checkBashGate("rm -rf /", "deny");

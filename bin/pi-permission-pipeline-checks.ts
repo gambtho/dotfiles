@@ -88,6 +88,74 @@ const BASELINE_PIPELINE_CASES: PipelineCase[] = [
 
 const RELAXED_PIPELINE_CASES: PipelineCase[] = [
   {
+    label: "reported regex anchor pipeline",
+    command:
+      "rg --files /home/tng/kaimahi-local/kagent-orka-compat/orka | grep -E '(Dockerfile|samples/|getting-started|install|deploy/orka|values.yaml)$|config/samples/'; rg -n 'image:|WORKER_IMAGE|workerImage|imageTag|repository:|tag:|VERSION' /home/tng/kaimahi-local/kagent-orka-compat/orka/{Dockerfile,Makefile,charts/orka/values.yaml,config/manager/manager.yaml} | head -100",
+    expected: "allow",
+  },
+  {
+    label: "reported GitHub inspection loop",
+    command:
+      'for path in packages/ai/src/providers/github-copilot.models.ts packages/ai/src/providers/github-copilot.ts packages/ai/src/models.generated.ts; do echo "--- $path ---"; gh api "repos/earendil-works/pi/contents/$path?ref=main" --jq .content | base64 -d | rg -n -C 8 "gpt-6-astra|openai-responses|openai-completions|resolveApi|supportedApis" | head -240; done',
+    expected: "allow",
+  },
+  {
+    label: "ordinary HTTPS clone",
+    command: "git clone https://example.com/repo.git /tmp/pi-clone-example",
+    expected: "allow",
+  },
+  {
+    label: "slash-qualified shallow clone",
+    command: "/usr/bin/git clone --depth 1 https://example.com/repo.git /tmp/pi-clone-example",
+    expected: "allow",
+  },
+  {
+    label: "SSH clone with assignment and chain",
+    command: "GIT_TERMINAL_PROMPT=0 git clone git@github.com:owner/repo.git /tmp/pi-clone-example && git status --short",
+    expected: "allow",
+  },
+  {
+    label: "clone does not bypass global config denial",
+    command: "git -c core.sshCommand=false clone https://example.com/repo.git",
+    expected: "deny",
+    surface: "bash",
+    pattern: "*git -c *",
+  },
+  {
+    label: "interpolation does not bypass protected reads",
+    command: 'grep "$pattern" ~/.ssh/config',
+    expected: "deny",
+    surface: "path_read",
+    pattern: "~/.ssh/*",
+  },
+  {
+    label: "interpolation does not bypass protected redirects",
+    command: 'echo "$value" > ~/.ssh/config',
+    expected: "deny",
+    surface: "path_write",
+    pattern: "~/.ssh/*",
+  },
+  {
+    label: "regex anchor does not bypass search subprocess denial",
+    command: "rg --pre cat 'TODO$' .",
+    expected: "deny",
+    surface: "bash",
+    pattern: "*rg *--pre*",
+  },
+  {
+    label: "interpolation does not bypass shell wrapper review",
+    command: 'bash -c \'echo "$path"\'',
+    expected: "ask",
+    surface: "bash",
+  },
+  {
+    label: "substitution does not hide force push",
+    command: 'echo "$(git push --force origin main)"',
+    expected: "deny",
+    surface: "bash",
+    pattern: "*git *push *--for*",
+  },
+  {
     label: "referenced skill script",
     command: "node ~/.agents/skills/impeccable/scripts/load-context.mjs",
     expected: "allow",
@@ -534,6 +602,30 @@ const RELAXED_PIPELINE_CASES: PipelineCase[] = [
     expected: "allow",
   },
 ];
+
+// Keep one full-pipeline case for each former blanket dollar-sign rule.
+for (const command of [
+  'echo "--- $path ---"',
+  'printf "%s" "$path"',
+  'cat "$path"',
+  'head "$path"',
+  'tail "$path"',
+  "grep -E 'TODO$' README.md",
+  "rg 'TODO$' .",
+  "fd 'test$' .",
+  'find "$path" -name README.md',
+  'ls "$path"',
+  'readlink "$path"',
+  'realpath "$path"',
+  "jq --arg key name '.[$key]' package.json",
+  "yq '.name | test(\"example$\")' config.yaml",
+]) {
+  RELAXED_PIPELINE_CASES.push({
+    label: `dollar sign alone does not prompt: ${command}`,
+    command,
+    expected: "allow",
+  });
+}
 
 for (const method of ["POST", "PUT", "PATCH", "DELETE", "post", "put", "patch", "delete"] as const) {
   RELAXED_PIPELINE_CASES.push({

@@ -134,7 +134,8 @@ setup() {
     and $bash["git push*"] == "allow"
     and $bash["*git *push *--delete*"] == "ask"
     and $bash["*git *push *--all*"] == "ask"
-    and $bash["git clone*"] == "ask"
+    and $bash["git clone*"] == "allow"
+    and $bash["*/git clone*"] == "allow"
     and $bash["*git *branch * -D*"] == "ask"
     and $bash["*git *worktree remove * -f*"] == "ask"
     and $bash["*git *commit * --am*"] == "ask"
@@ -631,8 +632,6 @@ setup() {
     and $bash["yq -i*"] == "ask"
     and $bash["yq --inplace*"] == "ask"
     and ($bash | has("*$*") | not)
-    and $bash["*cat *$*"] == "ask"
-    and $bash["*rg *$*"] == "ask"
     and ($bash | has("*git * -c *=*") | not)
     and $bash["*git -c *"] == "deny"
     and $bash["*git -C * -c *=*"] == "deny"
