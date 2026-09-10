@@ -15,6 +15,7 @@ source "$ROOT/ai/pi/cleanup-legacy.sh"
 source "$ROOT/ai/pi/migrate-security-stack.sh"
 
 MODE=apply
+PERMISSION_PYTHON=""
 PI_AI_RESET_MUTABLE_CONFIG="${PI_AI_RESET_MUTABLE_CONFIG:-0}"
 PI_AGENT_DIR=""
 WEB_CONFIG_PATH=""
@@ -28,10 +29,13 @@ usage() {
 }
 
 require_permission_validation_dependencies() {
-  command_exists python3 ||
-    log_error "Python 3 is required for Pi permission validation; install python3 and rerun the installer."
-  if ! python3 -c 'import jsonschema' >/dev/null 2>&1; then
-    log_error "Python jsonschema is required for Pi permission validation; install the Python jsonschema module for this python3 and rerun the installer."
+  if command_exists python3 && python3 -c 'import jsonschema' >/dev/null 2>&1; then
+    PERMISSION_PYTHON=$(command -v python3)
+  elif [[ -x /usr/bin/python3 ]] && /usr/bin/python3 -c 'import jsonschema' >/dev/null 2>&1; then
+    PERMISSION_PYTHON=/usr/bin/python3
+    log_info "Using /usr/bin/python3 for Pi permission validation; PATH python3 is unavailable or lacks jsonschema."
+  else
+    log_error "Python jsonschema is required for Pi permission validation; install the Python jsonschema module for PATH python3 or /usr/bin/python3 and rerun the installer."
   fi
 }
 
@@ -326,7 +330,8 @@ reconcile_permission_policy() {
     rm -f "$candidate"
     return 1
   fi
-  if ! "$ROOT/bin/validate-pi-permission-config" \
+  # Use the interpreter that passed preflight, not the validator's PATH shebang.
+  if ! "$PERMISSION_PYTHON" "$ROOT/bin/validate-pi-permission-config" \
     --schema "$schema" --config "$candidate"; then
     log_warning "Refusing to publish a Pi permission policy that fails the exact installed schema."
     rm -f "$candidate"
