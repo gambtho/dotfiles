@@ -182,10 +182,63 @@ SCRIPT
   [ "$before" = "$after" ]
 }
 
-@test "Pi installer reports missing jsonschema before mutation" {
+@test "Pi installer prefers PATH Python for permission validation" {
+  export PI_VERSION
+  stub_existing_pi
+  stub_command python3 '
+    printf "%s\n" "$*" >>"$TEST_ROOT/python-invocations"
+    exec /usr/bin/python3 "$@"
+  '
+  local agent_dir="$TEST_ROOT/path-python-agent"
+
+  run env HOME="$HOME" PATH="$PATH" PI_VERSION="$PI_VERSION" \
+    PI_CODING_AGENT_DIR="$agent_dir" bash "$REPO_ROOT/ai/pi/install.sh"
+
+  [ "$status" -eq 0 ]
+  grep -q '^-c import jsonschema$' "$TEST_ROOT/python-invocations"
+  grep -Fq "$REPO_ROOT/bin/validate-pi-permission-config --schema " "$TEST_ROOT/python-invocations"
+  [ -f "$agent_dir/extensions/pi-permission-system/config.json" ]
+}
+
+@test "Pi installer falls back to system Python when PATH Python lacks jsonschema" {
   export PI_VERSION
   stub_existing_pi
   stub_command python3 'exec /usr/bin/python3 -S "$@"'
+  local agent_dir="$TEST_ROOT/fallback-python-agent"
+
+  run env HOME="$HOME" PATH="$PATH" PI_VERSION="$PI_VERSION" \
+    PI_CODING_AGENT_DIR="$agent_dir" bash "$REPO_ROOT/ai/pi/install.sh"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"/usr/bin/python3"* ]]
+  [ -f "$agent_dir/extensions/pi-permission-system/config.json" ]
+  jq -e '.permission.bash["*"] == "allow"' \
+    "$agent_dir/extensions/pi-permission-system/config.json"
+  [ "$(<"$HOME/pi-invocation")" = 'update --extensions' ]
+}
+
+@test "Pi check mode uses system Python fallback without mutation" {
+  stub_command python3 'exec /usr/bin/python3 -S "$@"'
+  local agent_dir="$TEST_ROOT/fallback-check-agent"
+  local before after
+  before=$(snapshot_tree "$TEST_ROOT")
+
+  run env HOME="$HOME" PATH="$PATH" PI_CODING_AGENT_DIR="$agent_dir" \
+    bash "$REPO_ROOT/ai/pi/install.sh" --check
+
+  after=$(snapshot_tree "$TEST_ROOT")
+  [ "$status" -eq 0 ]
+  [ "$before" = "$after" ]
+}
+
+@test "Pi installer reports missing jsonschema in both interpreters before mutation" {
+  export PI_VERSION
+  stub_existing_pi
+  stub_command python3 'exec /usr/bin/python3 -S "$@"'
+  mkdir -p "$TEST_ROOT/python-modules"
+  printf 'raise ImportError("jsonschema unavailable for test")\n' \
+    >"$TEST_ROOT/python-modules/jsonschema.py"
+  export PYTHONPATH="$TEST_ROOT/python-modules" PYTHONDONTWRITEBYTECODE=1
   local agent_dir="$TEST_ROOT/missing-jsonschema-agent"
   local before after
   before=$(snapshot_tree "$TEST_ROOT")
@@ -197,7 +250,7 @@ SCRIPT
   [ "$status" -ne 0 ]
   [[ "$output" == *"ERROR"* ]]
   [[ "$output" == *"Python jsonschema is required for Pi permission validation"* ]]
-  [[ "$output" == *"install the Python jsonschema module for this python3"* ]]
+  [[ "$output" == *"install the Python jsonschema module"* ]]
   [[ "$output" != *"python3-jsonschema"* ]]
   [[ "$output" != *"fails the exact installed schema"* ]]
   [ "$before" = "$after" ]
