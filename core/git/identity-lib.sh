@@ -239,9 +239,8 @@ identity_slug_provisioned() {
 # Which command repairs the git include depends on how far provisioning got.
 # Bootstrap authors core/git/gitconfig.<slug>.symlink, and install_dotfiles
 # links it into $HOME as a separate later step -- so an authored-but-unlinked
-# identity needs make relink. Sending it to make bootstrap instead is a second
-# dead end: bootstrap sees the authored file, reports "already configured",
-# and never re-links.
+# identity needs make relink. Bootstrap also reaches the linking step, but
+# relink avoids rerunning provisioning and prompts.
 identity_slug_provision_hint() {
   local slug="$1" prefix="${2:-}"
   local configfile configdir authored

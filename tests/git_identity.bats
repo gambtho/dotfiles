@@ -315,9 +315,9 @@ MAKE
   done
 }
 
-# The state that produced the dead end: bootstrap authored the identity, then
-# died before install_dotfiles linked it. "Run make bootstrap" is wrong advice
-# there -- it reports the identity as already configured and does not re-link.
+# Bootstrap authored the identity, then died before install_dotfiles linked it.
+# Prefer make relink over make bootstrap to finish linking without rerunning
+# provisioning and prompts.
 @test "hint says relink when the identity is authored but not linked" {
   setup_shim_repo "$TEST_ROOT/r" https://github.com/guarzo/repo.git
   printf '[user]\n\temail = guarzo@example.invalid\n' \

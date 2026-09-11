@@ -9,7 +9,8 @@
 # herdr.dev in the background. That fights a committed pin: a background update
 # would move the binary out from under the digest this repo records, so the
 # shipped config turns version_check off and `make pins-check` becomes the
-# one place a new release is noticed. Run `make pins-update` to move the pin.
+# one place a new release is noticed. Update artifact versions and checksums
+# manually after checksum review to move the Herdr pin.
 
 set -euo pipefail
 
