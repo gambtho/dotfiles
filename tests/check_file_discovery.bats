@@ -96,6 +96,40 @@ list_files() {
   [[ "$output" != *"core/shell/zshrc.symlink"* ]]
 }
 
+@test "private command discovery includes shell sources but excludes other interpreters and ignored state" {
+  local fixture="$TEST_ROOT/private-discovery" class file
+  mkdir -p "$fixture/bin" "$fixture/libexec/lib" "$fixture/libexec/.opencode"
+  git init -q "$fixture"
+  cp "$REPO_ROOT/bin/list-check-files" "$fixture/list-check-files"
+  printf '.opencode/\n' >"$fixture/.gitignore"
+  printf '#!/usr/bin/env bash\ntrue\n' >"$fixture/bin/public-probe"
+  printf '#!/bin/sh\ntrue\n' >"$fixture/libexec/tracked-shell"
+  printf '#!/usr/bin/env -S bash -e\ntrue\n' >"$fixture/libexec/untracked-shell"
+  printf 'slice() { :; }\n' >"$fixture/libexec/lib/slice.sh"
+  chmod 0644 "$fixture/libexec/lib/slice.sh"
+  printf '#!/usr/bin/env -S python3 -B\n' >"$fixture/libexec/python-probe"
+  printf '#!/usr/bin/env node\n' >"$fixture/libexec/node-probe"
+  printf 'export {};\n' >"$fixture/libexec/module.ts"
+  printf 'unknown shell-like content\n' >"$fixture/libexec/ambiguous"
+  : >"$fixture/libexec/empty"
+  printf '#!/bin/sh\nfalse\n' >"$fixture/libexec/.opencode/ignored.sh"
+  git -C "$fixture" add bin/public-probe libexec/tracked-shell
+
+  for class in bash shellcheck shfmt; do
+    run bash -o pipefail -c 'cd "$1"; bash ./list-check-files "$2" | tr "\0" "\n"' \
+      _ "$fixture" "$class"
+    [ "$status" -eq 0 ]
+    for file in bin/public-probe libexec/tracked-shell libexec/untracked-shell \
+      libexec/lib/slice.sh libexec/ambiguous libexec/empty; do
+      printf '%s\n' "$output" | grep -Fxq "$file"
+    done
+    for file in libexec/python-probe libexec/node-probe libexec/module.ts \
+      libexec/.opencode/ignored.sh; do
+      ! printf '%s\n' "$output" | grep -Fxq "$file"
+    done
+  done
+}
+
 @test "zsh discovery includes shell symlinks and zsh sources" {
   list_files zsh
 
