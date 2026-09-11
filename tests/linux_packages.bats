@@ -9,7 +9,7 @@ setup() {
 compose_packages() {
   local os="$1" profile="$2"
   run env INSTALL_SOURCE_ONLY=1 bash -c '
-    source "$1/bin/install"
+    source "$1/bin/dot-install"
     OS="$2"
     PROFILE="$3"
     compose_apt_packages
@@ -109,7 +109,7 @@ compose_packages() {
   local events="$TEST_ROOT/events"
 
   run env INSTALL_SOURCE_ONLY=1 EVENTS="$events" bash -c '
-    source "$1/bin/install"
+    source "$1/bin/dot-install"
     OS=Ubuntu
     PROFILE=work
     setup_package_repositories() { printf "repositories\n" >>"$EVENTS"; }
@@ -128,7 +128,7 @@ compose_packages() {
   local events="$TEST_ROOT/events"
 
   run env INSTALL_SOURCE_ONLY=1 EVENTS="$events" bash -c '
-    source "$1/bin/install"
+    source "$1/bin/dot-install"
     OS=Ubuntu
     PROFILE=missing
     setup_package_repositories() { printf "repositories\n" >>"$EVENTS"; }
@@ -144,7 +144,7 @@ compose_packages() {
   local events="$TEST_ROOT/events"
 
   run env INSTALL_SOURCE_ONLY=1 EVENTS="$events" bash -c '
-    source "$1/bin/install"
+    source "$1/bin/dot-install"
     WORK_INSTALL_SOURCE_ONLY=1 source "$1/work/install.sh"
     OS=Ubuntu
     PROFILE=work
@@ -186,7 +186,7 @@ compose_packages() {
   mkdir -p "$audit_root/tmp"
 
   run env INSTALL_SOURCE_ONLY=1 bash -c '
-    source "$1/bin/install"
+    source "$1/bin/dot-install"
     DOTFILES_ROOT="$2"
     OS=Ubuntu
     PROFILE=personal
@@ -206,7 +206,7 @@ compose_packages() {
   mkdir -p "$audit_root/tmp"
 
   run env INSTALL_SOURCE_ONLY=1 EVENTS="$events" bash -c '
-    source "$1/bin/install"
+    source "$1/bin/dot-install"
     DOTFILES_ROOT="$2"
     OS=Ubuntu
     PROFILE=missing

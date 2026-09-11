@@ -8,6 +8,87 @@ setup() {
   source "$REPO_ROOT/config/versions.env"
 }
 
+run_installer() {
+  local fixture="$TEST_ROOT/entrypoint"
+  mkdir -p "$fixture/bin"
+  cp "$REPO_ROOT/bin/dot-install" "$fixture/bin/dot-install"
+  # Execute the real entrypoint, but stop at its first provisioning boundary.
+  # Even dropping "$@" at that entrypoint must fail safely, not configure a host.
+  cat >"$fixture/bin/common.sh" <<'SCRIPT'
+log_info() { :; }
+detect_os() { printf 'PROVISIONING_STARTED\n'; exit 97; }
+SCRIPT
+  run bash "$fixture/bin/dot-install" "$@"
+}
+
+@test "installer rejects utility flags and unexpected arguments before provisioning" {
+  local argument
+  for argument in -d -m --check --unknown -- "" destination; do
+    run_installer "$argument"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"Usage:"* ]]
+    [[ "$output" != *"PROVISIONING_STARTED"* ]]
+  done
+  run_installer -m 0755 source destination
+  [ "$status" -eq 2 ]
+  [[ "$output" != *"PROVISIONING_STARTED"* ]]
+}
+
+@test "installer help never starts provisioning" {
+  local argument
+  for argument in --help -h; do
+    run_installer "$argument"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Usage:"* ]]
+    [[ "$output" != *"PROVISIONING_STARTED"* ]]
+  done
+}
+
+@test "installer help rejects additional arguments rather than ignoring them" {
+  run_installer --help destination
+  [ "$status" -eq 2 ]
+  [[ "$output" != *"PROVISIONING_STARTED"* ]]
+}
+
+@test "installer with no arguments still reaches provisioning" {
+  run_installer
+  [ "$status" -eq 97 ]
+  [[ "$output" == *"PROVISIONING_STARTED"* ]]
+}
+
+@test "installer validates arguments without reading the selected profile" {
+  printf 'personal\n' >"$HOME/.dotfiles-profile"
+  stub_command tr 'printf "PROFILE_READ_FAILED\n" >&2; exit 95'
+
+  run_installer --help
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"PROFILE_READ_FAILED"* ]]
+  run_installer --unknown
+  [ "$status" -eq 2 ]
+  [[ "$output" != *"PROFILE_READ_FAILED"* ]]
+
+  run_installer
+  [ "$status" -eq 95 ]
+  [[ "$output" == *"PROFILE_READ_FAILED"* ]]
+  [[ "$output" != *"PROVISIONING_STARTED"* ]]
+}
+
+@test "dot-update forwards exact arguments and the installer exit status" {
+  local fixture="$TEST_ROOT/update"
+  mkdir -p "$fixture"
+  cp "$REPO_ROOT/bin/dot-update" "$fixture/dot-update"
+  cat >"$fixture/dot-install" <<'SCRIPT'
+#!/usr/bin/env bash
+printf '<%s>\n' "$@"
+exit 37
+SCRIPT
+  chmod +x "$fixture/dot-install"
+
+  run bash "$fixture/dot-update" --help "two words" "" -- -m
+  [ "$status" -eq 37 ]
+  [ "$output" = $'<--help>\n<two words>\n<>\n<-->\n<-m>' ]
+}
+
 @test "required phase failure makes summary fail" {
   run bash -c 'source "$1/bin/common.sh"; run_phase required packages false; finish_phases' _ "$REPO_ROOT"
   [ "$status" -ne 0 ]

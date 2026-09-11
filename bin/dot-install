@@ -7,14 +7,6 @@ source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 DOTFILES_ROOT=$(pwd -P)
 
-# Determine active profile
-PROFILE="personal"
-if [[ -f "$HOME/.dotfiles-profile" ]]; then
-  PROFILE=$(tr -d '[:space:]' <"$HOME/.dotfiles-profile")
-fi
-
-log_info "Running install for profile: $PROFILE"
-
 # ── Phase 1: OS packages ──────────────────────────────────────────────────────
 
 update_homebrew() {
@@ -183,7 +175,27 @@ setup_ai() {
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
+usage() {
+  printf 'Usage: dot-install [--help|-h]\nRun full dotfiles provisioning using ~/.dotfiles-profile (default: personal).\n'
+}
+
 main() {
+  # This provisions the machine; never treat file-install flags as consent.
+  if (($# > 0)); then
+    if [[ $# -eq 1 && ("$1" == --help || "$1" == -h) ]]; then
+      usage
+      return 0
+    fi
+    printf 'dot-install: unexpected arguments; this is not the system install utility.\n' >&2
+    usage >&2
+    return 2
+  fi
+
+  PROFILE="personal"
+  if [[ -f "$HOME/.dotfiles-profile" ]]; then
+    PROFILE=$(tr -d '[:space:]' <"$HOME/.dotfiles-profile")
+  fi
+  log_info "Running install for profile: $PROFILE"
   detect_os
 
   run_phase required packages install_platform_packages

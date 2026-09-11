@@ -55,6 +55,7 @@ Pi authenticates directly to the GitHub Copilot subscription through `/login`. S
 
 ## Conventions
 
+- `bin/` is public and precedes system commands on PATH. Name new maintenance commands `dot-<name>`; existing exceptions are enumerated in `tests/repository_hygiene.bats`. Never add standard-command names or an `install` compatibility wrapper/symlink. The `gh` identity shim is an intentional override: preserve its precedence. Document and test any new exception.
 - Keep authored Pi baselines in this repository; use runtime commands for mutable machine-local files under `~/.pi/agent/`.
 - `ai/pi/config/models.json` is a temporary GPT-6 Astra transport workaround; once Pi fixes the route upstream, remove both the tracked integration and its copied runtime entry.
 - Never commit `auth.json`, sessions, trust decisions, generated model catalogs, or package caches.

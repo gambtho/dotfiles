@@ -307,7 +307,7 @@ run_install_plugin() {
 
 @test "a failed plugin install warns without failing the phase" {
   # Plugin registration goes through the running server's socket API, so a first
-  # bootstrap cannot register anything -- and must not take down bin/install.
+  # bootstrap cannot register anything -- and must not take down bin/dot-install.
   fake_herdr '{"result":{"plugins":[]}}'
 
   source_installer PATH="$TEST_ROOT/bin:$PATH" FAKE_HERDR_STATUS=1 bash -c '

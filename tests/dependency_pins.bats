@@ -215,9 +215,9 @@ setup() {
 }
 
 @test "routine Neovim convergence restores without updating the lock" {
-  run rg -n 'Lazy![[:space:]]+restore' "$REPO_ROOT/bin/install"
+  run rg -n 'Lazy![[:space:]]+restore' "$REPO_ROOT/bin/dot-install"
   [ "$status" -eq 0 ]
-  run rg -n 'Lazy![[:space:]]+(sync|update)' "$REPO_ROOT/bin/install"
+  run rg -n 'Lazy![[:space:]]+(sync|update)' "$REPO_ROOT/bin/dot-install"
   [ "$status" -eq 1 ]
 }
 

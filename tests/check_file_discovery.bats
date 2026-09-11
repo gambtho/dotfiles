@@ -89,7 +89,7 @@ list_files() {
   list_files bash
 
   [ "$status" -eq 0 ]
-  [[ "$output" == *"bin/install"* ]]
+  [[ "$output" == *"bin/dot-install"* ]]
   [[ "$output" == *"bin/common.sh"* ]]
   [[ "$output" == *"${UNTRACKED_FILE#"$REPO_ROOT/"}"* ]]
   [[ "$output" != *"${IGNORED_FILE#"$REPO_ROOT/"}"* ]]
@@ -102,7 +102,7 @@ list_files() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"core/shell/zshrc.symlink"* ]]
   [[ "$output" == *"core/path.zsh"* ]]
-  [[ "$output" != *"bin/install"* ]]
+  [[ "$output" != *"bin/dot-install"* ]]
 }
 
 @test "bash gates recognize direct /bin/sh shebangs" {
@@ -162,7 +162,7 @@ list_files() {
   list_files shellcheck
 
   [ "$status" -eq 0 ]
-  [[ "$output" == *"bin/install"* ]]
+  [[ "$output" == *"bin/dot-install"* ]]
   [[ "$output" == *"bin/common.sh"* ]]
   [[ "$output" == *"ai/pi/install.sh"* ]]
   [[ "$output" == *"${UNTRACKED_FILE#"$REPO_ROOT/"}"* ]]
