@@ -93,7 +93,7 @@ readonly -a CADDY_MANAGED_SOURCE_FILES=(
 )
 
 # Pinned SHA-256 identities of the two approved static templates, the same
-# exact-tracked-content contract bin/validate-pi-webui uses for the runtime
+# exact-tracked-content contract libexec/validate-pi-webui uses for the runtime
 # manifest/lock. Any drift in either template — even syntactically valid,
 # placeholder-free, secret-free drift — must be a reviewed source change
 # that updates this pin, not a silent pass.
@@ -155,13 +155,13 @@ strict_firstpick_preflight() {
   resolve_source
   resolve_mise
   resolve_pi
-  "$SOURCE_ROOT/bin/validate-pi-webui" --tracked-only
+  "$SOURCE_ROOT/libexec/validate-pi-webui" --tracked-only
   set_managed_paths
   path_exists "$INSTALLED_RUNTIME" || {
     fail 'installed runtime is unavailable'
     return 1
   }
-  "$SOURCE_ROOT/bin/validate-pi-webui" --installed-runtime "$INSTALLED_RUNTIME"
+  "$SOURCE_ROOT/libexec/validate-pi-webui" --installed-runtime "$INSTALLED_RUNTIME"
   path_exists "$UNIT_PATH" || {
     fail 'installed service unit is unavailable'
     return 1

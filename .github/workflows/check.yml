@@ -34,6 +34,6 @@ jobs:
             --ignore-scripts \
             "@earendil-works/pi-coding-agent@$PI_VERSION" \
             "@gotgenes/pi-permission-system@$PI_PERMISSION_SYSTEM_VERSION"
-          bin/validate-pi-security-runtime \
+          libexec/validate-pi-security-runtime \
             --package-root "$package_prefix/lib/node_modules/@gotgenes/pi-permission-system" \
             --pi-package-root "$package_prefix/lib/node_modules/@earendil-works/pi-coding-agent"

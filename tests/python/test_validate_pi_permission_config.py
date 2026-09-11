@@ -6,7 +6,7 @@ import unittest
 
 
 VALIDATOR_PATH = (
-    pathlib.Path(__file__).resolve().parents[2] / "bin" / "validate-pi-permission-config"
+    pathlib.Path(__file__).resolve().parents[2] / "libexec" / "validate-pi-permission-config"
 )
 
 

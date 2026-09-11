@@ -120,7 +120,7 @@ run_security_migration() {
   shift 3
   run env REPO_ROOT="$REPO_ROOT" bash -c '
     set -euo pipefail
-    source "$REPO_ROOT/bin/common.sh"
+    source "$REPO_ROOT/libexec/common.sh"
     source "$REPO_ROOT/ai/pi/migrate-security-stack.sh"
     migrate_pi_security_stack "$@"
   ' _ "$mode" "$agent_dir" "$amp_settings" "$@"
@@ -196,7 +196,7 @@ SCRIPT
 
   [ "$status" -eq 0 ]
   grep -q '^-c import jsonschema$' "$TEST_ROOT/python-invocations"
-  grep -Fq "$REPO_ROOT/bin/validate-pi-permission-config --schema " "$TEST_ROOT/python-invocations"
+  grep -Fq "$REPO_ROOT/libexec/validate-pi-permission-config --schema " "$TEST_ROOT/python-invocations"
   [ -f "$agent_dir/extensions/pi-permission-system/config.json" ]
 }
 
@@ -394,7 +394,7 @@ EOF
   printf 'v0.14.0\n' >"$HOME/.local/state/vekil/installed-version"
 
   run env HOME="$HOME" PATH="$PATH" REPO_ROOT="$REPO_ROOT" bash -c '
-    source "$REPO_ROOT/bin/common.sh"
+    source "$REPO_ROOT/libexec/common.sh"
     source "$REPO_ROOT/ai/pi/cleanup-legacy.sh"
     cleanup_legacy_ai
   '

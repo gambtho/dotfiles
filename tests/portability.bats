@@ -48,7 +48,7 @@ setup() {
 }
 
 @test "repository shell tooling avoids Bash-4-only mapfile" {
-  run rg -n '(^|[[:space:]])mapfile([[:space:]]|$)' "$REPO_ROOT/bin" \
+  run rg -n '(^|[[:space:]])mapfile([[:space:]]|$)' "$REPO_ROOT/bin" "$REPO_ROOT/libexec" \
     "$REPO_ROOT"/ai/*/install.sh "$REPO_ROOT/fonts/install.sh" "$REPO_ROOT/work/install.sh"
   [ "$status" -eq 1 ]
 }

@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Install-phase runner shared by bin/dot-install and bin/bootstrap: run each phase,
+# Install-phase runner shared by bin/dot-install and libexec/bootstrap: run each phase,
 # collect required failures and optional warnings, and summarize at the end.
 # Sourced, never executed; must not change the caller's shell options.
 
 source "$(dirname "${BASH_SOURCE[0]}")/../log-helper"
 
 # Include guard — the one lib slice holding MUTABLE state. A script that
-# sources bin/common.sh and later this file directly must not re-run the
+# sources libexec/common.sh and later this file directly must not re-run the
 # initializers below and silently discard already-recorded phase failures.
 # (The other slices carry only functions and constants, where re-sourcing is
 # harmless; an `if`, not `[ ] && return`, so a first source under the

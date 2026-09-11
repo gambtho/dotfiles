@@ -65,7 +65,7 @@ Three things it deliberately will not do:
 ## Why the config is copied, not symlinked
 
 Every other `config/<name>/` directory in this repo is symlinked into
-`~/.config/` by `bin/relink`. Herdr cannot use that: it keeps runtime state in
+`~/.config/` by `make relink`. Herdr cannot use that: it keeps runtime state in
 its config directory alongside `config.toml` — `herdr.sock`, `herdr-client.sock`,
 `herdr-server.log`, and `session.json`. A directory symlink would point all of
 that into the git checkout and leave live sockets and logs in a working tree.

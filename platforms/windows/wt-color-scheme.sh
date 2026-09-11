@@ -39,7 +39,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 
-source "$SCRIPT_DIR/../../bin/common.sh"
+source "$SCRIPT_DIR/../../libexec/common.sh"
 
 info() { log_info "$*"; }
 ok() { log_success "$*"; }

@@ -751,10 +751,10 @@ setup() {
   printf '%s\n' '{"permission":{}}' >"$valid"
   printf '%s\n' '[]' >"$invalid"
 
-  run "$REPO_ROOT/bin/validate-pi-permission-config" --schema "$schema" --config "$valid"
+  run "$REPO_ROOT/libexec/validate-pi-permission-config" --schema "$schema" --config "$valid"
   [ "$status" -eq 0 ]
 
-  run "$REPO_ROOT/bin/validate-pi-permission-config" --schema "$schema" --config "$invalid"
+  run "$REPO_ROOT/libexec/validate-pi-permission-config" --schema "$schema" --config "$invalid"
   [ "$status" -ne 0 ]
   [[ "$output" == *"permission schema"* ]]
 }
@@ -763,13 +763,13 @@ setup() {
   local schema="$TEST_ROOT/missing-schema.json" malformed="$TEST_ROOT/malformed-schema.json" config="$TEST_ROOT/config.json"
   printf '%s\n' '{"permission":{}}' >"$config"
 
-  run "$REPO_ROOT/bin/validate-pi-permission-config" --schema "$schema" --config "$config"
+  run "$REPO_ROOT/libexec/validate-pi-permission-config" --schema "$schema" --config "$config"
   [ "$status" -ne 0 ]
   [[ "$output" == "error: permission schema $schema:"* ]]
   [[ "$output" != *"Traceback"* ]]
 
   printf '%s\n' '{' >"$malformed"
-  run "$REPO_ROOT/bin/validate-pi-permission-config" --schema "$malformed" --config "$config"
+  run "$REPO_ROOT/libexec/validate-pi-permission-config" --schema "$malformed" --config "$config"
   [ "$status" -ne 0 ]
   [[ "$output" == "error: permission schema $malformed:"* ]]
   [[ "$output" != *"Traceback"* ]]
@@ -779,13 +779,13 @@ setup() {
   local schema="$TEST_ROOT/schema.json" missing="$TEST_ROOT/missing-config.json" malformed="$TEST_ROOT/malformed-config.json"
   printf '%s\n' '{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","required":["permission"],"properties":{"permission":{"type":"object"}}}' >"$schema"
 
-  run "$REPO_ROOT/bin/validate-pi-permission-config" --schema "$schema" --config "$missing"
+  run "$REPO_ROOT/libexec/validate-pi-permission-config" --schema "$schema" --config "$missing"
   [ "$status" -ne 0 ]
   [[ "$output" == "error: permission schema $missing:"* ]]
   [[ "$output" != *"Traceback"* ]]
 
   printf '%s\n' '{' >"$malformed"
-  run "$REPO_ROOT/bin/validate-pi-permission-config" --schema "$schema" --config "$malformed"
+  run "$REPO_ROOT/libexec/validate-pi-permission-config" --schema "$schema" --config "$malformed"
   [ "$status" -ne 0 ]
   [[ "$output" == "error: permission schema $malformed:"* ]]
   [[ "$output" != *"Traceback"* ]]
@@ -796,21 +796,21 @@ setup() {
   printf '%s\n' '{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object"}' >"$schema"
   printf '\xff' >"$config"
 
-  run "$REPO_ROOT/bin/validate-pi-permission-config" --schema "$schema" --config "$config"
+  run "$REPO_ROOT/libexec/validate-pi-permission-config" --schema "$schema" --config "$config"
   [ "$status" -ne 0 ]
   [[ "$output" == "error: permission schema $config:"* ]]
   [[ "$output" != *"Traceback"* ]]
 
   printf '\xff' >"$schema"
   printf '{}\n' >"$config"
-  run "$REPO_ROOT/bin/validate-pi-permission-config" --schema "$schema" --config "$config"
+  run "$REPO_ROOT/libexec/validate-pi-permission-config" --schema "$schema" --config "$config"
   [ "$status" -ne 0 ]
   [[ "$output" == "error: permission schema $schema:"* ]]
   [[ "$output" != *"Traceback"* ]]
 }
 
 @test "Pi runtime validator fails clearly when permission package is absent" {
-  run "$REPO_ROOT/bin/validate-pi-security-runtime" \
+  run "$REPO_ROOT/libexec/validate-pi-security-runtime" \
     --package-root "$TEST_ROOT/missing-permission-package"
 
   [ "$status" -ne 0 ]
@@ -826,7 +826,7 @@ setup() {
     >"$package_root/schemas/permissions.schema.json"
   printf 'export class PermissionManager {}\n' >"$package_root/src/permission-manager.ts"
 
-  run "$REPO_ROOT/bin/validate-pi-security-runtime" \
+  run "$REPO_ROOT/libexec/validate-pi-security-runtime" \
     --package-root "$package_root" \
     --pi-package-root "$pi_root"
 

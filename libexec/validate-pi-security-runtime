@@ -64,7 +64,7 @@ if [[ ! -f "$pi_core_entry" ]]; then
   exit 1
 fi
 
-"$ROOT/bin/validate-pi-permission-config" \
+"$ROOT/libexec/validate-pi-permission-config" \
   --schema "$schema_file" \
   --config "$config_file"
 
@@ -75,6 +75,6 @@ JITI_ALIAS=$(node -e \
   'console.log(JSON.stringify({"@earendil-works/pi-coding-agent": process.argv[1]}))' \
   "$pi_core_entry")
 export JITI_ALIAS
-exec node "$jiti_cli" "$ROOT/bin/validate-pi-security-runtime.ts" \
+exec node "$jiti_cli" "$ROOT/libexec/validate-pi-security-runtime.ts" \
   --package-root "$package_root" \
   --repo-root "$ROOT"

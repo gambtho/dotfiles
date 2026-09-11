@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-source "$(dirname "$0")/../../bin/common.sh"
+source "$(dirname "$0")/../../libexec/common.sh"
 
 if [ "$(uname)" == "Darwin" ]; then
   log_info "Updating macOS software..."

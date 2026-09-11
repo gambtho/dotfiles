@@ -70,6 +70,12 @@ download_verified_artifact() {
     return 1
   fi
   chmod "$mode" "$temporary"
+  # BSD mv follows directory symlinks; validate after downloading, before publishing.
+  if [[ -d "$destination" ]]; then
+    printf 'refusing to publish over a directory: %s\n' "$destination" >&2
+    rm -f -- "$temporary"
+    return 1
+  fi
   if ! publish_staged_file "$temporary" "$destination"; then
     rm -f -- "$temporary"
     return 1

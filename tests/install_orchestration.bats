@@ -4,17 +4,17 @@ load test_helper
 
 setup() {
   setup_dotfiles_test
-  source "$REPO_ROOT/bin/common.sh"
+  source "$REPO_ROOT/libexec/common.sh"
   source "$REPO_ROOT/config/versions.env"
 }
 
 run_installer() {
   local fixture="$TEST_ROOT/entrypoint"
-  mkdir -p "$fixture/bin"
+  mkdir -p "$fixture/bin" "$fixture/libexec"
   cp "$REPO_ROOT/bin/dot-install" "$fixture/bin/dot-install"
   # Execute the real entrypoint, but stop at its first provisioning boundary.
   # Even dropping "$@" at that entrypoint must fail safely, not configure a host.
-  cat >"$fixture/bin/common.sh" <<'SCRIPT'
+  cat >"$fixture/libexec/common.sh" <<'SCRIPT'
 log_info() { :; }
 detect_os() { printf 'PROVISIONING_STARTED\n'; exit 97; }
 SCRIPT
@@ -90,13 +90,13 @@ SCRIPT
 }
 
 @test "required phase failure makes summary fail" {
-  run bash -c 'source "$1/bin/common.sh"; run_phase required packages false; finish_phases' _ "$REPO_ROOT"
+  run bash -c 'source "$1/libexec/common.sh"; run_phase required packages false; finish_phases' _ "$REPO_ROOT"
   [ "$status" -ne 0 ]
   [[ "$output" == *"FAILED: packages"* ]]
 }
 
 @test "optional phase failure is reported without failing install" {
-  run bash -c 'source "$1/bin/common.sh"; run_phase optional fonts false; finish_phases' _ "$REPO_ROOT"
+  run bash -c 'source "$1/libexec/common.sh"; run_phase optional fonts false; finish_phases' _ "$REPO_ROOT"
   [ "$status" -eq 0 ]
   [[ "$output" == *"WARNING: fonts"* ]]
 }
@@ -118,12 +118,12 @@ SCRIPT
 }
 
 @test "remote installer is denied without explicit consent" {
-  run bash -c 'source "$1/bin/common.sh"; require_remote_installers' _ "$REPO_ROOT"
+  run bash -c 'source "$1/libexec/common.sh"; require_remote_installers' _ "$REPO_ROOT"
   [ "$status" -ne 0 ]
 }
 
 @test "remote installer is allowed with explicit consent" {
-  run env ALLOW_REMOTE_INSTALLERS=1 bash -c 'source "$1/bin/common.sh"; require_remote_installers' _ "$REPO_ROOT"
+  run env ALLOW_REMOTE_INSTALLERS=1 bash -c 'source "$1/libexec/common.sh"; require_remote_installers' _ "$REPO_ROOT"
   [ "$status" -eq 0 ]
 }
 
@@ -151,7 +151,7 @@ SCRIPT
   chmod +x "$fake_bin/curl"
 
   run env ALLOW_REMOTE_INSTALLERS=1 PATH="$fake_bin:$PATH" REMOTE_INSTALLER_RESULT="$result" \
-    bash -c 'source "$1/bin/common.sh"; run_remote_installer https://example.test/install.sh sh "{}" --yes' _ "$REPO_ROOT"
+    bash -c 'source "$1/libexec/common.sh"; run_remote_installer https://example.test/install.sh sh "{}" --yes' _ "$REPO_ROOT"
   [ "$status" -eq 0 ]
   [ "$(cat "$result")" = "--yes" ]
 }
@@ -172,7 +172,7 @@ SCRIPT
   chmod +x "$STUB_BIN/curl"
 
   run env ALLOW_REMOTE_INSTALLERS=1 PATH="$PATH" CURL_LOG="$curl_log" \
-    bash -c 'source "$1/bin/common.sh"; run_remote_installer https://example.test/install.sh bash' _ "$REPO_ROOT"
+    bash -c 'source "$1/libexec/common.sh"; run_remote_installer https://example.test/install.sh bash' _ "$REPO_ROOT"
 
   [ "$status" -eq 0 ]
   grep -Fq -- '--connect-timeout 10 --max-time 120 --retry 3' "$curl_log"
@@ -190,7 +190,7 @@ SCRIPT
   chmod +x "$STUB_BIN/curl"
 
   run env PATH="$PATH" bash -c \
-    'source "$1/bin/common.sh"; download_verified_artifact https://example.test/tool deadbeef "$2" 0755' \
+    'source "$1/libexec/common.sh"; download_verified_artifact https://example.test/tool deadbeef "$2" 0755' \
     _ "$REPO_ROOT" "$HOME/tool"
 
   [ "$status" -ne 0 ]
@@ -213,13 +213,82 @@ SCRIPT
   chmod +x "$STUB_BIN/curl"
 
   run env PATH="$PATH" CURL_LOG="$TEST_ROOT/curl-args" bash -c \
-    'source "$1/bin/common.sh"; download_verified_artifact https://example.test/tool "$2" "$3" 0755' \
+    'source "$1/libexec/common.sh"; download_verified_artifact https://example.test/tool "$2" "$3" 0755' \
     _ "$REPO_ROOT" "$expected" "$HOME/tool"
 
   [ "$status" -eq 0 ]
   [ "$(cat "$HOME/tool")" = new ]
   [ "$(stat -c '%a' "$HOME/tool")" = 755 ]
   grep -Fq -- '--connect-timeout 10 --max-time 120 --retry 3' "$TEST_ROOT/curl-args"
+}
+
+stub_artifact_bsd_publish() {
+  stub_command curl '
+    while (($# > 0)); do
+      if [[ "$1" == --output ]]; then printf "new\n" >"$2"; exit 0; fi
+      shift
+    done
+    exit 1'
+  # Force the non-GNU branch. Without -T, the host mv also follows directory links.
+  stub_command mv '
+    [[ "${1:-}" == --version ]] && exit 1
+    printf "%s\n" "$*" >>"$TEST_ROOT/artifact-moves"
+    exec /bin/mv "$@"'
+}
+
+@test "verified artifact rejects directories and directory symlinks before BSD publication" {
+  stub_artifact_bsd_publish
+  local destination expected
+  expected=$(printf 'new\n' | sha256sum | awk '{print $1}')
+  mkdir -p "$HOME/directory"
+  ln -s "$HOME/directory" "$HOME/directory-link"
+
+  for destination in "$HOME/directory" "$HOME/directory-link"; do
+    run bash -c '
+      source "$1/libexec/common.sh"
+      download_verified_artifact https://example.test/tool "$2" "$3" 0755 || exit
+      printf "INSTALL_SUCCEEDED\n"
+    ' _ "$REPO_ROOT" "$expected" "$destination"
+
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"directory"* ]]
+    [[ "$output" != *"INSTALL_SUCCEEDED"* ]]
+    [ ! -e "$TEST_ROOT/artifact-moves" ]
+    [ -d "$HOME/directory" ]
+    [ -L "$HOME/directory-link" ]
+    run find "$HOME" -name '*.download.*'
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+  done
+}
+
+@test "verified artifact accepts files and non-directory symlinks with BSD publication" {
+  stub_artifact_bsd_publish
+  local destination expected
+  expected=$(printf 'new\n' | sha256sum | awk '{print $1}')
+  printf 'old\n' >"$HOME/file"
+  printf 'referent\n' >"$HOME/referent"
+  ln -s "$HOME/referent" "$HOME/file-link"
+  ln -s "$HOME/missing-referent" "$HOME/dangling-link"
+
+  for destination in "$HOME/new-file" "$HOME/file" "$HOME/file-link" "$HOME/dangling-link"; do
+    run bash -c '
+      source "$1/libexec/common.sh"
+      download_verified_artifact https://example.test/tool "$2" "$3" 0755
+    ' _ "$REPO_ROOT" "$expected" "$destination"
+
+    [ "$status" -eq 0 ]
+    [ -f "$destination" ]
+    [ ! -L "$destination" ]
+    [ -x "$destination" ]
+    [ "$(cat "$destination")" = new ]
+  done
+  [ -s "$TEST_ROOT/artifact-moves" ]
+  [ "$(cat "$HOME/referent")" = referent ]
+  [ ! -e "$HOME/missing-referent" ]
+  run find "$HOME" -name '*.download.*'
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
 }
 
 @test "publish_staged_file replaces a symlinked destination instead of following it" {
@@ -232,7 +301,7 @@ SCRIPT
   printf 'staged\n' >"$TEST_ROOT/staged"
   ln -s "$TEST_ROOT/elsewhere" "$TEST_ROOT/destination"
 
-  run bash -c 'source "$1/bin/common.sh"; publish_staged_file "$2" "$3"' \
+  run bash -c 'source "$1/libexec/common.sh"; publish_staged_file "$2" "$3"' \
     _ "$REPO_ROOT" "$TEST_ROOT/staged" "$TEST_ROOT/destination"
 
   [ "$status" -eq 0 ]
@@ -246,7 +315,7 @@ SCRIPT
   mkdir -p "$TEST_ROOT/destination-dir"
   printf 'staged\n' >"$TEST_ROOT/staged"
 
-  run bash -c 'source "$1/bin/common.sh"; publish_staged_file "$2" "$3"' \
+  run bash -c 'source "$1/libexec/common.sh"; publish_staged_file "$2" "$3"' \
     _ "$REPO_ROOT" "$TEST_ROOT/staged" "$TEST_ROOT/destination-dir"
 
   [ "$status" -ne 0 ]
@@ -264,7 +333,7 @@ SCRIPT
 
 @test "non-interactive bootstrap requires an explicit profile" {
   run env BOOTSTRAP_SOURCE_ONLY=1 HOME="$HOME" bash -c \
-    'source "$1/bin/bootstrap"; parse_bootstrap_args --non-interactive; validate_bootstrap_options' _ "$REPO_ROOT"
+    'source "$1/libexec/bootstrap"; parse_bootstrap_args --non-interactive; validate_bootstrap_options' _ "$REPO_ROOT"
   [ "$status" -ne 0 ]
   [[ "$output" == *"--profile is required"* ]]
 }
@@ -279,7 +348,7 @@ SCRIPT
   mkdir -p "$unconfigured_root/core/git"
 
   run env BOOTSTRAP_SOURCE_ONLY=1 HOME="$HOME" bash -c \
-    'source "$1/bin/bootstrap"; DOTFILES_ROOT="$2"; parse_bootstrap_args --non-interactive --profile personal; validate_bootstrap_options' \
+    'source "$1/libexec/bootstrap"; DOTFILES_ROOT="$2"; parse_bootstrap_args --non-interactive --profile personal; validate_bootstrap_options' \
     _ "$REPO_ROOT" "$unconfigured_root"
   [ "$status" -ne 0 ]
   [[ "$output" == *"Git user.name and user.email are required"* ]]
@@ -290,14 +359,14 @@ SCRIPT
   git config --global user.email "dotfiles@example.com"
 
   run env BOOTSTRAP_SOURCE_ONLY=1 HOME="$HOME" bash -c \
-    'source "$1/bin/bootstrap"; parse_bootstrap_args --non-interactive --profile work --allow-remote-installers; validate_bootstrap_options; printf "%s %s %s\n" "$NON_INTERACTIVE" "$BOOTSTRAP_PROFILE" "$ALLOW_REMOTE_INSTALLERS"' _ "$REPO_ROOT"
+    'source "$1/libexec/bootstrap"; parse_bootstrap_args --non-interactive --profile work --allow-remote-installers; validate_bootstrap_options; printf "%s %s %s\n" "$NON_INTERACTIVE" "$BOOTSTRAP_PROFILE" "$ALLOW_REMOTE_INSTALLERS"' _ "$REPO_ROOT"
   [ "$status" -eq 0 ]
   [ "$output" = "true work 1" ]
 }
 
 @test "bootstrap preserves remote installer consent from environment" {
   run env ALLOW_REMOTE_INSTALLERS=1 BOOTSTRAP_SOURCE_ONLY=1 HOME="$HOME" bash -c \
-    'source "$1/bin/bootstrap"; printf "%s\n" "$ALLOW_REMOTE_INSTALLERS"' _ "$REPO_ROOT"
+    'source "$1/libexec/bootstrap"; printf "%s\n" "$ALLOW_REMOTE_INSTALLERS"' _ "$REPO_ROOT"
   [ "$status" -eq 0 ]
   [ "$output" = "1" ]
 }
@@ -308,7 +377,7 @@ SCRIPT
   touch "$configured_root/core/git/gitconfig.local.symlink"
 
   run env BOOTSTRAP_SOURCE_ONLY=1 HOME="$HOME" bash -c \
-    'source "$1/bin/bootstrap"; DOTFILES_ROOT="$2"; parse_bootstrap_args --non-interactive --profile personal; validate_bootstrap_options' \
+    'source "$1/libexec/bootstrap"; DOTFILES_ROOT="$2"; parse_bootstrap_args --non-interactive --profile personal; validate_bootstrap_options' \
     _ "$REPO_ROOT" "$configured_root"
   [ "$status" -eq 0 ]
 }
@@ -317,7 +386,7 @@ SCRIPT
   local arch expected_asset expected_digest
   while read -r arch expected_asset expected_digest; do
     run env ARTIFACT_ARCH="$arch" bash -c '
-      source "$1/bin/common.sh"
+      source "$1/libexec/common.sh"
       download_verified_artifact() { printf "%s|%s|%s|%s\n" "$@"; }
       install_pinned_mise "$2"
     ' _ "$REPO_ROOT" "$HOME/mise"
@@ -333,7 +402,7 @@ CASES
   local arch expected_asset expected_digest
   while read -r arch expected_asset expected_digest; do
     run env ARTIFACT_ARCH="$arch" bash -c '
-      source "$1/bin/common.sh"
+      source "$1/libexec/common.sh"
       download_verified_artifact() { printf "%s|%s|%s|%s\n" "$@"; }
       install_pinned_yq "$2"
     ' _ "$REPO_ROOT" "$HOME/yq"
@@ -346,10 +415,10 @@ CASES
 }
 
 @test "bootstrap no longer calls an undefined mise installer" {
-  run rg -n 'install_mise_ubuntu' "$REPO_ROOT/bin/bootstrap"
+  run rg -n 'install_mise_ubuntu' "$REPO_ROOT/libexec/bootstrap"
 
   [ "$status" -eq 1 ]
-  run rg -n 'install_pinned_mise' "$REPO_ROOT/bin/bootstrap"
+  run rg -n 'install_pinned_mise' "$REPO_ROOT/libexec/bootstrap"
   [ "$status" -eq 0 ]
 }
 
@@ -358,7 +427,7 @@ CASES
   local path_result="$TEST_ROOT/path-after-mise-failure"
 
   run env BOOTSTRAP_SOURCE_ONLY=1 HOME="$HOME" PATH_RESULT="$path_result" bash -c '
-    source "$1/bin/bootstrap"
+    source "$1/libexec/bootstrap"
     sudo() { :; }
     command_exists() { [[ "$1" == zsh ]]; }
     install_pinned_mise() { return 42; }

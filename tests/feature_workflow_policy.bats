@@ -135,7 +135,7 @@ setup() {
   [ "$status" -eq 0 ]
   run grep -F 'Brave' "$readme"
   [ "$status" -eq 0 ]
-  run grep -F 'bin/validate-pi-security-runtime' "$readme"
+  run grep -F 'libexec/validate-pi-security-runtime' "$readme"
   [ "$status" -eq 0 ]
   run grep -F 'isolated pre-integration smoke' "$readme"
   [ "$status" -eq 0 ]

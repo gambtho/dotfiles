@@ -6,13 +6,13 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
 PINS_FILE="$ROOT/config/versions.env"
 MISE_FILE="$ROOT/config/mise/config.toml"
 export MISE_CONFIG_DIR="$ROOT/config/mise"
-source "$ROOT/bin/common.sh"
+source "$ROOT/libexec/common.sh"
 
 # shellcheck source=config/versions.env
 source "$PINS_FILE"
 
 usage() {
-  echo "Usage: bin/versions {list|check|update}" >&2
+  echo "Usage: libexec/versions {list|check|update}" >&2
 }
 
 list_mise() {

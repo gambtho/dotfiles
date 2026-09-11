@@ -2,11 +2,11 @@
 
 set -euo pipefail
 
-source "$(dirname "$0")/../../bin/common.sh"
+source "$(dirname "$0")/../../libexec/common.sh"
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd -P)"
-# shellcheck source=bin/lib/artifacts.sh
-source "$ROOT/bin/lib/artifacts.sh"
+# shellcheck source=libexec/lib/artifacts.sh
+source "$ROOT/libexec/lib/artifacts.sh"
 # shellcheck source=config/versions.env
 source "$ROOT/config/versions.env"
 # shellcheck source=ai/pi/cleanup-legacy.sh
@@ -331,7 +331,7 @@ reconcile_permission_policy() {
     return 1
   fi
   # Use the interpreter that passed preflight, not the validator's PATH shebang.
-  if ! "$PERMISSION_PYTHON" "$ROOT/bin/validate-pi-permission-config" \
+  if ! "$PERMISSION_PYTHON" "$ROOT/libexec/validate-pi-permission-config" \
     --schema "$schema" --config "$candidate"; then
     log_warning "Refusing to publish a Pi permission policy that fails the exact installed schema."
     rm -f "$candidate"

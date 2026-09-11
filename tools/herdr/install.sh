@@ -8,13 +8,14 @@
 # Herdr ships its own updater (`herdr update`, `herdr channel set`) and checks
 # herdr.dev in the background. That fights a committed pin: a background update
 # would move the binary out from under the digest this repo records, so the
-# shipped config turns version_check off and `bin/versions check` becomes the
-# one place a new release is noticed. Run `make pins-update` to move the pin.
+# shipped config turns version_check off and `make pins-check` becomes the
+# one place a new release is noticed. Update artifact versions and checksums
+# manually after checksum review to move the Herdr pin.
 
 set -euo pipefail
 
-# shellcheck source=bin/common.sh
-source "$(dirname "${BASH_SOURCE[0]}")/../../bin/common.sh"
+# shellcheck source=libexec/common.sh
+source "$(dirname "${BASH_SOURCE[0]}")/../../libexec/common.sh"
 
 DOTFILES_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 
@@ -27,7 +28,7 @@ HERDR_STATE_ROOT="${HERDR_STATE_ROOT:-${XDG_STATE_HOME:-$HOME/.local/state}/herd
 MARKER_FILE="$HERDR_STATE_ROOT/installed-version"
 # Herdr resolves its own config directory to ~/.config/herdr and keeps runtime
 # state there too -- sockets, logs, and session.json. That is why this is a
-# rendered copy rather than a config/herdr/ directory symlink: bin/relink would
+# rendered copy rather than a config/herdr/ directory symlink: libexec/relink would
 # point the whole directory into the repo and herdr would write live sockets
 # and logs into a git checkout.
 HERDR_CONFIG_ROOT="${HERDR_CONFIG_ROOT:-${XDG_CONFIG_HOME:-$HOME/.config}/herdr}"
@@ -103,7 +104,7 @@ validate_install_target() {
 
 # Herdr's install policy (refuse directories, replace a symlinked destination)
 # over the shared rename primitive; the -T rationale lives with
-# publish_staged_file in bin/common.sh.
+# publish_staged_file in libexec/common.sh.
 publish_file() {
   local staged="$1" destination="$2"
   validate_install_target "$destination" || return 1

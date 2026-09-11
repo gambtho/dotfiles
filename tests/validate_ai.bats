@@ -8,11 +8,11 @@ setup() {
 
 make_validator_repo() {
   VALIDATOR_REPO="$TEST_ROOT/validator-repo"
-  mkdir -p "$VALIDATOR_REPO/bin"
-  cp "$REPO_ROOT/bin/validate-ai" "$VALIDATOR_REPO/bin/validate-ai"
+  mkdir -p "$VALIDATOR_REPO/libexec"
+  cp "$REPO_ROOT/libexec/validate-ai" "$VALIDATOR_REPO/libexec/validate-ai"
   cp -a "$REPO_ROOT/ai" "$VALIDATOR_REPO/ai"
   git -C "$VALIDATOR_REPO" init -q
-  git -C "$VALIDATOR_REPO" add ai bin/validate-ai
+  git -C "$VALIDATOR_REPO" add ai libexec/validate-ai
 }
 
 write_pi_inventory() {
@@ -32,21 +32,21 @@ write_pi_prompts() {
 }
 
 @test "warnings do not abort validate-ai" {
-  run bash "$REPO_ROOT/bin/validate-ai" --verbose
+  run bash "$REPO_ROOT/libexec/validate-ai" --verbose
   [ "$status" -eq 0 ]
   [[ "$output" == *"Warnings:"* ]]
   [[ "$output" == *"PASSED"* ]]
 }
 
 @test "real Pi manifest is an exhaustive inventory of skills" {
-  run bash "$REPO_ROOT/bin/validate-ai" --verbose
+  run bash "$REPO_ROOT/libexec/validate-ai" --verbose
 
   [ "$status" -eq 0 ]
   [[ "$output" == *"package.json: exhaustive Pi skills inventory"* ]]
 }
 
 @test "real Pi manifest is an exhaustive inventory of prompts" {
-  run bash "$REPO_ROOT/bin/validate-ai" --verbose
+  run bash "$REPO_ROOT/libexec/validate-ai" --verbose
 
   [ "$status" -eq 0 ]
   [[ "$output" == *"package.json: exhaustive Pi prompts inventory"* ]]
@@ -62,7 +62,7 @@ write_pi_prompts() {
   make_validator_repo
   write_pi_skills '["./skills/not-real/SKILL.md"]'
 
-  run bash "$VALIDATOR_REPO/bin/validate-ai"
+  run bash "$VALIDATOR_REPO/libexec/validate-ai"
 
   [ "$status" -ne 0 ]
   [[ "$output" == *"declared Pi skill does not exist"* ]]
@@ -72,7 +72,7 @@ write_pi_prompts() {
   make_validator_repo
   write_pi_prompts '["./prompts/not-real.md"]'
 
-  run bash "$VALIDATOR_REPO/bin/validate-ai"
+  run bash "$VALIDATOR_REPO/libexec/validate-ai"
 
   [ "$status" -ne 0 ]
   [[ "$output" == *"declared Pi prompt does not exist"* ]]
@@ -82,7 +82,7 @@ write_pi_prompts() {
   make_validator_repo
   write_pi_skills '["./skills/improve/SKILL.md"]'
 
-  run bash "$VALIDATOR_REPO/bin/validate-ai"
+  run bash "$VALIDATOR_REPO/libexec/validate-ai"
 
   [ "$status" -ne 0 ]
   [[ "$output" == *"Pi manifest omits skill"* ]]
@@ -92,7 +92,7 @@ write_pi_prompts() {
   make_validator_repo
   write_pi_skills '["../outside/SKILL.md"]'
 
-  run bash "$VALIDATOR_REPO/bin/validate-ai"
+  run bash "$VALIDATOR_REPO/libexec/validate-ai"
 
   [ "$status" -ne 0 ]
   [[ "$output" == *"invalid Pi skill path"* ]]
@@ -103,7 +103,7 @@ write_pi_prompts() {
   ln -s ../missing "$VALIDATOR_REPO/ai/marketplace/plugins/my/broken-link"
   git -C "$VALIDATOR_REPO" add ai/marketplace/plugins/my/broken-link
 
-  run bash "$VALIDATOR_REPO/bin/validate-ai"
+  run bash "$VALIDATOR_REPO/libexec/validate-ai"
 
   [ "$status" -ne 0 ]
   [[ "$output" == *"tracked symlink does not resolve"* ]]
@@ -116,14 +116,14 @@ write_pi_prompts() {
   ln -s outside-hop "$VALIDATOR_REPO/ai/marketplace/plugins/my/escaping-link"
   git -C "$VALIDATOR_REPO" add ai/marketplace/plugins/my/escaping-link
 
-  run bash "$VALIDATOR_REPO/bin/validate-ai"
+  run bash "$VALIDATOR_REPO/libexec/validate-ai"
 
   [ "$status" -ne 0 ]
   [[ "$output" == *"tracked symlink resolves outside repository"* ]]
 }
 
 @test "validator checks every tracked Pi JSON baseline offline" {
-  run bash "$REPO_ROOT/bin/validate-ai" --verbose
+  run bash "$REPO_ROOT/libexec/validate-ai" --verbose
 
   [ "$status" -eq 0 ]
   [[ "$output" == *"settings.json: valid JSON"* ]]
@@ -140,7 +140,7 @@ write_pi_prompts() {
   make_validator_repo
   printf '{invalid\n' >"$VALIDATOR_REPO/ai/pi/config/subagents.json"
 
-  run bash "$VALIDATOR_REPO/bin/validate-ai"
+  run bash "$VALIDATOR_REPO/libexec/validate-ai"
 
   [ "$status" -ne 0 ]
   [[ "$output" == *"config/subagents.json: invalid JSON"* ]]
@@ -153,7 +153,7 @@ write_pi_prompts() {
   jq '.searchRouting.apiKey = ""' "$web" >"$temporary"
   mv "$temporary" "$web"
 
-  run bash "$VALIDATOR_REPO/bin/validate-ai"
+  run bash "$VALIDATOR_REPO/libexec/validate-ai"
 
   [ "$status" -ne 0 ]
   [[ "$output" == *"credential-like property"* ]]
@@ -168,7 +168,7 @@ write_pi_prompts() {
     jq --arg key "$key" '.[$key] = "duckduckgo"' "$web" >"$temporary"
     mv "$temporary" "$web"
 
-    run bash "$VALIDATOR_REPO/bin/validate-ai"
+    run bash "$VALIDATOR_REPO/libexec/validate-ai"
 
     [ "$status" -ne 0 ]
     [[ "$output" == *"must not declare $key"* ]]
@@ -177,6 +177,6 @@ write_pi_prompts() {
 }
 
 @test "validator avoids Bash-4-only mapfile" {
-  run rg -n '(^|[[:space:]])mapfile([[:space:]]|$)' "$REPO_ROOT/bin/validate-ai"
+  run rg -n '(^|[[:space:]])mapfile([[:space:]]|$)' "$REPO_ROOT/libexec/validate-ai"
   [ "$status" -eq 1 ]
 }

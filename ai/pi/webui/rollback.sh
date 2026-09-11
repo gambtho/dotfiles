@@ -62,7 +62,7 @@ preflight() {
       return 1
     }
     require_managed_directory "$INSTALLED_RUNTIME" 'installed runtime'
-    "$SOURCE_ROOT/bin/validate-pi-webui" --installed-runtime "$INSTALLED_RUNTIME"
+    "$SOURCE_ROOT/libexec/validate-pi-webui" --installed-runtime "$INSTALLED_RUNTIME"
   fi
   if [[ "$remove_worktree" -eq 1 ]] && path_exists "$LANDING_WORKTREE"; then
     validate_landing_worktree "$LANDING_WORKTREE"

@@ -43,7 +43,7 @@ setup() {
   #
   # These probes previously lived in tools/dev/ as a second, parallel set.
   # tools/dev/ is gone (design §13 step 8) and the discovery rules were never
-  # keyed on it (bin/list-check-files:40-52 matches tools/*), so one set covers
+  # keyed on it (libexec/list-check-files matches tools/*), so one set covers
   # the same predicate.
   TOOL_PROBE_DIR="$REPO_ROOT/tools/herdr"
   TOOL_SUB_DIR="$TOOL_PROBE_DIR/probe-lib-$BATS_TEST_NUMBER"
@@ -82,7 +82,7 @@ teardown() {
 
 list_files() {
   local class="$1"
-  run bash -c '"$1/bin/list-check-files" "$2" | tr "\0" "\n"' _ "$REPO_ROOT" "$class"
+  run bash -c '"$1/libexec/list-check-files" "$2" | tr "\0" "\n"' _ "$REPO_ROOT" "$class"
 }
 
 @test "bash discovery includes tracked and untracked source but excludes ignored state" {
@@ -90,10 +90,60 @@ list_files() {
 
   [ "$status" -eq 0 ]
   [[ "$output" == *"bin/dot-install"* ]]
-  [[ "$output" == *"bin/common.sh"* ]]
+  [[ "$output" == *"libexec/common.sh"* ]]
   [[ "$output" == *"${UNTRACKED_FILE#"$REPO_ROOT/"}"* ]]
   [[ "$output" != *"${IGNORED_FILE#"$REPO_ROOT/"}"* ]]
   [[ "$output" != *"core/shell/zshrc.symlink"* ]]
+}
+
+@test "all shipped private shell sources remain in the shell gates" {
+  local class file
+  for class in bash shellcheck shfmt; do
+    list_files "$class"
+    [ "$status" -eq 0 ]
+    for file in bootstrap relink versions list-check-files validate-ai \
+      validate-pi-security-runtime validate-pi-webui common.sh log-helper \
+      lib/artifacts.sh lib/links.sh lib/phases.sh lib/system.sh; do
+      printf '%s\n' "$output" | grep -Fxq "libexec/$file"
+    done
+    ! printf '%s\n' "$output" | grep -Fxq libexec/validate-pi-permission-config
+    ! printf '%s\n' "$output" | grep -Fxq libexec/validate-pi-security-runtime.ts
+    ! printf '%s\n' "$output" | grep -Fxq libexec/pi-permission-pipeline-checks.ts
+  done
+}
+
+@test "private command discovery includes shell sources but excludes other interpreters and ignored state" {
+  local fixture="$TEST_ROOT/private-discovery" class file
+  mkdir -p "$fixture/bin" "$fixture/libexec/lib" "$fixture/libexec/.opencode"
+  git init -q "$fixture"
+  cp "$REPO_ROOT/libexec/list-check-files" "$fixture/list-check-files"
+  printf '.opencode/\n' >"$fixture/.gitignore"
+  printf '#!/usr/bin/env bash\ntrue\n' >"$fixture/bin/public-probe"
+  printf '#!/bin/sh\ntrue\n' >"$fixture/libexec/tracked-shell"
+  printf '#!/usr/bin/env -S bash -e\ntrue\n' >"$fixture/libexec/untracked-shell"
+  printf 'slice() { :; }\n' >"$fixture/libexec/lib/slice.sh"
+  chmod 0644 "$fixture/libexec/lib/slice.sh"
+  printf '#!/usr/bin/env -S python3 -B\n' >"$fixture/libexec/python-probe"
+  printf '#!/usr/bin/env node\n' >"$fixture/libexec/node-probe"
+  printf 'export {};\n' >"$fixture/libexec/module.ts"
+  printf 'unknown shell-like content\n' >"$fixture/libexec/ambiguous"
+  : >"$fixture/libexec/empty"
+  printf '#!/bin/sh\nfalse\n' >"$fixture/libexec/.opencode/ignored.sh"
+  git -C "$fixture" add bin/public-probe libexec/tracked-shell
+
+  for class in bash shellcheck shfmt; do
+    run bash -o pipefail -c 'cd "$1"; bash ./list-check-files "$2" | tr "\0" "\n"' \
+      _ "$fixture" "$class"
+    [ "$status" -eq 0 ]
+    for file in bin/public-probe libexec/tracked-shell libexec/untracked-shell \
+      libexec/lib/slice.sh libexec/ambiguous libexec/empty; do
+      printf '%s\n' "$output" | grep -Fxq "$file"
+    done
+    for file in libexec/python-probe libexec/node-probe libexec/module.ts \
+      libexec/.opencode/ignored.sh; do
+      ! printf '%s\n' "$output" | grep -Fxq "$file"
+    done
+  done
 }
 
 @test "zsh discovery includes shell symlinks and zsh sources" {
@@ -142,7 +192,7 @@ list_files() {
     [[ "$output" != *"${ENV_IGNORE_PYTHON_FILE#"$REPO_ROOT/"}"* ]]
     [[ "$output" != *"${ENV_ASSIGN_PYTHON_FILE#"$REPO_ROOT/"}"* ]]
     [[ "$output" != *"${FISH_FILE#"$REPO_ROOT/"}"* ]]
-    [[ "$output" != *"bin/validate-pi-permission-config"* ]]
+    [[ "$output" != *"libexec/validate-pi-permission-config"* ]]
   done
 }
 
@@ -163,7 +213,7 @@ list_files() {
 
   [ "$status" -eq 0 ]
   [[ "$output" == *"bin/dot-install"* ]]
-  [[ "$output" == *"bin/common.sh"* ]]
+  [[ "$output" == *"libexec/common.sh"* ]]
   [[ "$output" == *"ai/pi/install.sh"* ]]
   [[ "$output" == *"${UNTRACKED_FILE#"$REPO_ROOT/"}"* ]]
   [[ "$output" != *"${IGNORED_FILE#"$REPO_ROOT/"}"* ]]
@@ -174,7 +224,7 @@ list_files() {
 
   [ "$status" -eq 0 ]
   [[ "$output" == *"tests/test_helper.bash"* ]]
-  [[ "$output" == *"bin/common.sh"* ]]
+  [[ "$output" == *"libexec/common.sh"* ]]
   [[ "$output" == *"ai/pi/install.sh"* ]]
 }
 
@@ -197,15 +247,12 @@ list_files() {
   done
 }
 
-@test "shfmt covers extensionless bin executables" {
-  # Extensionless bin/ executables are the bulk of this repo's shell code.
-  # Linting but never format-checking them let drift accumulate exactly where
-  # most changes land. Discovery now matches the shellcheck set; the remaining
-  # backlog of unformatted bin/ scripts is tracked separately, so this asserts
-  # discovery rather than a clean shfmt run.
+@test "shfmt covers extensionless public and private executables" {
+  # Extensionless bin/ and libexec/ executables need the same format coverage
+  # as lint coverage. Assert discovery independently of a clean shfmt run.
   local shellcheck_set shfmt_set
-  shellcheck_set=$("$REPO_ROOT/bin/list-check-files" shellcheck | tr '\0' '\n' | sort)
-  shfmt_set=$("$REPO_ROOT/bin/list-check-files" shfmt | tr '\0' '\n' | sort)
+  shellcheck_set=$("$REPO_ROOT/libexec/list-check-files" shellcheck | tr '\0' '\n' | sort)
+  shfmt_set=$("$REPO_ROOT/libexec/list-check-files" shfmt | tr '\0' '\n' | sort)
 
   run comm -23 <(printf '%s\n' "$shellcheck_set") <(printf '%s\n' "$shfmt_set")
   [ "$status" -eq 0 ]
@@ -215,7 +262,7 @@ list_files() {
 }
 
 @test "Makefile check pipelines propagate discovery failures portably" {
-  run rg -n 'sort -z|sort -zu|xargs[^\n]* -r([[:space:]]|$)' "$REPO_ROOT/bin/list-check-files" "$REPO_ROOT/Makefile"
+  run rg -n 'sort -z|sort -zu|xargs[^\n]* -r([[:space:]]|$)' "$REPO_ROOT/libexec/list-check-files" "$REPO_ROOT/Makefile"
   [ "$status" -eq 1 ]
 
   run rg -n "bash -o pipefail -c" "$REPO_ROOT/Makefile"
@@ -223,14 +270,14 @@ list_files() {
 }
 
 @test "discovery rejects unknown classes" {
-  run "$REPO_ROOT/bin/list-check-files" ruby
+  run "$REPO_ROOT/libexec/list-check-files" ruby
 
   [ "$status" -eq 2 ]
   [[ "$output" == *"Usage:"* ]]
 }
 
 @test "discovery fails clearly outside a Git checkout" {
-  run bash -c 'cd "$1" && "$2/bin/list-check-files" bash' _ "$TEST_ROOT" "$REPO_ROOT"
+  run bash -c 'cd "$1" && "$2/libexec/list-check-files" bash' _ "$TEST_ROOT" "$REPO_ROOT"
 
   [ "$status" -ne 0 ]
   [[ "$output" == *"must run inside a Git checkout"* ]]

@@ -25,12 +25,12 @@ setup() {
 }
 
 make_webui_fixture() {
-  mkdir -p "$WEBUI_FIXTURE/ai/pi/webui/runtime" "$WEBUI_FIXTURE/bin"
+  mkdir -p "$WEBUI_FIXTURE/ai/pi/webui/runtime" "$WEBUI_FIXTURE/libexec"
   cp "$REPO_ROOT/ai/pi/webui/runtime/package.json" \
     "$WEBUI_FIXTURE/ai/pi/webui/runtime/package.json"
   cp "$REPO_ROOT/ai/pi/webui/runtime/package-lock.json" \
     "$WEBUI_FIXTURE/ai/pi/webui/runtime/package-lock.json"
-  cp "$REPO_ROOT/bin/validate-pi-webui" "$WEBUI_FIXTURE/bin/validate-pi-webui"
+  cp "$REPO_ROOT/libexec/validate-pi-webui" "$WEBUI_FIXTURE/libexec/validate-pi-webui"
   cp "$REPO_ROOT/ai/pi/webui/install.sh" "$WEBUI_FIXTURE/ai/pi/webui/install.sh"
   cp "$REPO_ROOT/ai/pi/webui/tailscale.sh" "$WEBUI_FIXTURE/ai/pi/webui/tailscale.sh"
   cp "$REPO_ROOT/ai/pi/webui/rollback.sh" "$WEBUI_FIXTURE/ai/pi/webui/rollback.sh"
@@ -41,7 +41,7 @@ make_webui_fixture() {
     "$WEBUI_FIXTURE/ai/pi/webui/pi-webui-caddy.service.in"
   cp "$REPO_ROOT/ai/pi/webui/caddy-entrypoint.sh" "$WEBUI_FIXTURE/ai/pi/webui/caddy-entrypoint.sh"
   cp "$REPO_ROOT/ai/pi/webui/custom-domain.sh" "$WEBUI_FIXTURE/ai/pi/webui/custom-domain.sh"
-  chmod +x "$WEBUI_FIXTURE/bin/validate-pi-webui" \
+  chmod +x "$WEBUI_FIXTURE/libexec/validate-pi-webui" \
     "$WEBUI_FIXTURE/ai/pi/webui/"{install,tailscale,rollback,caddy-entrypoint,custom-domain}.sh
   printf 'ID=ubuntu\nVERSION_ID="24.04"\nVERSION_CODENAME=noble\n' >"$PI_WEBUI_TEST_OS_RELEASE"
   printf '.pi/\n' >"$WEBUI_FIXTURE/.gitignore"
@@ -273,7 +273,7 @@ fingerprint_paths() {
 }
 
 run_webui_validator() {
-  run "$WEBUI_FIXTURE/bin/validate-pi-webui" "$@"
+  run "$WEBUI_FIXTURE/libexec/validate-pi-webui" "$@"
 }
 
 run_installer() {
