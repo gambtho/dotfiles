@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install-phase runner shared by bin/install and bin/bootstrap: run each phase,
+# Install-phase runner shared by bin/dot-install and bin/bootstrap: run each phase,
 # collect required failures and optional warnings, and summarize at the end.
 # Sourced, never executed; must not change the caller's shell options.
 

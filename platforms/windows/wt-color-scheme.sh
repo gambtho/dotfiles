@@ -30,7 +30,7 @@
 # $WT_WINDOWS_USER (the same variable the profiles script reads). Only when
 # neither is supplied *and* stdin is a terminal does this prompt. A
 # non-interactive run fails with that instruction rather than tripping over the
-# unset variable `select` leaves behind, which is what lets bin/install call
+# unset variable `select` leaves behind, which is what lets bin/dot-install call
 # this unattended.
 #
 # Testing hook: WT_SETTINGS_PATH overrides settings.json discovery.

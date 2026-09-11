@@ -461,7 +461,7 @@ main() {
   setup_profile
   install_dotfiles
 
-  log_success "Bootstrap complete. Run 'bin/install' to complete setup."
+  log_success "Bootstrap complete. Run 'bin/dot-install' to complete setup."
 }
 
 if [[ "${BOOTSTRAP_SOURCE_ONLY:-0}" != 1 ]]; then

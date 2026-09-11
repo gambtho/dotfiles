@@ -98,6 +98,47 @@ run_loader() {
   [[ ":$output:" == *":/usr/bin:"* ]]
 }
 
+# Exercise the real exported bin directory without executing any of its tools.
+# Moving bin later in PATH would fix install but break the intentional gh shim.
+assert_install_lookup() {
+  local shell="$1" config="$2"
+  shift 2
+  ln -s "$REPO_ROOT" "$HOME/.dotfiles"
+  # Guarantee a competing gh even when the host installs it outside /usr/bin.
+  stub_command gh 'exit 99'
+  run "$shell" "$@" -c '
+    PATH="$STUB_BIN:/usr/bin:/bin"
+    export PATH
+    SYSTEM_INSTALL=$(command -v install) || exit 1
+    export SYSTEM_INSTALL
+    test "$(command -v gh)" = "$STUB_BIN/gh" || exit 1
+    ZSH="$HOME/.dotfiles"
+    . "$1"
+    printf "install: %s\n" "$(command -v install)"
+    test "$(command -v install)" = "$SYSTEM_INSTALL" || exit 1
+    test "$(command -v gh)" = "$HOME/.dotfiles/bin/gh" || exit 1
+    for child in /bin/sh /bin/bash; do
+      "$child" -c '\''
+        test "$(command -v install)" = "$SYSTEM_INSTALL" &&
+        test "$(command -v gh)" = "$HOME/.dotfiles/bin/gh"
+      '\'' || exit 1
+    done
+  ' _ "$REPO_ROOT/$config"
+  [ "$status" -eq 0 ]
+}
+
+@test "core PATH preserves system install and the gh shim in child shells" {
+  assert_install_lookup zsh core/path.zsh -df
+}
+
+@test "zsh login PATH preserves system install and the gh shim in child shells" {
+  assert_install_lookup zsh core/shell/zprofile.symlink -df
+}
+
+@test "bash login PATH preserves system install and the gh shim in child shells" {
+  assert_install_lookup bash core/shell/bash_profile.symlink --noprofile --norc
+}
+
 @test "zshrc loads customizations from configured DOTFILES root" {
   local custom_root="$TEST_ROOT/custom-dotfiles"
   mkdir -p "$custom_root/core/shell"

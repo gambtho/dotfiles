@@ -202,7 +202,7 @@ install_config() {
   # The config is machine-local state the user owns -- it also holds keybindings
   # and per-machine tweaks. Report drift and move on: overwriting would silently
   # discard a hand edit, and failing would make an edited config break every
-  # unrelated phase of bin/install.
+  # unrelated phase of bin/dot-install.
   if ! cmp -s "$STAGED_CONFIG" "$config"; then
     log_warning "$config differs from the shipped defaults; leaving it as-is."
   fi
@@ -272,7 +272,7 @@ install_plugin() {
 
   # Never fatal. Plugin commands go through the running Herdr server's socket
   # API, so a first bootstrap that has not started Herdr yet cannot register
-  # anything -- and that must not take down every later phase of bin/install.
+  # anything -- and that must not take down every later phase of bin/dot-install.
   log_info "Installing $HERDR_DEVCONTAINER_REPO $HERDR_DEVCONTAINER_REF..."
   if "$HERDR_BIN" plugin install "$HERDR_DEVCONTAINER_REPO" \
     --ref "$HERDR_DEVCONTAINER_REF" --yes; then

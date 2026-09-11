@@ -82,7 +82,7 @@ setup() {
 @test "dot-update delegates without manipulating mise versions" {
   run rg -n 'mise (upgrade|outdated|latest|use)' "$REPO_ROOT/bin/dot-update"
   [ "$status" -eq 1 ]
-  run rg -n 'exec .*bin/install|exec .*dirname.*install' "$REPO_ROOT/bin/dot-update"
+  run rg -n 'exec .*dirname.*dot-install' "$REPO_ROOT/bin/dot-update"
   [ "$status" -eq 0 ]
 }
 
@@ -152,6 +152,39 @@ setup() {
     [ -e "$f" ] || continue
     run git -C "$REPO_ROOT" ls-files --error-unmatch "${f#"$REPO_ROOT/"}"
     [ "$status" -eq 0 ]
+  done
+}
+
+@test "bin reserves common system command names even for dangling symlinks" {
+  local name
+  for name in install bash sh zsh cat chmod chown cp curl cut date dirname env find \
+    git grep head ln ls make mkdir mktemp mv printf pwd readlink rm rmdir sed sort \
+    stat sudo tail tar tee test touch tr uname uniq wc wget xargs; do
+    if [ -e "$REPO_ROOT/bin/$name" ] || [ -L "$REPO_ROOT/bin/$name" ]; then
+      printf 'Reserved system command name: bin/%s\n' "$name"
+      return 1
+    fi
+  done
+}
+
+@test "new public maintenance commands use the dot namespace" {
+  local file name
+  for file in "$REPO_ROOT"/bin/*; do
+    # Include dangling links: they can become executable when a target returns.
+    [ -L "$file" ] || { [ -f "$file" ] && [ -x "$file" ]; } || continue
+    name=${file##*/}
+    case "$name" in
+      dot-?*) ;;
+      gh) ;; # Intentional identity-routing override, not a maintenance command.
+      # Existing public names are grandfathered, not prefixes for new commands.
+      bootstrap | relink | versions | git-identity | git-worktree-gc | tmux-copy-url | \
+        list-check-files | validate-ai | validate-pi-permission-config | \
+        validate-pi-security-runtime | validate-pi-webui) ;;
+      *)
+        printf 'Unapproved public command: bin/%s; use dot-<name> or document an exception.\n' "$name"
+        return 1
+        ;;
+    esac
   done
 }
 

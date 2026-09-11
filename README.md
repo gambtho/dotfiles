@@ -29,13 +29,13 @@ Without that consent, `bin/bootstrap` fails at the Homebrew install step with
 `Remote installer execution is disabled. Re-run with ALLOW_REMOTE_INSTALLERS=1
 after reviewing the installer source.`
 
-After bootstrap, run `bin/install` (or `bin/dot-update`) to install packages and language runtimes.
+After bootstrap, run `bin/dot-install` (or `bin/dot-update`) to install packages and language runtimes.
 
 ## Structure
 
 ```
 ~/.dotfiles/
-  bin/            # Scripts: bootstrap, install, dot-update, relink, helpers
+  bin/            # Scripts: bootstrap, dot-install, dot-update, relink, helpers
   core/           # Always loaded: shell (zsh/prezto/p10k), git, path, env
   languages/      # Runtime tooling: go, ruby, python, rust, mise
   tools/          # Tool configs: docker, kubernetes
@@ -222,7 +222,7 @@ bin/dot-update    # update packages and language runtimes; restore Neovim plugin
 make check        # run syntax, lint, tests, and AI config validation
 ```
 
-`bin/dot-update` delegates to `bin/install`, which runs `nvim --headless "+Lazy!
+`bin/dot-update` delegates to `bin/dot-install`, which runs `nvim --headless "+Lazy!
 restore" +qa` — this restores plugins to match `config/nvim/lazy-lock.json`
 exactly. It never advances the lockfile itself.
 
@@ -232,6 +232,15 @@ developer machine.
 
 ## Migrating an Existing Installation
 
+The full installer is now `bin/dot-install` (or `make install`). Update external
+scripts that called `bin/install`. There is deliberately no compatibility wrapper
+or symlink at the old path: it shadowed the system file-install utility for every
+process inheriting the dotfiles PATH. After pulling the rename, clear cached
+command paths with `rehash` in zsh or `hash -r` in Bash, or start a fresh shell.
+`dot-install` accepts no provisioning arguments; `--help`/`-h` displays usage,
+and any other arguments fail before provisioning starts. `dot-update` forwards
+the same arguments and exit status.
+
 After pulling this modernization, verify the repository, refresh symlinks, and
 run the installer:
 
@@ -239,7 +248,7 @@ run the installer:
 git pull
 make check
 bin/relink
-bin/install
+bin/dot-install
 exec zsh
 ```
 
@@ -248,7 +257,7 @@ Remote installer scripts remain disabled by default. After reviewing their
 sources, explicitly opt in when a missing tool requires one:
 
 ```bash
-ALLOW_REMOTE_INSTALLERS=1 bin/install
+ALLOW_REMOTE_INSTALLERS=1 bin/dot-install
 ```
 
 ## Neovim
@@ -256,7 +265,7 @@ ALLOW_REMOTE_INSTALLERS=1 bin/install
 Neovim config lives in `config/nvim/init.lua` (based on [kickstart.nvim](https://github.com/nvim-lua/kickstart.nvim)),
 symlinked to `~/.config/nvim`. Plugins are bootstrapped via lazy.nvim on first launch.
 
-Routine updates (`bin/install`, `bin/dot-update`) only restore plugins to the
+Routine updates (`bin/dot-install`, `bin/dot-update`) only restore plugins to the
 versions recorded in `config/nvim/lazy-lock.json`; they never advance that
 lockfile. To intentionally update Neovim plugins, open Neovim and run
 `:Lazy update` (or `:Lazy sync`) manually, review the resulting diff to
@@ -265,7 +274,7 @@ change.
 
 ## Terminal Theme (WSL)
 
-On WSL, `bin/install` applies the Tokyo Night color scheme to Windows Terminal
+On WSL, `bin/dot-install` applies the Tokyo Night color scheme to Windows Terminal
 (`platforms/windows/wt-color-scheme.sh`), so the terminal matches Herdr's UI
 theme and Neovim's `tokyonight-night`. Windows Terminal ships no Tokyo Night
 built-in and otherwise falls back to Campbell.
@@ -344,6 +353,15 @@ anything with uncommitted changes are never removed. Locked worktrees are
 skipped unless `--include-locked`, which unlocks each before removing it.
 
 ## Repository Hygiene
+
+`bin/` is exported ahead of system directories, including for child processes.
+New maintenance executables must use `dot-<name>`; existing public command names
+are explicitly grandfathered in `tests/repository_hygiene.bats`. New exceptions
+require a documented reason and lookup coverage. `gh` is an intentional override
+for identity routing and must retain PATH precedence. Common system command names
+are reserved, including non-executable files and dangling symlinks at those names.
+Do not restore `bin/install` or solve collisions by moving all of `bin/` later in
+PATH. Shell-loading tests verify both system `install` and the `gh` override.
 
 - Active configuration must not discover files under `archived/`.
 - Machine-local files use a `.local` suffix and remain ignored.

@@ -3,7 +3,7 @@
 # ── Main targets ──────────────────────────────────────────────────────────────
 
 install: ## Run full install (packages, runtimes, shell, git, neovim, fonts, ai)
-	bash bin/install
+	bash bin/dot-install
 
 bootstrap: ## First-time setup (prereqs, gitconfig, profile, symlinks)
 	bash bin/bootstrap

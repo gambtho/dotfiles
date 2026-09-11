@@ -12,7 +12,7 @@ already has it.
 
 ## What the installer does
 
-`install.sh` runs as the `herdr` phase of `bin/install`:
+`install.sh` runs as the `herdr` phase of `bin/dot-install`:
 
 1. Refuses anything but Linux. Upstream ships macOS assets too, but the
    machines this repo bootstraps are WSL2 and an untested darwin path is worse
