@@ -261,25 +261,78 @@ EOF
   [[ "$output" != *"Run bin/git-identity."* ]]
 }
 
+prepare_make_hint_fixture() {
+  setup_shim_repo "$TEST_ROOT/unrelated" https://github.com/guarzo/repo.git
+  local root="$TEST_ROOT/dotfiles space's checkout"
+  mv "$DOTFILES" "$root"
+  export DOTFILES="$root"
+  cat >"$DOTFILES/Makefile" <<'MAKE'
+.PHONY: bootstrap relink
+bootstrap relink:
+	@printf '%s\n' "$@" > invoked-target
+MAKE
+  cd "$TEST_ROOT/unrelated"
+}
+
+@test "provision hints run the intended Make target outside a spaced dotfiles root" {
+  prepare_make_hint_fixture
+  mkdir -p "$HOME/.gh-guarzo"
+  local target hint
+  for target in bootstrap relink; do
+    if [ "$target" = relink ]; then
+      printf '[user]\n\temail = guarzo@example.invalid\n' \
+        >"$DOTFILES/core/git/gitconfig.guarzo.symlink"
+    fi
+    run bash -c '. "$1/core/git/identity-lib.sh"; identity_slug_provision_hint guarzo' _ "$DOTFILES"
+    [ "$status" -eq 0 ]
+    hint=${output##*run: }
+    [[ "$hint" == make\ -C\ *\ "$target" ]]
+    run bash -c "$hint"
+    [ "$status" -eq 0 ]
+    [ "$(cat "$DOTFILES/invoked-target")" = "$target" ]
+    [ ! -e "$TEST_ROOT/unrelated/invoked-target" ]
+  done
+}
+
+@test "doctor repair commands run Make from unrelated CWD with current and older libraries" {
+  prepare_make_hint_fixture
+  provision_guarzo_files
+  local mode hint
+  for mode in current older; do
+    if [ "$mode" = older ]; then
+      printf 'unset -f identity_config_override_scope\n' \
+        >>"$DOTFILES/core/git/identity-lib.sh"
+    fi
+    run "$REPO_ROOT/bin/git-identity"
+    [ "$status" -eq 6 ]
+    hint=$(printf '%s\n' "$output" | grep 'Run: make -C')
+    hint=${hint##*Run: }
+    run bash -c "$hint"
+    [ "$status" -eq 0 ]
+    [ "$(cat "$DOTFILES/invoked-target")" = relink ]
+    [ ! -e "$TEST_ROOT/unrelated/invoked-target" ]
+  done
+}
+
 # The state that produced the dead end: bootstrap authored the identity, then
-# died before install_dotfiles linked it. "Run bootstrap" is wrong advice there
-# -- it reports the identity as already configured and does not re-link.
+# died before install_dotfiles linked it. "Run make bootstrap" is wrong advice
+# there -- it reports the identity as already configured and does not re-link.
 @test "hint says relink when the identity is authored but not linked" {
   setup_shim_repo "$TEST_ROOT/r" https://github.com/guarzo/repo.git
   printf '[user]\n\temail = guarzo@example.invalid\n' \
     >"$DOTFILES/core/git/gitconfig.guarzo.symlink"
   run bash -c "source '$DOTFILES/core/git/identity-lib.sh'; identity_slug_provision_hint guarzo"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"bin/relink"* ]]
-  [[ "$output" != *"bin/bootstrap"* ]]
+  [[ "$output" == *"make -C $DOTFILES relink"* ]]
+  [[ "$output" != *make\ -C\ *\ bootstrap* ]]
 }
 
 @test "hint says bootstrap when no identity file has been authored yet" {
   setup_shim_repo "$TEST_ROOT/r" https://github.com/guarzo/repo.git
   run bash -c "source '$DOTFILES/core/git/identity-lib.sh'; identity_slug_provision_hint guarzo"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"bin/bootstrap"* ]]
-  [[ "$output" != *"bin/relink"* ]]
+  [[ "$output" == *"make -C $DOTFILES bootstrap"* ]]
+  [[ "$output" != *make\ -C\ *\ relink* ]]
 }
 
 @test "hint reports only the half that is missing" {
@@ -289,8 +342,8 @@ EOF
   run bash -c "source '$DOTFILES/core/git/identity-lib.sh'; identity_slug_provision_hint guarzo"
   [ "$status" -eq 0 ]
   [[ "$output" == *"gh auth login"* ]]
-  [[ "$output" != *"bin/relink"* ]]
-  [[ "$output" != *"bin/bootstrap"* ]]
+  [[ "$output" != *make\ -C\ *\ relink* ]]
+  [[ "$output" != *make\ -C\ *\ bootstrap* ]]
 }
 
 @test "hint is silent for the default identity" {
@@ -301,7 +354,7 @@ EOF
 }
 
 # NOT ROUTED has two causes with different repairs. A missing conditional
-# include is repaired by bin/relink; a repo-local user.email is not -- local
+# include is repaired by make relink; a repo-local user.email is not -- local
 # scope beats every include, so relink runs, changes nothing, and the report
 # is identical the second time.
 
@@ -314,7 +367,7 @@ EOF
   [ "$status" -eq 6 ]
   [[ "$output" == *"NOT ROUTED"* ]]
   [[ "$output" == *"git config --local --unset user.email"* ]]
-  [[ "$output" != *"bin/relink"* ]]
+  [[ "$output" != *make\ -C\ *\ relink* ]]
 }
 
 @test "not-routed still points at relink when no local override exists" {
@@ -324,7 +377,7 @@ EOF
   run "$REPO_ROOT/bin/git-identity"
   [ "$status" -eq 6 ]
   [[ "$output" == *"NOT ROUTED"* ]]
-  [[ "$output" == *"bin/relink"* ]]
+  [[ "$output" == *"make -C $DOTFILES relink"* ]]
 }
 
 @test "not-routed names the signing key override separately from the email" {
@@ -363,7 +416,7 @@ EOF
   cd "$TEST_ROOT/r"
   run "$REPO_ROOT/bin/git-identity"
   [ "$status" -eq 6 ]
-  [[ "$output" == *"bin/relink"* ]]
+  [[ "$output" == *"make -C $DOTFILES relink"* ]]
   [[ "$output" != *"command not found"* ]]
 }
 

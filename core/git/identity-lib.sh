@@ -239,7 +239,7 @@ identity_slug_provisioned() {
 # Which command repairs the git include depends on how far provisioning got.
 # Bootstrap authors core/git/gitconfig.<slug>.symlink, and install_dotfiles
 # links it into $HOME as a separate later step -- so an authored-but-unlinked
-# identity needs bin/relink. Sending it to bin/bootstrap instead is a second
+# identity needs make relink. Sending it to make bootstrap instead is a second
 # dead end: bootstrap sees the authored file, reports "already configured",
 # and never re-links.
 identity_slug_provision_hint() {
@@ -254,11 +254,11 @@ identity_slug_provision_hint() {
 
   if [ ! -e "$configfile" ]; then
     if [ -e "$authored" ]; then
-      printf '%s%s is authored but not linked -- run: %s/bin/relink\n' \
+      printf '%s%s is authored but not linked -- run: make -C %q relink\n' \
         "$prefix" "$authored" "$IDENTITY_DOTFILES_ROOT"
     else
-      printf '%sno identity file authored yet -- run: %s/bin/bootstrap (prompts for "%s")\n' \
-        "$prefix" "$IDENTITY_DOTFILES_ROOT" "$slug"
+      printf '%sno identity file authored yet (prompts for "%s") -- run: make -C %q bootstrap\n' \
+        "$prefix" "$slug" "$IDENTITY_DOTFILES_ROOT"
     fi
   fi
 
@@ -276,7 +276,7 @@ identity_slug_provision_hint() {
 # set in the repository's own config always beats a routed identity.
 #
 # This is the second cause of NOT ROUTED, and it needs the opposite repair from
-# the first: bin/relink fixes a missing include, but re-linking cannot dislodge
+# the first: make relink fixes a missing include, but re-linking cannot dislodge
 # a repo-local value, so a diagnostic that names only the include sends you
 # round the same loop twice.
 #
