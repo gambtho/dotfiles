@@ -55,12 +55,12 @@ Pi authenticates directly to the GitHub Copilot subscription through `/login`. S
 
 ## Conventions
 
-- `bin/` is public and precedes system commands on PATH. Name new maintenance commands `dot-<name>`; existing exceptions are enumerated in `tests/repository_hygiene.bats`. Never add standard-command names or an `install` compatibility wrapper/symlink. The `gh` identity shim is an intentional override: preserve its precedence. Document and test any new exception.
+- `bin/` is the exact public command surface: `dot-install`, `dot-update`, `gh`, `git-identity`, `git-worktree-gc`, and `tmux-copy-url`. `tests/repository_hygiene.bats` enforces this inventory; additions require explicit justification and test updates. Repository maintenance tools and sourced libraries belong in `libexec/`, which must never be added to PATH; use the existing Make targets for routine maintenance. Never add standard-command names or compatibility wrappers/symlinks for removed paths. Preserve PATH ordering and the intentional `gh` identity shim's precedence.
 - Keep authored Pi baselines in this repository; use runtime commands for mutable machine-local files under `~/.pi/agent/`.
 - `ai/pi/config/models.json` is a temporary GPT-6 Astra transport workaround; once Pi fixes the route upstream, remove both the tracked integration and its copied runtime entry.
 - Never commit `auth.json`, sessions, trust decisions, generated model catalogs, or package caches.
 - Language rules live in `ai/marketplace/plugins/my/skills/polish-core/rules/`.
-- After changing Pi configuration or package resources, run `bash bin/validate-ai` and the relevant tests.
+- After changing Pi configuration or package resources, run `make validate` and the relevant tests.
 - Prompt and skill edits take effect after `/reload` or in the next Pi session.
 
 ## Adding resources

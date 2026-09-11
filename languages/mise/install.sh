@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-source "$(dirname "$0")/../../bin/common.sh"
+source "$(dirname "$0")/../../libexec/common.sh"
 
 install_tools() {
   local profile="${DOTFILES_PROFILE:-personal}"

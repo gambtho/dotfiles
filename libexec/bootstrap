@@ -284,7 +284,7 @@ setup_identity_map() {
   fi
 
   {
-    printf '# Machine-local owner map, written by bin/bootstrap.\n'
+    printf '# Machine-local owner map, written by libexec/bootstrap.\n'
     printf '# Replaces the shared map entirely; see identity-owners.local.example.\n'
     printf '%s default\n' "$default_owner"
     # Disable pathname expansion while splitting the answer: an unquoted `*`
@@ -376,7 +376,7 @@ install_dotfiles() {
     for dst in "${SKIPPED_DESTINATIONS[@]}"; do
       log_warning "  $dst"
     done
-    log_warning "Remove or move each path above, then re-run bin/relink."
+    log_warning "Remove or move each path above, then re-run make relink."
     return 1
   fi
 

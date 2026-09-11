@@ -16,7 +16,7 @@ setup() {
 }
 
 @test "versions list shows mise and non-mise pins" {
-  run bash "$REPO_ROOT/bin/versions" list
+  run bash "$REPO_ROOT/libexec/versions" list
   [ "$status" -eq 0 ]
   [[ "$output" == *"mise go 1.26"* ]]
   [[ "$output" == *"git prezto $PREZTO_REF"* ]]
@@ -45,7 +45,7 @@ setup() {
   stub_command git 'printf "unrelated-ref\\n"'
   stub_command curl 'printf "v1.28.0\\n"'
 
-  run bash "$REPO_ROOT/bin/versions" check
+  run bash "$REPO_ROOT/libexec/versions" check
   [ "$status" -ne 0 ]
 }
 
@@ -110,7 +110,7 @@ setup() {
   local webui_manifest="$REPO_ROOT/ai/pi/webui/runtime/package.json"
   local webui_lock="$REPO_ROOT/ai/pi/webui/runtime/package-lock.json"
   local readme="$REPO_ROOT/ai/pi/webui/README.md"
-  local validator="$REPO_ROOT/bin/validate-pi-webui"
+  local validator="$REPO_ROOT/libexec/validate-pi-webui"
   local install="$REPO_ROOT/ai/pi/webui/install.sh"
   local custom_domain="$REPO_ROOT/ai/pi/webui/custom-domain.sh"
   local webui_version
@@ -196,7 +196,7 @@ setup() {
 }
 
 @test "versions rejects unknown commands" {
-  run bash "$REPO_ROOT/bin/versions" unknown
+  run bash "$REPO_ROOT/libexec/versions" unknown
   [ "$status" -eq 2 ]
   [[ "$output" == *"Usage:"* ]]
 }
@@ -252,7 +252,7 @@ esac
 SCRIPT
   chmod +x "$STUB_BIN/curl"
 
-  run env PATH="$PATH" bash "$REPO_ROOT/bin/versions" check
+  run env PATH="$PATH" bash "$REPO_ROOT/libexec/versions" check
 
   [ "$status" -eq 0 ]
   [[ "$output" == *"current artifact mise v2026.7.18"* ]]
@@ -297,7 +297,7 @@ SCRIPT
   chmod +x "$STUB_BIN/curl"
 
   for failure in transport response; do
-    run env PATH="$PATH" VERSION_LOOKUP_FAILURE="$failure" bash "$REPO_ROOT/bin/versions" check
+    run env PATH="$PATH" VERSION_LOOKUP_FAILURE="$failure" bash "$REPO_ROOT/libexec/versions" check
 
     [ "$status" -ne 0 ]
     [[ "$output" == *"error artifact mise: unable to query latest release for jdx/mise"* ]]
@@ -327,7 +327,7 @@ esac
 SCRIPT
   chmod +x "$STUB_BIN/curl"
 
-  run env PATH="$PATH" bash "$REPO_ROOT/bin/versions" check
+  run env PATH="$PATH" bash "$REPO_ROOT/libexec/versions" check
 
   [ "$status" -ne 0 ]
   [[ "$output" == *"error channel kubernetes: unable to query upstream stable channel"* ]]
@@ -358,7 +358,7 @@ esac
 SCRIPT
   chmod +x "$STUB_BIN/curl"
 
-  run env PATH="$PATH" bash "$REPO_ROOT/bin/versions" check
+  run env PATH="$PATH" bash "$REPO_ROOT/libexec/versions" check
 
   [ "$status" -ne 0 ]
   [[ "$output" == *"error channel kubernetes: unable to query upstream stable channel"* ]]
@@ -368,7 +368,7 @@ SCRIPT
 @test "versions update writes no pins when the Kubernetes channel lookup fails" {
   local fixture="$TEST_ROOT/fixture"
   mkdir -p "$fixture"
-  cp -R "$REPO_ROOT/bin" "$fixture/bin"
+  cp -R "$REPO_ROOT/libexec" "$fixture/libexec"
   cp -R "$REPO_ROOT/config" "$fixture/config"
 
   stub_command mise 'exit 0'
@@ -386,7 +386,7 @@ esac
 SCRIPT
   chmod +x "$STUB_BIN/curl"
 
-  run bash "$fixture/bin/versions" update
+  run bash "$fixture/libexec/versions" update
 
   [ "$status" -ne 0 ]
   [[ "$output" == *"no pins were updated"* ]]
@@ -397,19 +397,19 @@ SCRIPT
 }
 
 @test "versions update keeps artifact bumps behind checksum review" {
-  run rg -n 'checksum-reviewed manual update required' "$REPO_ROOT/bin/versions"
+  run rg -n 'checksum-reviewed manual update required' "$REPO_ROOT/libexec/versions"
 
   [ "$status" -eq 0 ]
 }
 
 @test "versions update leaves the Kubernetes channel operator-owned" {
   local fixture="$TEST_ROOT/fixture"
-  # Copy whole directories rather than a hand-maintained file list: bin/versions
+  # Copy whole directories rather than a hand-maintained file list: libexec/versions
   # sources siblings, and naming them individually makes an unrelated new
   # dependency fail this test for a reason that has nothing to do with the
   # Kubernetes channel.
   mkdir -p "$fixture"
-  cp -R "$REPO_ROOT/bin" "$fixture/bin"
+  cp -R "$REPO_ROOT/libexec" "$fixture/libexec"
   cp -R "$REPO_ROOT/config" "$fixture/config"
 
   stub_command mise 'exit 0'
@@ -432,7 +432,7 @@ esac
 SCRIPT
   chmod +x "$STUB_BIN/curl"
 
-  run bash "$fixture/bin/versions" update
+  run bash "$fixture/libexec/versions" update
 
   [ "$status" -eq 0 ]
   [ "$(grep '^KUBERNETES_CHANNEL=' "$fixture/config/versions.env")" = \
@@ -445,7 +445,7 @@ SCRIPT
 @test "versions update writes no pins when a remote HEAD cannot be resolved" {
   local fixture="$TEST_ROOT/fixture"
   mkdir -p "$fixture"
-  cp -R "$REPO_ROOT/bin" "$fixture/bin"
+  cp -R "$REPO_ROOT/libexec" "$fixture/libexec"
   cp -R "$REPO_ROOT/config" "$fixture/config"
 
   stub_command mise 'exit 0'
@@ -474,7 +474,7 @@ esac
 SCRIPT
   chmod +x "$STUB_BIN/curl"
 
-  run bash "$fixture/bin/versions" update
+  run bash "$fixture/libexec/versions" update
 
   [ "$status" -ne 0 ]
   [[ "$output" == *"no pins were updated"* ]]

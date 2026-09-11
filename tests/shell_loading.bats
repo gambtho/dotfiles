@@ -114,6 +114,9 @@ assert_install_lookup() {
     test "$(command -v gh)" = "$STUB_BIN/gh" || exit 1
     ZSH="$HOME/.dotfiles"
     . "$1"
+    case ":$PATH:" in
+      *":$HOME/.dotfiles/libexec:"* | *":$REPO_ROOT/libexec:"*) exit 1 ;;
+    esac
     printf "install: %s\n" "$(command -v install)"
     test "$(command -v install)" = "$SYSTEM_INSTALL" || exit 1
     test "$(command -v gh)" = "$HOME/.dotfiles/bin/gh" || exit 1

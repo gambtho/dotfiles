@@ -307,6 +307,7 @@ MAKE
     [ "$status" -eq 6 ]
     hint=$(printf '%s\n' "$output" | grep 'Run: make -C')
     hint=${hint##*Run: }
+    rm -f "$DOTFILES/invoked-target"
     run bash -c "$hint"
     [ "$status" -eq 0 ]
     [ "$(cat "$DOTFILES/invoked-target")" = relink ]
@@ -520,7 +521,7 @@ EOF
 }
 
 @test "bash_profile is mapped to ~/.bash_profile by the link mapper" {
-  run bash -c "source '$REPO_ROOT/bin/common.sh' >/dev/null 2>&1; managed_link_pairs '$REPO_ROOT' '$HOME' | tr '\0' '\n'"
+  run bash -c "source '$REPO_ROOT/libexec/common.sh' >/dev/null 2>&1; managed_link_pairs '$REPO_ROOT' '$HOME' | tr '\0' '\n'"
   [ "$status" -eq 0 ]
   [[ "$output" == *"$HOME/.bash_profile"* ]]
 }
@@ -769,7 +770,7 @@ be_default() {
 @test "non-interactive bootstrap skips secondary provisioning and reads no stdin" {
   setup_sec_boot old50 'guarzo default\ngambtho gambtho\n'
   run env BOOTSTRAP_SOURCE_ONLY=1 HOME="$HOME" bash -c "
-    source '$REPO_ROOT/bin/bootstrap'
+    source '$REPO_ROOT/libexec/bootstrap'
     NON_INTERACTIVE=true
     DOTFILES_ROOT='$SECBOOT'
     setup_secondary_identity
@@ -782,7 +783,7 @@ be_default() {
   setup_sec_boot old51 'guarzo default\ngambtho gambtho\n'
   printf '[user]\n\temail = x@example.invalid\n' >"$SECBOOT/core/git/gitconfig.gambtho.symlink"
   run env BOOTSTRAP_SOURCE_ONLY=1 HOME="$HOME" bash -c "
-    source '$REPO_ROOT/bin/bootstrap'
+    source '$REPO_ROOT/libexec/bootstrap'
     NON_INTERACTIVE=true
     DOTFILES_ROOT='$SECBOOT'
     setup_secondary_identity
@@ -846,7 +847,7 @@ be_default() {
   # quoting layers this way, so the test exercises the escaping and not the
   # harness.
   run env BOOTSTRAP_SOURCE_ONLY=1 HOME="$HOME" bash -c "
-    source '$REPO_ROOT/bin/bootstrap'
+    source '$REPO_ROOT/libexec/bootstrap'
     NON_INTERACTIVE=false
     DOTFILES_ROOT='$SECBOOT'
     printf 'y\nA&B|C\\\\D\nuser@example.invalid\n/abs/k&y.pub\n' | setup_secondary_identity
@@ -874,7 +875,7 @@ be_default() {
   chmod a-w "$SECBOOT/core/git"
   run env BOOTSTRAP_SOURCE_ONLY=1 HOME="$HOME" bash -c "
     set -e
-    source '$REPO_ROOT/bin/bootstrap'
+    source '$REPO_ROOT/libexec/bootstrap'
     NON_INTERACTIVE=false
     DOTFILES_ROOT='$SECBOOT'
     printf 'y\nName\nuser@example.invalid\n/abs/key.pub\n' | setup_secondary_identity
@@ -977,7 +978,7 @@ active_map() {
   cp "$REPO_ROOT/core/git/identity-owners.local.example" "$fake/core/git/"
   cp "$REPO_ROOT/core/git/identity-owners" "$fake/core/git/"
   run env BOOTSTRAP_SOURCE_ONLY=1 HOME="$HOME" bash -c "
-    source '$REPO_ROOT/bin/bootstrap'
+    source '$REPO_ROOT/libexec/bootstrap'
     NON_INTERACTIVE=true
     DOTFILES_ROOT='$fake'
     setup_identity_map
@@ -993,7 +994,7 @@ active_map() {
   cp "$REPO_ROOT/core/git/identity-owners" "$fake/core/git/"
   cp "$REPO_ROOT/core/git/identity-lib.sh" "$fake/core/git/"
   run env BOOTSTRAP_SOURCE_ONLY=1 HOME="$HOME" bash -c "
-    source '$REPO_ROOT/bin/bootstrap'
+    source '$REPO_ROOT/libexec/bootstrap'
     NON_INTERACTIVE=false
     DOTFILES_ROOT='$fake'
     printf 'y\nguarzo\ngambtho\n' | setup_identity_map
@@ -1031,7 +1032,7 @@ setup_map_boot() {
 
 run_map_setup() {
   run env BOOTSTRAP_SOURCE_ONLY=1 HOME="$HOME" bash -c "
-    source '$REPO_ROOT/bin/bootstrap'
+    source '$REPO_ROOT/libexec/bootstrap'
     NON_INTERACTIVE=false
     DOTFILES_ROOT='$MAPBOOT'
     printf '%b' '$1' | setup_identity_map
@@ -1078,10 +1079,10 @@ run_map_setup() {
   local glob_dir="$TEST_ROOT/glob-input"
   mkdir -p "$glob_dir"
   : >"$glob_dir/acme"
-  # The cd must happen AFTER sourcing: bin/bootstrap cds to its own repo root at
+  # The cd must happen AFTER sourcing: libexec/bootstrap cds to its own repo root at
   # source time, so any directory set before the source call is discarded.
   run env BOOTSTRAP_SOURCE_ONLY=1 HOME="$HOME" bash -c "
-    source '$REPO_ROOT/bin/bootstrap'
+    source '$REPO_ROOT/libexec/bootstrap'
     cd '$glob_dir'
     NON_INTERACTIVE=false
     DOTFILES_ROOT='$MAPBOOT'
@@ -1148,7 +1149,7 @@ setup_sec_boot() {
 
 run_sec_setup() {
   run env BOOTSTRAP_SOURCE_ONLY=1 HOME="$HOME" bash -c "
-    source '$REPO_ROOT/bin/bootstrap'
+    source '$REPO_ROOT/libexec/bootstrap'
     NON_INTERACTIVE=${2:-false}
     DOTFILES_ROOT='$SECBOOT'
     printf '%b' '$1' | setup_secondary_identity
@@ -1286,7 +1287,7 @@ render_routes() {
   printf 'guarzo default\ngambtho gambtho\n' >"$fake/core/git/identity-owners"
   unset IDENTITY_MAP_FILE
   run env BOOTSTRAP_SOURCE_ONLY=1 HOME="$HOME" bash -c "
-    source '$REPO_ROOT/bin/bootstrap'
+    source '$REPO_ROOT/libexec/bootstrap'
     DOTFILES_ROOT='$fake'
     render_identity_routes
   "
@@ -1310,7 +1311,7 @@ render_routes() {
     >>"$fake/core/git/identity-lib.sh"
   printf 'OLD ROUTES\n' >"$fake/core/git/gitconfig.identity-routes.symlink"
 
-  run bash -c "source '$REPO_ROOT/bin/common.sh'; regenerate_identity_routes '$fake'"
+  run bash -c "source '$REPO_ROOT/libexec/common.sh'; regenerate_identity_routes '$fake'"
   [ "$status" -eq 1 ]
   run cat "$fake/core/git/gitconfig.identity-routes.symlink"
   [ "$output" = "OLD ROUTES" ]
@@ -1329,7 +1330,7 @@ render_routes() {
 
   run env BOOTSTRAP_SOURCE_ONLY=1 HOME="$HOME" bash -c "
     set -e
-    source '$REPO_ROOT/bin/bootstrap'
+    source '$REPO_ROOT/libexec/bootstrap'
     DOTFILES_ROOT='$fake'
     render_identity_routes
     echo REACHED_NEXT_STEP
@@ -1367,7 +1368,7 @@ render_routes() {
   #
   # Which is exactly why an old git skips rather than fails, before any setup
   # runs: the absolute link it writes is correct behavior for that git, not a
-  # regression in this repo. bin/relink warns on the same 2.48 floor for the
+  # regression in this repo. libexec/relink warns on the same 2.48 floor for the
   # same reason -- the setting is inert there, not broken. The gitconfig test
   # above still holds on every version, so the key itself stays covered.
   local want=2.48.0 have

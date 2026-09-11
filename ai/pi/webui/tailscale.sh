@@ -186,11 +186,11 @@ check_local_service() {
   resolve_source
   resolve_mise
   resolve_pi
-  "$SOURCE_ROOT/bin/validate-pi-webui" --tracked-only
+  "$SOURCE_ROOT/libexec/validate-pi-webui" --tracked-only
   set_managed_paths
   validate_landing_worktree "$LANDING_WORKTREE"
   if path_exists "$INSTALLED_RUNTIME"; then
-    "$SOURCE_ROOT/bin/validate-pi-webui" --installed-runtime "$INSTALLED_RUNTIME"
+    "$SOURCE_ROOT/libexec/validate-pi-webui" --installed-runtime "$INSTALLED_RUNTIME"
   else
     [[ "$strict" -eq 0 ]] || {
       fail 'installed runtime is unavailable'

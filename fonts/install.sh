@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-source "$(dirname "${BASH_SOURCE[0]}")/../bin/common.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/../libexec/common.sh"
 # shellcheck source=config/versions.env
 source "$(dirname "${BASH_SOURCE[0]}")/../config/versions.env"
 

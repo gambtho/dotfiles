@@ -7,25 +7,31 @@ Personal dotfiles for Linux, macOS, and WSL. Built around zsh + Prezto + Powerle
 ```bash
 git clone https://github.com/gambtho/dotfiles.git ~/.dotfiles
 cd ~/.dotfiles
-bin/bootstrap
+make bootstrap
 ```
 
-`bin/bootstrap` will:
+If Make is not installed yet, run `bash libexec/bootstrap` from the repository
+root instead. Advanced flags also use the private entrypoint directly, for
+example `bash libexec/bootstrap --non-interactive --profile server` (requires
+an existing Git identity). It also accepts `--profile personal|work|server` and
+`--allow-remote-installers`; there is no Make argument-forwarding interface.
+
+`make bootstrap` will:
 1. Install OS prerequisites (Homebrew on macOS / apt + zsh + mise on Linux)
 2. Set up `.gitconfig.local` from template (prompts for name and email)
 3. Prompt for profile selection (`personal` or `work`)
 4. Symlink all dotfiles and `config/` directories
 
-On a pristine macOS machine without Homebrew, `bin/bootstrap` needs to run the
+On a pristine macOS machine without Homebrew, `make bootstrap` needs to run the
 upstream Homebrew installer script. That remote installer execution is
 disabled by default; review the Homebrew install script source, then opt in
 explicitly:
 
 ```bash
-ALLOW_REMOTE_INSTALLERS=1 bin/bootstrap
+ALLOW_REMOTE_INSTALLERS=1 make bootstrap
 ```
 
-Without that consent, `bin/bootstrap` fails at the Homebrew install step with
+Without that consent, `make bootstrap` fails at the Homebrew install step with
 `Remote installer execution is disabled. Re-run with ALLOW_REMOTE_INSTALLERS=1
 after reviewing the installer source.`
 
@@ -35,7 +41,8 @@ After bootstrap, run `bin/dot-install` (or `bin/dot-update`) to install packages
 
 ```
 ~/.dotfiles/
-  bin/            # Scripts: bootstrap, dot-install, dot-update, relink, helpers
+  bin/            # Exactly six public commands, exported on PATH
+  libexec/        # Private maintenance entrypoints and sourced libraries; never on PATH
   core/           # Always loaded: shell (zsh/prezto/p10k), git, path, env
   languages/      # Runtime tooling: go, ruby, python, rust, mise
   tools/          # Tool configs: docker, kubernetes
@@ -55,7 +62,7 @@ Create `~/.dotfiles-profile` (not git-tracked) to select which profile is active
 echo "personal" > ~/.dotfiles-profile   # or "work"
 ```
 
-`bin/bootstrap` prompts for this on first run. The `work` profile sources every
+`make bootstrap` prompts for this on first run. The `work` profile sources every
 `work/*.zsh` on disk. Tracked files there hold only generic tooling (paths, krew,
 apt repositories); employer-specific aliases, identities, and endpoints belong in
 a machine-local `work/*.local.zsh` (gitignored — copy
@@ -84,17 +91,17 @@ deliberate: the map says which owners this machine *knows about*, independent
 of whether they are actually set up, so tooling can tell "unmapped and
 unrelated" apart from "known identity but not provisioned."
 
-**How routing works.** `bin/relink` generates one
+**How routing works.** `make relink` generates one
 `includeIf "hasconfig:remote.*.url:..."` block per non-default owner in the
 **active** map into the gitignored `~/.gitconfig.identity-routes`, which
 `core/git/gitconfig.symlink` includes. Generated rather than tracked because the
 map is per-machine: a hardcoded owner would name the wrong account on a machine
 that flips the roles, leaving the other identity silently unrouted. Re-run
-`bin/relink` after changing the map. Each block pulls in `~/.gitconfig.<slug>`
-only for repositories with a matching remote. That
+`make -C "${DOTFILES:-$HOME/.dotfiles}" relink` after changing the map. Each block
+pulls in `~/.gitconfig.<slug>` only for repositories with a matching remote. That
 include path is gitignored and machine-local — the tracked template lives at
 `core/git/gitconfig.secondary.symlink.example`, which is slug-agnostic.
-`bin/bootstrap` renders it per non-`default` slug into
+`make bootstrap` renders it per non-`default` slug into
 `core/git/gitconfig.<slug>.symlink` (relinked to `~/.gitconfig.<slug>`); to do
 it by hand, copy the template, replace `IDENTITY_SLUG` with the slug, and fill
 in the real name, email, and absolute signing-key path.
@@ -117,16 +124,21 @@ owner/identity applies and whether it's usable (provisioned, token valid,
 transport supported). It's the fastest way to check "why is this behaving
 oddly". When an identity is mapped but not provisioned, it — like `bin/gh` and
 the pre-push guard — prints the commands that finish provisioning rather than
-just naming the gap: `bin/relink` when the identity file is authored but not
-yet linked into `$HOME`, `bin/bootstrap` when it hasn't been authored at all,
-and `GH_CONFIG_DIR=$HOME/.gh-<slug> gh auth login --scopes repo,workflow` for a
-missing `gh` config dir.
+just naming the gap: `make -C <dotfiles-root> relink` when the identity file is
+authored but not yet linked into `$HOME`, `make -C <dotfiles-root> bootstrap`
+when it hasn't been authored at all, and
+`GH_CONFIG_DIR=$HOME/.gh-<slug> gh auth login --scopes repo,workflow` for a missing
+`gh` config dir. The emitted dotfiles root is resolved and shell-escaped, so the
+repair works from an unrelated repository with spaces in the dotfiles path.
+Use `make -C "${DOTFILES:-$HOME/.dotfiles}" bootstrap` when provisioning manually
+from outside the checkout.
 
 `NOT ROUTED` — the identity is provisioned but git resolves a different
 `user.email` or `user.signingKey` — has two causes with opposite repairs, and
 the diagnostic names whichever applies: a missing conditional include (fixed by
-`bin/relink`), or a `local`/`worktree`-scope value set in the repository itself,
-which outranks every include and is fixed by `git config --local --unset
+`make -C "${DOTFILES:-$HOME/.dotfiles}" relink`), or a `local`/`worktree`-scope
+value set in the repository itself, which outranks every include and is fixed
+by `git config --local --unset
 user.email`. The pre-push guard names the same cause when it blocks.
 
 A global `pre-push` hook (`core/git/git-hooks.symlink/pre-push`) double-checks
@@ -157,7 +169,7 @@ bypassed or the repo's local config drifted.
   resolving the destination owner, so they recognise the mismatch and refuse
   rather than silently pushing under the wrong account.
 
-**Manual provisioning steps** (also driven interactively by `bin/bootstrap`'s
+**Manual provisioning steps** (also driven interactively by `make bootstrap`'s
 secondary-identity prompt, which fills in the template but does not run
 either of these for you):
 
@@ -197,7 +209,7 @@ inherit another machine's roles, which is the failure this design exists to
 prevent. List every owner the machine should know — one you leave out becomes
 unmapped, so nothing routes it and nothing blocks it.
 
-`bin/bootstrap` offers to write the local map, or copy
+`make bootstrap` offers to write the local map, or copy
 `identity-owners.local.example` by hand. It then offers to provision each
 non-`default` slug the map names, rendering
 `gitconfig.secondary.symlink.example` into `core/git/gitconfig.<slug>.symlink`
@@ -209,7 +221,7 @@ on a particular machine.
 
 Provisioning is two independent halves, and an identity is only usable with
 both: the git include (`core/git/gitconfig.<slug>.symlink`, authored by
-`bin/bootstrap` and linked into `$HOME` by its symlink step — `bin/relink`
+`make bootstrap` and linked into `$HOME` by its symlink step — `make relink`
 re-links it on its own) and the `gh` config dir (`$HOME/.gh-<slug>`, created
 only by that `gh auth login`). Bootstrap authoring the file does not link it,
 so a run interrupted between those two steps leaves an identity that exists in
@@ -232,6 +244,23 @@ developer machine.
 
 ## Migrating an Existing Installation
 
+Private tooling has moved one-for-one from `bin/` to `libexec/`, including
+`bootstrap`, `relink`, `versions`, `list-check-files`, all `validate-*` tools,
+their TypeScript modules, `common.sh`, `log-helper`, and `lib/`. Old paths such
+as `bin/bootstrap` and `bin/relink` are removed with no wrappers, symlinks, or
+copies left behind. Update external scripts to explicit `libexec/` paths;
+use `make bootstrap`, `make relink`, `make pins`, `make pins-check`,
+`make pins-update`, and `make validate` for routine operation from the checkout.
+Do not add `libexec/` to PATH. Refresh cached command paths with `rehash` (zsh),
+`hash -r` (Bash), or restart the shell after pulling this migration.
+
+An existing checkout may retain ignored `bin/__pycache__/` bytecode from earlier
+Python validation; Git does not remove it when pulling the migration. If the
+exact public-inventory check reports that directory, inspect its contents and
+move the directory intact to a new, unused backup location outside `bin/` before
+rerunning `make check`. Do not delete unfamiliar files or overwrite an existing
+backup; no automatic cache cleanup is performed.
+
 The full installer is now `bin/dot-install` (or `make install`). Update external
 scripts that called `bin/install`. There is deliberately no compatibility wrapper
 or symlink at the old path: it shadowed the system file-install utility for every
@@ -247,12 +276,12 @@ run the installer:
 ```bash
 git pull
 make check
-bin/relink
+make relink
 bin/dot-install
 exec zsh
 ```
 
-`bin/relink` removes dead symlinks and recreates links from the current layout.
+`make relink` removes dead symlinks and recreates links from the current layout.
 Remote installer scripts remain disabled by default. After reviewing their
 sources, explicitly opt in when a missing tool requires one:
 
@@ -355,11 +384,14 @@ skipped unless `--include-locked`, which unlocks each before removing it.
 ## Repository Hygiene
 
 `bin/` is exported ahead of system directories, including for child processes.
-New maintenance executables must use `dot-<name>`; existing public command names
-are explicitly grandfathered in `tests/repository_hygiene.bats`. New exceptions
-require a documented reason and lookup coverage. `gh` is an intentional override
-for identity routing and must retain PATH precedence. Common system command names
-are reserved, including non-executable files and dangling symlinks at those names.
+Its exact public inventory is `dot-install`, `dot-update`, `gh`, `git-identity`,
+`git-worktree-gc`, and `tmux-copy-url`. `tests/repository_hygiene.bats` rejects
+extra files, directories, and dangling symlinks. Public additions require an
+explicit inventory change and justification; routine maintenance tooling and
+sourced libraries belong in repository-owned `libexec/`, never on PATH.
+`gh` is an intentional override for identity routing and must retain PATH
+precedence. Common system command names are reserved, including non-executable
+files and dangling symlinks at those names.
 Do not restore `bin/install` or solve collisions by moving all of `bin/` later in
 PATH. Shell-loading tests verify both system `install` and the `gh` override.
 
@@ -400,7 +432,7 @@ Pi's always-loaded global working agreement is `ai/pi/AGENTS.md`; project instru
 ### Validation
 
 ```bash
-bash bin/validate-ai --verbose   # checks Pi prompt/skill frontmatter and manifest coverage
+make validate   # checks Pi prompt/skill frontmatter and manifest coverage
 ```
 
 ## Origins

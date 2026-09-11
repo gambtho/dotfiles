@@ -12,22 +12,22 @@ setup() {
   # `cmd | filter` pipeline reports the filter's status. The exemptions are
   # deliberate, not backlog:
   #   sourced libraries    run in the caller's shell and must not mutate its
-  #                        options (bin/common.sh, bin/log-helper, bin/lib/*,
+  #                        options (libexec/common.sh, libexec/log-helper, libexec/lib/*,
   #                        core/git/identity-lib.sh)
   #   status-branching CLIs  bin/gh and bin/git-identity branch on non-zero
   #                        statuses throughout and pin `set -uo pipefail`
   local file lax=""
   while IFS= read -r -d '' file; do
     case "$file" in
-      bin/common.sh | bin/log-helper | core/git/identity-lib.sh) continue ;;
-      bin/lib/*) continue ;;
+      libexec/common.sh | libexec/log-helper | core/git/identity-lib.sh) continue ;;
+      libexec/lib/*) continue ;;
       bin/gh | bin/git-identity)
         grep -q '^set -uo pipefail$' "$REPO_ROOT/$file" || lax="$lax $file"
         continue
         ;;
     esac
     grep -q '^set -euo pipefail$' "$REPO_ROOT/$file" || lax="$lax $file"
-  done < <(cd "$REPO_ROOT" && bin/list-check-files bash)
+  done < <(cd "$REPO_ROOT" && libexec/list-check-files bash)
   [ -z "$lax" ] || {
     printf 'missing strict mode:%s\n' "$lax"
     false
@@ -167,24 +167,18 @@ setup() {
   done
 }
 
-@test "new public maintenance commands use the dot namespace" {
-  local file name
-  for file in "$REPO_ROOT"/bin/*; do
-    # Include dangling links: they can become executable when a target returns.
-    [ -L "$file" ] || { [ -f "$file" ] && [ -x "$file" ]; } || continue
-    name=${file##*/}
-    case "$name" in
-      dot-?*) ;;
-      gh) ;; # Intentional identity-routing override, not a maintenance command.
-      # Existing public names are grandfathered, not prefixes for new commands.
-      bootstrap | relink | versions | git-identity | git-worktree-gc | tmux-copy-url | \
-        list-check-files | validate-ai | validate-pi-permission-config | \
-        validate-pi-security-runtime | validate-pi-webui) ;;
-      *)
-        printf 'Unapproved public command: bin/%s; use dot-<name> or document an exception.\n' "$name"
-        return 1
-        ;;
-    esac
+@test "public bin contains only the six approved executable files" {
+  run bash -c '
+    shopt -s dotglob nullglob
+    for file in "$1"/bin/*; do printf "%s\n" "${file##*/}"; done | LC_ALL=C sort
+  ' _ "$REPO_ROOT"
+  [ "$status" -eq 0 ]
+  [ "$output" = $'dot-install\ndot-update\ngh\ngit-identity\ngit-worktree-gc\ntmux-copy-url' ]
+  local name
+  for name in dot-install dot-update gh git-identity git-worktree-gc tmux-copy-url; do
+    [ -f "$REPO_ROOT/bin/$name" ]
+    [ -x "$REPO_ROOT/bin/$name" ]
+    [ ! -L "$REPO_ROOT/bin/$name" ]
   done
 }
 

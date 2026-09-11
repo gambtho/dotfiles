@@ -498,8 +498,8 @@ build_candidate() {
   cp "$source_runtime/package.json" "$source_runtime/package-lock.json" "$CANDIDATE_RUNTIME/" || return 1
   "$MISE_LAUNCHER" exec -- npm ci --prefix "$CANDIDATE_RUNTIME" --ignore-scripts --omit=optional ||
     return 1
-  "$SOURCE_ROOT/bin/validate-pi-webui" --tracked-only "$CANDIDATE_RUNTIME" || return 1
-  "$SOURCE_ROOT/bin/validate-pi-webui" --installed-runtime "$CANDIDATE_RUNTIME" || return 1
+  "$SOURCE_ROOT/libexec/validate-pi-webui" --tracked-only "$CANDIDATE_RUNTIME" || return 1
+  "$SOURCE_ROOT/libexec/validate-pi-webui" --installed-runtime "$CANDIDATE_RUNTIME" || return 1
   render_unit "$RUNTIME_LAUNCHER" "$LANDING_WORKTREE" "$PI_LAUNCHER" >"$CANDIDATE_UNIT" ||
     return 1
   chmod 0600 "$CANDIDATE_UNIT" || return 1
@@ -694,13 +694,13 @@ main() {
   resolve_mise
   resolve_pi
 
-  "$SOURCE_ROOT/bin/validate-pi-webui" --tracked-only
+  "$SOURCE_ROOT/libexec/validate-pi-webui" --tracked-only
 
   set_managed_paths
 
   validate_landing_worktree "$LANDING_WORKTREE"
   if [[ -e "$INSTALLED_RUNTIME" || -L "$INSTALLED_RUNTIME" ]]; then
-    "$SOURCE_ROOT/bin/validate-pi-webui" --installed-runtime "$INSTALLED_RUNTIME"
+    "$SOURCE_ROOT/libexec/validate-pi-webui" --installed-runtime "$INSTALLED_RUNTIME"
   else
     printf 'installed runtime is absent\n'
   fi

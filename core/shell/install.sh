@@ -3,7 +3,7 @@
 set -euo pipefail
 
 # Source the common functions, including detect_os and command_exists
-source "$(dirname "$0")/../../bin/common.sh"
+source "$(dirname "$0")/../../libexec/common.sh"
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd -P)"
 # shellcheck source=config/versions.env

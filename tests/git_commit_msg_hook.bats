@@ -78,7 +78,7 @@ EOF
   [ "$status" -eq 0 ]
   [ "$output" = "~/.git-hooks" ]
 
-  run bash "$REPO_ROOT/bin/relink"
+  run bash "$REPO_ROOT/libexec/relink"
   [ "$status" -eq 0 ]
 
   local repository="$TEST_ROOT/repository"
@@ -110,7 +110,7 @@ EOF
   mkdir -p "$HOME/.git-hooks"
   : >"$HOME/.git-hooks/pre-existing"
 
-  run bash "$REPO_ROOT/bin/relink"
+  run bash "$REPO_ROOT/libexec/relink"
 
   [ "$status" -ne 0 ]
   [[ "$output" == *"left UNLINKED"* ]]
@@ -120,7 +120,7 @@ EOF
 }
 
 @test "relink succeeds and reports nothing skipped on a clean home" {
-  run bash "$REPO_ROOT/bin/relink"
+  run bash "$REPO_ROOT/libexec/relink"
 
   [ "$status" -eq 0 ]
   [[ "$output" != *"left UNLINKED"* ]]

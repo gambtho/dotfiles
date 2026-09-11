@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-source "$(dirname "$0")/../../bin/common.sh"
+source "$(dirname "$0")/../../libexec/common.sh"
 
 MARKER_FILE="$(dirname "$0")/set_background"
 BACKGROUND_IMAGE="../misc/tree_tunnel.jpeg"

@@ -341,7 +341,7 @@ const RELAXED_PIPELINE_CASES: PipelineCase[] = [
   },
   {
     label: "shell script invocation",
-    command: "bash bin/validate-ai --verbose",
+    command: "bash libexec/validate-ai --verbose",
     expected: "allow",
   },
   {
@@ -655,7 +655,7 @@ for (const agentName of ["rush", "deep", "review"] as const) {
     },
     {
       label: `${agentName} validator`,
-      command: "bash bin/validate-ai --verbose",
+      command: "bash libexec/validate-ai --verbose",
       agentName,
       expected: "allow",
       origin: "agent",

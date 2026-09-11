@@ -6,13 +6,13 @@ install: ## Run full install (packages, runtimes, shell, git, neovim, fonts, ai)
 	bash bin/dot-install
 
 bootstrap: ## First-time setup (prereqs, gitconfig, profile, symlinks)
-	bash bin/bootstrap
+	bash libexec/bootstrap
 
 update: ## Update packages, runtimes, neovim plugins
 	bash bin/dot-update
 
 relink: ## Remove dead symlinks and re-create from current layout
-	bash bin/relink
+	bash libexec/relink
 
 # ── AI tools ──────────────────────────────────────────────────────────────────
 
@@ -46,28 +46,28 @@ ai-webui-domain-setup: ## Build and install the opt-in custom-domain Caddy servi
 	bash ai/pi/webui/custom-domain.sh setup
 
 pins: ## List managed dependency versions and refs
-	bash bin/versions list
+	bash libexec/versions list
 
 pins-check: ## Check managed dependency pins for updates
-	bash bin/versions check
+	bash libexec/versions check
 
 pins-update: ## Interactively update managed dependency pins
-	bash bin/versions update
+	bash libexec/versions update
 
 validate: ## Validate AI config structure (agents, commands, skills)
-	bash bin/validate-ai --verbose
+	bash libexec/validate-ai --verbose
 
 # ── Verification ───────────────────────────────────────────────────────────────
 
 check: syntax lint test python-test validate
 
 syntax:
-	@bash -o pipefail -c 'bin/list-check-files bash | xargs -0 -n 1 bash -n'
-	@bash -o pipefail -c 'bin/list-check-files zsh | xargs -0 -n 1 zsh -n'
+	@bash -o pipefail -c 'libexec/list-check-files bash | xargs -0 -n 1 bash -n'
+	@bash -o pipefail -c 'libexec/list-check-files zsh | xargs -0 -n 1 zsh -n'
 
 lint:
-	@bash -o pipefail -c 'bin/list-check-files shellcheck | xargs -0 shellcheck -x -S warning -e SC1091'
-	@bash -o pipefail -c 'bin/list-check-files shfmt | xargs -0 shfmt -d -i 2 -ci'
+	@bash -o pipefail -c 'libexec/list-check-files shellcheck | xargs -0 shellcheck -x -S warning -e SC1091'
+	@bash -o pipefail -c 'libexec/list-check-files shfmt | xargs -0 shfmt -d -i 2 -ci'
 
 test:
 	bats tests

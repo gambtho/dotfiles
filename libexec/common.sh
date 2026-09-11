@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Aggregator kept for the ~20 scripts that `source bin/common.sh`. The library
-# itself lives in bin/lib/, split by concern so a reader (or a new script that
+# Aggregator kept for the ~20 scripts that `source libexec/common.sh`. The library
+# itself lives in libexec/lib/, split by concern so a reader (or a new script that
 # needs only one slice) can see which functions form which contract:
 #
-#   bin/lib/system.sh       command_exists, detect_os
-#   bin/lib/phases.sh       run_phase / finish_phases install-phase runner
-#   bin/lib/links.sh        the managed-symlink contract and shared link loop
-#   bin/lib/artifacts.sh    pinned, digest-verified artifact acquisition
+#   libexec/lib/system.sh       command_exists, detect_os
+#   libexec/lib/phases.sh       run_phase / finish_phases install-phase runner
+#   libexec/lib/links.sh        the managed-symlink contract and shared link loop
+#   libexec/lib/artifacts.sh    pinned, digest-verified artifact acquisition
 #
 # Each lib file is self-contained (sources its own dependencies) and safe to
 # source directly; this file exists so existing consumers keep working and new

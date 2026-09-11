@@ -172,7 +172,7 @@ YOLO never bypasses explicit denies. Parent and child commands are not OS-contai
 Offline repository checks require no installed extension packages or network:
 
 ```bash
-bash bin/validate-ai --verbose
+make validate
 make ai-check
 make check
 ```
@@ -182,7 +182,7 @@ After isolated or production package installation, validate the tracked policy c
 ```bash
 SMOKE_AGENT_DIR=/absolute/path/to/smoke-home/.pi/agent
 SMOKE_PI_PACKAGE_ROOT=/absolute/path/to/smoke-home/.local/lib/node_modules/@earendil-works/pi-coding-agent
-bin/validate-pi-security-runtime \
+libexec/validate-pi-security-runtime \
   --package-root "$SMOKE_AGENT_DIR/npm/node_modules/@gotgenes/pi-permission-system" \
   --pi-package-root "$SMOKE_PI_PACKAGE_ROOT"
 ```

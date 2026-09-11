@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# bin/relink — Remove stale dotfile symlinks and re-create them from current repo layout.
+# libexec/relink — Remove stale dotfile symlinks and re-create them from current repo layout.
 #
 # Run this after pulling a restructure branch that moved .symlink files to new
 # directories. It will:
@@ -73,7 +73,7 @@ if [ ${#SKIPPED_DESTINATIONS[@]} -gt 0 ]; then
   for dst in "${SKIPPED_DESTINATIONS[@]}"; do
     log_warning "  $dst"
   done
-  log_error "Remove or move each path above, then re-run bin/relink."
+  log_error "Remove or move each path above, then re-run make relink."
 fi
 
 # ── Step 3: git feature gates ─────────────────────────────────────────────────

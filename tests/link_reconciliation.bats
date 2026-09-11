@@ -4,7 +4,7 @@ load test_helper
 
 setup() {
   setup_dotfiles_test
-  source "$REPO_ROOT/bin/common.sh"
+  source "$REPO_ROOT/libexec/common.sh"
   printf 'managed\n' >"$TEST_ROOT/source"
 }
 
@@ -43,7 +43,7 @@ setup() {
   printf 'local\n' >"$HOME/destination"
 
   run bash -c '
-    source "$1/bin/common.sh"
+    source "$1/libexec/common.sh"
     ln() { return 1; }
     reconcile_link "$2" "$3" config replace apply
   ' _ "$REPO_ROOT" "$TEST_ROOT/source" "$HOME/destination"
@@ -121,7 +121,7 @@ CASES
   printf 'local\n' >"$HOME/destination"
 
   run env HOME="$HOME" BOOTSTRAP_SOURCE_ONLY=1 bash -c '
-    source "$1/bin/bootstrap"
+    source "$1/libexec/bootstrap"
     overwrite_all=false
     backup_all=false
     skip_all=true
@@ -138,7 +138,7 @@ CASES
   # No /dev/tty is available here, so any attempt to prompt fails loudly
   # instead of silently skipping.
   run env HOME="$HOME" BOOTSTRAP_SOURCE_ONLY=1 bash -c '
-    source "$1/bin/bootstrap"
+    source "$1/libexec/bootstrap"
     overwrite_all=false
     backup_all=false
     skip_all=false
@@ -154,7 +154,7 @@ CASES
   printf 'local\n' >"$HOME/destination"
 
   run env HOME="$HOME" BOOTSTRAP_SOURCE_ONLY=1 bash -c '
-    source "$1/bin/bootstrap"
+    source "$1/libexec/bootstrap"
     overwrite_all=false
     backup_all=false
     skip_all=false
@@ -167,7 +167,7 @@ CASES
 @test "relink replaces a different symlink" {
   ln -s "$TEST_ROOT/old" "$HOME/.zshrc"
 
-  run env HOME="$HOME" bash "$REPO_ROOT/bin/relink"
+  run env HOME="$HOME" bash "$REPO_ROOT/libexec/relink"
 
   [ "$status" -eq 0 ]
   assert_symlink_target "$HOME/.zshrc" "$REPO_ROOT/core/shell/zshrc.symlink"
@@ -176,7 +176,7 @@ CASES
 @test "relink preserves and reports a real-file conflict" {
   printf 'local\n' >"$HOME/.zshrc"
 
-  run env HOME="$HOME" bash "$REPO_ROOT/bin/relink"
+  run env HOME="$HOME" bash "$REPO_ROOT/libexec/relink"
 
   [ "$status" -ne 0 ]
   [ "$(cat "$HOME/.zshrc")" = local ]
@@ -216,13 +216,13 @@ CASES
 @test "bootstrap and relink share one link loop while keeping their differing conflict policies" {
   # Both scripts must go through the shared walker — a second bespoke loop is
   # exactly the drift this refactor removed.
-  grep -q 'link_managed_pairs "\$DOTFILES_ROOT" "\$HOME" interactive' "$REPO_ROOT/bin/bootstrap"
-  grep -q 'link_managed_pairs "\$DOTFILES_ROOT" "\$HOME" replace-symlinks' "$REPO_ROOT/bin/relink"
+  grep -q 'link_managed_pairs "\$DOTFILES_ROOT" "\$HOME" interactive' "$REPO_ROOT/libexec/bootstrap"
+  grep -q 'link_managed_pairs "\$DOTFILES_ROOT" "\$HOME" replace-symlinks' "$REPO_ROOT/libexec/relink"
 
   # bootstrap: interactive conflict still prompts (policy: prompt user)
   printf 'local\n' >"$HOME/destination"
   run env HOME="$HOME" BOOTSTRAP_SOURCE_ONLY=1 bash -c '
-    source "$1/bin/bootstrap"
+    source "$1/libexec/bootstrap"
     overwrite_all=false
     backup_all=false
     skip_all=false
@@ -233,7 +233,7 @@ CASES
   # relink: same conflict is reported non-interactively, not prompted
   printf 'local\n' >"$HOME/destination2"
   run env HOME="$HOME" bash -c '
-    source "$1/bin/relink"
+    source "$1/libexec/relink"
   ' _ "$REPO_ROOT"
   # Status and a positive marker, not just the absence of the prompt text: an
   # abort before the loop produces no "already exists at" either, so the
@@ -253,7 +253,7 @@ CASES
   # rather than emitting a path built from an empty timestamp.
   run bash -c '
     set -e
-    source "$1/bin/common.sh"
+    source "$1/libexec/common.sh"
     if candidate="$(next_backup_path "$2")"; then
       printf "REPORTED SUCCESS %s\n" "$candidate"
     else

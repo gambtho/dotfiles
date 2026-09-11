@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Validate the personal Pi package: prompt templates, skills, and manifest.
-# Usage: bin/validate-ai [--verbose]
+# Usage: libexec/validate-ai [--verbose]
 
 set -euo pipefail
 
