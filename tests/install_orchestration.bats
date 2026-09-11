@@ -222,6 +222,75 @@ SCRIPT
   grep -Fq -- '--connect-timeout 10 --max-time 120 --retry 3' "$TEST_ROOT/curl-args"
 }
 
+stub_artifact_bsd_publish() {
+  stub_command curl '
+    while (($# > 0)); do
+      if [[ "$1" == --output ]]; then printf "new\n" >"$2"; exit 0; fi
+      shift
+    done
+    exit 1'
+  # Force the non-GNU branch. Without -T, the host mv also follows directory links.
+  stub_command mv '
+    [[ "${1:-}" == --version ]] && exit 1
+    printf "%s\n" "$*" >>"$TEST_ROOT/artifact-moves"
+    exec /bin/mv "$@"'
+}
+
+@test "verified artifact rejects directories and directory symlinks before BSD publication" {
+  stub_artifact_bsd_publish
+  local destination expected
+  expected=$(printf 'new\n' | sha256sum | awk '{print $1}')
+  mkdir -p "$HOME/directory"
+  ln -s "$HOME/directory" "$HOME/directory-link"
+
+  for destination in "$HOME/directory" "$HOME/directory-link"; do
+    run bash -c '
+      source "$1/libexec/common.sh"
+      download_verified_artifact https://example.test/tool "$2" "$3" 0755 || exit
+      printf "INSTALL_SUCCEEDED\n"
+    ' _ "$REPO_ROOT" "$expected" "$destination"
+
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"directory"* ]]
+    [[ "$output" != *"INSTALL_SUCCEEDED"* ]]
+    [ ! -e "$TEST_ROOT/artifact-moves" ]
+    [ -d "$HOME/directory" ]
+    [ -L "$HOME/directory-link" ]
+    run find "$HOME" -name '*.download.*'
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+  done
+}
+
+@test "verified artifact accepts files and non-directory symlinks with BSD publication" {
+  stub_artifact_bsd_publish
+  local destination expected
+  expected=$(printf 'new\n' | sha256sum | awk '{print $1}')
+  printf 'old\n' >"$HOME/file"
+  printf 'referent\n' >"$HOME/referent"
+  ln -s "$HOME/referent" "$HOME/file-link"
+  ln -s "$HOME/missing-referent" "$HOME/dangling-link"
+
+  for destination in "$HOME/new-file" "$HOME/file" "$HOME/file-link" "$HOME/dangling-link"; do
+    run bash -c '
+      source "$1/libexec/common.sh"
+      download_verified_artifact https://example.test/tool "$2" "$3" 0755
+    ' _ "$REPO_ROOT" "$expected" "$destination"
+
+    [ "$status" -eq 0 ]
+    [ -f "$destination" ]
+    [ ! -L "$destination" ]
+    [ -x "$destination" ]
+    [ "$(cat "$destination")" = new ]
+  done
+  [ -s "$TEST_ROOT/artifact-moves" ]
+  [ "$(cat "$HOME/referent")" = referent ]
+  [ ! -e "$HOME/missing-referent" ]
+  run find "$HOME" -name '*.download.*'
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
 @test "publish_staged_file replaces a symlinked destination instead of following it" {
   # Without -T (GNU mv), a symlinked destination is followed and the staged
   # file lands inside the target directory; the link survives pointing at
