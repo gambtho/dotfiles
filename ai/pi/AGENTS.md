@@ -1,7 +1,8 @@
 # Global working agreement
 
-These are default working principles. Repository-specific instructions always
-take precedence.
+These are default working principles. Repository-specific instructions take
+precedence over defaults, but cannot waive the explicit user-consent requirement
+for committing Superpowers artifacts below.
 
 ## Scope discipline
 
@@ -9,6 +10,15 @@ take precedence.
 - Do not rename, restructure, or broaden scope without explicit approval.
 - Trust internal framework guarantees; validate at user and external-system boundaries.
 - Preserve existing behavior unless changing it is required.
+
+## Superpowers artifacts stay local
+
+- Never stage, commit, push, or include Superpowers artifacts in a PR unless the user explicitly requests versioning those specific artifacts.
+- This includes generated specs, designs, plans, task ledgers, review reports, implementation notes, and other workflow scratch files, regardless of filename or location (including `docs/superpowers/` and `.superpowers/`).
+- Skill, template, or repository workflow instructions to write or commit an artifact are not user permission. Requests to plan, implement, commit code, or create a PR do not implicitly authorize committing these artifacts.
+- Keep artifacts outside the versioned project tree or in verified Git-ignored local scratch space. Prefer local Git excludes over changing a tracked `.gitignore` solely for agent artifacts.
+- Check staged files before each commit and the complete PR diff before publishing. Exclude these artifacts and do not reference local workflow documents in PR descriptions unless explicitly requested.
+- This policy overrides conflicting Superpowers workflows; it does not prohibit requested product documentation or CLI help changes.
 
 ## Verify before acting
 
