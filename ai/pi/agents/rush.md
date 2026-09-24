@@ -1,7 +1,7 @@
 ---
 description: Bounded search and inventory agent
 display_name: Rush
-model: github-copilot/gpt-5.4-mini
+model: github-copilot/gpt-6-luna
 thinking: low
 tools: read, bash, grep, find, ls
 prompt_mode: append

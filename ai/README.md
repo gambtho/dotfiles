@@ -42,10 +42,10 @@ Interactive browser automation remains opt-in rather than a default dependency.
 
 | `subagent_type` | Model | Thinking | Use |
 |---|---|---|---|
-| `rush` | GitHub Copilot GPT-5.4 Mini | low | Bounded searches, inventories, and mechanical checks |
-| `smart` | GitHub Copilot GPT-5.6 Sol | medium | Normal review, investigation, and implementation subtasks |
-| `deep` | GitHub Copilot GPT-5.6 Terra | high | Architecture, security, diagnosis, and broad analysis |
-| `review` | GitHub Copilot Claude Opus 5 | high | Independent cross-family second opinions |
+| `rush` | GitHub Copilot GPT-6 Luna | low | Bounded searches, inventories, and mechanical checks |
+| `smart` | GitHub Copilot GPT-6 Sol | medium | Normal review, investigation, and implementation subtasks |
+| `deep` | GitHub Copilot GPT-6 Astra | high | Architecture, security, diagnosis, and broad analysis |
+| `review` | GitHub Copilot Claude Opus 5.5 | high | Independent cross-family second opinions |
 
 Each `subagent` invocation supplies one self-contained `prompt`, a 3–5 word `description`, and a `subagent_type`. Parallel work uses sibling calls with `run_in_background: true`; record each returned ID and poll with `get_subagent_result({ agent_id, wait: false })`. An explicit `model` is reserved for a user request or deliberate cross-family review.
 

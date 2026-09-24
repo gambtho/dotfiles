@@ -1,7 +1,7 @@
 ---
 description: Architecture security and diagnosis analyst
 display_name: Deep
-model: github-copilot/gpt-5.6-terra
+model: github-copilot/gpt-6-astra
 thinking: high
 tools: read, bash, grep, find, ls
 prompt_mode: append
