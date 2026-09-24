@@ -1,7 +1,7 @@
 ---
 description: General review investigation and implementation agent
 display_name: Smart
-model: github-copilot/gpt-5.6-sol
+model: github-copilot/gpt-6-sol
 thinking: medium
 tools: read, write, edit, bash, grep, find, ls
 prompt_mode: append

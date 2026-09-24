@@ -13,11 +13,12 @@ agent_frontmatter() {
   awk 'NR == 1 { next } /^---$/ { exit } { print }' "$AGENTS/$1.md" | yq -o=json '.'
 }
 
-@test "Pi defaults to the smart GPT-5.6 model" {
+@test "Pi defaults to the smart GPT-6 model without restricting cycling" {
   run jq -e '
     .defaultProvider == "github-copilot"
-    and .defaultModel == "gpt-5.6-sol"
+    and .defaultModel == "gpt-6-sol"
     and .defaultThinkingLevel == "medium"
+    and (has("enabledModels") | not)
   ' "$SETTINGS"
   [ "$status" -eq 0 ]
 }
@@ -27,10 +28,10 @@ agent_frontmatter() {
     .version == 1
     and .currentMode == "smart"
     and ([.modes[].provider] | all(. == "github-copilot"))
-    and .modes.rush.modelId == "gpt-5.4-mini"
-    and .modes.smart.modelId == "gpt-5.6-sol"
-    and .modes.deep.modelId == "gpt-5.6-terra"
-    and .modes.review.modelId == "claude-opus-5"
+    and .modes.rush.modelId == "gpt-6-luna"
+    and .modes.smart.modelId == "gpt-6-sol"
+    and .modes.deep.modelId == "gpt-6-astra"
+    and .modes.review.modelId == "claude-opus-5.5"
   ' "$MODES"
   [ "$status" -eq 0 ]
 }
