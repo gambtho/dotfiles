@@ -62,6 +62,13 @@ find_real_gh() {
     candidate="$entry/gh"
     [ -x "$candidate" ] || continue
     [ "$(identity_realpath "$candidate")" = "$self" ] && continue
+    # A manual /usr/local install can outlive the distro package update.
+    # Prefer the package-managed CLI on Linux without changing custom PATH
+    # overrides or Homebrew selection on other platforms.
+    if [ "$candidate" = /usr/local/bin/gh ] && [ "$(uname -s)" = Linux ] &&
+      [ -x /usr/bin/gh ] && [ "$(identity_realpath /usr/bin/gh)" != "$self" ]; then
+      candidate=/usr/bin/gh
+    fi
     printf '%s\n' "$candidate"
     return 0
   done
