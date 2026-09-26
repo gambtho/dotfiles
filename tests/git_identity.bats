@@ -177,6 +177,17 @@ EOF
   mkdir -p "$HOME/.gh-guarzo"
 }
 
+@test "shim prefers the Linux package gh over a stale local installation" {
+  [ "$(uname -s)" = Linux ] || skip "Linux package paths only"
+  [ -x /usr/local/bin/gh ] && [ -x /usr/bin/gh ] || skip "requires both gh installations"
+  setup_shim_repo "$TEST_ROOT/r" https://github.com/gambtho/repo.git
+  export PATH="$STUB_BIN:/usr/local/bin:/usr/bin:/bin"
+  cd "$TEST_ROOT"
+  run "$REPO_ROOT/bin/gh" version
+  [ "$status" -eq 0 ]
+  [ "$output" = "$(/usr/bin/gh version)" ]
+}
+
 @test "shim routes a guarzo repo to the guarzo gh config dir" {
   setup_shim_repo "$TEST_ROOT/r" https://github.com/guarzo/repo.git
   provision_guarzo_files
