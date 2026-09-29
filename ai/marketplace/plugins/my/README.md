@@ -19,6 +19,7 @@ Personal prompt templates and skills loaded directly from this dotfiles reposito
 - `jekyll-media-gallery` — Jekyll media-gallery workflow.
 - `overnight-improve` — iterative improvement loop using Pi Ralph tooling.
 - `polish-core` — shared review and conservative auto-fix engine.
+- `product-owner` — project-specific product strategy conversation and outcome-focused feature briefs.
 
 ## Installation
 
