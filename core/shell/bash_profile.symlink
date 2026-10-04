@@ -17,4 +17,8 @@ case ":$PATH:" in
   *":$HOME/.dotfiles/bin:"*) ;;
   *) PATH="$HOME/.dotfiles/bin:$PATH" ;;
 esac
+# A managed Pi must win over an npm copy (including one supplied by mise).
+if [ -d "$HOME/.pi/agent/bin" ]; then
+  PATH="$HOME/.pi/agent/bin:$PATH"
+fi
 export PATH

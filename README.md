@@ -413,11 +413,12 @@ ai/
 ### Setup
 
 ```bash
-make ai          # install pinned Pi, link config, and reconcile packages
+make ai          # bootstrap managed Pi, link config, and reconcile pinned packages
 make ai-check    # dry-run without changing the machine
+pi update        # update the managed Pi release independently of make ai
 ```
 
-The full installer also runs Pi setup during Phase 9. Authentication remains machine-local: start `pi`, run `/login`, and choose **GitHub Copilot**. Use `/model` to select any Copilot model enabled for the subscription and Ctrl+S to save the highlighted model as the default.
+On first use, `make ai` runs Pi's official managed installer, which installs the latest release with locked dependencies and migrates a user-local npm Pi installation if present. Later runs reuse that managed installation without downgrading or updating Pi itself. The separately deployed Pi Web UI keeps its own runtime version pin. The full installer also runs Pi setup during Phase 9. Authentication remains machine-local: start `pi`, run `/login`, and choose **GitHub Copilot**. Use `/model` to select any Copilot model enabled for the subscription and Ctrl+S to save the highlighted model as the default.
 
 #### Temporary GPT-6 Astra workaround
 

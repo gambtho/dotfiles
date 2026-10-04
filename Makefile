@@ -19,7 +19,7 @@ relink: ## Remove dead symlinks and re-create from current layout
 # Failures are aggregated rather than aborting the loop: one broken installer
 # must not block the rest, but it must still fail the target — a plain loop
 # reports only the last installer's status and hides every earlier failure.
-ai: ## Install/update Pi and its managed configuration
+ai: ## Bootstrap managed Pi and reconcile its configuration
 	@failed=""; for installer in ai/pi/install.sh; do \
 		echo "Running $$installer..."; \
 		bash "$$installer" || failed="$$failed $$installer"; \

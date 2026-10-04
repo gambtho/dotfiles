@@ -84,6 +84,22 @@ run_loader() {
   [[ ":$output:" == *":$REPO_ROOT/bin:"* ]]
 }
 
+@test "shell startup prefers managed Pi over npm and mise copies" {
+  mkdir -p "$HOME/.pi/agent/bin" "$HOME/.local/bin"
+  printf '#!/bin/sh\n' >"$HOME/.pi/agent/bin/pi"
+  printf '#!/bin/sh\n' >"$HOME/.local/bin/pi"
+  chmod +x "$HOME/.pi/agent/bin/pi" "$HOME/.local/bin/pi"
+  local shell config
+  for config in core/path.zsh core/shell/zprofile.symlink core/shell/bash_profile.symlink; do
+    shell=zsh
+    [[ "$config" == *bash_profile* ]] && shell=bash
+    run env HOME="$HOME" PATH="$STUB_BIN:/usr/bin:/bin:$HOME/.pi/agent/bin" ZSH="$REPO_ROOT" \
+      "$shell" -c 'source "$1"; command -v pi' _ "$REPO_ROOT/$config"
+    [ "$status" -eq 0 ]
+    [ "${output##*$'\n'}" = "$HOME/.pi/agent/bin/pi" ]
+  done
+}
+
 @test "core path changes persist after function-scoped loading" {
   run env HOME="$HOME" PATH="/usr/bin:/bin" zsh -dfc '
     load_path() {

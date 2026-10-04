@@ -10,10 +10,12 @@ if command -v mise >/dev/null 2>&1; then
   eval "$(mise activate zsh --shims)"
 fi
 
-# Make ~/.dotfiles/bin and ~/.local/bin available in non-interactive login
-# shells (cron, `wsl.exe -- zsh -lc <cmd>`, ssh ForceCommand). .zshrc still
-# sets the full interactive PATH on top of this.
+# Make managed Pi and the dotfiles commands available in non-interactive login
+# shells. .zshrc still sets the full interactive PATH on top of this.
 for d in "$HOME/.dotfiles/bin" "$HOME/.local/bin" "$HOME/bin"; do
   [[ -d "$d" && ":$PATH:" != *":$d:"* ]] && PATH="$d:$PATH"
 done
+if [[ -d "$HOME/.pi/agent/bin" ]]; then
+  PATH="$HOME/.pi/agent/bin:$PATH"
+fi
 export PATH
