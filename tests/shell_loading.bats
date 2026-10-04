@@ -93,7 +93,7 @@ run_loader() {
   for config in core/path.zsh core/shell/zprofile.symlink core/shell/bash_profile.symlink; do
     shell=zsh
     [[ "$config" == *bash_profile* ]] && shell=bash
-    run env HOME="$HOME" PATH="$STUB_BIN:/usr/bin:/bin:$HOME/.pi/agent/bin" ZSH="$REPO_ROOT" \
+    run env HOME="$HOME" PATH="$STUB_BIN:/usr/bin:/bin:$HOME/.local/bin:$HOME/.pi/agent/bin" ZSH="$REPO_ROOT" \
       "$shell" -c 'source "$1"; command -v pi' _ "$REPO_ROOT/$config"
     [ "$status" -eq 0 ]
     [ "${output##*$'\n'}" = "$HOME/.pi/agent/bin/pi" ]

@@ -149,7 +149,7 @@ printf '{"kind":"pi-managed-install","schemaVersion":1,"layout":"releases-v1"}\n
   >"$HOME/.pi/agent/install/managed-install.json"
 rm -f "$HOME/.local/bin/pi"
 SCRIPT
-  stub_command curl 'printf "%s\n" "$*" >"$HOME/curl-invocation"; /usr/bin/cat "$TEST_ROOT/managed-installer.sh"'
+  stub_command curl 'printf "%s\n" "$*" >"$HOME/curl-invocation"; cp "$TEST_ROOT/managed-installer.sh" "${@: -1}"'
   stub_command npm 'exit 0'
 }
 
@@ -190,14 +190,15 @@ SCRIPT
   mkdir -p "$HOME/.local/bin"
   cp "$TEST_ROOT/pi-fixture" "$HOME/.local/bin/pi"
 
-  run env HOME="$HOME" PATH="$PATH" PI_VERSION="$PI_VERSION" \
+  run env HOME="$HOME" PATH="$PATH" TMPDIR="$TEST_ROOT" PI_VERSION="$PI_VERSION" \
     bash "$REPO_ROOT/ai/pi/install.sh"
 
   [ "$status" -eq 0 ]
   [ ! -e "$HOME/.local/bin/pi" ]
   [ -x "$HOME/.pi/agent/bin/pi" ]
   [ -f "$HOME/.pi/agent/install/managed-install.json" ]
-  [ "$(<"$HOME/curl-invocation")" = '-fsSL https://pi.dev/install.sh' ]
+  [[ "$(<"$HOME/curl-invocation")" == '-fsSL https://pi.dev/install.sh -o '* ]]
+  [ -z "$(find "$TEST_ROOT" -name 'pi-managed-installer.*' -print)" ]
   [[ "$(<"$HOME/install-path")" == "$HOME/.local/bin:$HOME/.pi/agent/bin:"* ]]
   [ ! -e "$HOME/npm-invocation" ]
 }
@@ -207,14 +208,86 @@ SCRIPT
   stub_pi_install
   mkdir -p "$HOME/.local/bin"
   cp "$TEST_ROOT/pi-fixture" "$HOME/.local/bin/pi"
-  stub_command curl 'exit 22'
+  stub_command curl 'printf "touch \"%s\"\n" "$HOME/partial-script-ran"; if [[ "$*" == *" -o "* ]]; then printf "partial\n" >"${@: -1}"; fi; exit 22'
 
-  run env HOME="$HOME" PATH="$PATH" PI_VERSION="$PI_VERSION" \
+  run env HOME="$HOME" PATH="$PATH" TMPDIR="$TEST_ROOT" PI_VERSION="$PI_VERSION" \
     bash "$REPO_ROOT/ai/pi/install.sh"
 
   [ "$status" -ne 0 ]
   [ -x "$HOME/.local/bin/pi" ]
   [ ! -e "$HOME/.pi/agent/bin/pi" ]
+  [ ! -e "$HOME/partial-script-ran" ]
+  [ -z "$(find "$TEST_ROOT" -name 'pi-managed-installer.*' -print)" ]
+}
+
+@test "Pi installer cleans up the downloaded script when it fails" {
+  export PI_VERSION
+  stub_pi_install
+  stub_command curl 'printf "#!/bin/sh\nprintf script-ran >%s\nexit 42\n" "$HOME/script-ran" >"${@: -1}"'
+
+  run env HOME="$HOME" PATH="$PATH" TMPDIR="$TEST_ROOT" PI_VERSION="$PI_VERSION" \
+    bash "$REPO_ROOT/ai/pi/install.sh"
+
+  [ "$status" -eq 42 ]
+  [ -f "$HOME/script-ran" ]
+  [ -z "$(find "$TEST_ROOT" -name 'pi-managed-installer.*' -print)" ]
+  [ ! -e "$HOME/.pi/agent/bin/pi" ]
+}
+
+@test "Pi installer reuses a managed launcher outside the overridden HOME" {
+  export PI_VERSION
+  stub_existing_pi
+  local external_agent="$TEST_ROOT/external-agent"
+  stub_managed_pi_for_agent "$external_agent"
+  rm "$HOME/.pi/agent/bin/pi" "$HOME/.pi/agent/install/managed-install.json"
+  ln -s "$external_agent/bin/pi" "$STUB_BIN/pi"
+  stub_command curl 'printf "unexpected download\\n" >"$HOME/curl-invocation"; exit 1'
+
+  run env HOME="$HOME" PATH="$PATH" PI_VERSION="$PI_VERSION" \
+    bash "$REPO_ROOT/ai/pi/install.sh"
+
+  [ "$status" -eq 0 ]
+  [ ! -e "$HOME/curl-invocation" ]
+  [ -x "$external_agent/bin/pi" ]
+  [ "$(<"$HOME/pi-invocation")" = 'update --extensions' ]
+  [ -f "$HOME/.pi/agent/settings.json" ]
+}
+
+@test "Pi installer migrates a local npm copy before reusing an external managed launcher" {
+  export PI_VERSION
+  stub_pi_install
+  local external_agent="$TEST_ROOT/external-agent"
+  mkdir -p "$external_agent/bin" "$external_agent/install" "$HOME/.local/bin"
+  cp "$TEST_ROOT/pi-fixture" "$external_agent/bin/pi"
+  cp "$TEST_ROOT/pi-fixture" "$HOME/.local/bin/pi"
+  printf '{"kind":"pi-managed-install","schemaVersion":1,"layout":"releases-v1"}\n' \
+    >"$external_agent/install/managed-install.json"
+  ln -s "$external_agent/bin/pi" "$STUB_BIN/pi"
+
+  run env HOME="$HOME" PATH="$PATH" PI_VERSION="$PI_VERSION" \
+    bash "$REPO_ROOT/ai/pi/install.sh"
+
+  [ "$status" -eq 0 ]
+  [ ! -e "$HOME/.local/bin/pi" ]
+  [ -x "$HOME/.pi/agent/bin/pi" ]
+  [ -e "$HOME/curl-invocation" ]
+}
+
+@test "Pi installer refuses an unrecognized destination even with another managed Pi on PATH" {
+  export PI_VERSION
+  stub_existing_pi
+  local external_agent="$TEST_ROOT/external-agent"
+  stub_managed_pi_for_agent "$external_agent"
+  ln -s "$external_agent/bin/pi" "$STUB_BIN/pi"
+  printf '#!/bin/sh\nexit 0\n' >"$HOME/.pi/agent/bin/pi"
+  rm "$HOME/.pi/agent/install/managed-install.json"
+
+  run env HOME="$HOME" PATH="$PATH" PI_VERSION="$PI_VERSION" \
+    bash "$REPO_ROOT/ai/pi/install.sh"
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Refusing to replace an unrecognized Pi launcher"* ]]
+  [ ! -e "$HOME/pi-invocation" ]
 }
 
 @test "Pi installer refuses an unrelated Pi ahead of a fresh managed install" {
