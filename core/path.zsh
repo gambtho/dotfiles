@@ -3,6 +3,7 @@ path=(${path:#.})
 path=(${path:#./bin})
 path=(
   "${ZSH:-$HOME/.dotfiles}/bin"
+  "$HOME/.pi/agent/bin"
   "$HOME/.local/bin"
   "$HOME/bin"
   /usr/local/bin

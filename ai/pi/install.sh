@@ -7,8 +7,6 @@ source "$(dirname "$0")/../../libexec/common.sh"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd -P)"
 # shellcheck source=libexec/lib/artifacts.sh
 source "$ROOT/libexec/lib/artifacts.sh"
-# shellcheck source=config/versions.env
-source "$ROOT/config/versions.env"
 # shellcheck source=ai/pi/cleanup-legacy.sh
 source "$ROOT/ai/pi/cleanup-legacy.sh"
 # shellcheck source=ai/pi/migrate-security-stack.sh
@@ -18,6 +16,7 @@ MODE=apply
 PERMISSION_PYTHON=""
 PI_AI_RESET_MUTABLE_CONFIG="${PI_AI_RESET_MUTABLE_CONFIG:-0}"
 PI_AGENT_DIR=""
+PI_BINARY=""
 WEB_CONFIG_PATH=""
 AMP_SETTINGS_PATH=""
 CANONICAL_DOTFILES_ROOT=""
@@ -720,10 +719,79 @@ reconcile_authored_links() {
   done
 }
 
+managed_pi_launcher_is_ready() {
+  local launcher=$1 resolved target directory marker links=0
+  [[ -n "$launcher" && -x "$launcher" ]] || return 1
+  resolved=$launcher
+  while [[ -L "$resolved" ]]; do
+    ((++links <= 40)) || return 1
+    target=$(readlink "$resolved") || return 1
+    if [[ "$target" == /* ]]; then
+      resolved=$target
+    else
+      resolved="${resolved%/*}/$target"
+    fi
+  done
+  [[ -f "$resolved" && -x "$resolved" && "${resolved##*/}" == pi ]] || return 1
+  directory=$(cd -P "$(dirname "$resolved")" && pwd -P) || return 1
+  [[ "$directory" == */bin ]] || return 1
+  marker="${directory%/bin}/install/managed-install.json"
+  [[ -f "$marker" && ! -L "$marker" ]] &&
+    jq -e '.kind == "pi-managed-install" and .schemaVersion == 1 and .layout == "releases-v1"' \
+      "$marker" >/dev/null 2>&1 &&
+    "$launcher" --version >/dev/null 2>&1
+}
+
+managed_pi_is_ready() {
+  local active_pi
+  PI_BINARY=""
+  if managed_pi_launcher_is_ready "$PI_AGENT_DIR/bin/pi"; then
+    PI_BINARY="$PI_AGENT_DIR/bin/pi"
+    return 0
+  fi
+  # Do not bypass an unrecognized launcher at the intended destination.
+  [[ ! -e "$PI_AGENT_DIR/bin/pi" && ! -L "$PI_AGENT_DIR/bin/pi" ]] || return 1
+  if [[ -e "$HOME/.local/bin/pi" || -L "$HOME/.local/bin/pi" ]] &&
+    ! managed_pi_launcher_is_ready "$HOME/.local/bin/pi"; then
+    return 1
+  fi
+  active_pi=$(command -v pi || true)
+  if managed_pi_launcher_is_ready "$active_pi"; then
+    PI_BINARY="$active_pi"
+    return 0
+  fi
+  return 1
+}
+
 install_pi() {
-  mkdir -p "$HOME/.local/bin"
-  npm install -g --prefix "$HOME/.local" --ignore-scripts \
-    "@earendil-works/pi-coding-agent@$PI_VERSION"
+  local legacy_path="$HOME/.local/bin/pi" existing_pi
+  existing_pi=$(PATH="$HOME/.local/bin:$PI_AGENT_DIR/bin:$PATH" command -v pi || true)
+  if [[ -n "$existing_pi" && "$existing_pi" != "$legacy_path" ]] &&
+    ! managed_pi_launcher_is_ready "$existing_pi"; then
+    log_warning "Refusing to migrate unrelated Pi at $existing_pi; remove or update it explicitly first."
+    return 1
+  fi
+  if ! command_exists curl || ! command_exists npm; then
+    log_warning "curl and npm are required to install managed Pi."
+    return 1
+  fi
+  # Put the legacy user-local npm install ahead of mise or other npm copies so
+  # Pi's installer migrates the intended copy; offer our agent bin as its new
+  # managed launcher destination.
+  local installer status=0
+  installer=$(mktemp "${TMPDIR:-/tmp}/pi-managed-installer.XXXXXX") || return 1
+  if ! PATH="$HOME/.local/bin:$PI_AGENT_DIR/bin:$PATH" \
+    curl -fsSL https://pi.dev/install.sh -o "$installer"; then
+    rm -f -- "$installer"
+    return 1
+  fi
+  PATH="$HOME/.local/bin:$PI_AGENT_DIR/bin:$PATH" sh "$installer" || status=$?
+  rm -f -- "$installer"
+  ((status == 0)) || return "$status"
+  managed_pi_is_ready || {
+    log_warning "Pi's installer did not create a managed launcher at $PI_AGENT_DIR/bin/pi."
+    return 1
+  }
 }
 
 permission_package_artifacts_are_complete() {
@@ -734,7 +802,7 @@ permission_package_artifacts_are_complete() {
 }
 
 ensure_pinned_npm_packages() {
-  local pi_binary="$HOME/.local/bin/pi" specifications package_name package_version
+  local pi_binary="$PI_BINARY" specifications package_name package_version
   local package_manifest package_root installed_version source settings_source="$PI_AGENT_DIR/settings.json"
   [[ "$MODE" == check ]] && settings_source="$ROOT/ai/pi/settings.json"
   if ! specifications=$(jq -r '
@@ -811,19 +879,22 @@ main() {
 
   if [[ "$MODE" == check ]]; then
     log_info "[dry-run] Would remove positively identified Vekil, Claude, and Codex integration remnants"
-    log_info "[dry-run] Would install Pi $PI_VERSION into $HOME/.local"
+    if managed_pi_is_ready; then
+      log_info "[dry-run] Would reuse managed Pi at $PI_BINARY"
+    else
+      log_info "[dry-run] Would install or migrate latest managed Pi to $PI_AGENT_DIR/bin/pi"
+    fi
   else
     cleanup_legacy_ai
-    if [[ ! -x "$HOME/.local/bin/pi" ]] ||
-      [[ "$("$HOME/.local/bin/pi" --version 2>/dev/null || true)" != "$PI_VERSION" ]]; then
-      command_exists npm || {
-        log_warning "npm is required to install Pi."
-        return 1
-      }
-      install_pi
-      log_success "Installed Pi $PI_VERSION."
+    if managed_pi_is_ready; then
+      log_info "Managed Pi is already installed at $PI_BINARY; run pi update to upgrade it."
     else
-      log_info "Pi $PI_VERSION is already installed at $HOME/.local/bin/pi."
+      if [[ -e "$PI_AGENT_DIR/bin/pi" || -L "$PI_AGENT_DIR/bin/pi" ]]; then
+        log_warning "Refusing to replace an unrecognized Pi launcher at $PI_AGENT_DIR/bin/pi."
+        return 1
+      fi
+      install_pi
+      log_success "Installed managed Pi."
     fi
   fi
 
@@ -863,7 +934,7 @@ main() {
     return 0
   fi
 
-  PI_CODING_AGENT_DIR="$PI_AGENT_DIR" "$HOME/.local/bin/pi" update --extensions
+  PI_CODING_AGENT_DIR="$PI_AGENT_DIR" "$PI_BINARY" update --extensions
   log_success "Pi configuration and packages are ready. Run /login and choose GitHub Copilot if this machine is not authenticated."
 }
 

@@ -51,8 +51,10 @@ JSON
 
 stub_existing_pi() {
   write_permission_test_schema
-  mkdir -p "$HOME/.local/bin"
-  cat >"$HOME/.local/bin/pi" <<'SCRIPT'
+  mkdir -p "$HOME/.pi/agent/bin" "$HOME/.pi/agent/install"
+  printf '{"kind":"pi-managed-install","schemaVersion":1,"layout":"releases-v1"}\n' \
+    >"$HOME/.pi/agent/install/managed-install.json"
+  cat >"$HOME/.pi/agent/bin/pi" <<'SCRIPT'
 #!/usr/bin/env bash
 set -e
 if [[ "${1:-}" == --version ]]; then
@@ -80,7 +82,14 @@ else
   fi
 fi
 SCRIPT
-  chmod +x "$HOME/.local/bin/pi"
+  chmod +x "$HOME/.pi/agent/bin/pi"
+}
+
+stub_managed_pi_for_agent() {
+  local agent_dir=$1
+  mkdir -p "$agent_dir/bin" "$agent_dir/install"
+  cp "$HOME/.pi/agent/bin/pi" "$agent_dir/bin/pi"
+  cp "$HOME/.pi/agent/install/managed-install.json" "$agent_dir/install/managed-install.json"
 }
 
 seed_mutable_pi_drift() {
@@ -127,41 +136,21 @@ run_security_migration() {
 }
 
 stub_pi_install() {
-  write_permission_test_schema
-  cat >"$STUB_BIN/npm" <<'SCRIPT'
-#!/usr/bin/env bash
-set -e
-printf '%s\n' "$*" >"$HOME/npm-invocation"
-mkdir -p "$HOME/.local/bin"
-cat >"$HOME/.local/bin/pi" <<PI
-#!/usr/bin/env bash
-if [[ "\${1:-}" == --version ]]; then
-  printf '%s\n' "$PI_VERSION"
-else
-  printf '%s\n' "\$*" >"$HOME/pi-invocation"
-  if [[ "\${1:-}" == install && "\${2:-}" == npm:*@* ]]; then
-    package_spec=\${2#npm:}
-    package_version=\${package_spec##*@}
-    package_name=\${package_spec%@*}
-    package_root="\${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/npm/node_modules/\$package_name"
-    mkdir -p "\$package_root"
-    printf '{"name":"%s","version":"%s"}\\n' "\$package_name" "\$package_version" \\
-      >"\$package_root/package.json"
-    if [[ "\$package_name" == @gotgenes/pi-permission-system ]]; then
-      mkdir -p "\$package_root/schemas" "\$package_root/src"
-      cp "\$TEST_ROOT/permission-system-schema.json" \
-        "\$package_root/schemas/permissions.schema.json"
-      if [[ "\${PI_TEST_OMIT_PERMISSION_MANAGER:-0}" != 1 ]]; then
-        printf 'export class PermissionManager {}\\n' \
-          >"\$package_root/src/permission-manager.ts"
-      fi
-    fi
-  fi
-fi
-PI
-chmod +x "$HOME/.local/bin/pi"
+  stub_existing_pi
+  cp "$HOME/.pi/agent/bin/pi" "$TEST_ROOT/pi-fixture"
+  rm "$HOME/.pi/agent/bin/pi" "$HOME/.pi/agent/install/managed-install.json"
+  cat >"$TEST_ROOT/managed-installer.sh" <<'SCRIPT'
+#!/bin/sh
+set -eu
+printf '%s\n' "$PATH" >"$HOME/install-path"
+mkdir -p "$HOME/.pi/agent/bin" "$HOME/.pi/agent/install"
+cp "$TEST_ROOT/pi-fixture" "$HOME/.pi/agent/bin/pi"
+printf '{"kind":"pi-managed-install","schemaVersion":1,"layout":"releases-v1"}\n' \
+  >"$HOME/.pi/agent/install/managed-install.json"
+rm -f "$HOME/.local/bin/pi"
 SCRIPT
-  chmod +x "$STUB_BIN/npm"
+  stub_command curl 'printf "%s\n" "$*" >"$HOME/curl-invocation"; cp "$TEST_ROOT/managed-installer.sh" "${@: -1}"'
+  stub_command npm 'exit 0'
 }
 
 @test "Pi check mode changes no files with custom agent and XDG roots" {
@@ -182,6 +171,142 @@ SCRIPT
   [ "$before" = "$after" ]
 }
 
+@test "Pi installer reuses a managed Pi without downgrading or reinstalling it" {
+  export PI_VERSION=1.99.0
+  stub_existing_pi
+  stub_command curl 'printf "unexpected download\\n" >"$HOME/curl-invocation"; exit 1'
+
+  run env HOME="$HOME" PATH="$PATH" PI_VERSION="$PI_VERSION" \
+    bash "$REPO_ROOT/ai/pi/install.sh"
+
+  [ "$status" -eq 0 ]
+  [ ! -e "$HOME/curl-invocation" ]
+  [ "$(<"$HOME/pi-invocation")" = 'update --extensions' ]
+}
+
+@test "Pi installer migrates the user-local npm copy without installing a repo-pinned Pi" {
+  export PI_VERSION
+  stub_pi_install
+  mkdir -p "$HOME/.local/bin"
+  cp "$TEST_ROOT/pi-fixture" "$HOME/.local/bin/pi"
+
+  run env HOME="$HOME" PATH="$PATH" TMPDIR="$TEST_ROOT" PI_VERSION="$PI_VERSION" \
+    bash "$REPO_ROOT/ai/pi/install.sh"
+
+  [ "$status" -eq 0 ]
+  [ ! -e "$HOME/.local/bin/pi" ]
+  [ -x "$HOME/.pi/agent/bin/pi" ]
+  [ -f "$HOME/.pi/agent/install/managed-install.json" ]
+  [[ "$(<"$HOME/curl-invocation")" == '-fsSL https://pi.dev/install.sh -o '* ]]
+  [ -z "$(find "$TEST_ROOT" -name 'pi-managed-installer.*' -print)" ]
+  [[ "$(<"$HOME/install-path")" == "$HOME/.local/bin:$HOME/.pi/agent/bin:"* ]]
+  [ ! -e "$HOME/npm-invocation" ]
+}
+
+@test "Pi installer keeps the legacy npm launcher when the managed download fails" {
+  export PI_VERSION
+  stub_pi_install
+  mkdir -p "$HOME/.local/bin"
+  cp "$TEST_ROOT/pi-fixture" "$HOME/.local/bin/pi"
+  stub_command curl 'printf "touch \"%s\"\n" "$HOME/partial-script-ran"; if [[ "$*" == *" -o "* ]]; then printf "partial\n" >"${@: -1}"; fi; exit 22'
+
+  run env HOME="$HOME" PATH="$PATH" TMPDIR="$TEST_ROOT" PI_VERSION="$PI_VERSION" \
+    bash "$REPO_ROOT/ai/pi/install.sh"
+
+  [ "$status" -ne 0 ]
+  [ -x "$HOME/.local/bin/pi" ]
+  [ ! -e "$HOME/.pi/agent/bin/pi" ]
+  [ ! -e "$HOME/partial-script-ran" ]
+  [ -z "$(find "$TEST_ROOT" -name 'pi-managed-installer.*' -print)" ]
+}
+
+@test "Pi installer cleans up the downloaded script when it fails" {
+  export PI_VERSION
+  stub_pi_install
+  stub_command curl 'printf "#!/bin/sh\nprintf script-ran >%s\nexit 42\n" "$HOME/script-ran" >"${@: -1}"'
+
+  run env HOME="$HOME" PATH="$PATH" TMPDIR="$TEST_ROOT" PI_VERSION="$PI_VERSION" \
+    bash "$REPO_ROOT/ai/pi/install.sh"
+
+  [ "$status" -eq 42 ]
+  [ -f "$HOME/script-ran" ]
+  [ -z "$(find "$TEST_ROOT" -name 'pi-managed-installer.*' -print)" ]
+  [ ! -e "$HOME/.pi/agent/bin/pi" ]
+}
+
+@test "Pi installer reuses a managed launcher outside the overridden HOME" {
+  export PI_VERSION
+  stub_existing_pi
+  local external_agent="$TEST_ROOT/external-agent"
+  stub_managed_pi_for_agent "$external_agent"
+  rm "$HOME/.pi/agent/bin/pi" "$HOME/.pi/agent/install/managed-install.json"
+  ln -s "$external_agent/bin/pi" "$STUB_BIN/pi"
+  stub_command curl 'printf "unexpected download\\n" >"$HOME/curl-invocation"; exit 1'
+
+  run env HOME="$HOME" PATH="$PATH" PI_VERSION="$PI_VERSION" \
+    bash "$REPO_ROOT/ai/pi/install.sh"
+
+  [ "$status" -eq 0 ]
+  [ ! -e "$HOME/curl-invocation" ]
+  [ -x "$external_agent/bin/pi" ]
+  [ "$(<"$HOME/pi-invocation")" = 'update --extensions' ]
+  [ -f "$HOME/.pi/agent/settings.json" ]
+}
+
+@test "Pi installer migrates a local npm copy before reusing an external managed launcher" {
+  export PI_VERSION
+  stub_pi_install
+  local external_agent="$TEST_ROOT/external-agent"
+  mkdir -p "$external_agent/bin" "$external_agent/install" "$HOME/.local/bin"
+  cp "$TEST_ROOT/pi-fixture" "$external_agent/bin/pi"
+  cp "$TEST_ROOT/pi-fixture" "$HOME/.local/bin/pi"
+  printf '{"kind":"pi-managed-install","schemaVersion":1,"layout":"releases-v1"}\n' \
+    >"$external_agent/install/managed-install.json"
+  ln -s "$external_agent/bin/pi" "$STUB_BIN/pi"
+
+  run env HOME="$HOME" PATH="$PATH" PI_VERSION="$PI_VERSION" \
+    bash "$REPO_ROOT/ai/pi/install.sh"
+
+  [ "$status" -eq 0 ]
+  [ ! -e "$HOME/.local/bin/pi" ]
+  [ -x "$HOME/.pi/agent/bin/pi" ]
+  [ -e "$HOME/curl-invocation" ]
+}
+
+@test "Pi installer refuses an unrecognized destination even with another managed Pi on PATH" {
+  export PI_VERSION
+  stub_existing_pi
+  local external_agent="$TEST_ROOT/external-agent"
+  stub_managed_pi_for_agent "$external_agent"
+  ln -s "$external_agent/bin/pi" "$STUB_BIN/pi"
+  printf '#!/bin/sh\nexit 0\n' >"$HOME/.pi/agent/bin/pi"
+  rm "$HOME/.pi/agent/install/managed-install.json"
+
+  run env HOME="$HOME" PATH="$PATH" PI_VERSION="$PI_VERSION" \
+    bash "$REPO_ROOT/ai/pi/install.sh"
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Refusing to replace an unrecognized Pi launcher"* ]]
+  [ ! -e "$HOME/pi-invocation" ]
+}
+
+@test "Pi installer refuses an unrelated Pi ahead of a fresh managed install" {
+  export PI_VERSION
+  stub_pi_install
+  stub_command pi 'printf "foreign\\n"'
+  local before after
+  before=$(snapshot_home)
+
+  run env HOME="$HOME" PATH="$PATH" PI_VERSION="$PI_VERSION" \
+    bash "$REPO_ROOT/ai/pi/install.sh"
+
+  after=$(snapshot_home)
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Refusing to migrate unrelated Pi"* ]]
+  [ ! -e "$HOME/curl-invocation" ]
+  [ "$before" = "$after" ]
+}
+
 @test "Pi installer prefers PATH Python for permission validation" {
   export PI_VERSION
   stub_existing_pi
@@ -190,6 +315,7 @@ SCRIPT
     exec /usr/bin/python3 "$@"
   '
   local agent_dir="$TEST_ROOT/path-python-agent"
+  stub_managed_pi_for_agent "$agent_dir"
 
   run env HOME="$HOME" PATH="$PATH" PI_VERSION="$PI_VERSION" \
     PI_CODING_AGENT_DIR="$agent_dir" bash "$REPO_ROOT/ai/pi/install.sh"
@@ -205,6 +331,7 @@ SCRIPT
   stub_existing_pi
   stub_command python3 'exec /usr/bin/python3 -S "$@"'
   local agent_dir="$TEST_ROOT/fallback-python-agent"
+  stub_managed_pi_for_agent "$agent_dir"
 
   run env HOME="$HOME" PATH="$PATH" PI_VERSION="$PI_VERSION" \
     PI_CODING_AGENT_DIR="$agent_dir" bash "$REPO_ROOT/ai/pi/install.sh"
@@ -990,6 +1117,7 @@ JSON
   export PI_VERSION
   stub_existing_pi
   local agent_dir="$TEST_ROOT/recognized-permission-agent"
+  stub_managed_pi_for_agent "$agent_dir"
   local permission="$agent_dir/extensions/pi-permission-system/config.json"
   mkdir -p "$(dirname "$permission")"
   ln -s "$REPO_ROOT/ai/pi/config/permission-system.json" "$permission"
@@ -1074,6 +1202,7 @@ JSON
   export PI_VERSION
   stub_existing_pi
   local agent_dir="$TEST_ROOT/legacy-agent"
+  stub_managed_pi_for_agent "$agent_dir"
   local canonical="$TEST_ROOT/canonical-dotfiles"
   mkdir -p "$agent_dir" "$canonical/ai/pi"
   printf '{"theme":"legacy","packages":["old"]}\n' >"$canonical/ai/pi/settings.json"
@@ -1106,6 +1235,7 @@ JSON
   export PI_VERSION
   stub_existing_pi
   local agent_dir="$TEST_ROOT/dangling-settings-agent"
+  stub_managed_pi_for_agent "$agent_dir"
   local canonical="$TEST_ROOT/canonical-dotfiles"
   mkdir -p "$agent_dir"
   ln -s "$TEST_ROOT/retired-dotfiles" "$canonical"
@@ -1127,6 +1257,7 @@ JSON
   export PI_VERSION
   stub_existing_pi
   local agent_dir="$TEST_ROOT/dangling-agent"
+  stub_managed_pi_for_agent "$agent_dir"
   mkdir -p "$agent_dir"
   ln -s "$REPO_ROOT/ai/pi/modes.json" "$agent_dir/modes.json"
 
@@ -1142,6 +1273,7 @@ JSON
   export PI_VERSION
   stub_existing_pi
   local agent_dir="$TEST_ROOT/extensions-agent"
+  stub_managed_pi_for_agent "$agent_dir"
   mkdir -p "$agent_dir/extensions/local-directory"
   printf 'local\n' >"$agent_dir/extensions/local.ts"
   ln -s /tmp/foreign-extension.ts "$agent_dir/extensions/foreign.ts"
@@ -1255,6 +1387,7 @@ JSON
   [ "$status" -ne 0 ]
   [[ "$output" == *"canonical checkout"* ]]
 
+  stub_managed_pi_for_agent "$TEST_ROOT/isolated-agent"
   run env HOME="$HOME" PATH="$PATH" PI_VERSION="$PI_VERSION" DOTFILES="$canonical" \
     PI_CODING_AGENT_DIR="$TEST_ROOT/isolated-agent" bash "$REPO_ROOT/ai/pi/install.sh"
   [ "$status" -eq 0 ]
