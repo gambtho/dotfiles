@@ -178,7 +178,9 @@ Why merge-base rather than the first PR commit: `/polish` treats its argument as
 
 Load the `polish-core` skill with the `read` tool and follow it with the arguments `{BASE} --fix`.
 
-Capture polish's output — specifically the **FIXED** section (items it applied) and the **NEEDS REVIEW** section (items it deferred). Both are needed for the final summary.
+Capture polish's **FIXED**, **NEEDS REVIEW**, and **Project review** sections. Count `M` as the unique deferred findings across NEEDS REVIEW and Project review, preserving their numbering, source/item associations, and report-only action; do not count cross-listed duplicates twice. Retain project profile sources, branch currency, verification status, and coverage even when there are no findings.
+
+Set `PROJECT_REVIEW_INCOMPLETE=true` if project coverage is incomplete (a required item is not checked, or the reviewer failed/timed out); `not applicable` is not incomplete. Missing Project review output is also incomplete, not a clean review. This flag must survive through summary and cleanup independently of `M`.
 
 If `/polish` exits with no FIXED items and a clean `git status`, jump to Phase 5 and skip the commit/push.
 
@@ -287,12 +289,13 @@ DEFERRED FOR HUMAN REVIEW ({M}):
 PR: {url}
 ```
 
-Reuse the exact grouping, numbering, and `[Severity|Confidence]` tags that `/polish` produced in its NEEDS REVIEW section — do not rewrite or re-classify. Just relabel the section as "DEFERRED FOR HUMAN REVIEW."
+Reuse the exact grouping, numbering, and `[Severity|Confidence]` tags from both NEEDS REVIEW and Project review — do not rewrite or re-classify. Relabel generic findings as "DEFERRED FOR HUMAN REVIEW" and retain **Project review**, grouped by profile source/checklist item, alongside them. Include project findings in the deferred total `M` and interactive follow-up. Always print project currency, verification, and coverage, even with zero findings.
 
 **Do not print a worktree status line here.** Phase 6 owns the final worktree decision, after Phase 5.5 has a chance to act on deferred items.
 
 Special cases (summary-only; worktree lifecycle is decided in Phase 6):
-- **Nothing fixed, nothing deferred** → "PR is clean per `/polish`. No changes needed." Phase 5.5 is skipped; Phase 6 removes the worktree.
+- **Project review incomplete** → state "Project review incomplete — no clean verdict." Preserve the status/reason and worktree unless the user explicitly opts into cleanup; offer deferred findings normally if `M > 0`.
+- **Nothing fixed, nothing deferred, project coverage complete** → "PR is clean per `/polish`. No changes needed." Phase 5.5 is skipped; Phase 6 removes the worktree.
 - **Nothing fixed, items deferred** → omit `FIXED & PUSHED`, keep `DEFERRED`. Phase 5.5 then prompts the user — **do not remove the worktree before that prompt**.
 - **Items fixed, nothing deferred** → omit `DEFERRED`. Phase 5.5 is skipped; Phase 6 handles per push outcome.
 - **Push declined** (`PUSH_DECLINED`) → title: `/polish-pr — PR #{N} (NOT PUSHED — worktree kept)`. Include:
@@ -332,7 +335,7 @@ Behavior by response:
 ### Numbers / "all" → fix loop
 
 1. For each selected deferred item:
-   - If it has a concrete `Suggested fix:` in its NEEDS REVIEW entry, apply that fix via the `Edit` tool inside `${WT}`.
+   - If it has a concrete `Suggested fix:` in its captured NEEDS REVIEW or Project review entry, apply that fix via the `Edit` tool inside `${WT}`.
    - If the fix requires a larger refactor or isn't concretely specified, **skip it** and note why (e.g. "#4 skipped — suggested fix is vague, apply manually"). Do not invent a fix.
 2. After all selected edits: show `git diff` so the user can see what changed.
 3. Prompt: `"Commit these {K} manual fixes? [y/N]"`.
@@ -368,11 +371,12 @@ Re-prompt once with a clarification ("Enter numbers like `1,3`, or one of: all, 
 
 ## Phase 6: Cleanup
 
-The worktree holds work the user may still care about. Only remove it when (a) the work is durable on the remote, (b) there's nothing to do, or (c) the user explicitly opted into cleanup. Decide based on the combined state of commits, push outcome, and `FOLLOW_UP`:
+The worktree holds work the user may still care about. Only remove it when (a) the work is durable on the remote, (b) there's nothing to do, or (c) the user explicitly opted into cleanup. Decide based on commits, push outcome, `FOLLOW_UP`, and `PROJECT_REVIEW_INCOMPLETE`. Incomplete project coverage takes precedence over the normal cleanup rows unless the user explicitly waived it:
 
 | Prior state                                                            | Action |
 |---|---|
-| Nothing committed AND no deferred items                                | Remove worktree |
+| Project review incomplete AND cleanup not explicitly waived            | **Keep worktree** (+ incomplete-review reason and hints) |
+| Nothing committed AND no deferred items AND project coverage complete   | Remove worktree |
 | Nothing committed AND `FOLLOW_UP=declined`                             | Remove worktree |
 | Nothing committed AND `FOLLOW_UP=keep`                                 | **Keep worktree** (+ hints) |
 | Committed + pushed successfully AND `FOLLOW_UP != keep`                | Remove worktree |
@@ -409,4 +413,4 @@ Print the PR URL once more at the end regardless.
 - **Stage files by name.** Never `git add -A` — that would pick up stray artifacts.
 - **Push requires explicit confirmation.** Even in auto-mode, always prompt. This is a visible action on a PR someone else may be watching.
 - **Do not post PR comments.** The deferred list is printed locally only.
-- **Do not run project tests/linters.** CI handles that; we just push and let CI report.
+- **Do not run project tests/linters** except the profile-requested disposable merge verification defined by `polish-core`. CI handles the remaining checks; never run this verification in `${WT}` itself.

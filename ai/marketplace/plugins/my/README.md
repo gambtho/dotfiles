@@ -37,7 +37,9 @@ GitHub identities only; other hosts still get repository-owned profiles and the
 built-in checklist. Loaded sources are printed.
 A read-only `project-reviewer` checks profiles alongside the generic reviewers.
 The **Project review** report groups findings by source and checklist item;
-these findings are never auto-fixed, even with `--fix`.
+these findings are never auto-fixed, even with `--fix`. `/polish-pr` carries them
+into its deferred summary and preserves the worktree when project coverage is
+incomplete rather than claiming a clean review.
 
 Polish reports how many commits the branch is behind the default branch. If the
 branch is behind and a profile requests testing against that branch, polish runs
