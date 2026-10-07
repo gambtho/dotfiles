@@ -486,6 +486,13 @@ Read the existing `~/.pi/pr-reviews/{OWNER}/{REPO}/learnings.md` (if any), then 
 - Trend vs last session: {any notable changes in issue rates}
 ```
 
+**Manual follow-up after maintainer review:** Promote recurring, confirmed review
+patterns into `~/.pi/pr-reviews/{OWNER}/{REPO}/review.md` as a concise numbered
+checklist. `/polish` loads that profile alongside repository-owned
+`.agents/review.md` and this store's `learnings.md`. Keep accepted patterns and
+false positives in learnings. Do not automatically create or update `review.md`
+during this pipeline; the maintainer-round promotion is a separate manual step.
+
 ### 7c: Clean Up Worktrees
 
 Remove all worktrees created during this run. For each worktree:
