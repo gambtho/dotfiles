@@ -162,11 +162,21 @@ This picks up any commits pushed to the PR after the prior `/polish-pr` run. **S
 
 ## Phase 2: Resolve the polish base commit
 
+Use `url` and `baseRefName` from the PR metadata loaded in Phase 0d. Removing the
+`/pull/{PR_NUMBER}` suffix from that canonical URL identifies the **base
+repository**, not the contributor's fork. Fetch its exact target branch; do not
+assume `origin` names the base repository or that its cached ref is current.
+
 ```
-BASE=$(git merge-base origin/{baseRefName} HEAD)
-git log --oneline ${BASE}..HEAD
+BASE_REPO_URL=${url%/pull/*}
+BASE_BRANCH=${baseRefName}
+git fetch --no-tags "${BASE_REPO_URL}" "refs/heads/${BASE_BRANCH}" &&
+  BASE_REF=$(git rev-parse --verify 'FETCH_HEAD^{commit}') &&
+  BASE=$(git merge-base "${BASE_REF}" HEAD) &&
+  git log --oneline "${BASE}..HEAD"
 ```
 
+- If fetching, resolving the fetched commit, calculating the merge-base, or listing commits fails, report the failure and **STOP**. Never fall back to `origin/{baseRefName}` or a stale cached ref.
 - If `BASE` is empty or the log is empty, **STOP** — the PR has no commits vs. its base (likely an up-to-date or empty PR).
 - Print the commit list so the user can see what's in scope before `/polish` runs.
 
