@@ -59,6 +59,16 @@
     {
       "source": "git:github.com/obra/superpowers@v6.3.0"
     },
+    {
+      "source": "git:github.com/addyosmani/agent-skills@0.6.12",
+      "extensions": [],
+      "skills": [
+        "skills/security-and-hardening/SKILL.md",
+        "skills/performance-optimization/SKILL.md"
+      ],
+      "prompts": [],
+      "themes": []
+    },
     "~/.dotfiles/ai/marketplace/plugins/my"
   ],
   "lastChangelogVersion": "0.85.1"

@@ -804,6 +804,21 @@ SCRIPT
   [ "$status" -eq 0 ]
 }
 
+@test "Pi loads only selected agent-skills without its router" {
+  run jq -e '
+    [.packages[] | objects | select(.source | startswith("git:github.com/addyosmani/agent-skills@"))]
+    | length == 1
+      and .[0].extensions == []
+      and .[0].prompts == []
+      and .[0].themes == []
+      and (.[0].skills | sort) == [
+        "skills/performance-optimization/SKILL.md",
+        "skills/security-and-hardening/SKILL.md"
+      ]
+  ' "$REPO_ROOT/ai/pi/settings.json"
+  [ "$status" -eq 0 ]
+}
+
 @test "Pi installer publishes authoritative permission policy while preserving runtime controls" {
   export PI_VERSION
   stub_existing_pi
