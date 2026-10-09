@@ -11,7 +11,7 @@ Review a design document or implementation plan against the actual repository us
 
 ## Workflow modes
 
-- **Automatic workflow mode:** when a non-trivial spec or implementation plan was just written or substantially revised in this session, run this review before implementation begins. After a spec, review the spec alone. After a plan written from a spec in this session, review them as a pair. Review each document revision automatically at most once; rerun only on user request or after a rewrite prompted by a `RETHINK` verdict.
+- **Automatic workflow mode:** when a non-trivial spec or implementation plan was just written or substantially revised in this session, run this review before implementation begins. After a spec, review the spec alone. After a plan, review it paired with its source spec whenever one is identifiable — written in this session, or referenced by the plan, even from an earlier session; review a plan alone only when no source spec can be found. Review each document revision automatically at most once; a revision made after a `REVISE` or `RETHINK` verdict is a new revision and gets one automatic review. Otherwise rerun only on user request.
   - On `SHIP` with no Blocking findings, summarize the review and continue the workflow.
   - On `REVISE`, `RETHINK`, or any Blocking finding, present the review and pause for the user to choose which findings to fold in before implementation.
 - **Standalone mode:** when the user asks only for a review, return the report and stop.
@@ -23,7 +23,7 @@ Review a design document or implementation plan against the actual repository us
 3. Only if the session provides no target, choose the newest document under `docs/superpowers/specs/` or `docs/superpowers/plans/` and clearly label that choice as a guess.
 4. Stop with usage guidance if no document can be identified.
 
-Review one document by default. Pair a spec and plan only when two paths, `--with-spec` / `--with-plan`, or automatic plan review supplies both. Verify every selected path exists and is readable. Documents may live outside the repository tree, because workflow artifacts are kept out of version control; the repository root is what the reviewer verifies claims against.
+Review one document by default. Pair a spec and plan only when two paths, `--with-spec` / `--with-plan`, or automatic plan review with an identified source spec supplies both. Verify every selected path exists and is readable. Documents may live outside the repository tree, because workflow artifacts are kept out of version control; the repository root is what the reviewer verifies claims against.
 
 ## Select an independent model
 
