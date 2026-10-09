@@ -30,6 +30,7 @@ Generic runtime behavior comes from pinned packages. The local `my` package rema
 | Allow/ask/deny policy | `@gotgenes/pi-permission-system` | Gates model-facing tools, paths, shell commands, and forwarded child requests |
 | Main-session modes, handoff, BTW, and session query | filtered `pi-amplike` | Amp permissions, subagents, prompts, themes, and legacy web skills are not loaded |
 | Structured development methods | `obra/superpowers` | Full pinned package, including the session bootstrap |
+| Security and performance checklists | filtered `addyosmani/agent-skills` | Only `security-and-hardening` and `performance-optimization`; its `using-agent-skills` router and commands are not loaded because they conflict with Superpowers routing |
 | Long-running iterations | `pi-ralph-wiggum` | Used by the custom `overnight-improve` workflow |
 | Model/context/cost UI | `pi-powerline-footer`, `usage-extension`, `session-recap` | Existing display and recap behavior |
 | Primary-checkout write enforcement | `ai/pi/extensions/worktree-guard.ts` | Covers built-in writes and mutating `lsp_fix` with rooted path resolution |
