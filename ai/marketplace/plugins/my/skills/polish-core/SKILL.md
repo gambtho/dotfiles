@@ -127,7 +127,7 @@ Each finding is classified with:
 
 ### 3a–3h: Find issues by category
 
-Read `references/polish-categories.md` relative to this skill directory for the eight category definitions: bugs & security, idiomatic code, pattern adherence, duplication, over-engineering, comments, dead code & dead abstractions, structural simplification. Each category in the reference specifies what auto-fixes vs. what reports.
+Read `references/polish-categories.md` relative to this skill directory for the eight category definitions: bugs & security (including caller impact and scale under expected load), idiomatic code, pattern adherence, duplication, over-engineering, comments, dead code & dead abstractions, structural simplification. Each category in the reference specifies what auto-fixes vs. what reports.
 
 Core principles that hold across all categories:
 
@@ -148,6 +148,7 @@ Apply this short built-in checklist even with no project profile. Profiles exten
 3. **Specific error assertions:** negative tests distinguish the intended error from an unrelated failure.
 4. **Behavioral docs:** docs describe behavior, not PR status or "in this change" narration.
 5. **Stable contracts:** nothing load-bearing relies on unstable strings, such as another component's error text.
+6. **Risky logic is tested:** new or changed risky logic (a branch, parser, money, security, data writes, or a bug fix) has at least one test that fails when it breaks. Ask for one good test, not coverage; trivial changes need none.
 
 All maintainer-lens findings are `report`, never auto-fixed. Keep source `built-in maintainer lens` and item number. Apply repository-specific accepted patterns to avoid false positives. For PR-wide scope/compatibility checks, consider the complete changed-file list and PR body even with PATH_FILTER or abbreviated large-diff analysis; disclose any coverage limits.
 
@@ -232,14 +233,17 @@ NEEDS REVIEW ({N} items):
     1. ⚠ [Severity|Confidence] file:line — Description of the finding.
        Context: why this matters and what to verify.
        Suggested fix: concrete action to take (when the fix is clear).
+       If skipped: the concrete consequence of leaving it as-is.
 
   Over-Engineering ({N}):
     2. ⚠ [Severity|Confidence] file:line — Description.
        Context: ...
+       If skipped: ...
 
   Pattern Adherence ({N}):
     3. ⚠ [Severity|Confidence] file:line — Description.
        Context: ...
+       If skipped: ...
 
   ... (additional categories as needed)
 
@@ -267,6 +271,7 @@ Project review:
   Source: ~/.pi/pr-reviews/OWNER/REPO/review.md
     Item 5 — Specific error assertions:
       4. [Warning|HIGH] tests/example.go:42 — item 5: ... (via project-reviewer)
+         If skipped: tests may pass while accepting the wrong error.
   Source: built-in maintainer lens
     No additional findings.
   Coverage: <unchecked items or abbreviated analysis; none if complete>
@@ -277,7 +282,7 @@ If a source has no findings, say so briefly. Keep this section when NEEDS REVIEW
 ### Report rules:
 
 - Fixed/would-fix items: one line each (file:line + short description).
-- Review items: include context — what was found, why it matters, what to verify. Where the fix is clear, include a concrete suggested action (e.g., "To fix: delete lines 30-45 and remove the corresponding test").
+- Review items: include context — what was found, why it matters, what to verify. Where the fix is clear, include a concrete suggested action (e.g., "To fix: delete lines 30-45 and remove the corresponding test"). Add a one-line "If skipped" consequence so the reader can triage without re-deriving impact.
 - **Group NEEDS REVIEW items by category** (Bugs & Security, Idiomatic Code, Codebase Patterns, Duplication, Over-Engineering, Comments, Dead Code, Structural). Within each category, sort by severity (Critical first, then Warning).
 - **Number each NEEDS REVIEW item** sequentially across all categories for interactive follow-up.
 - Generic subagent findings are merged into the appropriate category groups. Findings associated with project checklist items appear once in Project review, grouped by source/item, not duplicated in the generic categories.
