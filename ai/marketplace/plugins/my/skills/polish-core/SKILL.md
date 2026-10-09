@@ -271,6 +271,7 @@ Project review:
   Source: ~/.pi/pr-reviews/OWNER/REPO/review.md
     Item 5 — Specific error assertions:
       4. [Warning|HIGH] tests/example.go:42 — item 5: ... (via project-reviewer)
+         If skipped: tests may pass while accepting the wrong error.
   Source: built-in maintainer lens
     No additional findings.
   Coverage: <unchecked items or abbreviated analysis; none if complete>
