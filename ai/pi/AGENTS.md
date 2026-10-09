@@ -27,6 +27,7 @@ for committing Superpowers artifacts below.
 - Before reviewing an unnamed commit or branch, state its exact SHA and subject and wait for confirmation.
 - Verify callers before describing code as unused, deprecated, or dead.
 - Never claim success without running relevant tests, type checks, lint, or an equivalent exercise and citing the result.
+- These are not verification: "the change is too small to break anything", "it passed earlier", "the test is flaky, so the failure doesn't count", and "the types check, so it works". Run the check and cite the output, or state plainly that it was not run.
 
 ## Stop instead of guessing
 
@@ -57,7 +58,7 @@ Each `subagent` call launches exactly one agent and supplies a self-contained `p
 - Inspect and clarify in the current checkout, then create or reuse a linked worktree before the first repository write.
 - Specs, plans, tests, source, configuration, and documentation all count as writes.
 - The global worktree-guard extension blocks Pi's direct file-write tools in primary checkouts. Do not bypass it with shell redirection or generated-file commands.
-- For non-trivial work, load `blindspot-pass` before implementation, run `polish-core --fix` after implementation, inspect its edits, rerun verification, and use `change-explainer` for the completion write-up.
+- For non-trivial work, load `blindspot-pass` before implementation, load `second-opinion-core` after writing or substantially revising a spec or implementation plan, run `polish-core --fix` after implementation, inspect its edits, rerun verification, and use `change-explainer` for the completion write-up.
 
 ## Implementation
 

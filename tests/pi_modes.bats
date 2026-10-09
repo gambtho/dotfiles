@@ -319,7 +319,7 @@ agent_frontmatter() {
 @test "Pi workflows contain no Amp batch or mode contract" {
   run rg -n 'tasks:|one `subagent` tool call|mode `(rush|smart|deep|review)`|one parallel call' \
     "$REPO_ROOT/ai/pi/AGENTS.md" \
-    "$REPO_ROOT/ai/marketplace/plugins/my/prompts/second-opinion.md" \
+    "$REPO_ROOT/ai/marketplace/plugins/my/skills/second-opinion-core/SKILL.md" \
     "$REPO_ROOT/ai/marketplace/plugins/my/prompts/fix-pr.md" \
     "$REPO_ROOT/ai/marketplace/plugins/my/prompts/review-prs.md" \
     "$REPO_ROOT/ai/marketplace/plugins/my/skills/polish-core/SKILL.md" \
@@ -351,7 +351,7 @@ agent_frontmatter() {
 }
 
 @test "second opinion dispatches one described named reviewer" {
-  local prompt="$REPO_ROOT/ai/marketplace/plugins/my/prompts/second-opinion.md"
+  local prompt="$REPO_ROOT/ai/marketplace/plugins/my/skills/second-opinion-core/SKILL.md"
   run grep -F 'subagent_type: review' "$prompt"
   [ "$status" -eq 0 ]
   run grep -F 'subagent_type: deep' "$prompt"

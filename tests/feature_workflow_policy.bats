@@ -34,6 +34,10 @@ setup() {
 
   run grep -F "Use proactively after polish and fresh verification" "$EXPLAINER_SKILL"
   [ "$status" -eq 0 ]
+
+  run grep -F "Run proactively after writing or substantially revising a non-trivial spec or implementation plan" \
+    "$REPO_ROOT/ai/marketplace/plugins/my/skills/second-opinion-core/SKILL.md"
+  [ "$status" -eq 0 ]
 }
 
 @test "blindspot workflow pauses only for material unresolved decisions" {
@@ -174,6 +178,8 @@ setup() {
   run grep -F "create or reuse a linked worktree before the first repository write" "$PI_GUIDANCE"
   [ "$status" -eq 0 ]
   run grep -F "load \`blindspot-pass\` before implementation" "$PI_GUIDANCE"
+  [ "$status" -eq 0 ]
+  run grep -F "load \`second-opinion-core\` after writing or substantially revising a spec or implementation plan" "$PI_GUIDANCE"
   [ "$status" -eq 0 ]
   run grep -F "run \`polish-core --fix\` after implementation" "$PI_GUIDANCE"
   [ "$status" -eq 0 ]
