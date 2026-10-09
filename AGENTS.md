@@ -52,6 +52,7 @@ Pi authenticates directly to the GitHub Copilot subscription through `/login`. S
 - `blindspot-pass` — pre-implementation risk surface.
 - `implementation-plan` — evidence-based implementation plan.
 - `change-explainer` — reviewer-facing completed-change write-up.
+- `second-opinion-core` — cross-model spec/plan review; runs automatically after a spec or plan is written and backs `/second-opinion`.
 
 ## Conventions
 

@@ -54,3 +54,13 @@ Produce these sections:
   design workflow.
 
 Keep it evidence-based and concise. Separate confirmed facts from inferences.
+
+## Common rationalizations
+
+| Rationalization | Reality |
+|---|---|
+| "The request is clear, there's nothing to find" | Clear requests hide the constraints the requester never thought to mention. That is what this pass is for. |
+| "I already know this codebase" | Memory is not evidence. Cite the file that confirms each constraint or list it as an inference. |
+| "This checklist item doesn't apply" | Say why in one line. A silent skip is how data migration and compatibility get missed. |
+| "I'll catch it during implementation" | Discovering a constraint mid-implementation means rework. Discovering it here costs one search. |
+| "Asking would slow things down" | Only pause for high-impact decisions; for everything else, proceed with the conservative option and note it. |
