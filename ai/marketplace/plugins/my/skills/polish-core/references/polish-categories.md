@@ -20,10 +20,23 @@ Look for:
 - Insecure cryptographic usage
 - Improper authentication/authorization checks
 - SSRF, open redirects, unsafe URL construction
+- Callers broken by the change — when a signature, return value, or observable behavior changes, search for every caller, including tests, fixtures, and config
+- A fix applied in one caller while the shared function it works around stays broken
+- Moved or merged code that lost its original validation or error handling
 
 For each function in the diff, trace its inputs to its outputs. Check boundary values of loops and conditionals. For each error/null check, verify the negative path is handled.
 
-**Action**: all bugs/security findings are `report` at MEDIUM+ confidence. These require human verification — never auto-fix.
+**Scale under expected load.** First infer the expected load from the repository (README, deploy config, entry points): a single-user script or tool, or a service with many users and processes. State the assumed load in the finding. Then flag code that is correct for one user but wrong at that load:
+- Check-then-write races (exists-then-create, read-modify-write without a lock or transaction)
+- The same work repeated by every process or replica
+- Memory, caches, or lists that only grow
+- A query, request, or subprocess per item in a loop
+- Quadratic work on input that can be large
+- Per-process state that must be shared across processes
+
+Do not flag scale issues that the inferred load cannot reach.
+
+**Action**: all bugs/security findings, including scale findings, are `report` at MEDIUM+ confidence. These require human verification — never auto-fix.
 
 ## 3b: Idiomatic Code
 
@@ -55,6 +68,7 @@ Search for:
 - Standard library functions that could replace custom implementations
 - Near-duplicate logic across changed files
 - Copy-pasted blocks with minor variations
+- New dependencies in manifest changes (`package.json`, `go.mod`, `Cargo.toml`, `pyproject.toml`, etc.) whose use could be replaced by a few lines, the standard library, or an already-installed dependency
 
 **Action**:
 - Standard library replacements at HIGH confidence when the replacement is semantically identical: `auto-fix`
@@ -76,7 +90,9 @@ Look for:
 
 **Action**: all over-engineering findings are `report`. Never auto-fix — these require understanding intent.
 
-When flagging, be specific about the simpler alternative — don't just say "this is too complex."
+When flagging, be specific about the simpler alternative — don't just say "this is too complex." Prefer alternatives that delete code over ones that add layers.
+
+The inverse also applies: a function doing several unrelated jobs, making it hard to read or test, is a `report` finding. Suggest splitting by job, never by line count, and never into helpers that exist only to make a function shorter.
 
 ## 3f: Comment Quality
 
