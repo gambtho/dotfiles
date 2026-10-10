@@ -51,6 +51,7 @@ Pi authenticates directly to the GitHub Copilot subscription through `/login`. S
 - `polish-core` — shared engine behind `/polish`, including per-language idiom rules.
 - `blindspot-pass` — pre-implementation risk surface.
 - `implementation-plan` — evidence-based implementation plan.
+- `lane-coordinator` — coordinate manually started Pi lanes, verify reports, and gate outward publication.
 - `change-explainer` — reviewer-facing completed-change write-up.
 - `second-opinion-core` — cross-model spec/plan review; runs automatically after a spec or plan is written and backs `/second-opinion`.
 
