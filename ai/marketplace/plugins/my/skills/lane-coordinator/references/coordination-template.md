@@ -1,63 +1,31 @@
-# <Project> coordination
+# <project> coordination
 
-Local directory: <absolute path outside repositories>
-Registry owner: <single coordinator session identifier/path, if known>
-Last updated: <actual observation time>
+Stable facts for the coordinator. Volatile state lives in [STATE.md](state-template.md).
+Lane prompts: `~/<project>-local/lanes/W<n>-<slug>.md`. Last reviewed: <date>.
 
-This file is authoritative local coordination state. Read and update it; do not
-replace settled decisions on setup/resume. Lanes write only assigned reports/handoffs.
-Resolve competing coordinators before numbering or changing shared records.
+## Repositories
 
-## Repositories and people
+| Repo | Coordinator checkout | Merge policy |
+|---|---|---|
+| <owner/repo> | <path> | <who merges, required checks/reviews, strategy, contribution rules (DCO, AI disclosure, who replies to reviews)> |
 
-| Repo | Primary checkout | Default branch | Target/base policy | Owners/reviewers |
-|------|------------------|----------------|--------------------|-----------------|
-| <owner/repo> | <path> | <verified or unknown> | <policy> | <handles/areas> |
+## People
 
-Merge/contribution policy: <user merges; required reviews, strategy, DCO, AI disclosure>
-Shared rules file: <path, or none>
+| Who | GitHub | Area | Tone |
+|---|---|---|---|
+| <name> | <login> | <what they own> | <e.g. senior: offer and ask; non-native English: short and simple> |
 
 ## Standing rules
 
-- Coordinator does not implement product code or delegate implementation.
-- User manually starts/resumes lanes, each with a distinct linked worktree/branch per repo.
-- Never push to default/protected branches. Never merge; the user merges.
-- No force pushes without explicit approval. Do not mutate another lane's branch/PR.
-- Non-trivial work: design/audit approval first, unless scope is already approved.
-- Implementation approval, push permission, and exact outward-text approval are separate.
-- Creating/editing PRs, comments, reviews, and replies needs exact-draft/destination approval.
-- One PR at a time per lane; blocked/failing/pending are valid reporting states.
-- No secrets in logs/argv; no private names or lane identifiers in public text.
-- Generated workflow artifacts stay local, outside Git, unless explicitly authorized for versioning.
-- No automatic monitoring or reminders are promised.
+- Coordinator doesn't write product code; trivial changes only when the user asks.
+- Lanes draft every public post; the user approves the exact text.
+- Never push to main, never merge, no force push on someone else's branch.
+- <project-specific rules: context pinning, comment style, privacy, etc.>
 
-## Lanes
+## Standing grants (no per-item approval needed)
 
-| Lane / prompt | Repo | Session identifier/path | Worktree / branch | Base ref / SHA | State | Waiting on |
-|---------------|------|-------------------------|-------------------|----------------|-------|------------|
-| <Wn/path> | <repo> | <known or unresolved> | <path/branch> | <ref/SHA> | <planned/active/blocked/paused/closed> | <who/what> |
+- <e.g. close a lane when its PRs merge; post verified review replies on repo X>
 
-## Latest observations
+## Writing
 
-| Lane | Local HEAD | PR URL / head SHA | PR state | CI state / required checks known? | Verified at | Report / handoff |
-|------|------------|-------------------|----------|-----------------------------------|-------------|------------------|
-| <Wn> | <SHA/unknown> | <URL/SHA/not opened> | <state> | <passing/failing/pending/not configured/unknown; yes/no> | <time> | <paths> |
-
-Observations are revision-specific, not current guarantees. Reverify on return.
-
-## Decisions and approvals
-
-| When | Decision / exact approved action and destination | Scope / revision / draft reference | User approval evidence |
-|------|-------------------------------------------------|------------------------------------|------------------------|
-| <time> | <decision> | <scope; exact local draft if publication> | <session/message reference or quoted approval> |
-
-Missing or ambiguous approval is not authorization. Keep exact approved drafts
-locally; a changed draft or destination requires fresh approval.
-
-## Writing preferences and privacy
-
-<Confirmed voice preferences, flagged phrases, disclosure/privacy rules; unknowns labelled>
-
-## Waiting on
-
-- <owner: decision/action; affected lane; next check-in, not a scheduled reminder>
+<voice preferences and flagged phrases the user has corrected>

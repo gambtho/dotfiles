@@ -1,56 +1,48 @@
-# Outward writing rules
+# Writing rules
 
-Applies to PR titles/bodies, GitHub issues/comments/reviews/replies, commit messages,
-and messages written in the user's voice. Read confirmed writing preferences and
-privacy rules in the local COORDINATION.md; update that record when the user settles
-new preferences. Do not claim to remember preferences absent from available records.
+For PR titles and bodies, GitHub issues, comments and reviews, commit messages, and chat
+messages written in the user's voice. COORDINATION.md records the user's confirmed
+preferences, flagged phrases and per-person tone; follow those first.
 
 ## Voice
 
-- Concise, informal, plain words and short sentences.
-- Remove filler and stock AI phrases: “great question”, “delve”, “leverage”,
-  “it's worth noting”, “happy to”, and the user's recorded flagged phrases.
-- No emoji unless the user uses them in that channel.
-- Be direct without hiding uncertainty: “not verified”, “unknown”, and “observed
-  at SHA …” are useful facts, not hedging. Label inference and review limitations.
+- Short sentences, plain words. Lead with the point. Stop when it's made.
+- No stock AI phrasing: "great question", "delve", "leverage", "it's worth noting",
+  "happy to", "is the right shape", "holds up", plus the user's flagged phrases.
+- Chat messages are shorter than GitHub comments. Non-native readers get simpler words.
+- Senior readers get offers and questions ("let me know when…", "or if you want me to…"),
+  not instructions.
+- Uncertainty stated as a fact is fine ("not verified", "I didn't run the live suite").
+- No emoji unless the user uses them there.
 
-## Publication gate
+## Publishing
 
-1. Show the exact proposed action, destination, and title/body/text in a code block.
-2. Publish only after the user approves that exact draft for that destination/action.
-   This includes creating/editing PRs and posting comments, reviews, or replies.
-3. Changed text, destination, or action requires fresh approval. Record approved
-   drafts and approval evidence locally. If approval is ambiguous or missing, stop.
-
-Implementation approval is not push permission or publication approval. A lane's
-“ready” report, passing CI, permission to contribute, or skill invocation grants none
-of these. Push needs separate permission for the remote/branch. Never push to
-protected/default branches. Never merge; the user merges. No force push without
-explicit approval. Lanes must carry these same gates in their prompts.
+- Show the exact text and where it goes. Post only after the user approves that text.
+- Changed text or destination needs a new OK. Standing grants in COORDINATION.md are the
+  only exception.
+- Implementation approval, passing CI, or "go ahead and contribute" aren't approval to post.
+- Follow each repo's contribution policy (DCO, AI disclosure, who replies to reviews).
+  If it conflicts with the user's preference, ask.
 
 ## PR body shape
 
 ```markdown
-<Problem or change in 1–2 sentences.>
+<What changes and why, 1–3 sentences.>
 
 - <meaningful change>
 
-## Compatibility
-<Breaking changes/migration, or accurate compatibility note.>
+<Compatibility or upgrade note, if any.>
 
-## Tests
-<Actual commands/results and limits; distinguish lane evidence from checks personally run.>
+Verification: <checks actually run and their results; say what wasn't run.>
 
-<Fixes #N or Refs #N only for a verified relevant issue.>
+<Fixes #N / Refs #N>
 ```
 
-Follow repository contribution policy, including DCO, AI disclosure, and who replies
-to reviews. Ask when policy conflicts with user preferences. Preserve bot-generated
-blocks when editing existing bodies. Do not invent tests or compatibility claims.
+Keep bot-generated blocks when editing a body. No process notes ("held files",
+"approved exception", "polish found") in public text.
 
 ## Privacy
 
-No secrets in logs or command-line arguments. Never name customers, private events
-or internal projects in public repos, including issues, labels, milestones, commits,
-branches, and PR text. No lane numbers or internal coordination names in public text.
-Do not publish local coordination files, private transcripts, or handoffs by default.
+Never name customers, private events or internal projects in public repos, including
+labels, milestones, branches and commit messages. No lane numbers or local paths in
+public text. Don't publish local coordination files or transcripts.
