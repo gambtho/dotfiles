@@ -2,7 +2,7 @@
 
 Volatile. Update when a lane opens, closes or changes what it waits on, and when a
 decision lands. Re-check GitHub before trusting any PR state here.
-Stable facts: [COORDINATION.md](coordination-template.md).
+Stable facts: `COORDINATION.md` in the same folder.
 Last updated: <date>. Last lane number used: **W<n>**.
 
 ## Open lanes

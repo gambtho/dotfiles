@@ -21,7 +21,7 @@ unless the user says otherwise, with lane prompts in `lanes/`.
    [coordination-template.md](references/coordination-template.md), filling them from
    the lanes folder, open PRs/issues and what the user tells you. Ask only for what you
    can't find.
-2. **Re-check what's volatile.** For every open PR in STATE.md, `gh pr view -R <repo>`:
+2. **Re-check what's volatile.** For every open PR in STATE.md, `gh pr view <n> -R <repo>`:
    state, head, checks. Note anything that merged, closed or went red while you were away.
 3. **Give the user a short status:** what changed, what's waiting on whom, and the
    next one or two decisions. Then wait for their lead.
@@ -63,7 +63,7 @@ The user pastes reports, often as `<lane> - <report>`. Sometimes it's a repeat, 
 user doesn't remember which lane owns something; STATE.md answers that.
 
 1. **Verify before relaying.** `gh pr view <n> -R <repo> --json state,headRefOid,mergeable,files,statusCheckRollup`,
-   `gh pr diff`, and the code at the lines that matter. Check that the head matches what
+   `gh pr diff <n> -R <repo>`, and the code at the lines that matter. Check that the head matches what
    the lane tested, the checks ran on that head, the diff stays in the lane's files, and
    nothing claims more than the evidence. Don't bounce a report for missing fields;
    look them up.

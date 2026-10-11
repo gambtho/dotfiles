@@ -1,6 +1,6 @@
 # <project> coordination
 
-Stable facts for the coordinator. Volatile state lives in [STATE.md](state-template.md).
+Stable facts for the coordinator. Volatile state lives in `STATE.md` in the same folder.
 Lane prompts: `~/<project>-local/lanes/W<n>-<slug>.md`. Last reviewed: <date>.
 
 ## Repositories
