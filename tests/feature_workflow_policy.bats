@@ -104,7 +104,7 @@ setup() {
   [ "$status" -eq 1 ]
   run grep -F 'ai/pi/config/models.json' "$readme"
   [ "$status" -eq 1 ]
-  run grep -F 'make ai-update' "$readme"
+  run grep -F 'pi update --extensions' "$readme"
   [ "$status" -eq 0 ]
   run grep -F 'native Copilot transport' "$readme"
   [ "$status" -eq 0 ]

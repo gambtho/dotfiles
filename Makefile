@@ -1,4 +1,4 @@
-.PHONY: install bootstrap update relink ai ai-check ai-update ai-webui ai-webui-check ai-webui-domain-check ai-webui-domain-setup pins pins-check pins-update check syntax lint test python-test pi-runtime-test validate
+.PHONY: install bootstrap update relink ai ai-check ai-webui ai-webui-check ai-webui-domain-check ai-webui-domain-setup pins pins-check pins-update check syntax lint test python-test pi-runtime-test validate
 
 # ── Main targets ──────────────────────────────────────────────────────────────
 
@@ -19,7 +19,7 @@ relink: ## Remove dead symlinks and re-create from current layout
 # Failures are aggregated rather than aborting the loop: one broken installer
 # must not block the rest, but it must still fail the target — a plain loop
 # reports only the last installer's status and hides every earlier failure.
-ai: ## Reconcile managed Pi; bootstrap missing extensions without healthy upgrades
+ai: ## Reconcile Pi configuration and update extensions through native Pi
 	@failed=""; for installer in ai/pi/install.sh; do \
 		echo "Running $$installer..."; \
 		bash "$$installer" || failed="$$failed $$installer"; \
@@ -32,15 +32,6 @@ ai-check: ## Dry-run: show what the Pi install would do
 		bash "$$installer" --check || failed="$$failed $$installer"; \
 	done; \
 	if [ -n "$$failed" ]; then echo "make ai-check: failed:$$failed" >&2; exit 1; fi
-
-# Export paths as data; never interpolate a manifest value into recipe text.
-export PI_AI_RESOLUTION_MANIFEST
-ai-update: ## Explicit extension update or exact PI_AI_RESOLUTION_MANIFEST promotion (stop Pi first)
-	@set -- --update-extensions; \
-	if [ -n "$${PI_AI_RESOLUTION_MANIFEST:-}" ]; then \
-	  set -- "$$@" --resolution-manifest "$$PI_AI_RESOLUTION_MANIFEST"; \
-	fi; \
-	bash ai/pi/install.sh "$$@"
 
 ai-webui: ## Install/update the opt-in Pi Web UI
 	bash ai/pi/webui/install.sh --apply
@@ -85,7 +76,7 @@ python-test:
 	python3 -m unittest discover -s tests/python -p 'test_*.py'
 
 pi-runtime-test: ## Exercise selected installed Pi/permission/subagents/LSP packages without paid providers
-	node --test tests/pi_extension_runtime.test.mjs
+	node --test tests/pi_extension_runtime.test.mjs tests/pi_native_packages.test.mjs
 
 # ── Help ──────────────────────────────────────────────────────────────────────
 

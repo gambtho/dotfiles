@@ -2,8 +2,9 @@
 // packages in an isolated HOME; the SDK, Codemode, hooks and child runtime are real.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { existsSync, mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { basename, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { ExtensionAPI, ExtensionUIContext, ExtensionError, ProviderModelConfig, ToolCallEvent, ToolResultEvent, ToolExecutionStartEvent, ToolExecutionUpdateEvent, ToolExecutionEndEvent } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage, ToolCall } from "@earendil-works/pi-ai";
@@ -26,7 +27,9 @@ const lspRoot = option("--lsp-root");
 const repoRoot = option("--repo-root");
 const home = process.env.HOME;
 assert.ok(home);
-assert.match(home, /^\/tmp\/pi-native-test-/, "launch through the isolated test wrapper");
+assert.ok(home === resolve(home) && /^pi-native-test-[A-Za-z0-9]{6}$/.test(basename(home))
+  && realpathSync(home) === join(realpathSync(tmpdir()), basename(home)),
+  "launch through the isolated test wrapper");
 const agentDir = join(home, "agent");
 assert.equal(process.env.PI_CODING_AGENT_DIR, agentDir);
 const hostEntry = join(hostRoot, "dist/index.js");

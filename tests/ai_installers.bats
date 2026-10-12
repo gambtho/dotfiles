@@ -24,53 +24,9 @@ setup() {
   cp "$REPO_ROOT/ai/marketplace/plugins/my/package.json" "$HOME/.dotfiles/ai/marketplace/plugins/my/package.json"
 }
 
-stub_sdk_boundaries() {
-  # Real SDK and Git state transitions; only registry/remote transport is isolated.
-  stub_command npm '
-    if [[ "${@: -2}" == "root -g" ]]; then exec "$REAL_NPM" "$@"; fi
-    [[ "$1" == install && "$3" == --prefix ]] || exit 81
-    if [[ "${PI_TEST_REQUIRE_RECOVERY:-0}" == 1 ]]; then
-      captures=( "${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}"/package-recovery.*/recovery.json )
-      [[ ${#captures[@]} == 1 && -f "${captures[0]}" ]] || exit 86
-      jq -e ".priorDeclarations == []" "${captures[0]}" >/dev/null || exit 87
-    fi
-    if [[ "${PI_TEST_REQUIRE_REGULAR_MIGRATION:-0}" == 1 ]]; then
-      [[ ! -e "${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/amplike.json" ]] || exit 89
-    fi
-    "$TEST_ROOT/pi-fixture" install "npm:$2"
-    [[ "${PI_TEST_INSTALL_FAIL:-0}" != 1 ]] || exit 42
-  '
-  /usr/bin/git init -q "$TEST_ROOT/git-seed"
-  local tree sha tag
-  tree=$(printf '' | /usr/bin/git -C "$TEST_ROOT/git-seed" hash-object -w -t tree --stdin)
-  sha=$(printf 'fixture\n' | GIT_AUTHOR_NAME=Fixture GIT_AUTHOR_EMAIL=fixture@example.invalid \
-    GIT_COMMITTER_NAME=Fixture GIT_COMMITTER_EMAIL=fixture@example.invalid \
-    /usr/bin/git -C "$TEST_ROOT/git-seed" commit-tree "$tree")
-  /usr/bin/git -C "$TEST_ROOT/git-seed" update-ref HEAD "$sha"
-  for tag in v0.2.0 v6.3.0 0.6.12; do /usr/bin/git -C "$TEST_ROOT/git-seed" tag "$tag" "$sha"; done
-  stub_command git '
-    if [[ "$1" == -C && "$3" == fetch ]]; then root=$2; shift 3; cd "$root" || exit; exec "$0" fetch "$@"; fi
-    case "$1" in
-      clone)
-        [[ "$2" == https://github.com/*/* ]] || exit 82
-        printf "install git:%s\n" "${2#https://}" >>"$HOME/pi-invocations"
-        /usr/bin/git clone -q "$TEST_ROOT/git-seed" "$3" || exit
-        /usr/bin/git -C "$3" config remote.origin.url "$2"
-        exit ;;
-      ls-remote)
-        [[ "$2" == --symref && "$3" == https://github.com/*/* && "$4" == HEAD ]] || exit 82
-        exec /usr/bin/git ls-remote --symref "$TEST_ROOT/git-seed" HEAD ;;
-      fetch)
-        shift; [[ "$1" == --no-tags ]] && shift
-        [[ "$1" == origin || "$1" == https://github.com/*/* ]] || exit 82
-        shift
-        exec /usr/bin/git fetch --no-tags "$TEST_ROOT/git-seed" "$@" ;;
-    esac
-    exec /usr/bin/git "$@"
-  '
-  # The old installer fixture is not a real permission extension. Isolate this
-  # external behavioral gate, not the package manager or production checker.
-  # tests/pi_permissions.bats separately exercises the actual selected-host gate.
+stub_runtime_validator() {
+  # Installer ownership fixtures use a minimal schema; native runtime tests
+  # separately exercise the actual selected-host evaluator and CLI.
   stub_command node '
     if [[ "${2:-}" == */libexec/validate-pi-security-runtime.ts ]]; then
       printf "validated\n" >>"$TEST_ROOT/validator-events"
@@ -137,40 +93,25 @@ if [[ "${1:-}" == --version ]]; then
 else
   printf '%s\n' "$*" >"$HOME/pi-invocation"
   printf '%s\n' "$*" >>"$HOME/pi-invocations"
-  if [[ "${1:-}" == install && "${2:-}" == npm:* ]]; then
-    package_spec=${2#npm:}
-    package_name=$package_spec
-    package_version=${PI_TEST_NPM_VERSION:-2.3.4}
-    if [[ "${package_spec#@}" == *@* ]]; then
-      package_version=${package_spec##*@}
-      package_name=${package_spec%@*}
-    fi
-    package_root="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/npm/node_modules/$package_name"
+  [[ "$*" == 'update --extensions --no-approve' ]] || exit 81
+  [[ "$PWD" != "$REPO_ROOT" && ! -e "$PWD/.pi" ]] || exit 82
+  printf '%s\n' "$PWD" >"$TEST_ROOT/update-cwd"
+  [[ "${PI_TEST_UPDATE_FAIL:-0}" != 1 ]] || exit 42
+  if [[ "${PI_TEST_REQUIRE_REGULAR_MIGRATION:-0}" == 1 ]]; then
+    [[ ! -e "$PI_CODING_AGENT_DIR/amplike.json" ]] || exit 89
+  fi
+  while IFS= read -r package_name; do
+    package_root="$PI_CODING_AGENT_DIR/npm/node_modules/$package_name"
     mkdir -p "$package_root"
-    printf '{"name":"%s","version":"%s"}\n' "$package_name" "$package_version" \
-      >"$package_root/package.json"
+    printf '{"name":"%s","version":"29.2.0"}\n' "$package_name" >"$package_root/package.json"
     if [[ "$package_name" == @gotgenes/pi-permission-system ]]; then
       mkdir -p "$package_root/schemas" "$package_root/src"
-      cp "$TEST_ROOT/permission-system-schema.json" \
-        "$package_root/schemas/permissions.schema.json"
-      if [[ "${PI_TEST_OMIT_PERMISSION_MANAGER:-0}" != 1 ]]; then
-        printf 'export class PermissionManager {}\n' \
-          >"$package_root/src/permission-manager.ts"
-      fi
+      # Tests may seed an incompatible installed schema; don't overwrite it.
+      [[ -e "$package_root/schemas/permissions.schema.json" ]] ||
+        cp "$TEST_ROOT/permission-system-schema.json" "$package_root/schemas/permissions.schema.json"
+      printf 'export class PermissionManager {}\n' >"$package_root/src/permission-manager.ts"
     fi
-  elif [[ "${1:-}" == install && "${2:-}" == git:github.com/*/* ]]; then
-    source=${2#git:}
-    repository=${source%@*}
-    package_root="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/git/$repository"
-    /usr/bin/git init -q "$package_root"
-    tree=$(printf '' | /usr/bin/git -C "$package_root" hash-object -w -t tree --stdin)
-    sha=$(printf 'fixture %s\n' "${PI_TEST_GIT_REVISION:-1}" |
-      GIT_AUTHOR_NAME=Fixture GIT_AUTHOR_EMAIL=fixture@example.invalid \
-        GIT_COMMITTER_NAME=Fixture GIT_COMMITTER_EMAIL=fixture@example.invalid \
-        /usr/bin/git -C "$package_root" commit-tree "$tree")
-    /usr/bin/git -C "$package_root" update-ref HEAD "$sha"
-    /usr/bin/git -C "$package_root" config remote.origin.url "https://$repository"
-  fi
+  done < <(jq -r '.packages[] | if type == "object" then .source else . end | select(startswith("npm:")) | ltrimstr("npm:")' "$PI_CODING_AGENT_DIR/settings.json")
 fi
 SCRIPT
   chmod +x "$HOME/.pi/agent/bin/pi"
@@ -178,7 +119,7 @@ SCRIPT
   printf '0.0.0-test\n' >"$HOME/.pi/agent/install/current-version"
   mkdir -p "$HOME/.pi/agent/install/releases/0.0.0-test/node_modules/@earendil-works"
   ln -s "$HOST_ROOT" "$HOME/.pi/agent/install/releases/0.0.0-test/node_modules/@earendil-works/pi-coding-agent"
-  stub_sdk_boundaries
+  stub_runtime_validator
 }
 
 stub_managed_pi_for_agent() {
@@ -237,6 +178,7 @@ run_security_migration() {
 stub_pi_install() {
   stub_existing_pi
   cp "$HOME/.pi/agent/bin/pi" "$TEST_ROOT/pi-fixture"
+  stub_command npm 'exit 81' # Bootstrap prerequisite only; native CLI is stubbed.
   rm "$HOME/.pi/agent/bin/pi" "$HOME/.pi/agent/install/managed-install.json"
   cat >"$TEST_ROOT/managed-installer.sh" <<'SCRIPT'
 #!/bin/sh
@@ -289,35 +231,6 @@ SCRIPT
   [ "$before" = "$(snapshot_tree "$TEST_ROOT")" ]
 }
 
-@test "Pi explicit update captures Astra override and prior receipt before migration" {
-  export PI_VERSION PI_AI_CONFIRM_STOPPED=1
-  stub_existing_pi
-  printf '{"packages":[]}\n' >"$HOME/.pi/agent/settings.json"
-  printf '{"providers":{"github-copilot":{"models":[{"id":"gpt-6-astra"}]}}}\n' >"$HOME/.pi/agent/models.json"
-  printf '{"prior":"keep"}\n' >"$HOME/.pi/agent/dotfiles-migrations.json"
-  run bash "$REPO_ROOT/ai/pi/install.sh" --update-extensions
-  [ "$status" -eq 0 ]
-  [ ! -e "$HOME/.pi/agent/models.json" ]
-  local captures=("$HOME"/.pi/agent/package-recovery.*/recovery.json) backup
-  backup=$(jq -r '.configBackups[] | select(.destination | endswith("/models.json")) | .backupPath' "${captures[0]}")
-  jq -e '.providers["github-copilot"].models[0].id == "gpt-6-astra"' "$backup"
-  backup=$(jq -r '.configBackups[] | select(.destination | endswith("/dotfiles-migrations.json")) | .backupPath' "${captures[0]}")
-  jq -e '.prior == "keep" and (has("astraOverrideRetired") | not)' "$backup"
-  jq -e '.prior == "keep" and .astraOverrideRetired == true' "$HOME/.pi/agent/dotfiles-migrations.json"
-}
-
-@test "Pi explicit update captures retired dangling owned models link before removing it" {
-  export PI_VERSION PI_AI_CONFIRM_STOPPED=1
-  stub_existing_pi
-  printf '{"packages":[]}\n' >"$HOME/.pi/agent/settings.json"
-  ln -s "$REPO_ROOT/ai/pi/config/models.json" "$HOME/.pi/agent/models.json"
-  run bash "$REPO_ROOT/ai/pi/install.sh" --update-extensions
-  [ "$status" -eq 0 ]
-  [ ! -L "$HOME/.pi/agent/models.json" ]
-  local captures=("$HOME"/.pi/agent/package-recovery.*/recovery.json)
-  jq -e '.configBackups[] | select(.destination | endswith("/models.json")) | .state == "owned-link" and .missingTarget == true and (has("backupPath") | not)' "${captures[0]}"
-}
-
 @test "Pi check mode changes no files with custom agent and XDG roots" {
   local agent_dir="$TEST_ROOT/custom-agent"
   local xdg_dir="$TEST_ROOT/custom-xdg"
@@ -342,105 +255,74 @@ SCRIPT
   local hostless_path="$TEST_ROOT/hostless-bin:/usr/bin:/bin:$SANDBOX_TOOL_BIN"
   PATH="$hostless_path" run command -v pi
   [ "$status" -ne 0 ]
-  PATH="$hostless_path" PI_TEST_HOST_ROOT="$HOST_ROOT" run bats --filter '^explicit update captures private old state before declarations packages links and migrations$' "$BATS_TEST_FILENAME"
+  PATH="$hostless_path" PI_TEST_HOST_ROOT="$HOST_ROOT" run bats --filter '^regular Pi apply runs exactly one native' "$BATS_TEST_FILENAME"
   printf '%s\n' "$output"
   [ "$status" -eq 0 ]
-  [[ "$output" == *'ok 1 explicit update captures private old state'* ]]
-  PATH="$hostless_path" PI_TEST_HOST_ROOT="" run bats --filter '^explicit update captures private old state before declarations packages links and migrations$' "$BATS_TEST_FILENAME"
+  [[ "$output" == *'ok 1 regular Pi apply runs exactly one native'* ]]
+  PATH="$hostless_path" PI_TEST_HOST_ROOT="" run bats --filter '^regular Pi apply runs exactly one native' "$BATS_TEST_FILENAME"
   [ "$status" -ne 0 ]
   [[ "$output" == *'error: Pi executable not found on PATH'* ]]
 }
 
-@test "regular Pi apply never updates extensions" {
+@test "regular Pi apply runs exactly one native extension update without self or project approval" {
   export PI_VERSION
   stub_existing_pi
   run bash "$REPO_ROOT/ai/pi/install.sh"
   [ "$status" -eq 0 ]
-  run grep -E '^update( |$)' "$HOME/pi-invocations"
-  [ "$status" -eq 1 ]
+  [ "$(grep -c '^update' "$HOME/pi-invocations")" -eq 1 ]
+  grep -Fx 'update --extensions --no-approve' "$HOME/pi-invocations"
 }
 
-@test "explicit production update requires stopped-session acknowledgement before any mutation" {
+@test "native extension update and runtime failures stop before authored links and policy publication" {
+  export PI_VERSION PI_TEST_REQUIRE_GATE_BEFORE_LINKS=1
+  stub_existing_pi
+  run env PI_TEST_UPDATE_FAIL=1 bash "$REPO_ROOT/ai/pi/install.sh"
+  [ "$status" -eq 42 ]
+  [[ "$output" == *'Native Pi extension update failed'* ]]
+  [[ "$output" != *'packages are ready'* ]]
+  [ ! -d "$(<"$TEST_ROOT/update-cwd")" ]
+  [ ! -e "$HOME/.pi/agent/AGENTS.md" ]
+  [ ! -e "$HOME/.pi/agent/extensions/pi-permission-system/config.json" ]
+  run env PI_TEST_VALIDATOR_FAIL=1 bash "$REPO_ROOT/ai/pi/install.sh"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'pi install npm:@gotgenes/pi-permission-system'* ]]
+  [ ! -e "$HOME/.pi/agent/AGENTS.md" ]
+  [ ! -e "$HOME/.pi/agent/extensions/worktree-guard.ts" ]
+  [ ! -e "$HOME/.pi/agent/extensions/pi-permission-system/config.json" ]
+  [ ! -d "$(<"$TEST_ROOT/update-cwd")" ]
+}
+
+@test "native extension update quotes a custom agent path and cleans its isolated cwd" {
   export PI_VERSION
   stub_existing_pi
-  local before
-  before=$(snapshot_tree "$TEST_ROOT")
-  run bash "$REPO_ROOT/ai/pi/install.sh" --update-extensions
-  [ "$status" -ne 0 ]
-  [[ "$output" == *PI_AI_CONFIRM_STOPPED=1* ]]
-  [ "$before" = "$(snapshot_tree "$TEST_ROOT")" ]
-}
-
-@test "explicit update refuses active YOLO before package installation or config cleanup" {
-  export PI_VERSION PI_AI_CONFIRM_STOPPED=1
-  stub_existing_pi
-  mkdir -p "$HOME/.pi/agent/extensions/pi-permission-system"
-  printf '{"yoloMode":true}\n' >"$HOME/.pi/agent/extensions/pi-permission-system/config.json"
-  printf '{"packages":[]}\n' >"$HOME/.pi/agent/settings.json"
-  local before
-  before=$(snapshot_tree "$TEST_ROOT")
-  run bash "$REPO_ROOT/ai/pi/install.sh" --update-extensions
-  [ "$status" -ne 0 ]
-  [[ "$output" == *YOLO* ]]
-  [ "$before" = "$(snapshot_tree "$TEST_ROOT")" ]
-  [ ! -e "$HOME/pi-invocations" ]
-}
-
-@test "explicit update selects existing managed host without bootstrapping Pi itself" {
-  export PI_VERSION PI_AI_CONFIRM_STOPPED=1
-  stub_pi_install
-  local before
-  before=$(snapshot_tree "$TEST_ROOT")
-  run bash "$REPO_ROOT/ai/pi/install.sh" --update-extensions
-  [ "$status" -ne 0 ]
-  [[ "$output" == *managed*host* ]]
-  [ "$before" = "$(snapshot_tree "$TEST_ROOT")" ]
-  [ ! -e "$HOME/curl-invocation" ]
-}
-
-@test "make ai-update passes hostile manifest paths as one unchanged data argument" {
-  local fixture="$TEST_ROOT/make-fixture" value
-  mkdir -p "$fixture/ai/pi"
-  cp "$REPO_ROOT/Makefile" "$fixture/Makefile"
-  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$#" "$@" >"$TEST_ROOT/make-argv"\n' >"$fixture/ai/pi/install.sh"
-  value="$TEST_ROOT/a space ' quote ; \$(touch $TEST_ROOT/SENTINEL) \`touch $TEST_ROOT/SENTINEL\` .json"
-  run env PI_AI_RESOLUTION_MANIFEST="$value" make -C "$fixture" ai-update
+  local agent_dir="$TEST_ROOT/a space ' ; \$(touch SENTINEL) agent"
+  stub_managed_pi_for_agent "$agent_dir"
+  run env PI_CODING_AGENT_DIR="$agent_dir" bash "$REPO_ROOT/ai/pi/install.sh"
   [ "$status" -eq 0 ]
-  mapfile -t args <"$TEST_ROOT/make-argv"
-  [ "${args[0]}" = 3 ]
-  [ "${args[1]}" = --update-extensions ]
-  [ "${args[2]}" = --resolution-manifest ]
-  [ "${args[3]}" = "$value" ]
-  [ ! -e "$TEST_ROOT/SENTINEL" ]
-  # Make command-line variables escape literal dollars as $$ (documented Make semantics).
-  run make -C "$fixture" ai-update "PI_AI_RESOLUTION_MANIFEST=${value//\$/\$\$}"
-  [ "$status" -eq 0 ]
-  mapfile -t args <"$TEST_ROOT/make-argv"
-  [ "${args[0]}" = 3 ]
-  [ "${args[3]}" = "$value" ]
-  [ ! -e "$TEST_ROOT/SENTINEL" ]
+  [ -f "$agent_dir/extensions/pi-permission-system/config.json" ]
+  [ ! -e "$REPO_ROOT/SENTINEL" ]
+  [ ! -d "$(<"$TEST_ROOT/update-cwd")" ]
 }
 
-@test "explicit update captures private old state before declarations packages links and migrations" {
-  export PI_VERSION PI_AI_CONFIRM_STOPPED=1 PI_TEST_REQUIRE_RECOVERY=1 PI_TEST_REQUIRE_GATE_BEFORE_LINKS=1
-  stub_existing_pi
-  printf '{"theme":"old","packages":[]}\n' >"$HOME/.pi/agent/settings.json"
-  printf '{"marker":"old-modes"}\n' >"$HOME/.pi/agent/modes.json"
-  printf '{"permissions":{"mode":"old"},"keep":true}\n' >"$HOME/.pi/agent/amplike.json"
-  run bash "$REPO_ROOT/ai/pi/install.sh" --update-extensions
+@test "managed destination boundary accepts only exact OS aliases" {
+  run node --input-type=module - "$REPO_ROOT/libexec/pi-managed-paths.mjs" "$TEST_ROOT" <<'JS'
+import assert from "node:assert/strict";
+import { mkdirSync, symlinkSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+const { isStandardAlias, assertManagedPath } = await import(pathToFileURL(process.argv[2]));
+for (const path of ["/tmp", "/var", "/etc"]) {
+  assert.equal(isStandardAlias(path, `/private${path}`), true);
+  for (const target of ["/foreign", `/private${path}-other`, `${process.argv[3]}/private${path}`]) {
+    assert.equal(isStandardAlias(path, target), false);
+  }
+}
+assert.equal(isStandardAlias("/tmp-other", "/private/tmp"), false);
+assertManagedPath(`${process.env.HOME}/absent/agent`, true);
+mkdirSync(`${process.argv[3]}/os-fixture/private`, { recursive: true });
+symlinkSync(`${process.argv[3]}/os-fixture/private`, `${process.argv[3]}/os-fixture/tmp`);
+assert.throws(() => assertManagedPath(`${process.argv[3]}/os-fixture/tmp/absent`), /symlink/);
+JS
   [ "$status" -eq 0 ]
-  local captures=("$HOME"/.pi/agent/package-recovery.*/recovery.json) backup
-  [ "${#captures[@]}" -eq 1 ]
-  jq -e '.kind == "pre-update-recovery" and .priorDeclarations == [] and all(.packages[]; .state == "absent")' "${captures[0]}"
-  backup=$(jq -r '.configBackups[] | select(.destination | endswith("/settings.json")) | .backupPath' "${captures[0]}")
-  [ "$(jq -r .theme "$backup")" = old ]
-  [ "$(stat -c %a "${captures[0]}")" = 600 ]
-  [ "$(stat -c %a "$(dirname "${captures[0]}")")" = 700 ]
-  [ "$(stat -c %a "$backup")" = 600 ]
-  [ -f "$(dirname "${captures[0]}")/resolution.json" ]
-  [ "$(jq -r .marker "$HOME/.pi/agent/modes.json")" = old-modes ]
-  jq -e '.keep == true and (has("permissions") | not)' "$HOME/.pi/agent/amplike.json"
-  [ -L "$HOME/.pi/agent/AGENTS.md" ]
 }
 
 @test "installer accepts trusted HOME aliases but refuses below HOME and custom root links" {
@@ -469,143 +351,29 @@ SCRIPT
   [[ "$output" == *unsafe* || "$output" == *symlink* ]]
 }
 
-@test "installer capture failure reports only retained recovery artifacts" {
-  export PI_VERSION PI_AI_CONFIRM_STOPPED=1
-  stub_existing_pi
-  printf '{"packages":[]}\n' >"$HOME/.pi/agent/settings.json"
-  stub_command node '
-    if [[ " $* " == *" capture-recovery "* ]]; then
-      manifest=${@: -1}
-      if [[ "${RETAIN_CAPTURE:-0}" == 1 ]]; then printf "{\"retained\":true}\n" >"$manifest"; fi
-      if [[ "${RETAIN_CAPTURE:-0}" == backups ]]; then mkdir "$manifest.backups"; printf "retained\n" >"$manifest.backups/0.json"; fi
-      exit 46
-    fi
-    exec "$REAL_NODE" "$@"
-  '
-  run bash "$REPO_ROOT/ai/pi/install.sh" --update-extensions
-  [ "$status" -eq 1 ]
-  [[ "$output" == *'recovery: not captured'* ]]
-  [[ "$output" != *'/recovery.json'* ]]
-  local captures=("$HOME"/.pi/agent/package-recovery.*)
-  [ ! -d "${captures[0]}" ]
-  export RETAIN_CAPTURE=1
-  run bash "$REPO_ROOT/ai/pi/install.sh" --update-extensions
-  [ "$status" -eq 1 ]
-  captures=("$HOME"/.pi/agent/package-recovery.*/recovery.json)
-  [ -f "${captures[0]}" ]
-  [[ "$output" == *"recovery: ${captures[0]}"* ]]
-  [[ "$output" == *cleanup*failed* ]]
-  jq -e '.retained == true' "${captures[0]}"
-  export RETAIN_CAPTURE=backups
-  run bash "$REPO_ROOT/ai/pi/install.sh" --update-extensions
-  [ "$status" -eq 1 ]
-  [[ "$output" == *'artifacts retained; no manifest'* ]]
-  [[ "$output" == *cleanup*failed* ]]
-  local backups=("$HOME"/.pi/agent/package-recovery.*/recovery.json.backups/0.json)
-  [ -f "${backups[0]}" ]
-  [ "$(<"${backups[0]}")" = retained ]
-}
-
-@test "explicit installer and runtime gate failures retain recovery and report failed phase" {
-  export PI_VERSION PI_AI_CONFIRM_STOPPED=1
-  stub_existing_pi
-  printf '{"packages":[]}\n' >"$HOME/.pi/agent/settings.json"
-  printf '{"permissions":{}}\n' >"$HOME/.pi/agent/amplike.json"
-  export PI_TEST_INSTALL_FAIL=1
-  run bash "$REPO_ROOT/ai/pi/install.sh" --update-extensions
-  [ "$status" -ne 0 ]
-  [[ "$output" == *failed*during*candidate-install*recovery:* ]]
-  local captures=("$HOME"/.pi/agent/package-recovery.*/recovery.json)
-  [ -f "${captures[0]}" ]
-  [ ! -e "$(dirname "${captures[0]}")/resolution.json" ]
-  [[ "$output" == *'No rollback was performed'* ]]
-  jq -e 'has("permissions")' "$HOME/.pi/agent/amplike.json"
-  unset PI_TEST_INSTALL_FAIL
-  export PI_TEST_VALIDATOR_FAIL=1
-  run bash "$REPO_ROOT/ai/pi/install.sh" --update-extensions
-  [ "$status" -eq 43 ]
-  [[ "$output" == *failed*during*validate-runtime*recovery:* ]]
-  captures=("$HOME"/.pi/agent/package-recovery.*/recovery.json)
-  [ "${#captures[@]}" -eq 2 ]
-  [ -f "${captures[1]}" ]
-  jq -e 'has("permissions")' "$HOME/.pi/agent/amplike.json"
-  [ ! -e "$HOME/.pi/agent/extensions/pi-permission-system/config.json" ]
-}
-
-@test "installer promotes absent packages through hostile manifest path without floating bootstrap" {
-  export PI_VERSION PI_AI_CONFIRM_STOPPED=1
-  stub_existing_pi
-  run bash "$REPO_ROOT/ai/pi/install.sh"
-  [ "$status" -eq 0 ]
-  local manifest="$TEST_ROOT/private/a space \" quote ; \$(touch SENTINEL) .json"
-  run bash "$REPO_ROOT/libexec/pi-package-lifecycle" snapshot --agent-dir "$HOME/.pi/agent" \
-    --repo-root "$REPO_ROOT" --pi-package-root "$HOST_ROOT" --manifest "$manifest"
-  [ "$status" -eq 0 ]
-  local before
-  before=$(sha256sum "$manifest")
-  rm -rf "$HOME/.pi/agent/npm" "$HOME/.pi/agent/git"
-  rm -f "$HOME/pi-invocations"
-  run env PI_AI_RESOLUTION_MANIFEST="$manifest" make -C "$REPO_ROOT" ai-update
-  [ "$status" -eq 0 ]
-  [ "$before" = "$(sha256sum "$manifest")" ]
-  [ ! -e "$REPO_ROOT/SENTINEL" ]
-  [ "$(jq -r .version "$HOME/.pi/agent/npm/node_modules/pi-powerline-footer/package.json")" = 2.3.4 ]
-  run grep -E '^install npm:[^ ]+@[0-9]' "$HOME/pi-invocations"
-  [ "$status" -eq 0 ]
-  run grep -E '^install npm:(pi-powerline-footer|pi-amplike)$' "$HOME/pi-invocations"
-  [ "$status" -eq 1 ]
-}
-
-@test "malformed or unreviewed promotion manifest fails before recovery or any mutation" {
-  export PI_VERSION PI_AI_CONFIRM_STOPPED=1
-  stub_existing_pi
-  mkdir -m 700 "$TEST_ROOT/private"
-  local manifest="$TEST_ROOT/private/resolution.json" before
-  printf '{"schemaVersion":1}\n' >"$manifest"
-  chmod 600 "$manifest"
-  before=$(snapshot_tree "$TEST_ROOT")
-  run bash "$REPO_ROOT/ai/pi/install.sh" --update-extensions --resolution-manifest "$manifest"
-  [ "$status" -ne 0 ]
-  [[ "$output" == *manifest*schema* ]]
-  [ "$before" = "$(snapshot_tree "$TEST_ROOT")" ]
-  [ -z "$(find "$HOME/.pi/agent" -name 'package-recovery.*' -print)" ]
-}
-
-@test "explicit update rejects unsafe config ancestors before recovery or declaration publication" {
-  export PI_VERSION PI_AI_CONFIRM_STOPPED=1
+@test "regular apply rejects unsafe config ancestors before declaration publication" {
+  export PI_VERSION
   stub_existing_pi
   mkdir -p "$TEST_ROOT/foreign-config"
   ln -s "$TEST_ROOT/foreign-config" "$TEST_ROOT/xdg-alias"
   local before
   before=$(snapshot_tree "$TEST_ROOT")
-  run env XDG_CONFIG_HOME="$TEST_ROOT/xdg-alias" bash "$REPO_ROOT/ai/pi/install.sh" --update-extensions
+  run env XDG_CONFIG_HOME="$TEST_ROOT/xdg-alias" bash "$REPO_ROOT/ai/pi/install.sh"
   [ "$status" -ne 0 ]
   [[ "$output" == *'symlink in managed path'*'/xdg-alias'* ]]
   [ "$before" = "$(snapshot_tree "$TEST_ROOT")" ]
 }
 
-@test "explicit reset retains private ordinary config backups alongside recovery" {
-  export PI_VERSION PI_AI_CONFIRM_STOPPED=1 PI_AI_RESET_MUTABLE_CONFIG=1
-  stub_existing_pi
-  printf '{"packages":[]}\n' >"$HOME/.pi/agent/settings.json"
-  printf '{"old":true}\n' >"$HOME/.pi/agent/modes.json"
-  chmod 644 "$HOME/.pi/agent/settings.json" "$HOME/.pi/agent/modes.json"
-  run bash "$REPO_ROOT/ai/pi/install.sh" --update-extensions
-  [ "$status" -eq 0 ]
-  [ "$(stat -c %a "$HOME/.pi/agent/settings.json.backup")" = 600 ]
-  [ "$(stat -c %a "$HOME/.pi/agent/modes.json.backup")" = 600 ]
-}
-
-@test "installer rejects conflicting duplicate missing and relative update flags without mutation" {
+@test "installer rejects duplicate and unknown arguments without mutation" {
   local before
   before=$(snapshot_tree "$TEST_ROOT")
-  local -a cases=('--check --update-extensions' '--update-extensions --update-extensions' '--check --check' '--resolution-manifest' '--resolution-manifest /tmp/unused.json' '--update-extensions --resolution-manifest relative.json')
+  local -a cases=('--check --check' '--unknown' '--check extra')
   local args
   for args in "${cases[@]}"; do
     read -r -a argv <<<"$args"
     run bash "$REPO_ROOT/ai/pi/install.sh" "${argv[@]}"
     [ "$status" -eq 2 ]
-    [[ "$output" == *usage:* || "$output" == *absolute*path* ]]
+    [[ "$output" == *usage:* ]]
     [ "$before" = "$(snapshot_tree "$TEST_ROOT")" ]
   done
 }
@@ -620,7 +388,6 @@ SCRIPT
   run make -C "$REPO_ROOT" ai-check
   [ "$status" -eq 0 ]
   [ "$before" = "$(snapshot_tree "$TEST_ROOT")" ]
-  [ -z "$(find "$HOME/.pi/agent" -name 'package-recovery.*' -print)" ]
 }
 
 @test "Pi installer reuses a managed Pi without downgrading or reinstalling it" {
@@ -1036,7 +803,7 @@ EOF
   printf '{"yoloMode":true,"permission":{"bash":{"*":"allow"}}}\n' >"$permission"
   jq '.excludedExtensionPackages += ["git:github.com/carderne/pi-sandbox@53bd1d64d896d4a6bfab3769023201891e76ba72"]' \
     "$REPO_ROOT/ai/pi/config/subagents.json" >"$HOME/.pi/agent/subagents.json"
-  jq '.packages += ["git:github.com/carderne/pi-sandbox@53bd1d64d896d4a6bfab3769023201891e76ba72"]' \
+  jq '.packages = ["git:github.com/carderne/pi-sandbox@53bd1d64d896d4a6bfab3769023201891e76ba72"] + .packages' \
     "$REPO_ROOT/ai/pi/settings.json" >"$HOME/.pi/agent/settings.json"
   printf '{"custom":"retired policy"}\n' >"$HOME/.pi/agent/sandbox.json"
 
@@ -1073,7 +840,7 @@ EOF
   local policy
   for policy in '{invalid' '{"yoloMode":true}'; do
     printf '%s\n' "$policy" >"$permission"
-    jq '.packages += ["git:github.com/carderne/pi-sandbox@53bd1d64d896d4a6bfab3769023201891e76ba72"]' \
+    jq '.packages = [{"source":"git:github.com/carderne/pi-sandbox@53bd1d64d896d4a6bfab3769023201891e76ba72"}] + .packages' \
       "$REPO_ROOT/ai/pi/settings.json" >"$HOME/.pi/agent/settings.json"
 
     run env HOME="$HOME" PATH="$PATH" PI_VERSION="$PI_VERSION" \
@@ -1110,94 +877,6 @@ EOF
   [ "$status" -eq 0 ]
 }
 
-@test "Pi installer preserves healthy preexisting npm resolutions without reinstalling them" {
-  export PI_TEST_NPM_VERSION=$FIXTURE_PERMISSION_VERSION
-  export PI_VERSION
-  stub_existing_pi
-  local source
-  while IFS= read -r source; do
-    "$HOME/.pi/agent/bin/pi" install "$source"
-  done < <(jq -r '.packages[] | if type == "object" then .source else . end
-    | select(startswith("npm:"))' "$REPO_ROOT/ai/pi/settings.json")
-  rm -f "$HOME/pi-invocations" "$HOME/pi-invocation"
-
-  run bash "$REPO_ROOT/ai/pi/install.sh"
-
-  [ "$status" -eq 0 ]
-  run grep -E '^install npm:' "$HOME/pi-invocations"
-  [ "$status" -eq 1 ]
-  [ "$(jq -r .version "$HOME/.pi/agent/npm/node_modules/@gotgenes/pi-permission-system/package.json")" = "$FIXTURE_PERMISSION_VERSION" ]
-}
-
-@test "Pi installer explicitly installs missing floating npm packages including parent UI resources" {
-  export PI_VERSION
-  stub_existing_pi
-
-  run env HOME="$HOME" PATH="$PATH" PI_VERSION="$PI_VERSION" \
-    bash "$REPO_ROOT/ai/pi/install.sh"
-
-  [ "$status" -eq 0 ]
-  for source in \
-    "npm:pi-web-access" \
-    "npm:@narumitw/pi-lsp" \
-    "npm:@gotgenes/pi-permission-system" \
-    "npm:@gotgenes/pi-subagents" \
-    "npm:@narumitw/pi-worktree" \
-    "npm:@narumitw/pi-file-context"; do
-    run grep -Fx "install $source" "$HOME/pi-invocations"
-    [ "$status" -eq 0 ]
-  done
-}
-
-@test "Pi installer repairs a matching permission package with a missing required artifact" {
-  export PI_VERSION
-  stub_existing_pi
-  local package_root="$HOME/.pi/agent/npm/node_modules/@gotgenes/pi-permission-system"
-  local missing
-  mkdir -p "$package_root/schemas" "$package_root/src"
-  printf '{"name":"@gotgenes/pi-permission-system","version":"%s"}\n' \
-    "$FIXTURE_PERMISSION_VERSION" >"$package_root/package.json"
-
-  for missing in schemas/permissions.schema.json src/permission-manager.ts; do
-    cp "$TEST_ROOT/permission-system-schema.json" \
-      "$package_root/schemas/permissions.schema.json"
-    printf 'export class PermissionManager {}\n' \
-      >"$package_root/src/permission-manager.ts"
-    rm "$package_root/$missing"
-    : >"$HOME/pi-invocations"
-
-    run env HOME="$HOME" PATH="$PATH" PI_VERSION="$PI_VERSION" \
-      bash "$REPO_ROOT/ai/pi/install.sh"
-
-    [ "$status" -eq 0 ]
-    [ -f "$package_root/schemas/permissions.schema.json" ]
-    [ -f "$package_root/src/permission-manager.ts" ]
-    [ "$(grep -Fxc "install npm:@gotgenes/pi-permission-system@$FIXTURE_PERMISSION_VERSION" \
-      "$HOME/pi-invocations")" -eq 1 ]
-  done
-}
-
-@test "Pi installer fails when permission package reinstall remains incomplete" {
-  export PI_VERSION
-  stub_existing_pi
-  local package_root="$HOME/.pi/agent/npm/node_modules/@gotgenes/pi-permission-system"
-  mkdir -p "$package_root/schemas"
-  printf '{"name":"@gotgenes/pi-permission-system","version":"%s"}\n' \
-    "$FIXTURE_PERMISSION_VERSION" >"$package_root/package.json"
-  cp "$TEST_ROOT/permission-system-schema.json" \
-    "$package_root/schemas/permissions.schema.json"
-
-  run env HOME="$HOME" PATH="$PATH" PI_VERSION="$PI_VERSION" \
-    PI_TEST_OMIT_PERMISSION_MANAGER=1 bash "$REPO_ROOT/ai/pi/install.sh"
-
-  [ "$status" -ne 0 ]
-  [[ "$output" == *"incomplete package npm:@gotgenes/pi-permission-system"* ]]
-  [[ "$output" == *"src/permission-manager.ts"* ]]
-  [ "$(grep -Fxc "install npm:@gotgenes/pi-permission-system@$FIXTURE_PERMISSION_VERSION" \
-    "$HOME/pi-invocations")" -eq 1 ]
-  [ ! -e "$package_root/src/permission-manager.ts" ]
-}
-
 @test "Pi installer hashes permission policy with the macOS shasum fallback" {
   export PI_VERSION
   stub_existing_pi
@@ -1216,8 +895,6 @@ printf '%s\n' "$*" >>"$HOME/shasum-invocations"
 printf '%064d  %s\n' 0 "$3"
 SCRIPT
   chmod +x "$fallback_bin/shasum"
-  ln -sf "$STUB_BIN/npm" "$fallback_bin/npm"
-  ln -sf "$STUB_BIN/git" "$fallback_bin/git"
   ln -sf "$STUB_BIN/node" "$fallback_bin/node"
 
   run env HOME="$HOME" PATH="$fallback_bin" PI_VERSION="$PI_VERSION" \
@@ -1783,45 +1460,6 @@ JSON
   [ ! -e "$agent_dir/settings.json.backup" ]
 }
 
-@test "Pi explicit update with refresh captures readable legacy modes links before conversion" {
-  export PI_VERSION
-  stub_existing_pi
-  local agent_dir="$TEST_ROOT/update-legacy-agent" canonical="$HOME/.dotfiles"
-  stub_managed_pi_for_agent "$agent_dir"
-  mkdir -p "$canonical/ai/pi"
-  printf '{"packages":[]}\n' >"$agent_dir/settings.json"
-  printf '{"extra":"old-modes","modes":{"smart":{"provider":"github-copilot","modelId":"gpt-5.6-sol","color":"pink"}}}\n' >"$canonical/ai/pi/modes.json"
-  ln -s "$canonical/ai/pi/modes.json" "$agent_dir/modes.json"
-  run env PI_AI_REFRESH_PREFERENCES=1 DOTFILES="$canonical" PI_CODING_AGENT_DIR="$agent_dir" \
-    bash "$REPO_ROOT/ai/pi/install.sh" --update-extensions
-  [ "$status" -eq 0 ]
-  [ ! -L "$agent_dir/modes.json" ]
-  local captures=("$agent_dir"/package-recovery.*/recovery.json) backup
-  jq -e --arg target "$canonical/ai/pi/modes.json" '.configBackups[] | select(.destination | endswith("/modes.json")) | .state == "owned-link" and .linkTarget == $target' "${captures[0]}"
-  backup=$(jq -r '.configBackups[] | select(.destination | endswith("/modes.json")) | .backupPath' "${captures[0]}")
-  cmp "$canonical/ai/pi/modes.json" "$backup"
-  jq -e '.modes.smart.modelId == "gpt-5.6-sol" and .extra == "old-modes"' "$backup"
-  [ "$(stat -c %a "$backup")" = 600 ]
-  jq -s -e '.[0].modes.smart.modelId == .[1].modes.smart.modelId and .[0].modes.smart.color == "pink" and .[0].extra == "old-modes"' \
-    "$agent_dir/modes.json" "$REPO_ROOT/ai/pi/config/modes.json"
-}
-
-@test "Pi explicit update with refresh captures supported dangling legacy modes links before conversion" {
-  export PI_VERSION
-  stub_existing_pi
-  local agent_dir="$TEST_ROOT/update-dangling-agent"
-  stub_managed_pi_for_agent "$agent_dir"
-  printf '{"packages":[]}\n' >"$agent_dir/settings.json"
-  ln -s "$REPO_ROOT/ai/pi/modes.json" "$agent_dir/modes.json"
-  run env PI_AI_REFRESH_PREFERENCES=1 PI_CODING_AGENT_DIR="$agent_dir" \
-    bash "$REPO_ROOT/ai/pi/install.sh" --update-extensions
-  [ "$status" -eq 0 ]
-  [ ! -L "$agent_dir/modes.json" ]
-  local captures=("$agent_dir"/package-recovery.*/recovery.json)
-  jq -e --arg target "$REPO_ROOT/ai/pi/modes.json" '.configBackups[] | select(.destination | endswith("/modes.json")) | .state == "owned-link" and .linkTarget == $target and .missingTarget == true and (has("backupPath") | not)' "${captures[0]}"
-  cmp "$REPO_ROOT/ai/pi/config/modes.json" "$agent_dir/modes.json"
-}
-
 @test "Pi explicit refresh still refuses foreign legacy-shaped modes links without mutation" {
   local agent_dir="$TEST_ROOT/foreign-refresh-agent" foreign="$TEST_ROOT/foreign/ai/pi/modes.json"
   mkdir -p "$agent_dir" "$(dirname "$foreign")"
@@ -2131,7 +1769,7 @@ JSON
   [[ "$output" == *"dry-run"* ]]
 }
 
-@test "regular Pi installer invokes security migration before package bootstrap" {
+@test "regular Pi installer invokes security migration before native extension update" {
   export PI_VERSION PI_TEST_REQUIRE_REGULAR_MIGRATION=1
   stub_existing_pi
   printf '{"permissions":{"mode":"old"}}\n' >"$HOME/.pi/agent/amplike.json"

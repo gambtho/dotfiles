@@ -20,7 +20,7 @@ jobs:
           node-version: "26"
       - name: Install shell tooling
         run: sudo apt-get update && sudo apt-get install -y bats python3-jsonschema ripgrep shellcheck shfmt zsh
-      # Lifecycle/config tests consume the real SDK, not an auto-downloaded fixture.
+      # Config/native-package tests consume the real SDK, not a private adapter.
       - name: Provision current Pi compatibility candidates
         shell: bash
         run: |
@@ -52,7 +52,8 @@ jobs:
           const pi = metadata(process.argv[2]);
           const permission = metadata(process.argv[3]);
           const [major, minor] = pi.version.split(".").map(Number);
-          if (major < 1 || (major === 1 && minor < 1)) throw new Error(`Pi SDK 1.1+ required; resolved ${pi.version}`);
+          if (!/^\d+\.\d+(?:\.|$)/.test(pi.version) || !Number.isSafeInteger(major) || !Number.isSafeInteger(minor)
+            || major < 1 || (major === 1 && minor < 1)) throw new Error(`Pi SDK 1.1+ required; resolved ${pi.version}`);
           const subagents = metadata(process.argv[4]);
           const lsp = metadata(process.argv[5]);
           console.log(JSON.stringify({ pi, permission, subagents, lsp }, null, 2));

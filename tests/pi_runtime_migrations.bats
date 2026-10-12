@@ -203,6 +203,15 @@ refresh() {
   [ "$before" = "$(snapshot)" ]
 }
 
+@test "refresh adds compaction overrides when the old settings have none" {
+  seed_preferences
+  printf '{"compaction":{"reserveTokens":650000,"keepRecentTokens":60000}}\n' >"$AGENT/settings.json"
+  export PI_AI_REFRESH_PREFERENCES=1
+  refresh
+  [ "$status" -eq 0 ]
+  jq -e '.compaction.reserveTokens == 16384 and .compaction.keepRecentTokens == 20000 and .compaction.modelOverrides == {"github-copilot/gpt-6-luna":{"reserveTokens":650000,"keepRecentTokens":60000},"github-copilot/gpt-6.1-sol":{"reserveTokens":650000,"keepRecentTokens":60000},"github-copilot/gpt-6-astra":{"reserveTokens":650000,"keepRecentTokens":60000},"github-copilot/claude-opus-5.5":{"reserveTokens":650000,"keepRecentTokens":60000}}' "$AGENT/settings.json"
+}
+
 @test "refresh preserves unknown models custom token values and non-Copilot roles" {
   seed_preferences
   printf '%s\n' '{"defaultProvider":"other","defaultModel":"gpt-6-sol","defaultTools":["+codemode","+extra"],"compaction":{"reserveTokens":99,"keepRecentTokens":88,"modelOverrides":{"unknown/model":{"keepRecentTokens":77}}}}' >"$AGENT/settings.json"

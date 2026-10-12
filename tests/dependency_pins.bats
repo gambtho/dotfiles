@@ -69,12 +69,6 @@ setup() {
   [ "$status" -eq 1 ]
 }
 
-@test "Pi update preflight uses the Bash 3.2 nounset-safe optional array construction" {
-  # Source construction gate only; native Bash 3.2 availability is reported separately.
-  run grep -F 'run_package_lifecycle preflight ${manifest_args[@]+"${manifest_args[@]}"}' "$REPO_ROOT/ai/pi/install.sh"
-  [ "$status" -eq 0 ]
-}
-
 @test "main Pi remote declarations float while local my remains local" {
   run jq -e '
     [.packages[] | if type == "string" then . else .source end] as $sources
@@ -197,7 +191,7 @@ setup() {
     chmod +x "$prefix/bin/pi"
     printf "export {};\n" >"$core/dist/index.js"
     touch "$modules/jiti/lib/jiti-cli.mjs"
-    printf "{\"name\":\"@earendil-works/pi-coding-agent\",\"version\":\"1.1.0\"}\n" >"$core/package.json"
+    printf "{\"name\":\"@earendil-works/pi-coding-agent\",\"version\":\"%s\"}\n" "$CI_PI_VERSION" >"$core/package.json"
     printf "{\"name\":\"@gotgenes/pi-permission-system\",\"version\":\"30.0.0\"}\n" >"$permission/package.json"
     printf "{\"name\":\"@gotgenes/pi-subagents\",\"version\":\"23.4.0\"}\n" >"$subagents/package.json"
     printf "{\"name\":\"@narumitw/pi-lsp\",\"version\":\"0.49.9\"}\n" >"$lsp/package.json"
@@ -221,10 +215,21 @@ setup() {
     'exit "${CI_GATE_FAIL:-0}"' >"$fixture/libexec/validate-pi-security-runtime"
   chmod +x "$fixture/libexec/validate-pi-security-runtime"
   local failure
-  for failure in 0 43 44; do
-    export CI_GATE_FAIL=0 CI_NATIVE_FAIL=0
+  for failure in 0 43 44 1.2.3 2.0.0 0.9.0 1.0.9 NaN.1.0 1.NaN.0 .1.0 2..0 2 2.1e2.0 0x2.1.0 2.-1.0 2.Infinity.0 2.+1.0 9007199254740992.1.0 2.9007199254740992.0 "" "2. .0"; do
+    export CI_GATE_FAIL=0 CI_NATIVE_FAIL=0 CI_PI_VERSION=1.1.0
     if [[ "$failure" == 43 ]]; then export CI_GATE_FAIL=43; fi
     if [[ "$failure" == 44 ]]; then export CI_NATIVE_FAIL=44; fi
+    case "$failure" in
+      0 | 43 | 44) ;;
+      1.2.3 | 2.0.0)
+        CI_PI_VERSION=$failure
+        failure=0
+        ;;
+      *)
+        CI_PI_VERSION=$failure
+        failure=1
+        ;;
+    esac
     unset PI_TEST_HOST_ROOT PI_TEST_PERMISSION_ROOT PI_TEST_SUBAGENTS_ROOT PI_TEST_LSP_ROOT
     rm -f "$TEST_ROOT/ci-events"
     printf '' >"$GITHUB_ENV"
@@ -241,9 +246,13 @@ setup() {
     if [[ "$failure" == 0 ]]; then
       [ "$status" -eq 0 ]
       [ "$(<"$TEST_ROOT/ci-events")" = $'provision\ncheck\ngate\nnative' ]
-      jq -e '.pi.version == "1.1.0" and .permission.version == "30.0.0" and .subagents.version == "23.4.0" and .lsp.version == "0.49.9"' "$RUNNER_TEMP/pi-candidates.json"
+      jq -e --arg version "$CI_PI_VERSION" '.pi.version == $version and .permission.version == "30.0.0" and .subagents.version == "23.4.0" and .lsp.version == "0.49.9"' "$RUNNER_TEMP/pi-candidates.json"
     else
       [ "$status" -eq "$failure" ]
+      if [[ "$failure" == 1 ]]; then
+        [[ "$output" == *"Pi SDK 1.1+ required; resolved $CI_PI_VERSION"* ]]
+        [ "$(<"$TEST_ROOT/ci-events")" = provision ]
+      fi
     fi
   done
 }

@@ -79,6 +79,7 @@ type ReporterLike = {
 const BASELINE_PIPELINE_CASES: PipelineCase[] = [
   { label: "ordinary reader", command: "pwd", expected: "allow" },
   { label: "real session approval and reuse", command: "rm -rf /tmp/pi-permission-example", expected: "ask", approveForSession: true },
+  { label: "smart session approval preserves tool and input scope", command: "", toolName: "bash", agentName: "smart", input: { command: "rm -rf /tmp/pi-permission-example" }, expected: "ask", approveForSession: true },
   {
     label: "recursive deletion asks",
     command: "rm -rf /tmp/pi-permission-example",
@@ -1176,7 +1177,9 @@ export async function runPermissionPipelineChecks({
       expectPromptCount(testCase, prompts, 1);
       if (sessionRules.getRuleset().length === 0) fail(testCase, "session approval was not recorded");
       const repeated = await pipeline.evaluate({
-        toolName: "bash", agentName: null, input: { command: testCase.command },
+        toolName: testCase.toolName ?? "bash",
+        agentName: testCase.agentName ?? null,
+        input: testCase.input ?? { command: testCase.command },
         toolCallId: `${toolCallIdFor(testCase)}-repeat`, cwd: repoRoot,
       }, runner);
       expectAction(testCase, repeated, "allow");

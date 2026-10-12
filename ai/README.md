@@ -18,7 +18,7 @@ This migration does not read or rewrite the generated `models-store.json` catalo
 
 ## Capability stack
 
-Generic runtime behavior comes from floating npm declarations and Git remote default-branch HEADs. This deliberately includes unreleased Git changes: healthy installed resolutions stay put during normal reconciliation; only explicit updates advance them. Exact tested versions/SHAs are captured separately for promotion and recovery. The local `my` package remains responsible for personal review and implementation workflows.
+Generic runtime behavior comes from floating npm and Git declarations, reconciled by Pi's native package CLI. Normal installation may advance packages, including unreleased Git changes according to Pi's tracking/ref behavior. Resource filters remain repository-owned. The local `my` package remains responsible for personal review and implementation workflows.
 
 | Capability | Implementation | Notes |
 |---|---|---|
@@ -61,7 +61,7 @@ The four exact chat model IDs are `github-copilot/gpt-6-luna`, `github-copilot/g
 
 The fresh subagent baseline has a hard `defaultMaxTurns: 50` ceiling and `wrapUpTurns: 5`, warning five turns **before** that ceiling. This is not the old `graceTurns: 5` behavior, which allowed five turns **after** soft limit 50 (hard limit 55). Current subagents 23.4 ignores the deprecated `graceTurns`; its default wrap-up is two turns when `wrapUpTurns` is omitted. Existing regular subagent configuration is preserved, and selective preference refresh does **not** migrate these turn knobs. Choose `wrapUpTurns` deliberately before starting a fresh session; do not assume an existing file acquired the new baseline.
 
-Superpowers planning is a development process, not a read-only UI/security mode. The entire Shitty clipboard/memory/planner package and caffeinate are no longer selected. Old `--plan` and planning shortcuts are not part of this stack. User plans and package caches are preserved, not imported into a replacement planner. Start a fresh session after rollout rather than resuming legacy planning state.
+Superpowers planning is a development process, not a read-only UI/security mode. The entire Shitty clipboard/memory/planner package and caffeinate are no longer selected. Old `--plan` and planning shortcuts are not part of this stack. User plans are untouched, not imported into a replacement planner. Package caches follow native Pi reconciliation. Start a fresh session after rollout rather than resuming legacy planning state.
 
 ## Permission and containment model
 
@@ -89,7 +89,7 @@ Gotgenes children inherit permission-system and worktree-guard, with restrictive
 - LSP server subprocesses are extension-internal. Permission-system still gates the model-facing LSP call, and worktree-guard blocks a mutating fix targeting a primary checkout.
 - `pi-web-access network calls` are extension-internal. The tracked config disables cookie use, remote hosted fetch providers, clone/media/image features, environment proxy trust, and SSRF range exceptions.
 
-Do not put secrets in the agent environment, run Pi against untrusted code, enable YOLO for interactive work, or describe these controls as a security boundary. Keep extension selection and exact candidate resolutions under review.
+Do not put secrets in the agent environment, run Pi against untrusted code, enable YOLO for interactive work, or describe these controls as a security boundary. Keep extension selection and installed compatibility under review.
 
 ## Worktree policy
 
@@ -145,9 +145,9 @@ PI_AI_RESET_MUTABLE_CONFIG=1 make ai
 
 `PI_AI_RESET_MUTABLE_CONFIG=1` no longer replaces permission-system `yoloMode`, `debugLog`, or `permissionReviewLog`. During normal authoritative reconciliation, the same active-YOLO refusal applies with or without reset. Authentication, sessions, trust decisions, upstream-generated model catalogs, package caches, permission logs, grants, and runtime credentials remain machine-local and untracked. Runtime `models.json` is user-owned except for the one-time Astra retirement described above.
 
-For selective preference refresh rather than a full reset, stop Pi and use `PI_AI_REFRESH_PREFERENCES=1` with reconciliation or exact promotion. It advances only known old Copilot role/startup IDs, moves the known old large global compaction values into missing selected-model overrides with safe global fallbacks, adds Codemode without replacing other tools/settings, sets its mode to `on`, and changes only the old file-context copy-key shortcut to F8. Other preferences, custom role choices, existing model overrides, and unrelated config fields survive. It does not migrate `graceTurns`, `wrapUpTurns`, concurrency, or custom turn budgets. F8 leaves native message copy on Ctrl+Shift+X and editor copy on Ctrl+C; no replacement clipboard extension is loaded.
+For selective preference refresh rather than a full reset, stop Pi and use `PI_AI_REFRESH_PREFERENCES=1` with `make ai`. It advances only known old Copilot role/startup IDs, moves the known old large global compaction values into missing selected-model overrides with safe global fallbacks, adds Codemode without replacing other tools/settings, sets its mode to `on`, and changes only the old file-context copy-key shortcut to F8. Other preferences, custom role choices, existing model overrides, and unrelated config fields survive. It does not migrate `graceTurns`, `wrapUpTurns`, concurrency, or custom turn budgets. F8 leaves native message copy on Ctrl+Shift+X and editor copy on Ctrl+C; no replacement clipboard extension is loaded.
 
-When retiring a legacy `pi-sandbox` installation, the installer backs up and resets the permission policy to the tracked non-YOLO, unmatched-Bash-allows baseline, then removes the retired `pi-sandbox` child exclusion before reconciling packages. This transitional retirement path is the only exception to normal authoritative publication: it safely resets active YOLO and publishes the tracked baseline before the package schema is available so a permission layer remains present while the old containment package is retired. Normal reconciliation refuses active YOLO and validates the candidate against the exact installed schema before publication. A previous `~/.pi/agent/sandbox.json` and cached package checkout are preserved as inactive machine-local state; neither is loaded once the package source is absent from `settings.json`. They may be deleted manually after restarting Pi if rollback is not needed.
+When retiring a legacy `pi-sandbox` installation, the installer backs up and resets the permission policy to the tracked non-YOLO, unmatched-Bash-allows baseline before removing the package declaration. It removes the retired `pi-sandbox` child exclusion after native package reconciliation and installed-runtime validation. This transitional retirement path is the only exception to normal authoritative publication: it safely resets active YOLO and publishes the tracked baseline before the package schema is available so a permission layer remains present while the old containment package is retired. Normal reconciliation refuses active YOLO and validates the candidate against the exact installed schema before publication. A previous `~/.pi/agent/sandbox.json` and cached package checkout are preserved as inactive machine-local state; neither is loaded once the package source is absent from `settings.json`. They may be deleted manually after restarting Pi if rollback is not needed.
 
 ## Installation and rollout
 
@@ -165,52 +165,25 @@ Stop all Pi sessions before changing links/resources, including ordinary reconci
 make ai
 ```
 
-The installer refuses a production-agent-dir apply—including one reached through a resolved path alias—when invoked from a different linked implementation worktree while the canonical checkout exists. Before integration, use an **isolated pre-integration smoke** with an absolute temporary `PI_CODING_AGENT_DIR`, separate HOME and XDG paths, and `DOTFILES` pointed at the reviewed checkout so the local `my` package remains available. Package installation and the exact installed-runtime gate pipeline do not require Copilot authentication. An agent command must not read or copy production `auth.json`; defer interactive model-facing smoke to the canonical rollout unless the operator provisions isolated credentials outside the agent command. Keep the tested candidate available until its exact manifest has been copied to durable private storage and verified against that same graph. Do not fetch or update after freezing it. Canonical integration and rollout need separate authorization; do not run the production promotion command from an implementation worktree or a running production Pi session.
+The installer refuses a production-agent-dir apply—including one reached through a resolved path alias—when invoked from a different linked implementation worktree while the canonical checkout exists. Before integration, use an **isolated pre-integration smoke** with an absolute temporary `PI_CODING_AGENT_DIR`, separate HOME and XDG paths, and `DOTFILES` pointed at the reviewed checkout so the local `my` package remains available. Package installation and the installed-runtime gate pipeline do not require Copilot authentication. An agent command must not read or copy production `auth.json`; defer interactive model-facing smoke to canonical rollout unless the operator provisions isolated credentials outside the agent command. Canonical integration and rollout need separate authorization; do not apply from an implementation worktree or a running production Pi session.
 
-### Normal reconcile versus explicit update
+### Native package convergence
 
-`make ai` (or `bash ai/pi/install.sh`) preserves healthy installed npm versions and Git SHAs even though declarations float. Targeted bootstrap installs only missing packages; an incomplete permission-system installation with valid cached identity/version is repaired at that exact version. Unknown/mismatched metadata fails rather than becoming an upgrade. Installed schema/behavior gates run before policy publication; the package inventory must remain unchanged. It never silently runs update-all.
+`make ai` (or `bash ai/pi/install.sh`) validates arguments, the canonical source and owned destinations, installs or reuses managed Pi, performs positively identified legacy cleanup, and reconciles declarations. It then runs exactly one native `pi update --extensions --no-approve` with the selected agent directory from a private empty cwd. Project packages remain unapproved. The selected installed permission schema and evaluator must pass before authoritative policy and authored resources are published. The legacy sandbox reset remains the narrow pre-schema exception described above.
+
+Packages may advance during ordinary installation. Pi owns npm installation, Git tracking/ref behavior, dependency locks and cache reconciliation; cached files may be replaced. There is no repository package-health manager, exact tested-graph promotion, custom default-branch tracking or automatic package recovery. Missing or incompatible permission artifacts fail nonzero with native `pi install npm:@gotgenes/pi-permission-system` repair advice. Never weaken a schema gate to make a new package compatible.
 
 An existing managed Pi host is reused; host self-update stays operator-owned through `pi update`. First installation uses Pi's managed installer. The opt-in Web UI remains a separate pinned Pi 0.85.1 runtime, lockfile, and service lifecycle; extension refresh does not change them.
 
-Explicit extension update requires an existing managed host. Stop Pi, disable YOLO, and acknowledge production stopped state with `PI_AI_CONFIRM_STOPPED=1`. This flag is an acknowledgement, not running-process detection. For an isolated candidate, `make ai-update` or `bash ai/pi/install.sh --update-extensions` resolves latest npm and remote default-branch Git HEADs, not an assumed `main` branch or release tag. Production should instead promote the exact tested manifest below.
-
-Before declaration/package/link/migration mutation, explicit operations validate flags, destinations, source identities, filters and any supplied manifest, reject active YOLO/dirty or foreign Git trees, and capture a private pre-update recovery snapshot. Gates fail nonzero with the failed phase and recovery path; installation and multi-file publication are **not atomic** and there is **no automatic rollback**. Never weaken a schema gate to make a new package compatible.
-
-Git dependency installs use a scoped public `npmCommand` wrapper after clone/reset. It checks the public `getInstalledPath` for the exact source against the subprocess's real cwd, and suppresses creation of a **new** npm lock only when both `package-lock.json` and `npm-shrinkwrap.json` are absent. Existing locks and caller controls retain normal npm semantics; npm registry installs and the process environment are unchanged. An already dirty checkout, including a lock generated by an older installer, still fails preflight. Inspect and preserve those bytes yourself; no automatic deletion or generated-lock exemption exists.
-
-### Exact tested promotion
-
-After isolated runtime gates, `libexec/pi-package-lifecycle snapshot` writes a strict resolution manifest containing `schemaVersion`, `hostVersion`, `declarationDigest`, and every remote package's identity, declared source, exact source, kind, and resolution. npm versions are exact and Git commits are full 40-character SHAs. The reviewed local `my` declaration and resource filters participate in the digest, but local code has no remote resolution entry; keep the reviewed local product code unchanged. `snapshot` records installed identity/health, **not** an attestation that native tests ran. Record those tests separately.
-
-Choose durable storage outside Git: an owned real directory with mode `0700` and a regular manifest with mode `0600`. Copy the sealed file byte-for-byte, verify source/destination SHA256 equality, then run lifecycle `verify` against the same tested SDK/graph using the copied path. No re-resolution, update, digest rewrite, or new snapshot after freeze. The tested promotion format is different from a recovery snapshot; a recovery manifest is never a promotion input.
-
-Only after authorized integration, from the canonical checkout with all Pi sessions stopped and YOLO off:
+For standalone package updates, stop Pi sessions and use the supported native interface:
 
 ```bash
-PI_AI_CONFIRM_STOPPED=1 \
-PI_AI_REFRESH_PREFERENCES=1 \
-PI_AI_RESOLUTION_MANIFEST=/absolute/private/tested-resolutions.json \
-make ai-update
+pi update --extensions --no-approve
 ```
 
-Equivalent installer interface: `bash ai/pi/install.sh --update-extensions --resolution-manifest /absolute/private/tested-resolutions.json`. Promotion installs the manifest's exact sources directly, including when a dependency is missing; it does not first bootstrap a floating candidate. Float declarations/filters remain intact. An inaccessible exact source or host/declaration/filter/resolution mismatch stops the operation, never falls back to latest.
+This updates extensions, not Pi itself. Stop-session guidance is an operator responsibility, not automatic process detection. `--check` reports convergence without running package commands, downloading, generating settings locks or writing configuration. Normal apply and native package updates are **not atomic**: a failure can leave partial package/configuration changes. Per-file private configuration backups remain; they are not package rollback orchestration.
 
-Verify the promoted state before starting a new session. Substitute the actual selected managed host root, agent directory, canonical checkout, and tested private manifest:
-
-```bash
-bash libexec/pi-package-lifecycle verify \
-  --agent-dir /absolute/path/to/agent \
-  --repo-root /absolute/path/to/canonical-dotfiles \
-  --pi-package-root /absolute/path/to/selected/pi-coding-agent \
-  --manifest /absolute/private/tested-resolutions.json
-
-bash libexec/validate-pi-security-runtime \
-  --package-root /absolute/path/to/agent/npm/node_modules/@gotgenes/pi-permission-system \
-  --pi-package-root /absolute/path/to/selected/pi-coding-agent
-```
-
-Also inspect floating declarations, preserved custom settings, Astra retirement/receipt, deliberately chosen turn knobs, model/compaction/Codemode preferences and F8. Selective refresh does not guarantee every existing preference matches a fresh baseline. If anything differs, keep Pi stopped: repeat isolated verification or recover the previous state, without fetching newer code. A fresh Pi session follows successful canonical verification; live model smoke is optional, operator-authenticated, and not a prerequisite proved by no-network fixtures.
+Before starting a fresh session, inspect declarations, preserved custom settings, Astra retirement/receipt, deliberately chosen turn knobs, model/compaction/Codemode preferences and F8. Selective refresh does not guarantee every existing preference matches a fresh baseline. Repeat installed schema/evaluator and relevant runtime verification after an update; isolated evidence does not guarantee an identical production package graph or provider availability.
 
 Permission publication uses best-effort compare-before-publish: it checks the runtime file identity before backup and again after backup immediately before the atomic rename. Because the permission-system UI writer shares no lock with the installer, an unavoidable race remains between the final check and rename; the extra check narrows but cannot eliminate it.
 
@@ -239,9 +212,9 @@ make validate
 make ai-check
 ```
 
-`make check` runs shell syntax, ShellCheck/shfmt, all Bats suites, Python tests, and AI validation. Lifecycle/migration fixtures require the selected Pi 1.1+ public SDK (and its bundled Jiti) through `PI_TEST_HOST_ROOT` plus a `pi` executable on PATH; they do not download one automatically. Full checks also need a current Neovim for the existing `vim.system()`-based tree-sitter guard tests. Keep Git's global config fixture-owned under the isolated HOME, not an unwritable `/dev/null` override. Use an independent HOME/XDG/cache environment and remove shared candidate `PI_CODING_AGENT_DIR`, `DOTFILES`, and candidate `PI_TEST_*` selections before Bats/full checks. Fixtures must own their writable SDK/package roots; the original host SDK is a read-only prerequisite, not a fixture destination.
+`make check` runs shell syntax, ShellCheck/shfmt, all Bats suites, Python tests, and AI validation. Installer/migration fixtures require the selected Pi 1.1+ public SDK (and its bundled Jiti) through `PI_TEST_HOST_ROOT` or an available `pi` executable; they do not download one automatically. Full checks also need a current Neovim for the existing `vim.system()`-based tree-sitter guard tests. Keep Git's global config fixture-owned under the isolated HOME, not an unwritable `/dev/null` override. Use an independent HOME/XDG/cache environment and remove shared candidate `PI_CODING_AGENT_DIR`, `DOTFILES`, and candidate `PI_TEST_*` selections before Bats/full checks. Fixtures must own their writable SDK/package roots; the original host SDK is a read-only prerequisite, not a fixture destination.
 
-`make pi-runtime-test` is separate from `make check`. It requires the four explicitly selected `PI_TEST_HOST_ROOT`, `PI_TEST_PERMISSION_ROOT`, `PI_TEST_SUBAGENTS_ROOT`, and `PI_TEST_LSP_ROOT` roots. CI provisions current candidates, records their identities, runs `make check`, the installed schema/evaluator, and the native gate; a latest-compatible CI run does not replace exact-manifest promotion evidence.
+`make pi-runtime-test` is separate from `make check`. It requires the four explicitly selected `PI_TEST_HOST_ROOT`, `PI_TEST_PERMISSION_ROOT`, `PI_TEST_SUBAGENTS_ROOT`, and `PI_TEST_LSP_ROOT` roots. CI provisions current candidates, records their identities, runs `make check`, the installed schema/evaluator, and the native gate. The gate includes stock CLI missing npm/Git convergence and one bounded public-SDK resource-filter/local-my/retired-source proof with isolated transport and allowlisted environments; it does not modify the selected SDK or shared package graph.
 
 The tested Pi 1.1.0 graph exercises real Codemode nested tool calls, all four named child sessions, permission forwarding, inherited worktree enforcement, and current-layout fail-closed behavior. Optional runtime probes use the public interactive frontend and actual upstream F8 picker/worktree commands with deterministic provider, terminal-transport and user-dialog boundaries. They verify file quote delivery, active branch entry/history preservation, cwd/service rebinding, primary-write denial and linked/switched relative writes, current/main exclusion, dirty-removal refusal before confirmation, and clean removal only after Yes (No preserves it; branch survives). This is native SDK/extension behavior, not paid model, human TTY or OS clipboard certification. macOS/Windows live behavior remains untested. Caffeinate 0.49.11 failed actual WSL default inhibition (systemd denied; ScreenSaver D-Bus service absent) and was removed by operator decision; that is not a supported-platform pass or a backend adaptation.
 
@@ -259,14 +232,9 @@ libexec/validate-pi-security-runtime \
 
 For the normal installed roots, putting the intended `pi` first on `PATH` and setting `PI_CODING_AGENT_DIR` selects the same two dependencies implicitly.
 
-## Update recovery (non-atomic)
+## Configuration backups
 
-On failure, retain the failed-phase output and printed `package-recovery.*/recovery.json` plus its sibling backup directory. The `kind: pre-update-recovery` format records the prior/incoming remote union, including installed, absent and incomplete entries and retained retired-cache metadata. It captures exact prior sources when known, prior declarations, and seven destinations: settings, modes, models, subagents, permission config, file context, and migration receipt. Backup files are `0600` in owned `0700` directories. It does not collect auth/session/trust stores or perform rollback; separately preserve any other custom files you intend to change. An incomplete prior installation is not a verified healthy restore point.
-
-1. Keep Pi stopped and non-YOLO. Preserve the failure report, prior reviewed product code/declarations, recovery snapshot, configuration/receipt backups, and the previous tested resolution manifest if available.
-2. Reinstall only the old exact known npm versions/Git SHAs recorded in recovery, using the selected compatible host. Never use a floating update as recovery or pass recovery JSON to `--resolution-manifest`. If a prior source is unresolved/incomplete, resolve that recovery decision explicitly instead of inventing its version.
-3. Restore prior declarations, saved regular-file configurations and the matching migration receipt; retain the real extensions directory and verify authored-link ownership. Inspect additions recorded as previously absent: remove only positively owned additions with user confirmation, not unrelated caches, plans, models or config. There is no general rollback CLI or one-command transaction.
-4. Validate the restored policy against its exact installed schema/evaluator, run relevant runtime gates, and verify against the previous tested resolution manifest when available. Without it, inspect the known exact prior graph and repeat isolation verification; the recovery snapshot alone does not certify readiness. Start a fresh session only after these checks.
+Stop Pi before restoring configuration. Preserve failure output and the private per-file backups printed by the installer. Restore only the matching owned configuration and, for Astra retirement, the matching migration receipt. Keep the real extensions directory and unrelated user files intact. Repair packages separately using Pi's supported install commands, then validate the installed policy/schema/evaluator and relevant runtime behavior before starting a fresh session.
 
 Permission and migration publication use compare-before-publish guards and per-file atomic replacement, not a shared transaction/lock with runtime writers. Restore order matters, particularly the Astra receipt; stop on partial failures rather than treating backups as automatic rollback.
 

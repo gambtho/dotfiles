@@ -413,15 +413,15 @@ ai/
 ### Setup
 
 ```bash
-make ai          # bootstrap managed Pi and missing extensions; preserve healthy caches
-make ai-check    # dry-run without changing the machine
-make ai-update   # explicitly refresh reviewed extensions after stopping Pi sessions
-pi update        # update the managed Pi release independently of make ai
+make ai                  # converge configuration and update extensions through native Pi
+make ai-check            # dry-run without changing the machine
+pi update --extensions   # independently update extension packages (stop Pi sessions first)
+pi update                # update the managed Pi release independently of make ai
 ```
 
 On first use, `make ai` runs Pi's official managed installer, which installs the latest release with locked dependencies and migrates a user-local npm Pi installation if present. Later runs reuse that managed installation without downgrading or updating Pi itself. The separately deployed Pi Web UI keeps its own runtime version pin. The full installer also runs Pi setup during Phase 9. Authentication remains machine-local: start `pi`, run `/login`, and choose **GitHub Copilot**. Use `/model` to select any Copilot model enabled for the subscription and Ctrl+S to save the highlighted model as the default.
 
-GPT-6 Astra now uses Pi's native Copilot transport. The installer retires only the obsolete Astra override with a private backup and migration receipt, preserving unrelated custom models and provider settings. Ordinary `make ai` does not refresh healthy extension versions; explicit updates capture recovery state and validate the selected runtime before publishing configuration. See [AI setup and lifecycle documentation](ai/README.md) for update acknowledgement, exact-resolution promotion, and recovery instructions.
+GPT-6 Astra now uses Pi's native Copilot transport. The installer retires only the obsolete Astra override with a private backup and migration receipt, preserving unrelated custom models and provider settings. Ordinary `make ai` delegates extension reconciliation to `pi update --extensions --no-approve`; packages may advance and cached files may be replaced. Installed permission schema/evaluator checks precede policy publication. Stop Pi sessions before applying. See [AI setup documentation](ai/README.md) for mutable ownership, native updates, and configuration backups.
 
 The installer links the authored extension directory, and `ai/pi/settings.json` loads the local `my` package. The guard blocks Pi's direct file-write tools in primary checkouts; use a linked worktree, or place an intentional exception in `~/.pi/worktree-guard-allow`.
 

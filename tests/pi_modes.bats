@@ -4,7 +4,7 @@ load test_helper
 
 setup() {
   local real_pi
-  real_pi=$(command -v pi)
+  real_pi=$(command -v pi) || real_pi=""
   source "$BATS_TEST_DIRNAME/../libexec/lib/pi-runtime.sh"
   resolve_pi_runtime "$real_pi" "${PI_TEST_HOST_ROOT:-}"
   export HOST_ROOT=$PI_RUNTIME_PACKAGE_ROOT
@@ -16,6 +16,26 @@ setup() {
 
 agent_frontmatter() {
   awk 'NR == 1 { next } /^---$/ { exit } { print }' "$AGENTS/$1.md" | yq -o=json '.'
+}
+
+@test "modes fixture honors explicit SDK root when pi is absent from PATH" {
+  stub_command pi 'exit 99'
+  run command -v pi
+  [ "$status" -eq 0 ]
+  [ "$output" = "$STUB_BIN/pi" ]
+  local no_pi_path="$TEST_ROOT/no-pi-bin" tool
+  mkdir -p "$no_pi_path"
+  for tool in bats bash env readlink dirname basename cat mkdir mktemp rm ln touch nl sort uniq cut node yq; do
+    ln -s "$(command -v "$tool")" "$no_pi_path/$tool"
+  done
+  PATH="$no_pi_path" run command -v pi
+  [ "$status" -ne 0 ]
+  PATH="$no_pi_path" PI_TEST_HOST_ROOT="$HOST_ROOT" run bats --filter '^native Copilot compaction thresholds' "$BATS_TEST_FILENAME"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"ok 1 native Copilot compaction"* ]]
+  PATH="$no_pi_path" PI_TEST_HOST_ROOT="" run bats --filter '^native Copilot compaction thresholds' "$BATS_TEST_FILENAME"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Pi executable not found on PATH"* ]]
 }
 
 @test "Pi defaults to the smart GPT-6 model without restricting cycling" {

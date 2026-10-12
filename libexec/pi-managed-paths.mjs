@@ -1,6 +1,6 @@
 import { lstatSync, readlinkSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, resolve, sep } from "node:path";
+import { dirname, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const home = resolve(homedir());
@@ -44,22 +44,6 @@ export function assertManagedPath(path, directoriesOnly = false) {
       throw new Error(`refusing unsafe managed directory ${current}`);
     }
     if (dirname(current) === current) break;
-  }
-}
-
-/** Normalize only a validated HOME/OS alias, never a managed descendant link.
- * @param {string} path
- */
-export function managedPhysicalPath(path) {
-  assertManagedPath(path);
-  const suffix = [];
-  let current = resolve(path);
-  for (;;) {
-    try { return resolve(realpathSync(current), ...suffix.reverse()); } catch (error) {
-      if (error.code !== "ENOENT") throw error;
-      suffix.push(basename(current));
-      current = dirname(current);
-    }
   }
 }
 

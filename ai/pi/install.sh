@@ -17,10 +17,6 @@ source "$ROOT/libexec/lib/pi-runtime.sh"
 source "$ROOT/ai/pi/migrate-runtime-config.sh"
 
 MODE=apply
-UPDATE_EXTENSIONS=0
-RESOLUTION_MANIFEST=""
-RECOVERY_MANIFEST=""
-UPDATE_PHASE=preflight
 PI_HOST_ROOT=""
 PERMISSION_PYTHON=""
 PI_AI_RESET_MUTABLE_CONFIG="${PI_AI_RESET_MUTABLE_CONFIG:-0}"
@@ -34,8 +30,7 @@ MANAGED_SOURCE_ROOTS=()
 managed_extensions=(herdr-agent-state.ts herdr-prompt-state.ts worktree-guard.ts)
 
 usage() {
-  printf 'usage: %s [--check | --update-extensions [--resolution-manifest ABS]]\n' "$0"
-  printf 'Explicit production updates require PI_AI_CONFIRM_STOPPED=1 (acknowledge all Pi sessions are stopped).\n'
+  printf 'usage: %s [--check]\n' "$0"
 }
 
 require_permission_validation_dependencies() {
@@ -813,18 +808,17 @@ install_pi() {
   }
 }
 
-run_package_lifecycle() {
-  local action=$1
-  shift
-  local args=("$action" --agent-dir "$PI_AGENT_DIR" --repo-root "$ROOT" --pi-package-root "$PI_HOST_ROOT")
-  bash "$ROOT/libexec/pi-package-lifecycle" "${args[@]}" "$@"
-}
-
-report_update_failure() {
-  local status=$1
-  ((status != 0)) || return 0
-  printf 'error: Pi extension operation failed during %s; recovery: %s. No rollback was performed.\n' \
-    "$UPDATE_PHASE" "${RECOVERY_MANIFEST:-not captured}" >&2
+update_pi_extensions() {
+  local cwd status=0
+  # Never approve or discover packages from the checkout invoking the installer.
+  cwd=$(mktemp -d "${TMPDIR:-/tmp}/pi-package-update.XXXXXX") || return 1
+  (cd "$cwd" && PI_CODING_AGENT_DIR="$PI_AGENT_DIR" \
+    "$PI_BINARY" update --extensions --no-approve) || status=$?
+  rmdir -- "$cwd" || return 1
+  if ((status != 0)); then
+    log_warning "Native Pi extension update failed; inspect the output and repair packages with pi install <source> before rerunning."
+  fi
+  return "$status"
 }
 
 preflight_destinations() {
@@ -848,10 +842,9 @@ preflight_destinations() {
   refresh_pi_preferences "$PI_AGENT_DIR/settings.json" "$PI_AGENT_DIR/modes.json" "$ROOT/ai/pi/settings.json" "$ROOT/ai/pi/config/modes.json"
   refresh_pi_file_context "$PI_AGENT_DIR/pi-file-context.json" "$ROOT/ai/pi/config/file-context.json"
   reconcile_mutable_file "$ROOT/ai/pi/config/web-search.json" "$WEB_CONFIG_PATH" "Pi web access settings" 0600
-  # Preserve the previously approved regular-apply sandbox retirement reset.
-  # Explicit updates never use that path to bypass an active YOLO boundary.
-  if [[ "$UPDATE_EXTENSIONS" == 0 && -f "$PI_AGENT_DIR/settings.json" ]] &&
-    jq -e '.packages[]? | (if type == "object" then .source else . end) == "git:github.com/carderne/pi-sandbox@53bd1d64d896d4a6bfab3769023201891e76ba72"' "$PI_AGENT_DIR/settings.json" >/dev/null; then
+  # Preserve the approved legacy sandbox reset, not a general YOLO bypass.
+  if [[ -f "$PI_AGENT_DIR/settings.json" ]] &&
+    jq -e 'any(.packages[]?; (if type == "object" then .source else . end) == "git:github.com/carderne/pi-sandbox@53bd1d64d896d4a6bfab3769023201891e76ba72")' "$PI_AGENT_DIR/settings.json" >/dev/null; then
     return 0
   fi
   reconcile_permission_policy "$ROOT/ai/pi/config/permission-system.json" \
@@ -860,96 +853,26 @@ preflight_destinations() {
 }
 
 validate_selected_runtime() {
-  UPDATE_PHASE=validate-runtime
-  bash "$ROOT/libexec/validate-pi-security-runtime" \
+  if ! bash "$ROOT/libexec/validate-pi-security-runtime" \
     --package-root "$PI_AGENT_DIR/npm/node_modules/@gotgenes/pi-permission-system" \
-    --pi-package-root "$PI_HOST_ROOT" --python "$PERMISSION_PYTHON"
+    --pi-package-root "$PI_HOST_ROOT" --python "$PERMISSION_PYTHON"; then
+    log_warning "Installed Pi permission runtime is incompatible or incomplete; repair with pi install npm:@gotgenes/pi-permission-system and rerun before starting Pi."
+    return 1
+  fi
 }
 
 main() {
-  local check_seen=0 update_seen=0 manifest_seen=0 recovery_dir
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --check)
-        ((check_seen == 0)) || {
-          usage >&2
-          return 2
-        }
-        check_seen=1 MODE=check
-        shift
-        ;;
-      --update-extensions)
-        ((update_seen == 0)) || {
-          usage >&2
-          return 2
-        }
-        update_seen=1 UPDATE_EXTENSIONS=1
-        shift
-        ;;
-      --resolution-manifest)
-        if ((manifest_seen != 0 || $# < 2)) || [[ "$2" != /* || "/$2/" == *'/./'* || "/$2/" == *'/../'* ]]; then
-          log_warning "--resolution-manifest requires one absolute path without dot segments."
-          return 2
-        fi
-        manifest_seen=1 RESOLUTION_MANIFEST=$2
-        shift 2
-        ;;
-      *)
-        usage >&2
-        return 2
-        ;;
-    esac
-  done
-  if ((check_seen + update_seen > 1 || (manifest_seen == 1 && update_seen == 0))); then
+  if [[ $# == 1 && "$1" == --check ]]; then
+    MODE=check
+  elif [[ $# != 0 ]]; then
     usage >&2
     return 2
-  fi
-  if ((UPDATE_EXTENSIONS == 1)); then
-    trap 'report_update_failure "$?"' EXIT
   fi
   resolve_pi_paths
   validate_permission_before_publish_test_hook
   require_permission_validation_dependencies
   assert_safe_pi_source
-  if ((UPDATE_EXTENSIONS == 1)) && is_production_agent_dir && [[ "${PI_AI_CONFIRM_STOPPED:-0}" != 1 ]]; then
-    log_warning "Stop all production Pi sessions and set PI_AI_CONFIRM_STOPPED=1 before updating extensions."
-    return 1
-  fi
   preflight_destinations
-  if ((UPDATE_EXTENSIONS == 1)); then
-    managed_pi_is_ready || {
-      log_warning "Explicit extension updates require an existing managed Pi host; run make ai first."
-      return 1
-    }
-    resolve_pi_runtime "$PI_BINARY"
-    PI_HOST_ROOT=$PI_RUNTIME_PACKAGE_ROOT
-    local manifest_args=()
-    [[ -z "$RESOLUTION_MANIFEST" ]] || manifest_args=(--manifest "$RESOLUTION_MANIFEST")
-    run_package_lifecycle preflight ${manifest_args[@]+"${manifest_args[@]}"}
-    UPDATE_PHASE=capture-recovery
-    recovery_dir=$(mktemp -d "$PI_AGENT_DIR/package-recovery.XXXXXX")
-    RECOVERY_MANIFEST="$recovery_dir/recovery.json"
-    if ! run_package_lifecycle capture-recovery --manifest "$RECOVERY_MANIFEST"; then
-      if rmdir "$recovery_dir" 2>/dev/null; then
-        RECOVERY_MANIFEST=""
-      else
-        log_warning "Recovery capture cleanup failed; retained artifacts at $recovery_dir"
-        if [[ ! -e "$RECOVERY_MANIFEST" && ! -L "$RECOVERY_MANIFEST" ]]; then
-          RECOVERY_MANIFEST="$recovery_dir (artifacts retained; no manifest)"
-        fi
-      fi
-      return 1
-    fi
-    UPDATE_PHASE=publish-declarations
-    reconcile_pi_settings "$ROOT/ai/pi/settings.json" "$PI_AGENT_DIR/settings.json"
-    UPDATE_PHASE="candidate-install"
-    if [[ -n "$RESOLUTION_MANIFEST" ]]; then
-      run_package_lifecycle promote --manifest "$RESOLUTION_MANIFEST"
-    else
-      run_package_lifecycle update
-    fi
-    validate_selected_runtime
-  fi
 
   if [[ "$MODE" == check ]]; then
     log_info "[dry-run] Would remove positively identified Vekil, Claude, and Codex integration remnants"
@@ -958,8 +881,7 @@ main() {
     else
       log_info "[dry-run] Would install or migrate latest managed Pi to $PI_AGENT_DIR/bin/pi"
     fi
-  elif ((UPDATE_EXTENSIONS == 0)); then
-    cleanup_legacy_ai
+  else
     if managed_pi_is_ready; then
       log_info "Managed Pi is already installed at $PI_BINARY; run pi update to upgrade it."
     else
@@ -970,40 +892,26 @@ main() {
       install_pi
       log_success "Installed managed Pi."
     fi
+    cleanup_legacy_ai
   fi
+  migrate_pi_security_stack "$MODE" "$PI_AGENT_DIR" "$AMP_SETTINGS_PATH" "${MANAGED_SOURCE_ROOTS[@]}"
 
-  if [[ "$MODE" == apply && "$UPDATE_EXTENSIONS" == 0 ]]; then
+  # Legacy sandbox retirement resets before its declaration is removed. Normal
+  # policy and authored resource publication wait for installed compatibility.
+  reconcile_extension_directory "$PI_AGENT_DIR/extensions"
+  reconcile_private_runtime_directory "$PI_AGENT_DIR/extensions/pi-permission-system"
+  reset_permission_policy_for_sandbox_retirement \
+    "$ROOT/ai/pi/config/permission-system.json" \
+    "$PI_AGENT_DIR/extensions/pi-permission-system/config.json" \
+    "$PI_AGENT_DIR/settings.json"
+  reconcile_pi_settings "$ROOT/ai/pi/settings.json" "$PI_AGENT_DIR/settings.json"
+  if [[ "$MODE" == apply ]]; then
+    update_pi_extensions
     resolve_pi_runtime "$PI_BINARY"
     PI_HOST_ROOT=$PI_RUNTIME_PACKAGE_ROOT
-  fi
-  if ((UPDATE_EXTENSIONS == 0)); then
-    migrate_pi_security_stack "$MODE" "$PI_AGENT_DIR" "$AMP_SETTINGS_PATH" "${MANAGED_SOURCE_ROOTS[@]}"
-  fi
-  UPDATE_PHASE=publish-configuration
-  reconcile_authored_extensions "$PI_AGENT_DIR/extensions"
-  if [[ "$MODE" == apply ]]; then
-    mkdir -p "$PI_AGENT_DIR"
-  fi
-
-  # Establish the permission boundary before removing pi-sandbox from the
-  # runtime package inventory. Legacy sandbox retirement resets first; normal
-  # policy publication waits for the exact installed package schema.
-  reconcile_private_runtime_directory "$PI_AGENT_DIR/extensions/pi-permission-system"
-  if ((UPDATE_EXTENSIONS == 0)); then
-    reset_permission_policy_for_sandbox_retirement \
-      "$ROOT/ai/pi/config/permission-system.json" \
-      "$PI_AGENT_DIR/extensions/pi-permission-system/config.json" \
-      "$PI_AGENT_DIR/settings.json"
-    reconcile_pi_settings "$ROOT/ai/pi/settings.json" "$PI_AGENT_DIR/settings.json"
-    if [[ "$MODE" == apply ]]; then
-      UPDATE_PHASE=targeted-bootstrap
-      run_package_lifecycle bootstrap
-    fi
-  fi
-  if [[ "$MODE" == apply && "$UPDATE_EXTENSIONS" == 0 ]]; then
     validate_selected_runtime
   fi
-  UPDATE_PHASE=publish-policy
+  reconcile_authored_extensions "$PI_AGENT_DIR/extensions"
   reconcile_permission_policy \
     "$ROOT/ai/pi/config/permission-system.json" \
     "$PI_AGENT_DIR/extensions/pi-permission-system/config.json" \
@@ -1025,22 +933,10 @@ main() {
   reconcile_mutable_file "$ROOT/ai/pi/config/web-search.json" "$WEB_CONFIG_PATH" \
     "Pi web access settings" 0600
   if [[ "$MODE" == check ]]; then
-    log_info "[dry-run] Would reconcile Pi packages from settings.json"
+    log_info "[dry-run] Would reconcile Pi packages with pi update --extensions --no-approve and validate the installed runtime"
     return 0
   fi
 
-  if ((UPDATE_EXTENSIONS == 1)); then
-    UPDATE_PHASE=migrations
-    migrate_pi_security_stack "$MODE" "$PI_AGENT_DIR" "$AMP_SETTINGS_PATH" "${MANAGED_SOURCE_ROOTS[@]}"
-    UPDATE_PHASE=verify-resolutions
-    if [[ -n "$RESOLUTION_MANIFEST" ]]; then
-      run_package_lifecycle verify --manifest "$RESOLUTION_MANIFEST"
-    else
-      run_package_lifecycle snapshot --manifest "$recovery_dir/resolution.json"
-      log_info "Candidate resolution manifest: $recovery_dir/resolution.json"
-    fi
-  fi
-  UPDATE_PHASE=ready
   log_success "Pi configuration and packages are ready. Run /login and choose GitHub Copilot if this machine is not authenticated."
 }
 

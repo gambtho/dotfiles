@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,18 +16,20 @@ assert.ok(permissionRoot, "PI_TEST_PERMISSION_ROOT must select the candidate per
 
 // Every launched runtime gets an allowlisted environment, never production auth,
 // settings, sessions, caches, or credentials copied from the agent process.
-function isolatedRun(command, args) {
-  const root = mkdtempSync(`${tmpdir()}/pi-native-test-`);
+function isolatedRun(command, args, tempBase = tmpdir(), homePath = root => root) {
+  const root = mkdtempSync(`${realpathSync(tempBase)}/pi-native-test-`);
+  const home = homePath(root);
   try {
-    return spawnSync(command, typeof args === "function" ? args(root) : args, {
+    const result = spawnSync(command, typeof args === "function" ? args(root) : args, {
       cwd: root,
       encoding: "utf8",
       timeout: 120000,
       env: {
-        HOME: root,
-        XDG_CONFIG_HOME: `${root}/config`,
-        XDG_CACHE_HOME: `${root}/cache`,
-        PI_CODING_AGENT_DIR: `${root}/agent`,
+        HOME: home,
+        TMPDIR: realpathSync(tempBase),
+        XDG_CONFIG_HOME: `${home}/config`,
+        XDG_CACHE_HOME: `${home}/cache`,
+        PI_CODING_AGENT_DIR: `${home}/agent`,
         PATH: `${dirname(process.execPath)}:/usr/bin:/bin`,
         NODE_DISABLE_COMPILE_CACHE: "1",
         JITI_FS_CACHE: "false",
@@ -37,6 +39,8 @@ function isolatedRun(command, args) {
         npm_config_update_notifier: "false",
       },
     });
+    result.fixtureStarted = existsSync(`${home}/primary`);
+    return result;
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -56,7 +60,7 @@ test("candidate installed schema and full permission pipeline retain all approve
 test("native Codemode sessions and installed child forwarding enforce policy and worktree boundaries", t => {
   assert.ok(subagentsRoot, "PI_TEST_SUBAGENTS_ROOT is required; no mock child runtime");
   assert.ok(lspRoot, "PI_TEST_LSP_ROOT is required; the real installed LSP extension is loaded");
-  const result = isolatedRun(process.execPath, [
+  const args = [
     "--experimental-import-meta-resolve",
     `${repoRoot}/libexec/pi-extension-runtime-checks.ts`,
     "--pi-package-root", hostRoot,
@@ -64,14 +68,32 @@ test("native Codemode sessions and installed child forwarding enforce policy and
     "--subagents-root", subagentsRoot,
     "--lsp-root", lspRoot,
     "--repo-root", repoRoot,
-  ]);
-  assert.equal(result.status, 0, result.error?.message ?? result.stdout + result.stderr);
-  assert.equal(result.stderr, "", "native loading must have no compatibility warnings");
-  const evidence = JSON.parse(result.stdout.trim());
-  assert.ok(evidence.nestedCalls >= 12, result.stdout);
-  assert.deepEqual(evidence.children, ["rush", "smart", "deep", "review"]);
-  assert.ok(evidence.forwardedDenials >= 8, result.stdout);
-  t.diagnostic(result.stdout.trim());
+  ];
+  const customBase = mkdtempSync(`${tmpdir()}/pi-native-test-`);
+  try {
+    for (const tempBase of [tmpdir(), customBase]) {
+      const result = isolatedRun(process.execPath, args, tempBase);
+      assert.equal(result.status, 0, result.error?.message ?? result.stdout + result.stderr);
+      assert.equal(result.stderr, "", "native loading must have no compatibility warnings");
+      const evidence = JSON.parse(result.stdout.trim());
+      assert.ok(evidence.nestedCalls >= 12, result.stdout);
+      assert.deepEqual(evidence.children, ["rush", "smart", "deep", "review"]);
+      assert.ok(evidence.forwardedDenials >= 8, result.stdout);
+      t.diagnostic(result.stdout.trim());
+    }
+    for (const homePath of [root => `${root}/pi-native-test-ABC123`, root => `${root}/../${root.split("/").pop()}`, () => customBase, root => `${root}/pi-native-test-DEF456`]) {
+      const result = isolatedRun(process.execPath, root => {
+        mkdirSync(`${root}/pi-native-test-ABC123`);
+        symlinkSync(customBase, `${root}/pi-native-test-DEF456`);
+        return args;
+      }, customBase, homePath);
+      assert.equal(result.status, 1, result.stdout + result.stderr);
+      assert.match(result.stderr, /launch through the isolated test wrapper/);
+      assert.equal(result.fixtureStarted, false, "invalid HOME must fail before fixture callbacks");
+    }
+  } finally {
+    rmSync(customBase, { recursive: true, force: true });
+  }
 });
 
 test("current evaluator layout fails closed rather than borrowing a stale legacy manager", () => {
@@ -85,30 +107,4 @@ test("current evaluator layout fails closed rather than borrowing a stale legacy
   assert.match(result.stderr, /incompatible permission evaluator/);
   assert.match(result.stderr, /selected evaluator behavior failed/);
   assert.match(result.stderr, /Cannot find module .*src\/policy\/permission-manager\.ts/);
-});
-
-test("latest-layout healthy cached permission bootstrap retains its resolution without npm installation", () => {
-  const result = isolatedRun("/bin/bash", root => {
-    const installed = `${root}/agent/npm/node_modules/@gotgenes/pi-permission-system`;
-    mkdirSync(`${installed}/schemas`, { recursive: true });
-    mkdirSync(`${installed}/src/policy`, { recursive: true });
-    for (const file of ["package.json", "schemas/permissions.schema.json", "src/policy/permission-manager.ts"]) {
-      copyFileSync(`${permissionRoot}/${file}`, `${installed}/${file}`);
-    }
-    mkdirSync(`${root}/reviewed/ai/pi`, { recursive: true });
-    const declarations = JSON.stringify({ packages: ["npm:@gotgenes/pi-permission-system"] });
-    writeFileSync(`${root}/agent/settings.json`, declarations);
-    writeFileSync(`${root}/reviewed/ai/pi/settings.json`, declarations);
-    // If health misclassifies the verified current layout, fail at transport
-    // rather than installing an older package or touching a healthy cache.
-    mkdirSync(`${root}/bin`);
-    writeFileSync(`${root}/bin/npm`, "#!/bin/sh\nexit 89\n", { mode: 0o755 });
-    return ["-c", 'PATH="$HOME/bin:$PATH" exec bash "$@"', "_",
-      `${repoRoot}/libexec/pi-package-lifecycle`, "bootstrap",
-      "--agent-dir", `${root}/agent`, "--repo-root", `${root}/reviewed`, "--pi-package-root", hostRoot];
-  });
-  assert.equal(result.status, 0, result.error?.message ?? result.stdout + result.stderr);
-  const inventory = JSON.parse(result.stdout);
-  assert.equal(inventory.packages[0].state, "installed");
-  assert.deepEqual(inventory.packages[0].missingArtifacts, []);
 });
