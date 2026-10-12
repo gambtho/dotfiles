@@ -98,6 +98,20 @@ setup() {
   [ "$status" -eq 0 ]
 }
 
+@test "primary README documents current package update and native Astra behavior" {
+  local readme="$REPO_ROOT/README.md"
+  run grep -F 'reconcile pinned packages' "$readme"
+  [ "$status" -eq 1 ]
+  run grep -F 'ai/pi/config/models.json' "$readme"
+  [ "$status" -eq 1 ]
+  run grep -F 'make ai-update' "$readme"
+  [ "$status" -eq 0 ]
+  run grep -F 'native Copilot transport' "$readme"
+  [ "$status" -eq 0 ]
+  run grep -F '(ai/README.md)' "$readme"
+  [ "$status" -eq 0 ]
+}
+
 @test "Pi README documents packages mutable ownership and containment boundaries" {
   local readme="$REPO_ROOT/ai/README.md"
   local package

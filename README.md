@@ -413,16 +413,15 @@ ai/
 ### Setup
 
 ```bash
-make ai          # bootstrap managed Pi, link config, and reconcile pinned packages
+make ai          # bootstrap managed Pi and missing extensions; preserve healthy caches
 make ai-check    # dry-run without changing the machine
+make ai-update   # explicitly refresh reviewed extensions after stopping Pi sessions
 pi update        # update the managed Pi release independently of make ai
 ```
 
 On first use, `make ai` runs Pi's official managed installer, which installs the latest release with locked dependencies and migrates a user-local npm Pi installation if present. Later runs reuse that managed installation without downgrading or updating Pi itself. The separately deployed Pi Web UI keeps its own runtime version pin. The full installer also runs Pi setup during Phase 9. Authentication remains machine-local: start `pi`, run `/login`, and choose **GitHub Copilot**. Use `/model` to select any Copilot model enabled for the subscription and Ctrl+S to save the highlighted model as the default.
 
-#### Temporary GPT-6 Astra workaround
-
-Pi 0.85.1 incorrectly routes `github-copilot/gpt-6-astra` through the Chat Completions endpoint, which Copilot rejects with `unsupported_api_for_model`. The tracked `ai/pi/config/models.json` overrides only that model to use the Responses API and includes Copilot's required IDE headers. Run `make ai`, reopen `/model`, and reselect Astra to load the override. If `~/.pi/agent/models.json` already contains local changes, the installer preserves it; merge the tracked Astra entry manually or use the documented baseline-reset command. Once upstream Pi ships corrected Copilot transport metadata, remove the baseline and installer reconciliation, then delete the copied runtime file (or remove only its Astra entry if it contains other overrides); the hard-coded IDE header versions are intentionally temporary.
+GPT-6 Astra now uses Pi's native Copilot transport. The installer retires only the obsolete Astra override with a private backup and migration receipt, preserving unrelated custom models and provider settings. Ordinary `make ai` does not refresh healthy extension versions; explicit updates capture recovery state and validate the selected runtime before publishing configuration. See [AI setup and lifecycle documentation](ai/README.md) for update acknowledgement, exact-resolution promotion, and recovery instructions.
 
 The installer links the authored extension directory, and `ai/pi/settings.json` loads the local `my` package. The guard blocks Pi's direct file-write tools in primary checkouts; use a linked worktree, or place an intentional exception in `~/.pi/worktree-guard-allow`.
 

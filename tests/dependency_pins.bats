@@ -28,11 +28,11 @@ setup() {
   [[ "$output" == *"artifact win32yank v0.1.1"* ]]
   [[ "$output" == *"artifact herdr v0.8.0"* ]]
   [[ "$output" == *"npm pi-webui-runtime $PI_VERSION"* ]]
-  [[ "$output" == *"git pi-queue-steer v0.2.0"* ]]
-  [[ "$output" == *"npm pi-web-access 0.27.0"* ]]
-  [[ "$output" == *"npm pi-lsp 0.49.6"* ]]
-  [[ "$output" == *"npm pi-subagents 21.2.0"* ]]
-  [[ "$output" == *"npm pi-permission-system 29.2.0"* ]]
+  [[ "$output" != *"pi-queue-steer"* ]]
+  [[ "$output" != *"pi-web-access"* ]]
+  [[ "$output" != *"pi-lsp"* ]]
+  [[ "$output" != *"pi-subagents"* ]]
+  [[ "$output" != *"pi-permission-system"* ]]
   [[ "$output" != *"pi-sandbox"* ]]
   [[ "$output" == *"artifact nerd-fonts v3.4.0"* ]]
   [[ "$output" == *"artifact nerd-font-cascadia-mono v3.4.0 $NERD_FONT_CASCADIA_MONO_SHA256"* ]]
@@ -62,18 +62,6 @@ setup() {
     --glob '!docs/**' --glob '!tests/**'
   [ "$status" -eq 0 ]
   [ "$output" = "$REPO_ROOT/config/versions.env" ]
-
-  local key
-  for key in \
-    PI_QUEUE_STEER_REF \
-    PI_WEB_ACCESS_VERSION \
-    PI_LSP_VERSION \
-    PI_SUBAGENTS_VERSION \
-    PI_PERMISSION_SYSTEM_VERSION; do
-    run rg -l "^${key}=" "$REPO_ROOT" --glob '!docs/**' --glob '!tests/**'
-    [ "$status" -eq 0 ]
-    [ "$output" = "$REPO_ROOT/config/versions.env" ]
-  done
 }
 
 @test "canonical pin manifest omits retired Pi sandbox" {
@@ -81,32 +69,26 @@ setup() {
   [ "$status" -eq 1 ]
 }
 
-@test "Pi package settings match the canonical pin manifest" {
-  local versions="$REPO_ROOT/config/versions.env"
-  local settings="$REPO_ROOT/ai/pi/settings.json"
-  local queue web lsp subagents permissions
-  queue=$(awk -F= '$1 == "PI_QUEUE_STEER_REF" { print $2 }' "$versions")
-  web=$(awk -F= '$1 == "PI_WEB_ACCESS_VERSION" { print $2 }' "$versions")
-  lsp=$(awk -F= '$1 == "PI_LSP_VERSION" { print $2 }' "$versions")
-  subagents=$(awk -F= '$1 == "PI_SUBAGENTS_VERSION" { print $2 }' "$versions")
-  permissions=$(awk -F= '$1 == "PI_PERMISSION_SYSTEM_VERSION" { print $2 }' "$versions")
+@test "Pi update preflight uses the Bash 3.2 nounset-safe optional array construction" {
+  # Source construction gate only; native Bash 3.2 availability is reported separately.
+  run grep -F 'run_package_lifecycle preflight ${manifest_args[@]+"${manifest_args[@]}"}' "$REPO_ROOT/ai/pi/install.sh"
+  [ "$status" -eq 0 ]
+}
 
-  run jq -e \
-    --arg queue "git:github.com/tmustier/pi-queue-steer@$queue" \
-    --arg web "npm:pi-web-access@$web" \
-    --arg lsp "npm:@narumitw/pi-lsp@$lsp" \
-    --arg subagents "npm:@gotgenes/pi-subagents@$subagents" \
-    --arg permissions "npm:@gotgenes/pi-permission-system@$permissions" '
-      [.packages[] | if type == "string" then . else .source end] as $sources
-      | all([$queue, $web, $lsp, $subagents, $permissions][];
-          . as $expected | $sources | index($expected) != null)
-      and ($sources | map(select(contains("pi-sandbox"))) | length == 0)
-    ' "$settings"
+@test "main Pi remote declarations float while local my remains local" {
+  run jq -e '
+    [.packages[] | if type == "string" then . else .source end] as $sources
+    | all($sources[];
+        if startswith("npm:") then test("^npm:(@[^/]+/)?[^@]+$")
+        elif startswith("git:") then test("^git:github.com/[^@]+$")
+        else . == "~/.dotfiles/ai/marketplace/plugins/my" end)
+    and ($sources | index("~/.dotfiles/ai/marketplace/plugins/my") != null)
+    and ($sources | map(select(contains("pi-sandbox"))) | length == 0)
+  ' "$REPO_ROOT/ai/pi/settings.json"
   [ "$status" -eq 0 ]
 }
 
 @test "Web UI Pi identity, Firstp1ck package, and lock agree with the canonical Pi pin" {
-  local settings="$REPO_ROOT/ai/pi/settings.json"
   local webui_manifest="$REPO_ROOT/ai/pi/webui/runtime/package.json"
   local webui_lock="$REPO_ROOT/ai/pi/webui/runtime/package-lock.json"
   local readme="$REPO_ROOT/ai/pi/webui/README.md"
@@ -114,10 +96,6 @@ setup() {
   local install="$REPO_ROOT/ai/pi/webui/install.sh"
   local custom_domain="$REPO_ROOT/ai/pi/webui/custom-domain.sh"
   local webui_version
-
-  # settings.json's changelog bookmark tracks the pinned Pi release.
-  run jq -er --arg pi "$PI_VERSION" '.lastChangelogVersion == $pi' "$settings"
-  [ "$status" -eq 0 ]
 
   # The runtime manifest is the single source of truth for the exact
   # Firstp1ck version; every other file must agree with it and with the
@@ -195,6 +173,81 @@ setup() {
   [ "$status" -eq 0 ]
 }
 
+@test "CI provisions isolated current candidates before SDK checks and fails on runtime regression" {
+  local fixture="$TEST_ROOT/ci-repo" steps="$TEST_ROOT/steps.json"
+  export RUNNER_TEMP="$TEST_ROOT/runner" GITHUB_ENV="$TEST_ROOT/github-env" GITHUB_PATH="$TEST_ROOT/github-path"
+  mkdir -p "$fixture/libexec/lib" "$RUNNER_TEMP"
+  cp "$REPO_ROOT/libexec/lib/pi-runtime.sh" "$fixture/libexec/lib/"
+  yq -o=json '.' "$REPO_ROOT/.github/workflows/check.yml" >"$steps"
+  printf '' >"$GITHUB_ENV"
+  stub_command npm '
+    [[ "$*" == *"--global"* && "$*" == *"--ignore-scripts"* ]] || exit 81
+    [[ "$*" == *"@earendil-works/pi-coding-agent@latest"* && "$*" == *"@gotgenes/pi-permission-system@latest"* ]] || exit 82
+    [[ "$*" == *"@gotgenes/pi-subagents@latest"* && "$*" == *"@narumitw/pi-lsp@latest"* ]] || exit 82
+    [[ "$*" == *"--prefix $RUNNER_TEMP/"* && "$npm_config_cache" == "$RUNNER_TEMP/"* ]] || exit 83
+    prefix=""
+    while [[ $# -gt 0 ]]; do if [[ "$1" == --prefix ]]; then prefix=$2; break; fi; shift; done
+    modules="$prefix/lib/node_modules"
+    core="$modules/@earendil-works/pi-coding-agent"
+    permission="$modules/@gotgenes/pi-permission-system"
+    subagents="$modules/@gotgenes/pi-subagents"
+    lsp="$modules/@narumitw/pi-lsp"
+    mkdir -p "$core/dist" "$permission" "$subagents" "$lsp" "$modules/jiti/lib" "$prefix/bin"
+    printf "#!/bin/sh\nexit 99\n" >"$prefix/bin/pi"
+    chmod +x "$prefix/bin/pi"
+    printf "export {};\n" >"$core/dist/index.js"
+    touch "$modules/jiti/lib/jiti-cli.mjs"
+    printf "{\"name\":\"@earendil-works/pi-coding-agent\",\"version\":\"1.1.0\"}\n" >"$core/package.json"
+    printf "{\"name\":\"@gotgenes/pi-permission-system\",\"version\":\"30.0.0\"}\n" >"$permission/package.json"
+    printf "{\"name\":\"@gotgenes/pi-subagents\",\"version\":\"23.4.0\"}\n" >"$subagents/package.json"
+    printf "{\"name\":\"@narumitw/pi-lsp\",\"version\":\"0.49.9\"}\n" >"$lsp/package.json"
+    printf "provision\n" >>"$TEST_ROOT/ci-events"
+  '
+  stub_command make '
+    [[ -f "$PI_TEST_HOST_ROOT/dist/index.js" ]] || { printf "SDK host not provisioned before checks\n" >&2; exit 84; }
+    [[ "$(command -v pi)" == "$RUNNER_TEMP/pi-security-gate/bin/pi" ]] || { printf "selected Pi executable not on PATH before checks\n" >&2; exit 86; }
+    case "$*" in
+      check) printf "check\n" >>"$TEST_ROOT/ci-events" ;;
+      pi-runtime-test)
+        [[ -f "$PI_TEST_PERMISSION_ROOT/package.json" && -f "$PI_TEST_SUBAGENTS_ROOT/package.json" && -f "$PI_TEST_LSP_ROOT/package.json" ]] || exit 87
+        printf "native\n" >>"$TEST_ROOT/ci-events"
+        exit "${CI_NATIVE_FAIL:-0}" ;;
+      *) exit 84 ;;
+    esac
+  '
+  printf '%s\n' '#!/usr/bin/env bash' \
+    '[[ "$*" == *"--package-root $RUNNER_TEMP/"* && "$*" == *"--pi-package-root $PI_TEST_HOST_ROOT"* ]] || exit 85' \
+    'printf "gate\n" >>"$TEST_ROOT/ci-events"' \
+    'exit "${CI_GATE_FAIL:-0}"' >"$fixture/libexec/validate-pi-security-runtime"
+  chmod +x "$fixture/libexec/validate-pi-security-runtime"
+  local failure
+  for failure in 0 43 44; do
+    export CI_GATE_FAIL=0 CI_NATIVE_FAIL=0
+    if [[ "$failure" == 43 ]]; then export CI_GATE_FAIL=43; fi
+    if [[ "$failure" == 44 ]]; then export CI_NATIVE_FAIL=44; fi
+    unset PI_TEST_HOST_ROOT PI_TEST_PERMISSION_ROOT PI_TEST_SUBAGENTS_ROOT PI_TEST_LSP_ROOT
+    rm -f "$TEST_ROOT/ci-events"
+    printf '' >"$GITHUB_ENV"
+    printf '' >"$GITHUB_PATH"
+    run bash -c '
+      set -euo pipefail
+      cd "$1"
+      while IFS= read -r block; do
+        bash -e -c "$(printf "%s" "$block" | base64 --decode)"
+        set -a; source "$GITHUB_ENV"; set +a
+        while IFS= read -r directory; do export PATH="$directory:$PATH"; done <"$GITHUB_PATH"
+      done < <(jq -r '\''.jobs.validate.steps[] | select(has("run") and .name != "Install shell tooling") | .run | @base64'\'' "$2")
+    ' _ "$fixture" "$steps"
+    if [[ "$failure" == 0 ]]; then
+      [ "$status" -eq 0 ]
+      [ "$(<"$TEST_ROOT/ci-events")" = $'provision\ncheck\ngate\nnative' ]
+      jq -e '.pi.version == "1.1.0" and .permission.version == "30.0.0" and .subagents.version == "23.4.0" and .lsp.version == "0.49.9"' "$RUNNER_TEMP/pi-candidates.json"
+    else
+      [ "$status" -eq "$failure" ]
+    fi
+  done
+}
+
 @test "versions rejects unknown commands" {
   run bash "$REPO_ROOT/libexec/versions" unknown
   [ "$status" -eq 2 ]
@@ -242,11 +295,7 @@ case "$url" in
   *equalsraf/win32yank*) printf '{"tag_name":"v0.1.1"}\n' ;;
   *ryanoasis/nerd-fonts*) printf '{"tag_name":"v3.4.0"}\n' ;;
   *herdrdev/herdr*) printf '{"tag_name":"v0.8.0"}\n' ;;
-  *tmustier/pi-queue-steer*) printf '{"tag_name":"v0.2.0"}\n' ;;
-  *registry.npmjs.org/pi-web-access/latest*) printf '{"version":"0.27.0"}\n' ;;
-  *registry.npmjs.org/@narumitw/pi-lsp/latest*) printf '{"version":"0.49.6"}\n' ;;
-  *registry.npmjs.org/@gotgenes/pi-subagents/latest*) printf '{"version":"21.2.0"}\n' ;;
-  *registry.npmjs.org/@gotgenes/pi-permission-system/latest*) printf '{"version":"29.2.0"}\n' ;;
+  *tmustier/pi-queue-steer*|*registry.npmjs.org/pi-web-access/*|*registry.npmjs.org/@narumitw/pi-lsp/*|*registry.npmjs.org/@gotgenes/pi-subagents/*|*registry.npmjs.org/@gotgenes/pi-permission-system/*) exit 91 ;;
   *registry.npmjs.org*) printf '{"version":"0.85.1"}\n' ;;
 esac
 SCRIPT
@@ -262,11 +311,11 @@ SCRIPT
   [[ "$output" == *"current artifact herdr v0.8.0"* ]]
   [[ "$output" == *"current artifact nerd-fonts v3.4.0"* ]]
   [[ "$output" == *"current npm pi-webui-runtime $PI_VERSION"* ]]
-  [[ "$output" == *"current artifact pi-queue-steer v0.2.0"* ]]
-  [[ "$output" == *"current npm pi-web-access 0.27.0"* ]]
-  [[ "$output" == *"current npm pi-lsp 0.49.6"* ]]
-  [[ "$output" == *"current npm pi-subagents 21.2.0"* ]]
-  [[ "$output" == *"current npm pi-permission-system 29.2.0"* ]]
+  [[ "$output" != *"pi-queue-steer"* ]]
+  [[ "$output" != *"pi-web-access"* ]]
+  [[ "$output" != *"pi-lsp"* ]]
+  [[ "$output" != *"pi-subagents"* ]]
+  [[ "$output" != *"pi-permission-system"* ]]
   [[ "$output" != *"pi-sandbox"* ]]
 }
 

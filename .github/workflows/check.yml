@@ -20,20 +20,58 @@ jobs:
           node-version: "26"
       - name: Install shell tooling
         run: sudo apt-get update && sudo apt-get install -y bats python3-jsonschema ripgrep shellcheck shfmt zsh
+      # Lifecycle/config tests consume the real SDK, not an auto-downloaded fixture.
+      - name: Provision current Pi compatibility candidates
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_prefix="$RUNNER_TEMP/pi-security-gate"
+          MISE_SKIP_RESHIM=1 npm_config_cache="$RUNNER_TEMP/npm-cache" npm install \
+            --global \
+            --prefix "$package_prefix" \
+            --ignore-scripts --legacy-peer-deps --no-audit --no-fund \
+            "@earendil-works/pi-coding-agent@latest" \
+            "@gotgenes/pi-permission-system@latest" \
+            "@gotgenes/pi-subagents@latest" \
+            "@narumitw/pi-lsp@latest"
+          source libexec/lib/pi-runtime.sh
+          resolve_pi_runtime "" "$package_prefix/lib/node_modules/@earendil-works/pi-coding-agent"
+          printf 'PI_TEST_HOST_ROOT=%s\n' "$PI_RUNTIME_PACKAGE_ROOT" >>"$GITHUB_ENV"
+          printf 'PI_TEST_PERMISSION_ROOT=%s\n' "$package_prefix/lib/node_modules/@gotgenes/pi-permission-system" >>"$GITHUB_ENV"
+          printf 'PI_TEST_SUBAGENTS_ROOT=%s\n' "$package_prefix/lib/node_modules/@gotgenes/pi-subagents" >>"$GITHUB_ENV"
+          printf 'PI_TEST_LSP_ROOT=%s\n' "$package_prefix/lib/node_modules/@narumitw/pi-lsp" >>"$GITHUB_ENV"
+          printf '%s\n' "$package_prefix/bin" >>"$GITHUB_PATH"
+          node - "$PI_RUNTIME_PACKAGE_ROOT" "$package_prefix/lib/node_modules/@gotgenes/pi-permission-system" \
+            "$package_prefix/lib/node_modules/@gotgenes/pi-subagents" "$package_prefix/lib/node_modules/@narumitw/pi-lsp" \
+            >"$RUNNER_TEMP/pi-candidates.json" <<'JS'
+          const { readFileSync } = require("node:fs");
+          const metadata = root => {
+            const { name, version } = JSON.parse(readFileSync(`${root}/package.json`, "utf8"));
+            return { name, version };
+          };
+          const pi = metadata(process.argv[2]);
+          const permission = metadata(process.argv[3]);
+          const [major, minor] = pi.version.split(".").map(Number);
+          if (major < 1 || (major === 1 && minor < 1)) throw new Error(`Pi SDK 1.1+ required; resolved ${pi.version}`);
+          const subagents = metadata(process.argv[4]);
+          const lsp = metadata(process.argv[5]);
+          console.log(JSON.stringify({ pi, permission, subagents, lsp }, null, 2));
+          JS
+          cat "$RUNNER_TEMP/pi-candidates.json"
       - name: Run checks
         run: make check
       - name: Validate the installed Pi permission pipeline
         shell: bash
         run: |
           set -euo pipefail
-          source config/versions.env
-          package_prefix="$RUNNER_TEMP/pi-security-gate"
-          MISE_SKIP_RESHIM=1 npm_config_cache="$RUNNER_TEMP/npm-cache" npm install \
-            --global \
-            --prefix "$package_prefix" \
-            --ignore-scripts \
-            "@earendil-works/pi-coding-agent@$PI_VERSION" \
-            "@gotgenes/pi-permission-system@$PI_PERMISSION_SYSTEM_VERSION"
           libexec/validate-pi-security-runtime \
-            --package-root "$package_prefix/lib/node_modules/@gotgenes/pi-permission-system" \
-            --pi-package-root "$package_prefix/lib/node_modules/@earendil-works/pi-coding-agent"
+            --package-root "$RUNNER_TEMP/pi-security-gate/lib/node_modules/@gotgenes/pi-permission-system" \
+            --pi-package-root "$PI_TEST_HOST_ROOT"
+      - name: Exercise the native Codemode and child permission pipeline
+        run: make pi-runtime-test
+      - name: Record tested Pi candidate identities
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pi-candidates
+          path: ${{ runner.temp }}/pi-candidates.json
