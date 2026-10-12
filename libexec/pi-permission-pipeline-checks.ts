@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 type ExpectedDecision = "allow" | "ask" | "deny";
@@ -6,10 +8,14 @@ type PipelineCase = {
   label: string;
   command: string;
   expected: ExpectedDecision;
+  toolName?: string;
+  input?: Record<string, unknown>;
   agentName?: "rush" | "smart" | "deep" | "review";
   surface?: string;
   pattern?: string;
   origin?: "global" | "agent";
+  approveForSession?: true;
+  raw?: true;
 };
 
 export type PipelineCheckOptions = {
@@ -22,6 +28,7 @@ type PipelineOutcome = { action: "allow" } | { action: "block"; reason: string }
 
 type PermissionManagerLike = {
   configureForCwd(cwd: string): void;
+  check(intent: Record<string, unknown>): { state: ExpectedDecision };
 };
 
 type SessionRulesLike = {
@@ -44,6 +51,7 @@ type ToolCallContextLike = {
 type ToolCallGateInputsLike = {
   getActiveSkillEntries(): unknown[];
   getInfrastructureReadDirs(): string[];
+  getInfrastructureReadScope(): { dirs: string[]; excludedDirs: string[] };
   getToolPreviewLimits(): unknown;
   getPathNormalizer(): PathNormalizerLike;
   getShellToolAliases(): undefined;
@@ -54,8 +62,8 @@ type ToolCallGatePipelineLike = {
 };
 
 type PromptDecision = {
-  approved: false;
-  state: "denied";
+  approved: boolean;
+  state: "denied" | "approved_for_session";
   decidedBy: { kind: "user"; via: "dialog" };
 };
 
@@ -70,6 +78,8 @@ type ReporterLike = {
 
 const BASELINE_PIPELINE_CASES: PipelineCase[] = [
   { label: "ordinary reader", command: "pwd", expected: "allow" },
+  { label: "real session approval and reuse", command: "rm -rf /tmp/pi-permission-example", expected: "ask", approveForSession: true },
+  { label: "smart session approval preserves tool and input scope", command: "", toolName: "bash", agentName: "smart", input: { command: "rm -rf /tmp/pi-permission-example" }, expected: "ask", approveForSession: true },
   {
     label: "recursive deletion asks",
     command: "rm -rf /tmp/pi-permission-example",
@@ -797,8 +807,171 @@ for (const shell of ["sh", "bash", "zsh", "dash", "ksh"] as const) {
   );
 }
 
+// Literal policy boundaries: do not derive expectations from the authored rules.
+const QUERY_PIPELINE_CASES: PipelineCase[] = [];
+for (const agentName of [undefined, "rush", "smart", "deep", "review"] as const) {
+  for (const command of [
+    "printenv PI_PROVIDER PI_MODEL PI_REASONING_LEVEL",
+    "printenv XDG_CONFIG_HOME PI_CODING_AGENT_DIR",
+    "/usr/bin/printenv PI_PROVIDER PI_MODEL PI_REASONING_LEVEL",
+    "/usr/bin/printenv XDG_CONFIG_HOME PI_CODING_AGENT_DIR",
+  ]) {
+    QUERY_PIPELINE_CASES.push(
+      { label: `${agentName ?? "global"} exact metadata: ${command}`, command, agentName, expected: "allow", raw: true },
+      { label: `${agentName ?? "global"} composed metadata: ${command}`, command: `pwd && ${command}`, agentName, expected: "allow" },
+      { label: `${agentName ?? "global"} appended secret: ${command}`, command: `${command} GITHUB_TOKEN`, agentName, expected: "ask", raw: true },
+      { label: `${agentName ?? "global"} metadata denied chain: ${command}`, command: `${command} && sudo true`, agentName, expected: "deny" },
+    );
+  }
+  for (const command of ["printenv", "/usr/bin/printenv", "env", "/usr/bin/env", "printenv PI_MODEL", "printenv PI_PROVIDER PI_MODEL PI_REASONING_LEVEL_EXTRA"]) {
+    QUERY_PIPELINE_CASES.push({ label: `${agentName ?? "global"} environment still asks: ${command}`, command, agentName, expected: "ask", raw: true });
+  }
+  for (const toolName of ["unknown_extension_tool", "mcp"]) {
+    QUERY_PIPELINE_CASES.push({ label: `${agentName ?? "global"} unknown tool asks: ${toolName}`, command: "", toolName, input: {}, agentName, expected: "ask" });
+  }
+  if (agentName !== undefined) {
+    QUERY_PIPELINE_CASES.push({ label: `${agentName} metadata variable denial`, command: 'printenv PI_PROVIDER PI_MODEL "$PI_REASONING_LEVEL"', agentName, expected: "deny" });
+  }
+}
+
+for (const agentName of [undefined, "rush", "smart", "deep", "review"] as const) {
+  const readonly = agentName === "rush" || agentName === "deep" || agentName === "review";
+  for (const repo of [
+    "earendil-works/pi", "gotgenes/pi-packages", "narumiruna/pi-extensions",
+    "tmustier/pi-extensions", "tmustier/pi-queue-steer", "nicobailon/pi-web-access",
+    "nicobailon/pi-powerline-footer", "pasky/pi-amplike",
+    "obra/superpowers", "addyosmani/agent-skills",
+  ]) {
+    for (const git of ["git", "/usr/bin/git"]) {
+      const command = `${git} ls-remote https://github.com/${repo}.git HEAD`;
+      QUERY_PIPELINE_CASES.push(
+        { label: `${agentName ?? "global"} exact HEAD: ${command}`, command, agentName, expected: readonly ? "deny" : "allow", raw: true },
+        { label: `${agentName ?? "global"} composed HEAD: ${command}`, command: `pwd && ${command}`, agentName, expected: readonly ? "deny" : "allow" },
+        { label: `${agentName ?? "global"} HEAD cannot hide force push: ${command}`, command: `${command} && git push --force origin main`, agentName, expected: "deny" },
+      );
+    }
+  }
+  for (const git of ["git", "/usr/bin/git"]) {
+    const retired = `${git} ls-remote https://github.com/hjanuschka/shitty-extensions.git HEAD`;
+    QUERY_PIPELINE_CASES.push(
+      { label: `${agentName ?? "global"} retired HEAD asks: ${retired}`, command: retired, agentName, expected: readonly ? "deny" : "ask", raw: true },
+      { label: `${agentName ?? "global"} composed retired HEAD asks: ${retired}`, command: `pwd && ${retired}`, agentName, expected: readonly ? "deny" : "ask" },
+      { label: `${agentName ?? "global"} retired HEAD cannot hide denial`, command: `${retired} && git push --force origin main`, agentName, expected: "deny" },
+    );
+    for (const args of [
+      "https://github.com/earendil-works/pi.git HEAD main",
+      "https://github.com/earendil-works/pi.git HEAD_EXTRA",
+      "https://github.com/earendil-works/pi.git main",
+      "https://github.com/earendil-works/pi.git HEAD https://evil.example/extra.git",
+      "https://github.com.evil/earendil-works/pi.git HEAD",
+      "https://user:password@github.com/earendil-works/pi.git HEAD",
+      "https://github.com@evil.example/earendil-works/pi.git HEAD",
+      "git@github.com:earendil-works/pi.git HEAD",
+      "ssh://git@github.com/earendil-works/pi.git HEAD",
+      "https://github.com/unapproved/repo.git HEAD",
+      "--symref https://github.com/earendil-works/pi.git HEAD",
+      "--upload-pack=evil https://github.com/earendil-works/pi.git HEAD",
+      "https://github.com/earendil-works/pi.git HEAD --upload-pack=evil",
+    ]) {
+      QUERY_PIPELINE_CASES.push({ label: `${agentName ?? "global"} unapproved query: ${git} ${args}`, command: `${git} ls-remote ${args}`, agentName, expected: readonly ? "deny" : "ask" });
+    }
+    for (const command of [
+      `${git} -c core.sshCommand=false ls-remote https://github.com/earendil-works/pi.git HEAD`,
+      `${git} --config-env=core.sshCommand=GIT_SSH_COMMAND ls-remote https://github.com/earendil-works/pi.git HEAD`,
+      `${git} ls-remote https://github.com/earendil-works/pi.git HEAD && git push --force origin main`,
+      `git push --force origin main; ${git} ls-remote https://github.com/earendil-works/pi.git HEAD`,
+    ]) {
+      QUERY_PIPELINE_CASES.push({ label: `${agentName ?? "global"} query cannot hide denial: ${command}`, command, agentName, expected: "deny" });
+    }
+  }
+  if (agentName !== undefined) {
+    QUERY_PIPELINE_CASES.push({ label: `${agentName} query variable denial`, command: 'git ls-remote "$REPO_URL" HEAD', agentName, expected: "deny" });
+  }
+  // Children use existing API permissions, not new Git or endpoint-specific grants.
+  for (const gh of ["gh", "/usr/bin/gh"]) {
+    for (const args of [
+      "api repos/gotgenes/pi-packages --jq '{full_name,default_branch}'",
+      "api repos/gotgenes/pi-packages --jq .default_branch",
+      "api repos/gotgenes/pi-packages/git/ref/heads/main --jq .object.sha",
+    ]) {
+      const command = `${gh} ${args}`;
+      QUERY_PIPELINE_CASES.push(
+        { label: `${agentName ?? "global"} literal API read: ${command}`, command, agentName, expected: "allow", raw: true },
+        { label: `${agentName ?? "global"} composed API read: ${command}`, command: `pwd && ${command}`, agentName, expected: "allow" },
+        { label: `${agentName ?? "global"} API read cannot hide denial: ${command}`, command: `${command} && git push --force origin main`, agentName, expected: "deny" },
+      );
+    }
+    for (const args of [
+      "api repos/gotgenes/pi-packages -X POST",
+      "api repos/gotgenes/pi-packages --method PATCH",
+      "api repos/gotgenes/pi-packages -f name=example",
+      "api repos/gotgenes/pi-packages --input payload.json",
+    ]) {
+      const command = `${gh} ${args}`;
+      QUERY_PIPELINE_CASES.push(
+        { label: `${agentName ?? "global"} API mutation asks: ${command}`, command, agentName, expected: "ask", raw: true },
+        { label: `${agentName ?? "global"} composed API mutation asks: ${command}`, command: `pwd && ${command}`, agentName, expected: "ask" },
+      );
+    }
+    for (const args of [
+      "api repos/gotgenes/pi-packages -X DELETE",
+      "api repos/gotgenes/pi-packages --method DELETE",
+    ]) {
+      const command = `${gh} ${args}`;
+      QUERY_PIPELINE_CASES.push(
+        { label: `${agentName ?? "global"} selected API deletion denies: ${command}`, command, agentName, expected: "deny", raw: true },
+        { label: `${agentName ?? "global"} composed API deletion denies: ${command}`, command: `pwd && ${command}`, agentName, expected: "deny" },
+      );
+    }
+    if (agentName !== undefined) {
+      const command = `${gh} api "repos/$OWNER/$REPO" --jq .default_branch`;
+      QUERY_PIPELINE_CASES.push(
+        { label: `${agentName} API variable denial: ${command}`, command, agentName, expected: "deny", raw: true },
+        { label: `${agentName} composed API variable denial: ${command}`, command: `pwd && ${command}`, agentName, expected: "deny" },
+      );
+    }
+  }
+}
+
+for (const agentName of [undefined, "rush", "smart", "deep", "review"] as const) {
+  for (const [path, expected] of [
+    ["~/.dotfiles/config/versions.env", "allow"],
+    ["~/.dotfiles/config/unrelated.env", "deny"],
+    ["~/.dotfiles/config/versions.env.local", "deny"],
+    ["~/workspace/dotfiles-worktrees/unapproved/config/versions.env", "deny"],
+    [".env", "deny"],
+  ] as const) {
+    QUERY_PIPELINE_CASES.push(
+      { label: `${agentName ?? "global"} native metadata read: ${path}`, command: "", toolName: "read", input: { path }, agentName, expected },
+      { label: `${agentName ?? "global"} bash metadata read: ${path}`, command: `cat ${path}`, agentName, expected },
+      { label: `${agentName ?? "global"} metadata write denial: ${path}`, command: `printf x > ${path}`, agentName, expected: "deny" },
+    );
+  }
+  QUERY_PIPELINE_CASES.push(
+    { label: `${agentName ?? "global"} canonical edit denial`, command: "", toolName: "edit", input: { path: "~/.dotfiles/config/versions.env", oldText: "x", newText: "y" }, agentName, expected: "deny" },
+    { label: `${agentName ?? "global"} canonical direct write denial`, command: "", toolName: "write", input: { path: "~/.dotfiles/config/versions.env", content: "x" }, agentName, expected: "deny" },
+    { label: `${agentName ?? "global"} canonical cannot hide secret read`, command: "cat ~/.dotfiles/config/versions.env && cat .env", agentName, expected: "deny" },
+  );
+}
+
+// Bounded layouts verified against 29.2.0 and the current installed candidate.
+// Actual imports, construction, policy evaluation and approval must succeed; no evaluator is skipped.
+const MOVED_PERMISSION_MODULES: Record<string, string> = {
+  "permission-manager.ts": "policy/permission-manager.ts",
+  "permission-resolver.ts": "policy/permission-resolver.ts",
+  "session-rules.ts": "session/session-rules.ts",
+  "path-normalizer.ts": "path/path-normalizer.ts",
+  "tool-preview-formatter.ts": "tool-input/tool-preview-formatter.ts",
+};
+
+export function permissionModulePath(root: string, path: string): string {
+  const current = MOVED_PERMISSION_MODULES[path];
+  if (current && existsSync(join(root, "src/policy"))) return join(root, "src", current);
+  return join(root, "src", path);
+}
+
 const url = (root: string, path: string) =>
-  pathToFileURL(`${root}/src/${path}`).href;
+  pathToFileURL(permissionModulePath(root, path)).href;
 
 function fail(testCase: PipelineCase, message: string): never {
   throw new Error(`pipeline ${testCase.label}: ${message}`);
@@ -927,10 +1100,14 @@ export async function runPermissionPipelineChecks({
     { resolveToolPreviewLimits: () => unknown },
   ];
 
-  const cases = [...BASELINE_PIPELINE_CASES, ...RELAXED_PIPELINE_CASES];
+  const cases = [...QUERY_PIPELINE_CASES, ...BASELINE_PIPELINE_CASES, ...RELAXED_PIPELINE_CASES];
   for (const testCase of cases) {
     const manager = new PermissionManager({ agentDir });
     manager.configureForCwd(repoRoot);
+    if (testCase.raw) {
+      const state = manager.check({ kind: "tool", surface: "bash", input: { command: testCase.command }, agentName: testCase.agentName }).state;
+      if (state !== testCase.expected) fail(testCase, `raw evaluator expected ${testCase.expected}, received ${state}`);
+    }
     const sessionRules = new SessionRules();
     const resolver = new PermissionResolver(manager, sessionRules);
     const normalizer = new PathNormalizer(posixPathFlavor, repoRoot);
@@ -939,11 +1116,11 @@ export async function runPermissionPipelineChecks({
     const logs: Array<{ event: string; details: Record<string, unknown> }> = [];
 
     const prompter = {
-      async escalate(details: Record<string, unknown>) {
+      async escalate(details: Record<string, unknown>): Promise<PromptDecision> {
         prompts.push(details);
         return {
-          approved: false,
-          state: "denied" as const,
+          approved: testCase.approveForSession === true,
+          state: testCase.approveForSession ? "approved_for_session" as const : "denied" as const,
           decidedBy: { kind: "user" as const, via: "dialog" as const },
         };
       },
@@ -959,6 +1136,7 @@ export async function runPermissionPipelineChecks({
     const inputs = {
       getActiveSkillEntries: () => [],
       getInfrastructureReadDirs: () => [],
+      getInfrastructureReadScope: () => ({ dirs: [], excludedDirs: [] }),
       getToolPreviewLimits: () => resolveToolPreviewLimits(),
       getPathNormalizer: () => normalizer,
       getShellToolAliases: () => undefined,
@@ -973,9 +1151,9 @@ export async function runPermissionPipelineChecks({
     );
     const outcome = await pipeline.evaluate(
       {
-        toolName: "bash",
+        toolName: testCase.toolName ?? "bash",
         agentName: testCase.agentName ?? null,
-        input: { command: testCase.command },
+        input: testCase.input ?? { command: testCase.command },
         toolCallId: toolCallIdFor(testCase),
         cwd: repoRoot,
       },
@@ -994,11 +1172,33 @@ export async function runPermissionPipelineChecks({
       continue;
     }
 
+    if (testCase.approveForSession) {
+      expectAction(testCase, outcome, "allow");
+      expectPromptCount(testCase, prompts, 1);
+      if (sessionRules.getRuleset().length === 0) fail(testCase, "session approval was not recorded");
+      const repeated = await pipeline.evaluate({
+        toolName: testCase.toolName ?? "bash",
+        agentName: testCase.agentName ?? null,
+        input: testCase.input ?? { command: testCase.command },
+        toolCallId: `${toolCallIdFor(testCase)}-repeat`, cwd: repoRoot,
+      }, runner);
+      expectAction(testCase, repeated, "allow");
+      expectPromptCount(testCase, prompts, 1);
+      if (!logs.some(({ event }) => event === "permission_request.session_approved")) {
+        fail(testCase, "repeated call did not use the session approval branch");
+      }
+      console.log("Permission pipeline real approval recorded and reused without another prompt.");
+      continue;
+    }
+
     expectAction(testCase, outcome, "block");
     if (testCase.expected === "ask") {
       expectPromptCount(testCase, prompts, 1);
       const payload = asRecord(prompts[0]?.payload);
-      expectEvidence(testCase, asRecord(payload?.request));
+      const request = asRecord(payload?.request);
+      // Legacy scope is on the envelope; current scope is request.requester.
+      const requester = asRecord(request?.requester);
+      expectEvidence(testCase, request ? { ...request, agentName: requester?.agentName ?? prompts[0]?.agentName } : undefined);
       continue;
     }
 

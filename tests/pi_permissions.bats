@@ -48,6 +48,7 @@ setup() {
 @test "Pi permission policy allows known workflow tools" {
   local tool
   for tool in \
+    codemode \
     subagent \
     get_subagent_result \
     steer_subagent \
@@ -683,6 +684,58 @@ setup() {
   [ "$status" -eq 0 ]
 }
 
+@test "Pi metadata approvals are exact and follow environment asks" {
+  run jq -e '
+    .permission.bash as $bash | ($bash | keys_unsorted) as $keys
+    | all([
+        "printenv PI_PROVIDER PI_MODEL PI_REASONING_LEVEL",
+        "printenv XDG_CONFIG_HOME PI_CODING_AGENT_DIR",
+        "/usr/bin/printenv PI_PROVIDER PI_MODEL PI_REASONING_LEVEL",
+        "/usr/bin/printenv XDG_CONFIG_HOME PI_CODING_AGENT_DIR"
+      ][]; . as $command
+        | $bash[$command] == "allow"
+        and ($bash | has($command + "*") | not)
+        and (($keys | index($command)) > ($keys | index("*/printenv*"))))
+    and $bash.printenv == "ask"
+    and $bash["printenv *"] == "ask"
+    and $bash["*/printenv*"] == "ask"
+  ' "$PERMISSION_CONFIG"
+  [ "$status" -eq 0 ]
+}
+
+@test "Pi GitHub HEAD approvals are literal and follow ls-remote asks" {
+  run jq -e '
+    .permission.bash as $bash | ($bash | keys_unsorted) as $keys
+    | all([
+        "earendil-works/pi", "gotgenes/pi-packages", "narumiruna/pi-extensions",
+        "tmustier/pi-extensions", "tmustier/pi-queue-steer", "nicobailon/pi-web-access",
+        "nicobailon/pi-powerline-footer", "pasky/pi-amplike",
+        "obra/superpowers", "addyosmani/agent-skills"
+      ][]; . as $repo | all(["git", "/usr/bin/git"][]; . as $git
+        | "\($git) ls-remote https://github.com/\($repo).git HEAD" as $command
+        | $bash[$command] == "allow"
+        and ($bash | has($command + "*") | not)
+        and (($keys | index($command)) > ($keys | index("*/git ls-remote*")))
+        and (($keys | index($command)) < ($keys | index("*git -c *")))))
+    and all(["git", "/usr/bin/git"][]; . as $git
+      | ($bash | has("\($git) ls-remote https://github.com/hjanuschka/shitty-extensions.git HEAD") | not))
+    and $bash["git ls-remote*"] == "ask"
+    and $bash["*/git ls-remote*"] == "ask"
+  ' "$PERMISSION_CONFIG"
+  [ "$status" -eq 0 ]
+}
+
+@test "Pi canonical dependency metadata exception grants only reading" {
+  run jq -e '
+    .permission.path_read as $read | ($read | keys_unsorted) as $keys
+    | $read["~/.dotfiles/config/versions.env"] == "allow"
+    and (($keys | index("~/.dotfiles/config/versions.env")) > ($keys | index("*.env.*")))
+    and (.permission.path_write | has("~/.dotfiles/config/versions.env") | not)
+    and .permission.path_write["*.env"] == "deny"
+  ' "$PERMISSION_CONFIG"
+  [ "$status" -eq 0 ]
+}
+
 @test "Pi web access uses keyless ordered search and local extraction" {
   run jq -e '
     .searchRouting.providers == ["exa", "duckduckgo"]
@@ -718,18 +771,20 @@ setup() {
     | $excluded == [
         "git:github.com/tmustier/pi-extensions",
         "npm:pi-powerline-footer",
-        "npm:shitty-extensions",
         "npm:pi-amplike",
-        "git:github.com/tmustier/pi-queue-steer@v0.2.0",
-        "npm:pi-web-access@0.27.0",
-        "npm:@narumitw/pi-lsp@0.49.6"
+        "git:github.com/tmustier/pi-queue-steer",
+        "npm:pi-web-access",
+        "npm:@narumitw/pi-lsp",
+        "npm:@narumitw/pi-worktree",
+        "npm:@narumitw/pi-file-context"
       ]
     and all($excluded[]; . as $source | $sources | index($source) != null)
-    and ($excluded | index("npm:@gotgenes/pi-permission-system@29.2.0") == null)
-    and ($excluded | index("npm:@gotgenes/pi-subagents@21.2.0") == null)
+    and ($excluded | index("npm:@gotgenes/pi-permission-system") == null)
+    and ($excluded | index("npm:@gotgenes/pi-subagents") == null)
     and ($sources | map(select(contains("pi-sandbox"))) | length == 0)
     and ($excluded | map(select(contains("pi-sandbox"))) | length == 0)
-    and ($excluded | index("git:github.com/obra/superpowers@v6.3.0") == null)
+    and ($excluded | index("git:github.com/obra/superpowers") == null)
+    and ($excluded | index("~/.dotfiles/ai/marketplace/plugins/my") == null)
   ' "$SUBAGENT_CONFIG" "$SETTINGS"
   [ "$status" -eq 0 ]
 }
@@ -817,10 +872,283 @@ setup() {
   [[ "$output" == *"permission package not installed"* ]]
 }
 
+make_runtime_fixture() {
+  RUNTIME_AGENT="$TEST_ROOT/managed agent"
+  RUNTIME_MODULES="$RUNTIME_AGENT/install/releases/1.1.0/node_modules"
+  RUNTIME_PACKAGE="$RUNTIME_MODULES/@earendil-works/pi-coding-agent"
+  mkdir -p "$RUNTIME_AGENT/bin" "$RUNTIME_PACKAGE/dist/bundle" "$RUNTIME_MODULES/jiti/lib"
+  printf '{"kind":"pi-managed-install","schemaVersion":1,"layout":"releases-v1"}\n' \
+    >"$RUNTIME_AGENT/install/managed-install.json"
+  printf '1.1.0\n' >"$RUNTIME_AGENT/install/current-version"
+  printf '#!/bin/sh\ntouch "%s"\nexit 99\n' "$TEST_ROOT/launcher-executed" >"$RUNTIME_AGENT/bin/pi"
+  chmod +x "$RUNTIME_AGENT/bin/pi"
+  printf 'export {};\n' >"$RUNTIME_PACKAGE/dist/index.js"
+  printf '#!/usr/bin/env node\n' >"$RUNTIME_PACKAGE/dist/bundle/cli.js"
+  chmod +x "$RUNTIME_PACKAGE/dist/bundle/cli.js"
+  touch "$RUNTIME_MODULES/jiti/lib/jiti-cli.mjs"
+}
+
+run_runtime_discovery() {
+  run bash -c 'source "$1"; resolve_pi_runtime "$2" "${3:-}" || exit; printf "%s\n" "$PI_RUNTIME_PACKAGE_ROOT" "$PI_RUNTIME_JITI_CLI" "$PI_RUNTIME_NODE_MODULES"' _ \
+    "$REPO_ROOT/libexec/lib/pi-runtime.sh" "$@"
+}
+
+@test "runtime discovery selects managed release and hoisted Jiti without executing launcher" {
+  make_runtime_fixture
+  run_runtime_discovery "$RUNTIME_AGENT/bin/pi"
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = "$RUNTIME_PACKAGE" ]
+  [ "${lines[1]}" = "$RUNTIME_MODULES/jiti/lib/jiti-cli.mjs" ]
+  [ "${lines[2]}" = "$RUNTIME_MODULES" ]
+  [ ! -e "$TEST_ROOT/launcher-executed" ]
+}
+
+@test "runtime discovery resolves relative launcher symlinks without GNU readlink" {
+  make_runtime_fixture
+  ln -s '../managed agent/bin/pi' "$STUB_BIN/pi"
+  stub_command readlink '[[ "$1" != -* ]] || exit 99; exec /usr/bin/readlink "$@"'
+  run_runtime_discovery "$STUB_BIN/pi"
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = "$RUNTIME_PACKAGE" ]
+  [ ! -e "$TEST_ROOT/launcher-executed" ]
+}
+
+@test "runtime discovery accepts legacy CLI with package-local Jiti" {
+  make_runtime_fixture
+  mkdir -p "$RUNTIME_PACKAGE/node_modules/jiti/lib"
+  touch "$RUNTIME_PACKAGE/node_modules/jiti/lib/jiti-cli.mjs"
+  ln -s "$RUNTIME_PACKAGE/dist/bundle/cli.js" "$STUB_BIN/pi"
+  run_runtime_discovery "$STUB_BIN/pi"
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = "$RUNTIME_PACKAGE" ]
+  [ "${lines[1]}" = "$RUNTIME_PACKAGE/node_modules/jiti/lib/jiti-cli.mjs" ]
+  [ "${lines[2]}" = "$RUNTIME_PACKAGE/node_modules" ]
+}
+
+@test "runtime discovery accepts legacy dist CLI with hoisted Jiti" {
+  make_runtime_fixture
+  cp "$RUNTIME_PACKAGE/dist/bundle/cli.js" "$RUNTIME_PACKAGE/dist/cli.js"
+  ln -s "$RUNTIME_PACKAGE/dist/cli.js" "$STUB_BIN/pi"
+  run_runtime_discovery "$STUB_BIN/pi"
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = "$RUNTIME_PACKAGE" ]
+  [ "${lines[1]}" = "$RUNTIME_MODULES/jiti/lib/jiti-cli.mjs" ]
+}
+
+@test "runtime discovery explicit package root ignores launcher and uses hoisted Jiti" {
+  make_runtime_fixture
+  run_runtime_discovery "$TEST_ROOT/missing-launcher" "$RUNTIME_PACKAGE"
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = "$RUNTIME_PACKAGE" ]
+  [ "${lines[1]}" = "$RUNTIME_MODULES/jiti/lib/jiti-cli.mjs" ]
+}
+
+@test "runtime discovery rejects missing or invalid managed current version" {
+  make_runtime_fixture
+  rm "$RUNTIME_AGENT/install/current-version"
+  run_runtime_discovery "$RUNTIME_AGENT/bin/pi"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"current-version"* ]]
+  local version
+  for version in '' '../outside' '/tmp/outside' '1.1.0/../../outside' '1.1.0
+2.0.0' ' 1.1.0' '1.1.0;touch invalid'; do
+    printf '%s\n' "$version" >"$RUNTIME_AGENT/install/current-version"
+    run_runtime_discovery "$RUNTIME_AGENT/bin/pi"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"version"* ]]
+  done
+  printf '1.1.0\0bad\n' >"$RUNTIME_AGENT/install/current-version"
+  run_runtime_discovery "$RUNTIME_AGENT/bin/pi"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"version"* ]]
+  [ ! -e "$TEST_ROOT/launcher-executed" ]
+}
+
+@test "runtime discovery rejects foreign malformed missing or symlinked managed marker" {
+  make_runtime_fixture
+  local marker="$RUNTIME_AGENT/install/managed-install.json" value
+  for value in '{"kind":"foreign","schemaVersion":1,"layout":"releases-v1"}' \
+    '{"kind":"pi-managed-install","schemaVersion":2,"layout":"releases-v1"}' '{'; do
+    printf '%s\n' "$value" >"$marker"
+    run_runtime_discovery "$RUNTIME_AGENT/bin/pi"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"managed-install.json"* ]]
+  done
+  rm "$marker"
+  run_runtime_discovery "$RUNTIME_AGENT/bin/pi"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"managed-install.json"* ]]
+  printf '{"kind":"pi-managed-install","schemaVersion":1,"layout":"releases-v1"}\n' >"$TEST_ROOT/marker.json"
+  ln -s "$TEST_ROOT/marker.json" "$marker"
+  run_runtime_discovery "$RUNTIME_AGENT/bin/pi"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"managed-install.json"* ]]
+  [ ! -e "$TEST_ROOT/launcher-executed" ]
+}
+
+@test "runtime discovery rejects missing selected core even when another release exists" {
+  make_runtime_fixture
+  printf '2.0.0\n' >"$RUNTIME_AGENT/install/current-version"
+  run_runtime_discovery "$RUNTIME_AGENT/bin/pi"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"2.0.0"* ]]
+  [[ "$output" == *"extension API entry"* ]]
+}
+
+@test "runtime discovery does not borrow Jiti from outside selected package ancestry" {
+  make_runtime_fixture
+  rm "$RUNTIME_MODULES/jiti/lib/jiti-cli.mjs"
+  mkdir -p "$RUNTIME_AGENT/node_modules/jiti/lib"
+  touch "$RUNTIME_AGENT/node_modules/jiti/lib/jiti-cli.mjs"
+  run_runtime_discovery "$RUNTIME_AGENT/bin/pi"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"jiti"* ]]
+  [[ "$output" == *"$RUNTIME_PACKAGE"* ]]
+}
+
+@test "runtime discovery rejects launcher symlink loops and clears stale results" {
+  make_runtime_fixture
+  ln -s loop "$STUB_BIN/loop"
+  run bash -c 'source "$1"; resolve_pi_runtime "$2" || exit; if resolve_pi_runtime "$3"; then exit 99; fi; [[ -z "$PI_RUNTIME_PACKAGE_ROOT$PI_RUNTIME_JITI_CLI$PI_RUNTIME_NODE_MODULES" ]]' _ \
+    "$REPO_ROOT/libexec/lib/pi-runtime.sh" "$RUNTIME_AGENT/bin/pi" "$STUB_BIN/loop"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"symlink"* ]]
+}
+
+make_permission_runtime_fixture() {
+  PERMISSION_PACKAGE="$TEST_ROOT/permission-package"
+  mkdir -p "$PERMISSION_PACKAGE/schemas" "$PERMISSION_PACKAGE/src"
+  printf '{"version":"30.0.0"}\n' >"$PERMISSION_PACKAGE/package.json"
+  printf '{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object"}\n' \
+    >"$PERMISSION_PACKAGE/schemas/permissions.schema.json"
+  printf 'export {};\n' >"$PERMISSION_PACKAGE/src/permission-manager.ts"
+}
+
+@test "runtime validator routes managed release Jiti and core alias to Node" {
+  make_runtime_fixture
+  make_permission_runtime_fixture
+  ln -s '../managed agent/bin/pi' "$STUB_BIN/pi"
+  stub_command node 'if [[ "$1" == -e ]]; then printf "{\"@earendil-works/pi-coding-agent\":\"%s\"}\n" "$3"; else printf "%s\n" "$@" "$JITI_ALIAS"; fi'
+  run "$REPO_ROOT/libexec/validate-pi-security-runtime" --package-root "$PERMISSION_PACKAGE"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"$RUNTIME_MODULES/jiti/lib/jiti-cli.mjs"* ]]
+  [[ "$output" == *"$REPO_ROOT/libexec/validate-pi-security-runtime.ts"* ]]
+  [[ "$output" == *"\"@earendil-works/pi-coding-agent\":\"$RUNTIME_PACKAGE/dist/index.js\""* ]]
+  [ ! -e "$TEST_ROOT/launcher-executed" ]
+}
+
+@test "runtime validator explicit hoisted root still validates permission schema" {
+  make_runtime_fixture
+  make_permission_runtime_fixture
+  printf '{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"array"}\n' \
+    >"$PERMISSION_PACKAGE/schemas/permissions.schema.json"
+  stub_command node 'touch "$TEST_ROOT/node-executed"'
+  run "$REPO_ROOT/libexec/validate-pi-security-runtime" \
+    --package-root "$PERMISSION_PACKAGE" --pi-package-root "$RUNTIME_PACKAGE"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"permission schema"* ]]
+  [ ! -e "$TEST_ROOT/node-executed" ]
+}
+
+@test "runtime validator supplies selected Pi TUI peer alias without filesystem caches" {
+  make_runtime_fixture
+  make_permission_runtime_fixture
+  mkdir -p "$RUNTIME_MODULES/@earendil-works/pi-tui/dist"
+  printf '{"name":"@earendil-works/pi-tui","main":"dist/index.js"}\n' \
+    >"$RUNTIME_MODULES/@earendil-works/pi-tui/package.json"
+  touch "$RUNTIME_MODULES/@earendil-works/pi-tui/dist/index.js"
+  # Run real Node for alias resolution; only replace the evaluator execution.
+  local real_node
+  real_node=$(command -v node)
+  export RUNTIME_TEST_NODE=$real_node
+  stub_command node 'if [[ "$1" == -e ]]; then exec "$RUNTIME_TEST_NODE" "$@"; else printf "%s\n%s\n%s\n" "$JITI_ALIAS" "${JITI_FS_CACHE:-unset}" "${NODE_DISABLE_COMPILE_CACHE:-unset}"; fi'
+  run "$REPO_ROOT/libexec/validate-pi-security-runtime" \
+    --package-root "$PERMISSION_PACKAGE" --pi-package-root "$RUNTIME_PACKAGE"
+  [ "$status" -eq 0 ]
+  [[ "${lines[0]}" == *"\"@earendil-works/pi-tui\":\"$RUNTIME_MODULES/@earendil-works/pi-tui/dist/index.js\""* ]]
+  [ "${lines[1]}" = false ]
+  [ "${lines[2]}" = 1 ]
+}
+
+@test "runtime evaluator accepts selected package version and rejects missing private contract clearly" {
+  make_permission_runtime_fixture
+  run node --experimental-strip-types "$REPO_ROOT/libexec/validate-pi-security-runtime.ts" \
+    --package-root "$PERMISSION_PACKAGE" --repo-root "$REPO_ROOT"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"incompatible permission evaluator 30.0.0"* ]]
+  [[ "$output" == *"access-intent/bash/program.ts"* ]]
+  [[ "$output" != *"expected pi-permission-system 29.2.0"* ]]
+}
+
+@test "runtime evaluator fixture metadata follows selected package version" {
+  make_permission_runtime_fixture
+  printf '%s\n' \
+    'import { readFileSync } from "node:fs";' \
+    'import { join } from "node:path";' \
+    'export class PermissionManager {' \
+    '  constructor({agentDir}) { this.agentDir = agentDir; }' \
+    '  configureForCwd() { const version = JSON.parse(readFileSync(join(this.agentDir, "npm/node_modules/@gotgenes/pi-permission-system/package.json"), "utf8")).version; throw new Error(`fixture metadata: ${version}`); }' \
+    '}' >"$PERMISSION_PACKAGE/src/permission-manager.ts"
+  local declaration path
+  for declaration in \
+    'access-intent/bash/program.ts|export {};' \
+    'path-normalizer.ts|export class PathNormalizer {}' \
+    'path/path-flavor.ts|export const posixPathFlavor = {};' \
+    'handlers/gates/bash-command.ts|export {};'; do
+    path=${declaration%%|*}
+    mkdir -p "$(dirname "$PERMISSION_PACKAGE/src/$path")"
+    printf '%s\n' "${declaration#*|}" >"$PERMISSION_PACKAGE/src/$path"
+  done
+  run node --experimental-strip-types "$REPO_ROOT/libexec/validate-pi-security-runtime.ts" \
+    --package-root "$PERMISSION_PACKAGE" --repo-root "$REPO_ROOT"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"fixture metadata: 30.0.0"* ]]
+}
+
+@test "actual used evaluator modules exports and session approval fail closed in owned copies" {
+  source "$REPO_ROOT/libexec/lib/pi-runtime.sh"
+  resolve_pi_runtime "$(command -v pi)" "${PI_TEST_HOST_ROOT:-}"
+  local host="$PI_RUNTIME_PACKAGE_ROOT" source_root fixture version module damage
+  source_root="${PI_TEST_PERMISSION_ROOT:-${host%/install/releases/*}/npm/node_modules/@gotgenes/pi-permission-system}"
+  version=$(jq -r .version "$source_root/package.json")
+  for damage in healthy missing-module used-export session-approval; do
+    fixture="$TEST_ROOT/evaluator-$damage"
+    cp -a "$source_root" "$fixture"
+    if [[ ! -d "$fixture/node_modules" ]]; then ln -s "$(dirname "$(dirname "$source_root")")" "$fixture/node_modules"; fi
+    local layout=''
+    [[ ! -d "$fixture/src/policy" ]] || layout=policy/
+    case "$damage" in
+      missing-module) rm "$fixture/src/${layout}permission-resolver.ts" ;;
+      used-export) printf 'export {};\n' >"$fixture/src/${layout}permission-manager.ts" ;;
+      session-approval)
+        module="$fixture/src/session-rules.ts"
+        [[ ! -d "$fixture/src/session" ]] || module="$fixture/src/session/session-rules.ts"
+        python3 -c 'from pathlib import Path; import sys; p=Path(sys.argv[1]); s=p.read_text(); assert "recordSessionApproval(" in s; p.write_text(s.replace("recordSessionApproval(", "brokenSessionApproval(", 1))' "$module"
+        ;;
+    esac
+    run bash "$REPO_ROOT/libexec/validate-pi-security-runtime" --package-root "$fixture" --pi-package-root "$host" --python /usr/bin/python3
+    if [[ "$damage" == healthy ]]; then
+      printf '%s\n' "$output"
+      [ "$status" -eq 0 ]
+      [[ "$output" == *'real approval recorded and reused'* ]]
+    else
+      [ "$status" -ne 0 ]
+      [[ "$output" == *"incompatible permission evaluator $version at $fixture"* ]]
+      [[ "$output" == *'selected evaluator behavior failed'* ]]
+      case "$damage" in
+        missing-module) [[ "$output" == *permission-resolver* ]] ;;
+        used-export) [[ "$output" == *PermissionManager* ]] ;;
+        session-approval) [[ "$output" == *recordSessionApproval* ]] ;;
+      esac
+    fi
+  done
+}
+
 @test "Pi runtime validator fails clearly when bundled jiti is absent" {
   local package_root="$TEST_ROOT/permission-package"
   local pi_root="$TEST_ROOT/pi-package"
-  mkdir -p "$package_root/schemas" "$package_root/src" "$pi_root"
+  mkdir -p "$package_root/schemas" "$package_root/src" "$pi_root/dist"
+  touch "$pi_root/dist/index.js"
   printf '{"version":"29.2.0"}\n' >"$package_root/package.json"
   printf '{"$schema":"https://json-schema.org/draft/2020-12/schema"}\n' \
     >"$package_root/schemas/permissions.schema.json"

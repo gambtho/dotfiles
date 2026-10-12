@@ -3,10 +3,41 @@
 load test_helper
 
 setup() {
+  local real_pi real_npm real_node
+  real_pi=$(command -v pi) || real_pi=""
+  real_npm=$(command -v npm)
+  real_node=$(command -v node)
+  source "$BATS_TEST_DIRNAME/../libexec/lib/pi-runtime.sh"
+  resolve_pi_runtime "$real_pi" "${PI_TEST_HOST_ROOT:-}"
+  export HOST_ROOT=$PI_RUNTIME_PACKAGE_ROOT REAL_NPM=$real_npm REAL_NODE=$real_node
   setup_dotfiles_test
   export DOTFILES="$REPO_ROOT"
   source "$REPO_ROOT/config/versions.env"
+  FIXTURE_PERMISSION_VERSION=29.2.0
   mkdir -p "$HOME/.pi/agent"
+  export npm_config_prefix="$TEST_ROOT/global-prefix" npm_config_cache="$TEST_ROOT/npm-cache"
+  export npm_config_userconfig="$TEST_ROOT/user.npmrc" npm_config_globalconfig="$TEST_ROOT/global.npmrc"
+  export npm_config_logs_dir="$TEST_ROOT/npm-logs" npm_config_update_notifier=false
+  printf '' >"$npm_config_userconfig"
+  printf '' >"$npm_config_globalconfig"
+  mkdir -p "$HOME/.dotfiles/ai/marketplace/plugins/my"
+  cp "$REPO_ROOT/ai/marketplace/plugins/my/package.json" "$HOME/.dotfiles/ai/marketplace/plugins/my/package.json"
+}
+
+stub_runtime_validator() {
+  # Installer ownership fixtures use a minimal schema; native runtime tests
+  # separately exercise the actual selected-host evaluator and CLI.
+  stub_command node '
+    if [[ "${2:-}" == */libexec/validate-pi-security-runtime.ts ]]; then
+      printf "validated\n" >>"$TEST_ROOT/validator-events"
+      if [[ "${PI_TEST_REQUIRE_GATE_BEFORE_LINKS:-0}" == 1 ]]; then
+        [[ ! -e "${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/AGENTS.md" && ! -e "${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/extensions/worktree-guard.ts" ]] || exit 88
+      fi
+      [[ "${PI_TEST_VALIDATOR_FAIL:-0}" != 1 ]] || exit 43
+      exit 0
+    fi
+    exec "$REAL_NODE" "$@"
+  '
 }
 
 snapshot_tree() {
@@ -62,27 +93,33 @@ if [[ "${1:-}" == --version ]]; then
 else
   printf '%s\n' "$*" >"$HOME/pi-invocation"
   printf '%s\n' "$*" >>"$HOME/pi-invocations"
-  if [[ "${1:-}" == install && "${2:-}" == npm:*@* ]]; then
-    package_spec=${2#npm:}
-    package_version=${package_spec##*@}
-    package_name=${package_spec%@*}
-    package_root="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/npm/node_modules/$package_name"
+  [[ "$*" == 'update --extensions --no-approve' ]] || exit 81
+  [[ "$PWD" != "$REPO_ROOT" && ! -e "$PWD/.pi" ]] || exit 82
+  printf '%s\n' "$PWD" >"$TEST_ROOT/update-cwd"
+  [[ "${PI_TEST_UPDATE_FAIL:-0}" != 1 ]] || exit 42
+  if [[ "${PI_TEST_REQUIRE_REGULAR_MIGRATION:-0}" == 1 ]]; then
+    [[ ! -e "$PI_CODING_AGENT_DIR/amplike.json" ]] || exit 89
+  fi
+  while IFS= read -r package_name; do
+    package_root="$PI_CODING_AGENT_DIR/npm/node_modules/$package_name"
     mkdir -p "$package_root"
-    printf '{"name":"%s","version":"%s"}\n' "$package_name" "$package_version" \
-      >"$package_root/package.json"
+    printf '{"name":"%s","version":"29.2.0"}\n' "$package_name" >"$package_root/package.json"
     if [[ "$package_name" == @gotgenes/pi-permission-system ]]; then
       mkdir -p "$package_root/schemas" "$package_root/src"
-      cp "$TEST_ROOT/permission-system-schema.json" \
-        "$package_root/schemas/permissions.schema.json"
-      if [[ "${PI_TEST_OMIT_PERMISSION_MANAGER:-0}" != 1 ]]; then
-        printf 'export class PermissionManager {}\n' \
-          >"$package_root/src/permission-manager.ts"
-      fi
+      # Tests may seed an incompatible installed schema; don't overwrite it.
+      [[ -e "$package_root/schemas/permissions.schema.json" ]] ||
+        cp "$TEST_ROOT/permission-system-schema.json" "$package_root/schemas/permissions.schema.json"
+      printf 'export class PermissionManager {}\n' >"$package_root/src/permission-manager.ts"
     fi
-  fi
+  done < <(jq -r '.packages[] | if type == "object" then .source else . end | select(startswith("npm:")) | ltrimstr("npm:")' "$PI_CODING_AGENT_DIR/settings.json")
 fi
 SCRIPT
   chmod +x "$HOME/.pi/agent/bin/pi"
+  cp "$HOME/.pi/agent/bin/pi" "$TEST_ROOT/pi-fixture"
+  printf '0.0.0-test\n' >"$HOME/.pi/agent/install/current-version"
+  mkdir -p "$HOME/.pi/agent/install/releases/0.0.0-test/node_modules/@earendil-works"
+  ln -s "$HOST_ROOT" "$HOME/.pi/agent/install/releases/0.0.0-test/node_modules/@earendil-works/pi-coding-agent"
+  stub_runtime_validator
 }
 
 stub_managed_pi_for_agent() {
@@ -90,6 +127,9 @@ stub_managed_pi_for_agent() {
   mkdir -p "$agent_dir/bin" "$agent_dir/install"
   cp "$HOME/.pi/agent/bin/pi" "$agent_dir/bin/pi"
   cp "$HOME/.pi/agent/install/managed-install.json" "$agent_dir/install/managed-install.json"
+  cp "$HOME/.pi/agent/install/current-version" "$agent_dir/install/current-version"
+  mkdir -p "$agent_dir/install/releases/0.0.0-test/node_modules/@earendil-works"
+  ln -s "$HOST_ROOT" "$agent_dir/install/releases/0.0.0-test/node_modules/@earendil-works/pi-coding-agent"
 }
 
 seed_mutable_pi_drift() {
@@ -138,6 +178,7 @@ run_security_migration() {
 stub_pi_install() {
   stub_existing_pi
   cp "$HOME/.pi/agent/bin/pi" "$TEST_ROOT/pi-fixture"
+  stub_command npm 'exit 81' # Bootstrap prerequisite only; native CLI is stubbed.
   rm "$HOME/.pi/agent/bin/pi" "$HOME/.pi/agent/install/managed-install.json"
   cat >"$TEST_ROOT/managed-installer.sh" <<'SCRIPT'
 #!/bin/sh
@@ -150,7 +191,44 @@ printf '{"kind":"pi-managed-install","schemaVersion":1,"layout":"releases-v1"}\n
 rm -f "$HOME/.local/bin/pi"
 SCRIPT
   stub_command curl 'printf "%s\n" "$*" >"$HOME/curl-invocation"; cp "$TEST_ROOT/managed-installer.sh" "${@: -1}"'
-  stub_command npm 'exit 0'
+}
+
+@test "Pi fresh apply publishes F8 file context and never recreates retired models baseline" {
+  export PI_VERSION
+  stub_existing_pi
+  run bash "$REPO_ROOT/ai/pi/install.sh"
+  [ "$status" -eq 0 ]
+  [ ! -e "$HOME/.pi/agent/models.json" ]
+  [ ! -L "$HOME/.pi/agent/models.json" ]
+  [ ! -L "$HOME/.pi/agent/pi-file-context.json" ]
+  jq -e '.openShortcut == "f8"' "$HOME/.pi/agent/pi-file-context.json"
+  jq -e '.astraOverrideRetired == true' "$HOME/.pi/agent/dotfiles-migrations.json"
+}
+
+@test "Pi explicit refresh changes old file-context default only and normal apply preserves new drift" {
+  export PI_VERSION
+  stub_existing_pi
+  printf '{"openShortcut":"ctrl+shift+x","custom":true}\n' >"$HOME/.pi/agent/pi-file-context.json"
+  run bash "$REPO_ROOT/ai/pi/install.sh"
+  [ "$status" -eq 0 ]
+  [ "$(jq -r .openShortcut "$HOME/.pi/agent/pi-file-context.json")" = ctrl+shift+x ]
+  run env PI_AI_REFRESH_PREFERENCES=1 bash "$REPO_ROOT/ai/pi/install.sh"
+  [ "$status" -eq 0 ]
+  jq -e '.openShortcut == "f8" and .custom == true' "$HOME/.pi/agent/pi-file-context.json"
+  [ "$(stat -c %a "$HOME/.pi/agent/pi-file-context.json.backup")" = 600 ]
+  printf '{"openShortcut":"alt+o"}\n' >"$HOME/.pi/agent/pi-file-context.json"
+  run bash "$REPO_ROOT/ai/pi/install.sh"
+  [ "$status" -eq 0 ]
+  [ "$(jq -r .openShortcut "$HOME/.pi/agent/pi-file-context.json")" = alt+o ]
+}
+
+@test "Pi refresh flag rejects values outside zero or one before mutation" {
+  local before
+  before=$(snapshot_tree "$TEST_ROOT")
+  run env PI_AI_REFRESH_PREFERENCES=yes bash "$REPO_ROOT/ai/pi/install.sh" --check
+  [ "$status" -ne 0 ]
+  [[ "$output" == *PI_AI_REFRESH_PREFERENCES*0*1* ]]
+  [ "$before" = "$(snapshot_tree "$TEST_ROOT")" ]
 }
 
 @test "Pi check mode changes no files with custom agent and XDG roots" {
@@ -171,6 +249,147 @@ SCRIPT
   [ "$before" = "$after" ]
 }
 
+@test "installer fixture honors explicit SDK root when pi is absent from PATH" {
+  mkdir -p "$TEST_ROOT/hostless-bin"
+  ln -s "$REAL_NPM" "$TEST_ROOT/hostless-bin/npm"
+  local hostless_path="$TEST_ROOT/hostless-bin:/usr/bin:/bin:$SANDBOX_TOOL_BIN"
+  PATH="$hostless_path" run command -v pi
+  [ "$status" -ne 0 ]
+  PATH="$hostless_path" PI_TEST_HOST_ROOT="$HOST_ROOT" run bats --filter '^regular Pi apply runs exactly one native' "$BATS_TEST_FILENAME"
+  printf '%s\n' "$output"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'ok 1 regular Pi apply runs exactly one native'* ]]
+  PATH="$hostless_path" PI_TEST_HOST_ROOT="" run bats --filter '^regular Pi apply runs exactly one native' "$BATS_TEST_FILENAME"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'error: Pi executable not found on PATH'* ]]
+}
+
+@test "regular Pi apply runs exactly one native extension update without self or project approval" {
+  export PI_VERSION
+  stub_existing_pi
+  run bash "$REPO_ROOT/ai/pi/install.sh"
+  [ "$status" -eq 0 ]
+  [ "$(grep -c '^update' "$HOME/pi-invocations")" -eq 1 ]
+  grep -Fx 'update --extensions --no-approve' "$HOME/pi-invocations"
+}
+
+@test "native extension update and runtime failures stop before authored links and policy publication" {
+  export PI_VERSION PI_TEST_REQUIRE_GATE_BEFORE_LINKS=1
+  stub_existing_pi
+  run env PI_TEST_UPDATE_FAIL=1 bash "$REPO_ROOT/ai/pi/install.sh"
+  [ "$status" -eq 42 ]
+  [[ "$output" == *'Native Pi extension update failed'* ]]
+  [[ "$output" != *'packages are ready'* ]]
+  [ ! -d "$(<"$TEST_ROOT/update-cwd")" ]
+  [ ! -e "$HOME/.pi/agent/AGENTS.md" ]
+  [ ! -e "$HOME/.pi/agent/extensions/pi-permission-system/config.json" ]
+  run env PI_TEST_VALIDATOR_FAIL=1 bash "$REPO_ROOT/ai/pi/install.sh"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'pi install npm:@gotgenes/pi-permission-system'* ]]
+  [ ! -e "$HOME/.pi/agent/AGENTS.md" ]
+  [ ! -e "$HOME/.pi/agent/extensions/worktree-guard.ts" ]
+  [ ! -e "$HOME/.pi/agent/extensions/pi-permission-system/config.json" ]
+  [ ! -d "$(<"$TEST_ROOT/update-cwd")" ]
+}
+
+@test "native extension update quotes a custom agent path and cleans its isolated cwd" {
+  export PI_VERSION
+  stub_existing_pi
+  local agent_dir="$TEST_ROOT/a space ' ; \$(touch SENTINEL) agent"
+  stub_managed_pi_for_agent "$agent_dir"
+  run env PI_CODING_AGENT_DIR="$agent_dir" bash "$REPO_ROOT/ai/pi/install.sh"
+  [ "$status" -eq 0 ]
+  [ -f "$agent_dir/extensions/pi-permission-system/config.json" ]
+  [ ! -e "$REPO_ROOT/SENTINEL" ]
+  [ ! -d "$(<"$TEST_ROOT/update-cwd")" ]
+}
+
+@test "managed destination boundary accepts only exact OS aliases" {
+  run node --input-type=module - "$REPO_ROOT/libexec/pi-managed-paths.mjs" "$TEST_ROOT" <<'JS'
+import assert from "node:assert/strict";
+import { mkdirSync, symlinkSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+const { isStandardAlias, assertManagedPath } = await import(pathToFileURL(process.argv[2]));
+for (const path of ["/tmp", "/var", "/etc"]) {
+  assert.equal(isStandardAlias(path, `/private${path}`), true);
+  for (const target of ["/foreign", `/private${path}-other`, `${process.argv[3]}/private${path}`]) {
+    assert.equal(isStandardAlias(path, target), false);
+  }
+}
+assert.equal(isStandardAlias("/tmp-other", "/private/tmp"), false);
+assertManagedPath(`${process.env.HOME}/absent/agent`, true);
+mkdirSync(`${process.argv[3]}/os-fixture/private`, { recursive: true });
+symlinkSync(`${process.argv[3]}/os-fixture/private`, `${process.argv[3]}/os-fixture/tmp`);
+assert.throws(() => assertManagedPath(`${process.argv[3]}/os-fixture/tmp/absent`), /symlink/);
+JS
+  [ "$status" -eq 0 ]
+}
+
+@test "installer accepts trusted HOME aliases but refuses below HOME and custom root links" {
+  export PI_VERSION
+  stub_existing_pi
+  local physical="$HOME" alias="$TEST_ROOT/home-alias" selected before
+  ln -s "$physical" "$alias"
+  export HOME="$alias"
+  run bash "$REPO_ROOT/ai/pi/install.sh"
+  printf '%s\n' "$output"
+  [ "$status" -eq 0 ]
+  run bash "$REPO_ROOT/ai/pi/install.sh" --check
+  [ "$status" -eq 0 ]
+  for selected in "$physical-other" "$TEST_ROOT/custom-agent"; do
+    ln -s "$physical/.pi/agent" "$selected"
+    before=$(snapshot_tree "$physical")
+    PI_CODING_AGENT_DIR="$selected" run bash "$REPO_ROOT/ai/pi/install.sh" --check
+    [ "$status" -eq 1 ]
+    [[ "$output" == *unsafe* || "$output" == *symlink* ]]
+    [ "$before" = "$(snapshot_tree "$physical")" ]
+  done
+  mv "$physical/.pi" "$TEST_ROOT/foreign-pi"
+  ln -s "$TEST_ROOT/foreign-pi" "$physical/.pi"
+  run bash "$REPO_ROOT/ai/pi/install.sh" --check
+  [ "$status" -eq 1 ]
+  [[ "$output" == *unsafe* || "$output" == *symlink* ]]
+}
+
+@test "regular apply rejects unsafe config ancestors before declaration publication" {
+  export PI_VERSION
+  stub_existing_pi
+  mkdir -p "$TEST_ROOT/foreign-config"
+  ln -s "$TEST_ROOT/foreign-config" "$TEST_ROOT/xdg-alias"
+  local before
+  before=$(snapshot_tree "$TEST_ROOT")
+  run env XDG_CONFIG_HOME="$TEST_ROOT/xdg-alias" bash "$REPO_ROOT/ai/pi/install.sh"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'symlink in managed path'*'/xdg-alias'* ]]
+  [ "$before" = "$(snapshot_tree "$TEST_ROOT")" ]
+}
+
+@test "installer rejects duplicate and unknown arguments without mutation" {
+  local before
+  before=$(snapshot_tree "$TEST_ROOT")
+  local -a cases=('--check --check' '--unknown' '--check extra')
+  local args
+  for args in "${cases[@]}"; do
+    read -r -a argv <<<"$args"
+    run bash "$REPO_ROOT/ai/pi/install.sh" "${argv[@]}"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *usage:* ]]
+    [ "$before" = "$(snapshot_tree "$TEST_ROOT")" ]
+  done
+}
+
+@test "managed Pi make ai-check with installed SDK leaves all temporary roots unchanged" {
+  export PI_VERSION
+  stub_existing_pi
+  run bash "$REPO_ROOT/ai/pi/install.sh"
+  [ "$status" -eq 0 ]
+  local before
+  before=$(snapshot_tree "$TEST_ROOT")
+  run make -C "$REPO_ROOT" ai-check
+  [ "$status" -eq 0 ]
+  [ "$before" = "$(snapshot_tree "$TEST_ROOT")" ]
+}
+
 @test "Pi installer reuses a managed Pi without downgrading or reinstalling it" {
   export PI_VERSION=1.99.0
   stub_existing_pi
@@ -181,7 +400,7 @@ SCRIPT
 
   [ "$status" -eq 0 ]
   [ ! -e "$HOME/curl-invocation" ]
-  [ "$(<"$HOME/pi-invocation")" = 'update --extensions' ]
+  [ -f "$TEST_ROOT/validator-events" ]
 }
 
 @test "Pi installer migrates the user-local npm copy without installing a repo-pinned Pi" {
@@ -249,7 +468,7 @@ SCRIPT
   [ "$status" -eq 0 ]
   [ ! -e "$HOME/curl-invocation" ]
   [ -x "$external_agent/bin/pi" ]
-  [ "$(<"$HOME/pi-invocation")" = 'update --extensions' ]
+  [ -f "$TEST_ROOT/validator-events" ]
   [ -f "$HOME/.pi/agent/settings.json" ]
 }
 
@@ -341,7 +560,7 @@ SCRIPT
   [ -f "$agent_dir/extensions/pi-permission-system/config.json" ]
   jq -e '.permission.bash["*"] == "allow"' \
     "$agent_dir/extensions/pi-permission-system/config.json"
-  [ "$(<"$HOME/pi-invocation")" = 'update --extensions' ]
+  [ -f "$TEST_ROOT/validator-events" ]
 }
 
 @test "Pi check mode uses system Python fallback without mutation" {
@@ -395,7 +614,8 @@ SCRIPT
   [[ "$output" == *"$agent_dir/AGENTS.md"* ]]
   [[ "$output" == *"$agent_dir/keybindings.json"* ]]
   [[ "$output" == *"$agent_dir/modes.json"* ]]
-  [[ "$output" == *"$agent_dir/models.json"* ]]
+  [[ "$output" == *"$agent_dir/pi-file-context.json"* ]]
+  [[ "$output" == *"$agent_dir/dotfiles-migrations.json"* ]]
   [[ "$output" == *"$agent_dir/agents/rush.md"* ]]
   [[ "$output" == *"$agent_dir/agents/smart.md"* ]]
   [[ "$output" == *"$agent_dir/agents/deep.md"* ]]
@@ -453,13 +673,14 @@ JSON
     "$REPO_ROOT/ai/pi/extensions/worktree-guard.ts"
 
   cmp "$REPO_ROOT/ai/pi/config/modes.json" "$HOME/.pi/agent/modes.json"
-  cmp "$REPO_ROOT/ai/pi/config/models.json" "$HOME/.pi/agent/models.json"
+  [ ! -e "$HOME/.pi/agent/models.json" ]
+  cmp "$REPO_ROOT/ai/pi/config/file-context.json" "$HOME/.pi/agent/pi-file-context.json"
   [ ! -e "$HOME/.pi/agent/sandbox.json" ]
   cmp "$REPO_ROOT/ai/pi/config/subagents.json" "$HOME/.pi/agent/subagents.json"
   cmp "$REPO_ROOT/ai/pi/config/web-search.json" "$XDG_CONFIG_HOME/pi/web-search.json"
   [ "$(stat -c '%a' "$HOME/.pi/agent/settings.json")" = 644 ]
   [ "$(stat -c '%a' "$HOME/.pi/agent/modes.json")" = 644 ]
-  [ "$(stat -c '%a' "$HOME/.pi/agent/models.json")" = 644 ]
+  [ "$(stat -c '%a' "$HOME/.pi/agent/pi-file-context.json")" = 644 ]
   [ "$(stat -c '%a' "$HOME/.pi/agent/extensions/pi-permission-system/config.json")" = 644 ]
   [ "$(stat -c '%a' "$HOME/.pi/agent/subagents.json")" = 600 ]
   [ "$(stat -c '%a' "$XDG_CONFIG_HOME/pi/web-search.json")" = 600 ]
@@ -470,7 +691,7 @@ JSON
     and ([paths(scalars) as $path | getpath($path) | strings | select(contains("__PI_AGENT_DIR__"))] | length == 0)
   ' "$HOME/.pi/agent/extensions/pi-permission-system/config.json"
   [ "$status" -eq 0 ]
-  [ "$(cat "$HOME/pi-invocation")" = "update --extensions" ]
+  [ -f "$TEST_ROOT/validator-events" ]
 }
 
 @test "Pi installer removes positively identified Vekil and generated client remnants" {
@@ -544,7 +765,7 @@ EOF
   [ ! -L "$HOME/.pi/agent/auth.json" ]
 }
 
-@test "Pi keybindings reserve ctrl+x for plan mode" {
+@test "Pi keybindings retain message copy and model-clear shortcuts" {
   run jq -e '
     .["app.message.copy"] == "ctrl+shift+x"
     and .["app.models.clearAll"] == "alt+x"
@@ -561,14 +782,14 @@ EOF
   [ "$status" -eq 0 ]
 }
 
-@test "Pi selects the pinned workflow and security packages" {
+@test "Pi selects the floating workflow and security packages" {
   run jq -e '
     [.packages[] | if type == "string" then . else .source end] as $sources
-    | ($sources | index("git:github.com/tmustier/pi-queue-steer@v0.2.0")) != null
-    and ($sources | index("npm:pi-web-access@0.27.0")) != null
-    and ($sources | index("npm:@narumitw/pi-lsp@0.49.6")) != null
-    and ($sources | index("npm:@gotgenes/pi-subagents@21.2.0")) != null
-    and ($sources | index("npm:@gotgenes/pi-permission-system@29.2.0")) != null
+    | ($sources | index("git:github.com/tmustier/pi-queue-steer")) != null
+    and ($sources | index("npm:pi-web-access")) != null
+    and ($sources | index("npm:@narumitw/pi-lsp")) != null
+    and ($sources | index("npm:@gotgenes/pi-subagents")) != null
+    and ($sources | index("npm:@gotgenes/pi-permission-system")) != null
     and ($sources | map(select(contains("pi-sandbox"))) | length == 0)
   ' "$REPO_ROOT/ai/pi/settings.json"
   [ "$status" -eq 0 ]
@@ -582,7 +803,7 @@ EOF
   printf '{"yoloMode":true,"permission":{"bash":{"*":"allow"}}}\n' >"$permission"
   jq '.excludedExtensionPackages += ["git:github.com/carderne/pi-sandbox@53bd1d64d896d4a6bfab3769023201891e76ba72"]' \
     "$REPO_ROOT/ai/pi/config/subagents.json" >"$HOME/.pi/agent/subagents.json"
-  jq '.packages += ["git:github.com/carderne/pi-sandbox@53bd1d64d896d4a6bfab3769023201891e76ba72"]' \
+  jq '.packages = ["git:github.com/carderne/pi-sandbox@53bd1d64d896d4a6bfab3769023201891e76ba72"] + .packages' \
     "$REPO_ROOT/ai/pi/settings.json" >"$HOME/.pi/agent/settings.json"
   printf '{"custom":"retired policy"}\n' >"$HOME/.pi/agent/sandbox.json"
 
@@ -619,7 +840,7 @@ EOF
   local policy
   for policy in '{invalid' '{"yoloMode":true}'; do
     printf '%s\n' "$policy" >"$permission"
-    jq '.packages += ["git:github.com/carderne/pi-sandbox@53bd1d64d896d4a6bfab3769023201891e76ba72"]' \
+    jq '.packages = [{"source":"git:github.com/carderne/pi-sandbox@53bd1d64d896d4a6bfab3769023201891e76ba72"}] + .packages' \
       "$REPO_ROOT/ai/pi/settings.json" >"$HOME/.pi/agent/settings.json"
 
     run env HOME="$HOME" PATH="$PATH" PI_VERSION="$PI_VERSION" \
@@ -656,74 +877,6 @@ EOF
   [ "$status" -eq 0 ]
 }
 
-@test "Pi installer explicitly installs missing pinned npm packages before updating" {
-  export PI_VERSION
-  stub_existing_pi
-
-  run env HOME="$HOME" PATH="$PATH" PI_VERSION="$PI_VERSION" \
-    bash "$REPO_ROOT/ai/pi/install.sh"
-
-  [ "$status" -eq 0 ]
-  for source in \
-    "npm:pi-web-access@$PI_WEB_ACCESS_VERSION" \
-    "npm:@narumitw/pi-lsp@$PI_LSP_VERSION" \
-    "npm:@gotgenes/pi-permission-system@$PI_PERMISSION_SYSTEM_VERSION" \
-    "npm:@gotgenes/pi-subagents@$PI_SUBAGENTS_VERSION"; do
-    run grep -Fx "install $source" "$HOME/pi-invocations"
-    [ "$status" -eq 0 ]
-  done
-  [ "$(tail -1 "$HOME/pi-invocations")" = "update --extensions" ]
-}
-
-@test "Pi installer repairs a matching permission package with a missing required artifact" {
-  export PI_VERSION
-  stub_existing_pi
-  local package_root="$HOME/.pi/agent/npm/node_modules/@gotgenes/pi-permission-system"
-  local missing
-  mkdir -p "$package_root/schemas" "$package_root/src"
-  printf '{"name":"@gotgenes/pi-permission-system","version":"%s"}\n' \
-    "$PI_PERMISSION_SYSTEM_VERSION" >"$package_root/package.json"
-
-  for missing in schemas/permissions.schema.json src/permission-manager.ts; do
-    cp "$TEST_ROOT/permission-system-schema.json" \
-      "$package_root/schemas/permissions.schema.json"
-    printf 'export class PermissionManager {}\n' \
-      >"$package_root/src/permission-manager.ts"
-    rm "$package_root/$missing"
-    : >"$HOME/pi-invocations"
-
-    run env HOME="$HOME" PATH="$PATH" PI_VERSION="$PI_VERSION" \
-      bash "$REPO_ROOT/ai/pi/install.sh"
-
-    [ "$status" -eq 0 ]
-    [ -f "$package_root/schemas/permissions.schema.json" ]
-    [ -f "$package_root/src/permission-manager.ts" ]
-    [ "$(grep -Fxc "install npm:@gotgenes/pi-permission-system@$PI_PERMISSION_SYSTEM_VERSION" \
-      "$HOME/pi-invocations")" -eq 1 ]
-  done
-}
-
-@test "Pi installer fails when permission package reinstall remains incomplete" {
-  export PI_VERSION
-  stub_existing_pi
-  local package_root="$HOME/.pi/agent/npm/node_modules/@gotgenes/pi-permission-system"
-  mkdir -p "$package_root/schemas"
-  printf '{"name":"@gotgenes/pi-permission-system","version":"%s"}\n' \
-    "$PI_PERMISSION_SYSTEM_VERSION" >"$package_root/package.json"
-  cp "$TEST_ROOT/permission-system-schema.json" \
-    "$package_root/schemas/permissions.schema.json"
-
-  run env HOME="$HOME" PATH="$PATH" PI_VERSION="$PI_VERSION" \
-    PI_TEST_OMIT_PERMISSION_MANAGER=1 bash "$REPO_ROOT/ai/pi/install.sh"
-
-  [ "$status" -ne 0 ]
-  [[ "$output" == *"incomplete Pi permission package"* ]]
-  [[ "$output" == *"src/permission-manager.ts"* ]]
-  [ "$(grep -Fxc "install npm:@gotgenes/pi-permission-system@$PI_PERMISSION_SYSTEM_VERSION" \
-    "$HOME/pi-invocations")" -eq 1 ]
-  [ ! -e "$package_root/src/permission-manager.ts" ]
-}
-
 @test "Pi installer hashes permission policy with the macOS shasum fallback" {
   export PI_VERSION
   stub_existing_pi
@@ -742,6 +895,7 @@ printf '%s\n' "$*" >>"$HOME/shasum-invocations"
 printf '%064d  %s\n' 0 "$3"
 SCRIPT
   chmod +x "$fallback_bin/shasum"
+  ln -sf "$STUB_BIN/node" "$fallback_bin/node"
 
   run env HOME="$HOME" PATH="$fallback_bin" PI_VERSION="$PI_VERSION" \
     bash "$REPO_ROOT/ai/pi/install.sh"
@@ -770,7 +924,7 @@ SCRIPT
 @test "Pi loads permission-system and enables code actions without sandbox" {
   run jq -e '
     [.packages[] | if type == "string" then . else .source end] as $sources
-    | ($sources | index("npm:@gotgenes/pi-permission-system@29.2.0")) != null
+    | ($sources | index("npm:@gotgenes/pi-permission-system")) != null
     and ($sources | map(select(contains("pi-sandbox"))) | length == 0)
     and ([.packages[] | objects | select(.source == "git:github.com/tmustier/pi-extensions")][0].extensions
       | index("code-actions/index.ts")) != null
@@ -778,23 +932,9 @@ SCRIPT
   [ "$status" -eq 0 ]
 }
 
-@test "Pi Astra workaround routes GitHub Copilot through the Responses API" {
-  run jq -e '
-    .providers["github-copilot"].models
-    | length == 1
-      and .[0].id == "gpt-6-astra"
-      and .[0].api == "openai-responses"
-      and .[0].headers["User-Agent"] == "GitHubCopilotChat/0.35.0"
-      and .[0].headers["Editor-Version"] == "vscode/1.107.0"
-      and .[0].headers["Editor-Plugin-Version"] == "copilot-chat/0.35.0"
-      and .[0].headers["Copilot-Integration-Id"] == "vscode-chat"
-  ' "$REPO_ROOT/ai/pi/config/models.json"
-  [ "$status" -eq 0 ]
-}
-
 @test "Pi loads the complete Superpowers package" {
   run jq -e '
-    [.packages[] | objects | select(.source | startswith("git:github.com/obra/superpowers@"))]
+    [.packages[] | objects | select(.source == "git:github.com/obra/superpowers")]
     | length == 1
       and (.[0] | has("extensions") | not)
       and (.[0] | has("skills") | not)
@@ -806,7 +946,7 @@ SCRIPT
 
 @test "Pi loads only selected agent-skills without its router" {
   run jq -e '
-    [.packages[] | objects | select(.source | startswith("git:github.com/addyosmani/agent-skills@"))]
+    [.packages[] | objects | select(.source == "git:github.com/addyosmani/agent-skills")]
     | length == 1
       and .[0].extensions == []
       and .[0].prompts == []
@@ -861,13 +1001,15 @@ SCRIPT
   [[ "$install_output" == *preserved* ]]
   [[ "$install_output" == *PI_AI_RESET_MUTABLE_CONFIG=1* ]]
   [ "$(find "$HOME/.pi/agent/extensions/pi-permission-system" -name 'config.json.backup*' | wc -l)" -eq 1 ]
-  [ "$(find "$HOME" -name '*.backup*' | wc -l)" -eq 1 ]
+  [ -f "$HOME/.pi/agent/subagents.json.backup" ]
+  jq -e '.custom == "subagents"' "$HOME/.pi/agent/subagents.json.backup"
+  [ "$(find "$HOME" -name '*.backup*' | wc -l)" -eq 2 ]
 
   run env HOME="$HOME" PATH="$PATH" PI_VERSION="$PI_VERSION" \
     bash "$REPO_ROOT/ai/pi/install.sh"
   [ "$status" -eq 0 ]
   [ "$(find "$HOME/.pi/agent/extensions/pi-permission-system" -name 'config.json.backup*' | wc -l)" -eq 1 ]
-  [ "$(find "$HOME" -name '*.backup*' | wc -l)" -eq 1 ]
+  [ "$(find "$HOME" -name '*.backup*' | wc -l)" -eq 2 ]
 }
 
 @test "Pi installer refuses active YOLO permission policy replacement even during reset" {
@@ -903,7 +1045,7 @@ SCRIPT
   local original="$TEST_ROOT/original-permission.json"
   mkdir -p "$package_root/schemas"
   printf '{"name":"@gotgenes/pi-permission-system","version":"%s"}\n' \
-    "$PI_PERMISSION_SYSTEM_VERSION" >"$package_root/package.json"
+    "$FIXTURE_PERMISSION_VERSION" >"$package_root/package.json"
   mkdir -p "$package_root/src"
   printf 'export class PermissionManager {}\n' >"$package_root/src/permission-manager.ts"
   cat >"$package_root/schemas/permissions.schema.json" <<'JSON'
@@ -1194,7 +1336,8 @@ JSON
   [ "$status" -eq 0 ]
   [ -f "$HOME/.pi/agent/settings.json.backup" ]
   [ -f "$HOME/.pi/agent/modes.json.backup" ]
-  [ -f "$HOME/.pi/agent/models.json.backup" ]
+  [ ! -e "$HOME/.pi/agent/models.json.backup" ]
+  [ "$(jq -r .custom "$HOME/.pi/agent/models.json")" = models ]
   [ -f "$HOME/.pi/agent/extensions/pi-permission-system/config.json.backup" ]
   [ ! -e "$HOME/.pi/agent/sandbox.json.backup" ]
   [ "$(jq -r .custom "$HOME/.pi/agent/sandbox.json")" = sandbox ]
@@ -1202,15 +1345,15 @@ JSON
   [ -f "$XDG_CONFIG_HOME/pi/web-search.json.backup" ]
   cmp "$REPO_ROOT/ai/pi/settings.json" "$HOME/.pi/agent/settings.json"
   cmp "$REPO_ROOT/ai/pi/config/modes.json" "$HOME/.pi/agent/modes.json"
-  cmp "$REPO_ROOT/ai/pi/config/models.json" "$HOME/.pi/agent/models.json"
+  [ "$(jq -r .custom "$HOME/.pi/agent/models.json")" = models ]
   cmp "$REPO_ROOT/ai/pi/config/subagents.json" "$HOME/.pi/agent/subagents.json"
   cmp "$REPO_ROOT/ai/pi/config/web-search.json" "$XDG_CONFIG_HOME/pi/web-search.json"
-  [ "$(find "$HOME" -name '*.backup*' | wc -l)" -eq 6 ]
+  [ "$(find "$HOME" -name '*.backup*' | wc -l)" -eq 5 ]
 
   run env HOME="$HOME" PATH="$PATH" PI_VERSION="$PI_VERSION" \
     PI_AI_RESET_MUTABLE_CONFIG=1 bash "$REPO_ROOT/ai/pi/install.sh"
   [ "$status" -eq 0 ]
-  [ "$(find "$HOME" -name '*.backup*' | wc -l)" -eq 6 ]
+  [ "$(find "$HOME" -name '*.backup*' | wc -l)" -eq 5 ]
 }
 
 @test "Pi installer converts recognized legacy links without discarding readable state" {
@@ -1244,6 +1387,91 @@ JSON
     "$REPO_ROOT/ai/pi/extensions/herdr-agent-state.ts"
   assert_symlink_target "$agent_dir/extensions/worktree-guard.ts" \
     "$REPO_ROOT/ai/pi/extensions/worktree-guard.ts"
+}
+
+@test "Pi explicit refresh accepts readable legacy modes links without preflight mutation" {
+  export PI_VERSION
+  stub_existing_pi
+  local agent_dir="$TEST_ROOT/refresh-legacy-agent" canonical="$TEST_ROOT/canonical-dotfiles"
+  stub_managed_pi_for_agent "$agent_dir"
+  mkdir -p "$canonical/ai/pi"
+  printf '{"currentMode":"smart","extra":true,"modes":{"smart":{"provider":"github-copilot","modelId":"gpt-5.6-sol","color":"pink"}}}\n' >"$canonical/ai/pi/modes.json"
+  ln -s "$canonical/ai/pi/modes.json" "$agent_dir/modes.json"
+  local before
+  before=$(snapshot_tree "$TEST_ROOT")
+  run env PI_AI_REFRESH_PREFERENCES=1 DOTFILES="$canonical" PI_CODING_AGENT_DIR="$agent_dir" \
+    bash "$REPO_ROOT/ai/pi/install.sh" --check
+  [ "$status" -eq 0 ]
+  [ "$before" = "$(snapshot_tree "$TEST_ROOT")" ]
+  run env PI_AI_REFRESH_PREFERENCES=1 DOTFILES="$canonical" PI_CODING_AGENT_DIR="$agent_dir" \
+    bash "$REPO_ROOT/ai/pi/install.sh"
+  [ "$status" -eq 0 ]
+  [ ! -L "$agent_dir/modes.json" ]
+  jq -s -e '.[0].modes.smart.modelId == .[1].modes.smart.modelId and .[0].modes.smart.color == "pink" and .[0].extra == true' \
+    "$agent_dir/modes.json" "$REPO_ROOT/ai/pi/config/modes.json"
+  cmp "$canonical/ai/pi/modes.json" "$agent_dir/modes.json.backup"
+  [ "$(stat -c %a "$agent_dir/modes.json.backup")" = 600 ]
+  local count
+  count=$(find "$agent_dir" -name 'modes.json.backup*' | wc -l)
+  run env PI_AI_REFRESH_PREFERENCES=1 DOTFILES="$canonical" PI_CODING_AGENT_DIR="$agent_dir" \
+    bash "$REPO_ROOT/ai/pi/install.sh"
+  [ "$status" -eq 0 ]
+  [ "$count" = "$(find "$agent_dir" -name 'modes.json.backup*' | wc -l)" ]
+}
+
+@test "Pi explicit refresh accepts supported dangling legacy modes links without preflight mutation" {
+  export PI_VERSION
+  stub_existing_pi
+  local agent_dir="$TEST_ROOT/refresh-dangling-agent"
+  stub_managed_pi_for_agent "$agent_dir"
+  ln -s "$REPO_ROOT/ai/pi/modes.json" "$agent_dir/modes.json"
+  local before
+  before=$(snapshot_tree "$TEST_ROOT")
+  run env PI_AI_REFRESH_PREFERENCES=1 PI_CODING_AGENT_DIR="$agent_dir" \
+    bash "$REPO_ROOT/ai/pi/install.sh" --check
+  [ "$status" -eq 0 ]
+  [ "$before" = "$(snapshot_tree "$TEST_ROOT")" ]
+  run env PI_AI_REFRESH_PREFERENCES=1 PI_CODING_AGENT_DIR="$agent_dir" \
+    bash "$REPO_ROOT/ai/pi/install.sh"
+  [ "$status" -eq 0 ]
+  [ ! -L "$agent_dir/modes.json" ]
+  cmp "$REPO_ROOT/ai/pi/config/modes.json" "$agent_dir/modes.json"
+  [ ! -e "$agent_dir/modes.json.backup" ]
+}
+
+@test "Pi explicit refresh accepts supported dangling settings links without preflight mutation" {
+  export PI_VERSION
+  stub_existing_pi
+  local agent_dir="$TEST_ROOT/refresh-dangling-settings" canonical="$TEST_ROOT/dangling-dotfiles"
+  stub_managed_pi_for_agent "$agent_dir"
+  ln -s "$TEST_ROOT/retired-dotfiles" "$canonical"
+  ln -s "$canonical/ai/pi/settings.json" "$agent_dir/settings.json"
+  local before
+  before=$(snapshot_tree "$TEST_ROOT")
+  run env PI_AI_REFRESH_PREFERENCES=1 DOTFILES="$canonical" PI_CODING_AGENT_DIR="$agent_dir" \
+    bash "$REPO_ROOT/ai/pi/install.sh" --check
+  [ "$status" -eq 0 ]
+  [ "$before" = "$(snapshot_tree "$TEST_ROOT")" ]
+  run env PI_AI_REFRESH_PREFERENCES=1 DOTFILES="$canonical" PI_CODING_AGENT_DIR="$agent_dir" \
+    bash "$REPO_ROOT/ai/pi/install.sh"
+  [ "$status" -eq 0 ]
+  [ ! -L "$agent_dir/settings.json" ]
+  cmp "$REPO_ROOT/ai/pi/settings.json" "$agent_dir/settings.json"
+  [ ! -e "$agent_dir/settings.json.backup" ]
+}
+
+@test "Pi explicit refresh still refuses foreign legacy-shaped modes links without mutation" {
+  local agent_dir="$TEST_ROOT/foreign-refresh-agent" foreign="$TEST_ROOT/foreign/ai/pi/modes.json"
+  mkdir -p "$agent_dir" "$(dirname "$foreign")"
+  printf '{invalid\n' >"$foreign"
+  ln -s "$foreign" "$agent_dir/modes.json"
+  local before
+  before=$(snapshot_tree "$TEST_ROOT")
+  run env PI_AI_REFRESH_PREFERENCES=1 PI_CODING_AGENT_DIR="$agent_dir" \
+    bash "$REPO_ROOT/ai/pi/install.sh" --check
+  [ "$status" -ne 0 ]
+  [[ "$output" == *foreign*mutable*symlink* ]]
+  [ "$before" = "$(snapshot_tree "$TEST_ROOT")" ]
 }
 
 @test "Pi installer replaces a dangling recognized settings link with the baseline" {
@@ -1541,12 +1769,14 @@ JSON
   [[ "$output" == *"dry-run"* ]]
 }
 
-@test "Pi installer invokes security migration before package reconciliation" {
-  local migration_line package_line
-  migration_line=$(grep -n 'migrate_pi_security_stack' "$REPO_ROOT/ai/pi/install.sh" | cut -d: -f1)
-  package_line=$(grep -n 'update --extensions' "$REPO_ROOT/ai/pi/install.sh" | cut -d: -f1)
-  [ -n "$migration_line" ]
-  [ "$migration_line" -lt "$package_line" ]
+@test "regular Pi installer invokes security migration before native extension update" {
+  export PI_VERSION PI_TEST_REQUIRE_REGULAR_MIGRATION=1
+  stub_existing_pi
+  printf '{"permissions":{"mode":"old"}}\n' >"$HOME/.pi/agent/amplike.json"
+  run bash "$REPO_ROOT/ai/pi/install.sh"
+  [ "$status" -eq 0 ]
+  [ ! -e "$HOME/.pi/agent/amplike.json" ]
+  [ -f "$HOME/.pi/agent/npm/node_modules/pi-amplike/package.json" ]
 }
 
 @test "Pi installer callers no longer reference retired tracked modes or permissions" {

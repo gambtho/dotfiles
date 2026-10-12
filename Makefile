@@ -1,4 +1,4 @@
-.PHONY: install bootstrap update relink ai ai-check ai-webui ai-webui-check ai-webui-domain-check ai-webui-domain-setup pins pins-check pins-update check syntax lint test python-test validate
+.PHONY: install bootstrap update relink ai ai-check ai-webui ai-webui-check ai-webui-domain-check ai-webui-domain-setup pins pins-check pins-update check syntax lint test python-test pi-runtime-test validate
 
 # ── Main targets ──────────────────────────────────────────────────────────────
 
@@ -19,7 +19,7 @@ relink: ## Remove dead symlinks and re-create from current layout
 # Failures are aggregated rather than aborting the loop: one broken installer
 # must not block the rest, but it must still fail the target — a plain loop
 # reports only the last installer's status and hides every earlier failure.
-ai: ## Bootstrap managed Pi and reconcile its configuration
+ai: ## Reconcile Pi configuration and update extensions through native Pi
 	@failed=""; for installer in ai/pi/install.sh; do \
 		echo "Running $$installer..."; \
 		bash "$$installer" || failed="$$failed $$installer"; \
@@ -74,6 +74,9 @@ test:
 
 python-test:
 	python3 -m unittest discover -s tests/python -p 'test_*.py'
+
+pi-runtime-test: ## Exercise selected installed Pi/permission/subagents/LSP packages without paid providers
+	node --test tests/pi_extension_runtime.test.mjs tests/pi_native_packages.test.mjs
 
 # ── Help ──────────────────────────────────────────────────────────────────────
 

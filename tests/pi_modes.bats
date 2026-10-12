@@ -3,6 +3,11 @@
 load test_helper
 
 setup() {
+  local real_pi
+  real_pi=$(command -v pi) || real_pi=""
+  source "$BATS_TEST_DIRNAME/../libexec/lib/pi-runtime.sh"
+  resolve_pi_runtime "$real_pi" "${PI_TEST_HOST_ROOT:-}"
+  export HOST_ROOT=$PI_RUNTIME_PACKAGE_ROOT
   setup_dotfiles_test
   MODES="$REPO_ROOT/ai/pi/config/modes.json"
   SETTINGS="$REPO_ROOT/ai/pi/settings.json"
@@ -13,13 +18,87 @@ agent_frontmatter() {
   awk 'NR == 1 { next } /^---$/ { exit } { print }' "$AGENTS/$1.md" | yq -o=json '.'
 }
 
+@test "modes fixture honors explicit SDK root when pi is absent from PATH" {
+  stub_command pi 'exit 99'
+  run command -v pi
+  [ "$status" -eq 0 ]
+  [ "$output" = "$STUB_BIN/pi" ]
+  local no_pi_path="$TEST_ROOT/no-pi-bin" tool
+  mkdir -p "$no_pi_path"
+  for tool in bats bash env readlink dirname basename cat mkdir mktemp rm ln touch nl sort uniq cut node yq; do
+    ln -s "$(command -v "$tool")" "$no_pi_path/$tool"
+  done
+  PATH="$no_pi_path" run command -v pi
+  [ "$status" -ne 0 ]
+  PATH="$no_pi_path" PI_TEST_HOST_ROOT="$HOST_ROOT" run bats --filter '^native Copilot compaction thresholds' "$BATS_TEST_FILENAME"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"ok 1 native Copilot compaction"* ]]
+  PATH="$no_pi_path" PI_TEST_HOST_ROOT="" run bats --filter '^native Copilot compaction thresholds' "$BATS_TEST_FILENAME"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Pi executable not found on PATH"* ]]
+}
+
 @test "Pi defaults to the smart GPT-6 model without restricting cycling" {
   run jq -e '
     .defaultProvider == "github-copilot"
-    and .defaultModel == "gpt-6-sol"
+    and .defaultModel == "gpt-6.1-sol"
     and .defaultThinkingLevel == "medium"
     and (has("enabledModels") | not)
   ' "$SETTINGS"
+  [ "$status" -eq 0 ]
+}
+
+@test "compaction uses safe fallbacks and exactly four selected-model overrides" {
+  run jq -e '
+    .compaction.enabled == true
+    and .compaction.reserveTokens == 16384
+    and .compaction.keepRecentTokens == 20000
+    and .compaction.modelOverrides == {
+      "github-copilot/gpt-6-luna": {"reserveTokens":650000,"keepRecentTokens":60000},
+      "github-copilot/gpt-6.1-sol": {"reserveTokens":650000,"keepRecentTokens":60000},
+      "github-copilot/gpt-6-astra": {"reserveTokens":650000,"keepRecentTokens":60000},
+      "github-copilot/claude-opus-5.5": {"reserveTokens":650000,"keepRecentTokens":60000}
+    }
+    and .defaultTools == ["+codemode"]
+    and .codemode == {"mode":"on"}
+    and (has("lastChangelogVersion") | not)
+  ' "$SETTINGS"
+  [ "$status" -eq 0 ]
+}
+
+@test "native Copilot compaction thresholds remain positive and switch budgets by model" {
+  run node --experimental-import-meta-resolve --input-type=module - "$HOST_ROOT" "$SETTINGS" <<'JS'
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+const entry = pathToFileURL(`${process.argv[2]}/dist/index.js`).href;
+const { SettingsManager, shouldCompact } = await import(entry);
+const { githubCopilotProvider } = await import(import.meta.resolve("@earendil-works/pi-ai/providers/github-copilot", entry));
+const settings = SettingsManager.inMemory(JSON.parse(readFileSync(process.argv[3], "utf8")));
+const catalog = githubCopilotProvider().getModels();
+const selected = ["gpt-6-luna", "gpt-6.1-sol", "gpt-6-astra", "claude-opus-5.5"];
+for (const [id, reserve, recent] of [
+  ...selected.map(id => [id, 650000, 60000]),
+  ["claude-haiku-4.5", 16384, 20000],
+  ["gpt-5.4-mini", 16384, 20000],
+]) {
+  const model = catalog.find(model => model.id === id);
+  assert.ok(model, `native catalog missing ${id}`);
+  assert.equal(model.type, "chat");
+  assert.equal(model.provider, "github-copilot");
+  if (selected.includes(id)) assert.ok(model.contextWindow >= 1000000);
+  const budget = settings.getCompactionSettings(model);
+  assert.deepEqual(budget, { enabled: true, reserveTokens: reserve, keepRecentTokens: recent });
+  const threshold = model.contextWindow - reserve;
+  assert.ok(threshold > recent, `${id} has no positive usable context budget`);
+  assert.equal(shouldCompact(0, model.contextWindow, budget), false);
+  assert.equal(shouldCompact(threshold, model.contextWindow, budget), false);
+  assert.equal(shouldCompact(threshold + 1, model.contextWindow, budget), true);
+  console.log(`${id}: window=${model.contextWindow} reserve=${reserve} recent=${recent} threshold=${threshold}`);
+}
+assert.deepEqual(settings.getDefaultTools(), ["read", "bash", "edit", "write", "codemode"]);
+assert.equal(settings.getGlobalSettings().codemode.mode, "on");
+JS
   [ "$status" -eq 0 ]
 }
 
@@ -29,7 +108,7 @@ agent_frontmatter() {
     and .currentMode == "smart"
     and ([.modes[].provider] | all(. == "github-copilot"))
     and .modes.rush.modelId == "gpt-6-luna"
-    and .modes.smart.modelId == "gpt-6-sol"
+    and .modes.smart.modelId == "gpt-6.1-sol"
     and .modes.deep.modelId == "gpt-6-astra"
     and .modes.review.modelId == "claude-opus-5.5"
   ' "$MODES"
@@ -68,12 +147,12 @@ agent_frontmatter() {
   local agent actual
   for agent in rush deep review; do
     actual=$(agent_frontmatter "$agent")
-    run jq -e '.tools == "read, bash, grep, find, ls"' <<<"$actual"
+    run jq -e '.tools == "read, bash, grep, find, ls, codemode"' <<<"$actual"
     [ "$status" -eq 0 ]
   done
 
   actual=$(agent_frontmatter smart)
-  run jq -e '.tools == "read, write, edit, bash, grep, find, ls"' <<<"$actual"
+  run jq -e '.tools == "read, write, edit, bash, grep, find, ls, codemode"' <<<"$actual"
   [ "$status" -eq 0 ]
 }
 
@@ -151,6 +230,28 @@ agent_frontmatter() {
   actual=$(agent_frontmatter smart)
   run jq -e '.permission == {"bash": {"*$*": "deny"}}' <<<"$actual"
   [ "$status" -eq 0 ]
+}
+
+@test "Pi read-oriented agents keep metadata approvals without remote Git overrides" {
+  local agent actual
+  for agent in rush deep review; do
+    actual=$(agent_frontmatter "$agent")
+    run jq -e '
+      .permission.bash as $bash
+      | all([
+          "printenv PI_PROVIDER PI_MODEL PI_REASONING_LEVEL",
+          "printenv XDG_CONFIG_HOME PI_CODING_AGENT_DIR",
+          "/usr/bin/printenv PI_PROVIDER PI_MODEL PI_REASONING_LEVEL",
+          "/usr/bin/printenv XDG_CONFIG_HOME PI_CODING_AGENT_DIR"
+        ][]; . as $command | $bash[$command] == "allow"
+          and ($bash | has($command + "*") | not))
+      and ([$bash | keys[] | select(contains("ls-remote"))] | length == 0)
+      and ($bash | has("gh api *") | not)
+      and ($bash | has("*/gh api *") | not)
+      and $bash["*git *"] == "deny" and $bash["*$*"] == "deny"
+    ' <<<"$actual"
+    [ "$status" -eq 0 ]
+  done
 }
 
 @test "Pi read-oriented agent permissions stay structurally identical" {

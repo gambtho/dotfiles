@@ -9,13 +9,14 @@ import {
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { runPermissionPipelineChecks } from "./pi-permission-pipeline-checks.ts";
+import { permissionModulePath, runPermissionPipelineChecks } from "./pi-permission-pipeline-checks.ts";
 
 type PermissionState = "allow" | "ask" | "deny";
 
 type PermissionManagerLike = {
   configureForCwd(cwd: string): void;
-  getConfigIssues(agentName?: string): string[];
+  getConfigIssues?(agentName?: string): string[];
+  getPolicyIssues?(agentName?: string): string[];
   getToolPermission(toolName: string, agentName?: string): PermissionState;
   check(intent: Record<string, unknown>): { state: PermissionState };
 };
@@ -80,9 +81,12 @@ const repoRoot = option("--repo-root");
 const packageJson = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8")) as {
   version?: string;
 };
-if (packageJson.version !== "29.2.0") {
-  throw new Error(`expected pi-permission-system 29.2.0, received ${packageJson.version ?? "unknown"}`);
+if (typeof packageJson.version !== "string" || !packageJson.version.trim()) {
+  throw new Error(`permission package version missing or invalid at ${packageRoot}/package.json`);
 }
+const packageVersion = packageJson.version;
+const policyIssuesMethod = permissionModulePath(packageRoot, "permission-manager.ts").endsWith("/policy/permission-manager.ts")
+  ? "getPolicyIssues" : "getConfigIssues";
 
 const temporaryRoot = mkdtempSync(join(homedir(), ".pi-permission-validation-"));
 const homeDir = join(temporaryRoot, "home");
@@ -112,7 +116,10 @@ try {
     "pi-permission-system",
   );
   mkdirSync(permissionMetadataDir, { recursive: true });
-  writeFileSync(join(permissionMetadataDir, "package.json"), '{"version":"29.2.0"}\n');
+  writeFileSync(
+    join(permissionMetadataDir, "package.json"),
+    `${JSON.stringify({ version: packageVersion })}\n`,
+  );
 
   const baseline = JSON.parse(
     readFileSync(join(repoRoot, "ai", "pi", "config", "permission-system.json"), "utf8"),
@@ -123,11 +130,11 @@ try {
   );
   cpSync(join(repoRoot, "ai", "pi", "agents"), agentsDir, { recursive: true });
 
-  const moduleUrl = pathToFileURL(join(packageRoot, "src", "permission-manager.ts")).href;
+  const moduleUrl = pathToFileURL(permissionModulePath(packageRoot, "permission-manager.ts")).href;
   const bashProgramUrl = pathToFileURL(
     join(packageRoot, "src", "access-intent", "bash", "program.ts"),
   ).href;
-  const pathNormalizerUrl = pathToFileURL(join(packageRoot, "src", "path-normalizer.ts")).href;
+  const pathNormalizerUrl = pathToFileURL(permissionModulePath(packageRoot, "path-normalizer.ts")).href;
   const pathFlavorUrl = pathToFileURL(
     join(packageRoot, "src", "path", "path-flavor.ts"),
   ).href;
@@ -185,13 +192,13 @@ try {
   const manager = new loaded.PermissionManager({ agentDir });
   const pathNormalizer = new normalizerLoaded.PathNormalizer(flavorLoaded.posixPathFlavor, repoRoot);
 
-  async function checkBashGate(command: string, expected: PermissionState): Promise<void> {
+  async function checkBashGate(command: string, expected: PermissionState, agentName?: string): Promise<void> {
     const program = await bashLoaded.BashProgram.parse(command, pathNormalizer);
-    const actual = gateLoaded.resolveBashCommandCheck(command, program.commands(), undefined, {
+    const actual = gateLoaded.resolveBashCommandCheck(command, program.commands(), agentName, {
       resolve: (intent) => manager.check(intent),
       getToolPermission: (toolName, agentName) => manager.getToolPermission(toolName, agentName),
     }).state;
-    expectState(`global bash gate ${JSON.stringify(command)}`, actual, expected);
+    expectState(`${agentName ?? "global"} bash gate ${JSON.stringify(command)}`, actual, expected);
   }
 
   async function checkBashPath(
@@ -226,14 +233,28 @@ try {
   manager.configureForCwd(repoRoot);
 
   const issueScopes = [undefined, "rush", "smart", "deep", "review"] as const;
+  // Exercise the selected current/legacy method; incompatible implementations fail closed.
+  const readPolicyIssues = manager[policyIssuesMethod] as (agentName?: string) => string[];
   const issues = issueScopes.flatMap((agentName) =>
-    manager.getConfigIssues(agentName).map((issue) => `${agentName ?? "global"}: ${issue}`),
+    readPolicyIssues.call(manager, agentName).map((issue) => `${agentName ?? "global"}: ${issue}`),
   );
   if (issues.length > 0) {
     throw new Error(`permission config issues:\n${issues.map((issue) => `- ${issue}`).join("\n")}`);
   }
 
   await runPermissionPipelineChecks({ packageRoot, agentDir, repoRoot });
+
+  // Visibility and raw path surfaces are distinct from the shared query pipeline table.
+  for (const agentName of issueScopes) {
+    expectState(`${agentName ?? "global"} bash visibility`, manager.getToolPermission("bash", agentName), "allow");
+    expectState(`${agentName ?? "global"} unknown visibility`, manager.getToolPermission("unknown_extension_tool", agentName), "ask");
+    const canonicalMetadata = join(homeDir, ".dotfiles", "config", "versions.env");
+    checkPath(manager, "path_read", canonicalMetadata, "allow", agentName);
+    checkPath(manager, "path_write", canonicalMetadata, "deny", agentName);
+    checkPath(manager, "path_read", join(homeDir, ".dotfiles", "config", "unrelated.env"), "deny", agentName);
+    checkPath(manager, "path_read", join(homeDir, "workspace", "dotfiles-worktrees", "unapproved", "config", "versions.env"), "deny", agentName);
+    await checkBashPath(manager, "cat ~/.dotfiles/config/versions.env", "allow", agentName);
+  }
 
   expectState(
     "read tool",
@@ -922,6 +943,8 @@ try {
   }
 
   console.log("Pi permission schema and deterministic engine validation passed.");
+} catch (cause) {
+  throw new Error(`incompatible permission evaluator ${packageVersion} at ${packageRoot}: selected evaluator behavior failed`, { cause });
 } finally {
   if (originalHome === undefined) delete process.env.HOME;
   else process.env.HOME = originalHome;

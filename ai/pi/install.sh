@@ -11,10 +11,16 @@ source "$ROOT/libexec/lib/artifacts.sh"
 source "$ROOT/ai/pi/cleanup-legacy.sh"
 # shellcheck source=ai/pi/migrate-security-stack.sh
 source "$ROOT/ai/pi/migrate-security-stack.sh"
+# shellcheck source=libexec/lib/pi-runtime.sh
+source "$ROOT/libexec/lib/pi-runtime.sh"
+# shellcheck source=ai/pi/migrate-runtime-config.sh
+source "$ROOT/ai/pi/migrate-runtime-config.sh"
 
 MODE=apply
+PI_HOST_ROOT=""
 PERMISSION_PYTHON=""
 PI_AI_RESET_MUTABLE_CONFIG="${PI_AI_RESET_MUTABLE_CONFIG:-0}"
+PI_AI_REFRESH_PREFERENCES="${PI_AI_REFRESH_PREFERENCES:-0}"
 PI_AGENT_DIR=""
 PI_BINARY=""
 WEB_CONFIG_PATH=""
@@ -52,6 +58,14 @@ resolve_pi_paths() {
     0 | 1) ;;
     *)
       log_warning "PI_AI_RESET_MUTABLE_CONFIG must be 0 or 1."
+      return 1
+      ;;
+  esac
+
+  case "$PI_AI_REFRESH_PREFERENCES" in
+    0 | 1) ;;
+    *)
+      log_warning "PI_AI_REFRESH_PREFERENCES must be 0 or 1."
       return 1
       ;;
   esac
@@ -158,7 +172,7 @@ publish_rendered_baseline() {
 backup_regular_contents() {
   local source=$1 destination=$2 backup
   backup=$(next_backup_path "$destination")
-  if ! cp -L -- "$source" "$backup"; then
+  if ! (umask 077 && cp -L -- "$source" "$backup") || ! chmod 0600 "$backup"; then
     rm -f "$backup"
     return 1
   fi
@@ -794,88 +808,71 @@ install_pi() {
   }
 }
 
-permission_package_artifacts_are_complete() {
-  local package_root=$1
-  local schema="$package_root/schemas/permissions.schema.json"
-  local manager="$package_root/src/permission-manager.ts"
-  [[ -f "$schema" && ! -L "$schema" && -f "$manager" && ! -L "$manager" ]]
+update_pi_extensions() {
+  local cwd status=0
+  # Never approve or discover packages from the checkout invoking the installer.
+  cwd=$(mktemp -d "${TMPDIR:-/tmp}/pi-package-update.XXXXXX") || return 1
+  (cd "$cwd" && PI_CODING_AGENT_DIR="$PI_AGENT_DIR" \
+    "$PI_BINARY" update --extensions --no-approve) || status=$?
+  rmdir -- "$cwd" || return 1
+  if ((status != 0)); then
+    log_warning "Native Pi extension update failed; inspect the output and repair packages with pi install <source> before rerunning."
+  fi
+  return "$status"
 }
 
-ensure_pinned_npm_packages() {
-  local pi_binary="$PI_BINARY" specifications package_name package_version
-  local package_manifest package_root installed_version source settings_source="$PI_AGENT_DIR/settings.json"
-  [[ "$MODE" == check ]] && settings_source="$ROOT/ai/pi/settings.json"
-  if ! specifications=$(jq -r '
-    .packages[]
-    | if type == "object" then .source else . end
-    | select(type == "string")
-    | capture("^npm:(?<name>(?:@[^/@]+/)?[^@]+)@(?<version>[^@]+)$")
-    | [.name, .version]
-    | @tsv
-  ' "$settings_source"); then
-    log_warning "Could not enumerate pinned npm packages from Pi settings."
+preflight_destinations() {
+  # Dynamic scope makes existing reconcilers inspect their destinations without writes.
+  local MODE=check
+  [[ "$PI_AGENT_DIR" == /* && "$WEB_CONFIG_PATH" == /* && "$AMP_SETTINGS_PATH" == /* ]] || {
+    log_warning "Pi configuration roots must be absolute."
     return 1
+  }
+  node "$ROOT/libexec/pi-managed-paths.mjs" "$PI_AGENT_DIR" \
+    "$(dirname "$WEB_CONFIG_PATH")" "$(dirname "$AMP_SETTINGS_PATH")"
+  reconcile_authored_extensions "$PI_AGENT_DIR/extensions"
+  reconcile_authored_directory "$PI_AGENT_DIR/agents" "Pi agents directory"
+  reconcile_private_runtime_directory "$PI_AGENT_DIR/extensions/pi-permission-system"
+  reconcile_pi_settings "$ROOT/ai/pi/settings.json" "$PI_AGENT_DIR/settings.json"
+  reconcile_mutable_file "$ROOT/ai/pi/config/modes.json" "$PI_AGENT_DIR/modes.json" "Pi modes" 0644 'ai/pi/modes.json'
+  retire_astra_override "$PI_AGENT_DIR/models.json"
+  reconcile_mutable_file "$ROOT/ai/pi/config/subagents.json" "$PI_AGENT_DIR/subagents.json" "Pi subagent settings" 0600
+  reconcile_child_exclusions "$PI_AGENT_DIR/subagents.json" "$ROOT/ai/pi/config/subagents.json"
+  reconcile_mutable_file "$ROOT/ai/pi/config/file-context.json" "$PI_AGENT_DIR/pi-file-context.json" "Pi file context" 0644 'ai/pi/config/file-context.json'
+  refresh_pi_preferences "$PI_AGENT_DIR/settings.json" "$PI_AGENT_DIR/modes.json" "$ROOT/ai/pi/settings.json" "$ROOT/ai/pi/config/modes.json"
+  refresh_pi_file_context "$PI_AGENT_DIR/pi-file-context.json" "$ROOT/ai/pi/config/file-context.json"
+  reconcile_mutable_file "$ROOT/ai/pi/config/web-search.json" "$WEB_CONFIG_PATH" "Pi web access settings" 0600
+  # Preserve the approved legacy sandbox reset, not a general YOLO bypass.
+  if [[ -f "$PI_AGENT_DIR/settings.json" ]] &&
+    jq -e 'any(.packages[]?; (if type == "object" then .source else . end) == "git:github.com/carderne/pi-sandbox@53bd1d64d896d4a6bfab3769023201891e76ba72")' "$PI_AGENT_DIR/settings.json" >/dev/null; then
+    return 0
   fi
+  reconcile_permission_policy "$ROOT/ai/pi/config/permission-system.json" \
+    "$PI_AGENT_DIR/extensions/pi-permission-system/config.json" \
+    "$PI_AGENT_DIR/npm/node_modules/@gotgenes/pi-permission-system"
+}
 
-  while IFS=$'\t' read -r package_name package_version; do
-    [[ -n "$package_name" && -n "$package_version" ]] || continue
-    package_root="$PI_AGENT_DIR/npm/node_modules/$package_name"
-    package_manifest="$package_root/package.json"
-    installed_version=""
-    if [[ -f "$package_manifest" && ! -L "$package_manifest" ]]; then
-      installed_version=$(jq -r '.version // empty' "$package_manifest" 2>/dev/null || true)
-    fi
-    if [[ "$installed_version" == "$package_version" ]] &&
-      { [[ "$package_name" != @gotgenes/pi-permission-system ]] ||
-        permission_package_artifacts_are_complete "$package_root"; }; then
-      continue
-    fi
-
-    source="npm:$package_name@$package_version"
-    if [[ "$MODE" == check ]]; then
-      log_info "[dry-run] Would install missing, mismatched, or incomplete pinned Pi package $source"
-      continue
-    fi
-    PI_CODING_AGENT_DIR="$PI_AGENT_DIR" "$pi_binary" install "$source"
-    if [[ ! -f "$package_manifest" || -L "$package_manifest" ]] ||
-      [[ "$(jq -r '.version // empty' "$package_manifest" 2>/dev/null || true)" != "$package_version" ]]; then
-      log_warning "Pi did not install the expected package version for $source"
-      return 1
-    fi
-    if [[ "$package_name" == @gotgenes/pi-permission-system ]] &&
-      ! permission_package_artifacts_are_complete "$package_root"; then
-      log_warning "Pi installed an incomplete Pi permission package for $source; expected regular files at $package_root/schemas/permissions.schema.json and $package_root/src/permission-manager.ts"
-      return 1
-    fi
-  done <<<"$specifications"
-
-  if [[ "$MODE" == apply ]] && ! jq -s -e '.[0].packages == .[1].packages' \
-    "$PI_AGENT_DIR/settings.json" "$ROOT/ai/pi/settings.json" >/dev/null; then
-    log_warning "Pi package installation changed the tracked package inventory unexpectedly."
+validate_selected_runtime() {
+  if ! bash "$ROOT/libexec/validate-pi-security-runtime" \
+    --package-root "$PI_AGENT_DIR/npm/node_modules/@gotgenes/pi-permission-system" \
+    --pi-package-root "$PI_HOST_ROOT" --python "$PERMISSION_PYTHON"; then
+    log_warning "Installed Pi permission runtime is incompatible or incomplete; repair with pi install npm:@gotgenes/pi-permission-system and rerun before starting Pi."
     return 1
   fi
 }
 
 main() {
-  if [[ $# -gt 1 ]]; then
+  if [[ $# == 1 && "$1" == --check ]]; then
+    MODE=check
+  elif [[ $# != 0 ]]; then
     usage >&2
     return 2
   fi
-  case "${1:-}" in
-    "") ;;
-    --check) MODE=check ;;
-    *)
-      usage >&2
-      return 2
-      ;;
-  esac
-
   resolve_pi_paths
   validate_permission_before_publish_test_hook
   require_permission_validation_dependencies
   assert_safe_pi_source
-  migrate_pi_security_stack "$MODE" "$PI_AGENT_DIR" "$AMP_SETTINGS_PATH" \
-    "${MANAGED_SOURCE_ROOTS[@]}"
+  preflight_destinations
 
   if [[ "$MODE" == check ]]; then
     log_info "[dry-run] Would remove positively identified Vekil, Claude, and Codex integration remnants"
@@ -885,7 +882,6 @@ main() {
       log_info "[dry-run] Would install or migrate latest managed Pi to $PI_AGENT_DIR/bin/pi"
     fi
   else
-    cleanup_legacy_ai
     if managed_pi_is_ready; then
       log_info "Managed Pi is already installed at $PI_BINARY; run pi update to upgrade it."
     else
@@ -896,24 +892,26 @@ main() {
       install_pi
       log_success "Installed managed Pi."
     fi
+    cleanup_legacy_ai
   fi
+  migrate_pi_security_stack "$MODE" "$PI_AGENT_DIR" "$AMP_SETTINGS_PATH" "${MANAGED_SOURCE_ROOTS[@]}"
 
-  reconcile_authored_extensions "$PI_AGENT_DIR/extensions"
-  if [[ "$MODE" == apply ]]; then
-    mkdir -p "$PI_AGENT_DIR"
-  fi
-
-  # Establish the permission boundary before removing pi-sandbox from the
-  # runtime package inventory. Legacy sandbox retirement resets first; normal
-  # policy publication waits for the exact pinned package schema.
+  # Legacy sandbox retirement resets before its declaration is removed. Normal
+  # policy and authored resource publication wait for installed compatibility.
+  reconcile_extension_directory "$PI_AGENT_DIR/extensions"
   reconcile_private_runtime_directory "$PI_AGENT_DIR/extensions/pi-permission-system"
   reset_permission_policy_for_sandbox_retirement \
     "$ROOT/ai/pi/config/permission-system.json" \
     "$PI_AGENT_DIR/extensions/pi-permission-system/config.json" \
     "$PI_AGENT_DIR/settings.json"
-
   reconcile_pi_settings "$ROOT/ai/pi/settings.json" "$PI_AGENT_DIR/settings.json"
-  ensure_pinned_npm_packages
+  if [[ "$MODE" == apply ]]; then
+    update_pi_extensions
+    resolve_pi_runtime "$PI_BINARY"
+    PI_HOST_ROOT=$PI_RUNTIME_PACKAGE_ROOT
+    validate_selected_runtime
+  fi
+  reconcile_authored_extensions "$PI_AGENT_DIR/extensions"
   reconcile_permission_policy \
     "$ROOT/ai/pi/config/permission-system.json" \
     "$PI_AGENT_DIR/extensions/pi-permission-system/config.json" \
@@ -922,19 +920,23 @@ main() {
   reconcile_authored_links
   reconcile_mutable_file "$ROOT/ai/pi/config/modes.json" "$PI_AGENT_DIR/modes.json" \
     "Pi modes" 0644 'ai/pi/modes.json'
-  reconcile_mutable_file "$ROOT/ai/pi/config/models.json" "$PI_AGENT_DIR/models.json" \
-    "Pi model overrides" 0644
+  retire_astra_override "$PI_AGENT_DIR/models.json"
   reconcile_mutable_file "$ROOT/ai/pi/config/subagents.json" "$PI_AGENT_DIR/subagents.json" \
     "Pi subagent settings" 0600
   remove_retired_sandbox_exclusion "$PI_AGENT_DIR/subagents.json"
+  reconcile_child_exclusions "$PI_AGENT_DIR/subagents.json" "$ROOT/ai/pi/config/subagents.json"
+  reconcile_mutable_file "$ROOT/ai/pi/config/file-context.json" "$PI_AGENT_DIR/pi-file-context.json" \
+    "Pi file context" 0644 'ai/pi/config/file-context.json'
+  refresh_pi_preferences "$PI_AGENT_DIR/settings.json" "$PI_AGENT_DIR/modes.json" \
+    "$ROOT/ai/pi/settings.json" "$ROOT/ai/pi/config/modes.json"
+  refresh_pi_file_context "$PI_AGENT_DIR/pi-file-context.json" "$ROOT/ai/pi/config/file-context.json"
   reconcile_mutable_file "$ROOT/ai/pi/config/web-search.json" "$WEB_CONFIG_PATH" \
     "Pi web access settings" 0600
   if [[ "$MODE" == check ]]; then
-    log_info "[dry-run] Would reconcile Pi packages from settings.json"
+    log_info "[dry-run] Would reconcile Pi packages with pi update --extensions --no-approve and validate the installed runtime"
     return 0
   fi
 
-  PI_CODING_AGENT_DIR="$PI_AGENT_DIR" "$PI_BINARY" update --extensions
   log_success "Pi configuration and packages are ready. Run /login and choose GitHub Copilot if this machine is not authenticated."
 }
 

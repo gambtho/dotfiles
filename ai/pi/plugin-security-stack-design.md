@@ -2,7 +2,7 @@
 
 ## Status
 
-**Superseded on 2026-09-02.** This document records the original rollout design; its `pi-sandbox`, Bubblewrap, and preserve-drift permission-policy requirements are historical and are not the active security model. See `ai/README.md` for operator guidance and `ai/pi/permissive-permission-policy-design.md` for the current permission-only design.
+**Superseded on 2026-09-02.** This document records the original rollout design; its `pi-sandbox`, Bubblewrap, and preserve-drift permission-policy requirements are historical and are not the active security model. Its pinned-package/update procedure, old routing models, clipboard/planning stack, and model baseline are also historical: the current stack uses floating declarations with native Pi package updates, retires Shitty/caffeinate and the Astra override, and leaves user plans untouched. Native reconciliation may advance packages and replace cached files. Superpowers planning is a process, not a read-only UI/security mode. See `ai/README.md` for current ownership, isolated verification, configuration backups and operator guidance, and `ai/pi/permissive-permission-policy-design.md` for the permission-only design.
 
 Originally approved after independent `/second-opinion` review and follow-up package analysis on 2026-09-01. The user accepted the review findings and selected a parent-only sandbox after verification showed that `pi-sandbox` is unsafe to bind into concurrent in-process child sessions. Amended on 2026-09-02 to use a relaxed-but-guarded parent Bash policy after the original unmatched-command fallback caused excessive approval prompts.
 
@@ -167,7 +167,6 @@ The global `subagents.json` baseline contains this reviewed `excludedExtensionPa
 
 - `git:github.com/tmustier/pi-extensions`;
 - `npm:pi-powerline-footer`;
-- `npm:shitty-extensions`;
 - `npm:pi-amplike`;
 - `git:github.com/tmustier/pi-queue-steer@v0.2.0`;
 - `npm:pi-web-access@0.27.0`;
@@ -542,7 +541,7 @@ bash bin/validate-ai --verbose
 make check
 ```
 
-Before integration, the smoke HOME receives a temporary owner-only copy of the existing Pi authentication file and is deleted afterward. Production immutable links are never pointed into the temporary worktree. After the branch is integrated, run production `make ai` from the canonical dotfiles checkout and verify the identity-aware migration report. Completion distinguishes pre-integration runtime evidence from final canonical-checkout rollout evidence.
+Do not copy production authentication into a smoke HOME. Current pre-integration verification uses public SDK/package files, in-memory credentials/model stores, and deterministic no-network providers. Keep the exact tested manifest in durable private storage outside Git and verify its byte-for-byte copy against the same graph before discarding isolation evidence. Production immutable links are never pointed into the temporary worktree. Only after authorized integration and stopped-state/non-YOLO checks may the operator promote that exact manifest from the canonical checkout, then verify the installed resolutions and runtime gates before starting a fresh session. Completion distinguishes isolated evidence from canonical rollout, which is not implied by this historical design.
 
 ## Rollout and rollback
 

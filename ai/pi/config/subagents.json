@@ -1,17 +1,18 @@
 {
   "maxConcurrent": 4,
   "defaultMaxTurns": 50,
-  "graceTurns": 5,
+  "wrapUpTurns": 5,
   "consumedSessionRetentionMinutes": 10,
   "unconsumedSessionRetentionMinutes": 720,
   "abortAllOnInterrupt": true,
   "excludedExtensionPackages": [
     "git:github.com/tmustier/pi-extensions",
     "npm:pi-powerline-footer",
-    "npm:shitty-extensions",
     "npm:pi-amplike",
-    "git:github.com/tmustier/pi-queue-steer@v0.2.0",
-    "npm:pi-web-access@0.27.0",
-    "npm:@narumitw/pi-lsp@0.49.6"
+    "git:github.com/tmustier/pi-queue-steer",
+    "npm:pi-web-access",
+    "npm:@narumitw/pi-lsp",
+    "npm:@narumitw/pi-worktree",
+    "npm:@narumitw/pi-file-context"
   ]
 }

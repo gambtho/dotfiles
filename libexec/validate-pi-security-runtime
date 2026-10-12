@@ -6,6 +6,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
 AGENT_DIR="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}"
 package_root=""
 pi_package_root=""
+permission_python=python3
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -17,6 +18,14 @@ while [[ $# -gt 0 ]]; do
       package_root=$2
       shift 2
       ;;
+    --python)
+      [[ $# -ge 2 && "$2" == /* && -x "$2" ]] || {
+        printf 'error: --python requires an absolute executable path\n' >&2
+        exit 2
+      }
+      permission_python=$2
+      shift 2
+      ;;
     --pi-package-root)
       [[ $# -ge 2 ]] || {
         printf 'error: --pi-package-root requires a path\n' >&2
@@ -26,7 +35,7 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     *)
-      printf 'usage: %s [--package-root PATH] [--pi-package-root PATH]\n' "$0" >&2
+      printf 'usage: %s [--package-root PATH] [--pi-package-root PATH] [--python ABS]\n' "$0" >&2
       exit 2
       ;;
   esac
@@ -36,6 +45,9 @@ package_root="${package_root:-$AGENT_DIR/npm/node_modules/@gotgenes/pi-permissio
 package_file="$package_root/package.json"
 schema_file="$package_root/schemas/permissions.schema.json"
 manager_file="$package_root/src/permission-manager.ts"
+if [[ -d "$package_root/src/policy" ]]; then
+  manager_file="$package_root/src/policy/permission-manager.ts"
+fi
 config_file="$ROOT/ai/pi/config/permission-system.json"
 
 if [[ ! -f "$package_file" || ! -f "$schema_file" || ! -f "$manager_file" ]]; then
@@ -43,38 +55,41 @@ if [[ ! -f "$package_file" || ! -f "$schema_file" || ! -f "$manager_file" ]]; th
   exit 1
 fi
 
+source "$ROOT/libexec/lib/pi-runtime.sh"
+pi_bin=""
 if [[ -z "$pi_package_root" ]]; then
   pi_bin=$(command -v pi 2>/dev/null || true)
-  [[ -n "$pi_bin" ]] || {
-    printf 'error: Pi executable not found on PATH\n' >&2
-    exit 1
-  }
-  pi_real=$(readlink -f "$pi_bin")
-  pi_package_root=$(cd "$(dirname "$pi_real")/../.." && pwd -P)
 fi
+resolve_pi_runtime "$pi_bin" "$pi_package_root"
+jiti_cli=$PI_RUNTIME_JITI_CLI
+pi_core_entry="$PI_RUNTIME_PACKAGE_ROOT/dist/index.js"
 
-jiti_cli="$pi_package_root/node_modules/jiti/lib/jiti-cli.mjs"
-if [[ ! -f "$jiti_cli" ]]; then
-  printf 'error: Pi bundled jiti not installed at %s\n' "$jiti_cli" >&2
-  exit 1
-fi
-pi_core_entry="$pi_package_root/dist/index.js"
-if [[ ! -f "$pi_core_entry" ]]; then
-  printf 'error: Pi extension API entry not installed at %s\n' "$pi_core_entry" >&2
-  exit 1
-fi
-
-"$ROOT/libexec/validate-pi-permission-config" \
+"$permission_python" "$ROOT/libexec/validate-pi-permission-config" \
   --schema "$schema_file" \
   --config "$config_file"
 
 # Managed extensions omit Pi peer dependencies and normally receive them from
 # Pi's extension loader. Reproduce that host alias while retaining jiti's
 # TypeScript and extensionless-import resolution.
-JITI_ALIAS=$(node -e \
-  'console.log(JSON.stringify({"@earendil-works/pi-coding-agent": process.argv[1]}))' \
-  "$pi_core_entry")
+JITI_ALIAS=$(node -e '
+  const { createRequire } = require("node:module");
+  const core = process.argv[1];
+  const hostRequire = createRequire(core);
+  let tui;
+  try {
+    tui = hostRequire.resolve("@earendil-works/pi-tui");
+  } catch (error) {
+    console.error(`error: Pi TUI peer not installed for selected core ${core}: ${error.message}`);
+    process.exit(1);
+  }
+  console.log(JSON.stringify({
+    "@earendil-works/pi-coding-agent": core,
+    "@earendil-works/pi-tui": tui,
+  }));
+' "$pi_core_entry")
 export JITI_ALIAS
+# Runtime checks must not publish transpilation/compile caches into installed trees.
+export JITI_FS_CACHE=false NODE_DISABLE_COMPILE_CACHE=1
 exec node "$jiti_cli" "$ROOT/libexec/validate-pi-security-runtime.ts" \
   --package-root "$package_root" \
   --repo-root "$ROOT"
