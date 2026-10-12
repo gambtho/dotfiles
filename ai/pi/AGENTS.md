@@ -4,6 +4,13 @@ These are default working principles. Repository-specific instructions take
 precedence over defaults, but cannot waive the explicit user-consent requirement
 for committing Superpowers artifacts below.
 
+## Pi runtime boundaries
+
+- Stop Pi before changing linked resources. Routine reconciliation preserves healthy package resolutions; explicit updates and exact-tested promotion require separate operator action. Canonical rollout is not implied by isolated verification.
+- Superpowers planning is a process, not a read-only UI/security mode. Retired planner state is not migrated; start a fresh session after rollout without rewriting old sessions.
+- Codemode nested tool calls remain permission/worktree-guarded, but classifier/image models and extension-internal execution use separate ambient authority. These tripwires are not OS containment.
+- Existing mutable preferences are preserved unless a documented selective refresh/reset is requested. In particular, old `graceTurns` is not migrated to `wrapUpTurns`: warnings before a hard limit are different from grace after a soft limit.
+
 ## Scope discipline
 
 - Prefer the minimum complete change that solves the requested problem.
@@ -23,11 +30,35 @@ for committing Superpowers artifacts below.
 ## Verify before acting
 
 - Inspect relevant source, tests, docs, configuration, and nearby patterns before substantial changes.
+- Runtime metadata inspection is optional when useful, not a session-start requirement. Use `printenv PI_PROVIDER PI_MODEL PI_REASONING_LEVEL` or `printenv XDG_CONFIG_HOME PI_CODING_AGENT_DIR` (or their `/usr/bin/printenv` spellings); do not dump the environment or append secret-variable operands.
 - Before amending a commit or assuming merge state, run `gh pr view` and `git log`. Never amend an already-merged PR.
 - Before reviewing an unnamed commit or branch, state its exact SHA and subject and wait for confirmation.
 - Verify callers before describing code as unused, deprecated, or dead.
 - Never claim success without running relevant tests, type checks, lint, or an equivalent exercise and citing the result.
 - These are not verification: "the change is too small to break anything", "it passed earlier", "the test is flaky, so the failure doesn't count", and "the types check, so it works". Run the check and cite the output, or state plainly that it was not run.
+
+## GitHub ref inspection
+
+Read-oriented `rush`, `deep`, and `review` agents keep `git ls-remote` denied,
+even for literal HEAD queries approved in the parent. Use existing `gh api`
+read permissions instead. Inspect the repository's default branch first, then
+make a separate literal ref query using the branch actually returned. For example:
+
+```bash
+gh api repos/gotgenes/pi-packages --jq .default_branch
+```
+
+If that response is `main`, query:
+
+```bash
+gh api repos/gotgenes/pi-packages/git/ref/heads/main --jq .object.sha
+```
+
+Do not assume other repositories use `main`; substitute a verified literal branch,
+not a shell variable or command substitution. This is a transport choice, not a
+new GitHub-only API permission boundary. Existing API mutation flags still ask,
+selected destructive operations deny, and child variable/denied-chain restrictions
+remain in force.
 
 ## Stop instead of guessing
 

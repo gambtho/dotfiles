@@ -3,13 +3,17 @@ description: Independent cross-family reviewer
 display_name: Review
 model: github-copilot/claude-opus-5.5
 thinking: high
-tools: read, bash, grep, find, ls
+tools: read, bash, grep, find, ls, codemode
 prompt_mode: append
 permission:
   write: deny
   edit: deny
   bash:
     "*": allow
+    "printenv PI_PROVIDER PI_MODEL PI_REASONING_LEVEL": allow
+    "printenv XDG_CONFIG_HOME PI_CODING_AGENT_DIR": allow
+    "/usr/bin/printenv PI_PROVIDER PI_MODEL PI_REASONING_LEVEL": allow
+    "/usr/bin/printenv XDG_CONFIG_HOME PI_CODING_AGENT_DIR": allow
     "*git *": deny
     "git status*": allow
     "git show*": allow

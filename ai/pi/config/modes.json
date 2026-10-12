@@ -10,7 +10,7 @@
     },
     "smart": {
       "provider": "github-copilot",
-      "modelId": "gpt-6-sol",
+      "modelId": "gpt-6.1-sol",
       "thinkingLevel": "medium",
       "color": "blue"
     },
