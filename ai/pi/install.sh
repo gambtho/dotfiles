@@ -837,6 +837,7 @@ preflight_destinations() {
   reconcile_mutable_file "$ROOT/ai/pi/config/modes.json" "$PI_AGENT_DIR/modes.json" "Pi modes" 0644 'ai/pi/modes.json'
   retire_astra_override "$PI_AGENT_DIR/models.json"
   reconcile_mutable_file "$ROOT/ai/pi/config/subagents.json" "$PI_AGENT_DIR/subagents.json" "Pi subagent settings" 0600
+  remove_retired_subagent_grace_turns "$PI_AGENT_DIR/subagents.json"
   reconcile_child_exclusions "$PI_AGENT_DIR/subagents.json" "$ROOT/ai/pi/config/subagents.json"
   reconcile_mutable_file "$ROOT/ai/pi/config/file-context.json" "$PI_AGENT_DIR/pi-file-context.json" "Pi file context" 0644 'ai/pi/config/file-context.json'
   refresh_pi_preferences "$PI_AGENT_DIR/settings.json" "$PI_AGENT_DIR/modes.json" "$ROOT/ai/pi/settings.json" "$ROOT/ai/pi/config/modes.json"
@@ -924,6 +925,7 @@ main() {
   reconcile_mutable_file "$ROOT/ai/pi/config/subagents.json" "$PI_AGENT_DIR/subagents.json" \
     "Pi subagent settings" 0600
   remove_retired_sandbox_exclusion "$PI_AGENT_DIR/subagents.json"
+  remove_retired_subagent_grace_turns "$PI_AGENT_DIR/subagents.json"
   reconcile_child_exclusions "$PI_AGENT_DIR/subagents.json" "$ROOT/ai/pi/config/subagents.json"
   reconcile_mutable_file "$ROOT/ai/pi/config/file-context.json" "$PI_AGENT_DIR/pi-file-context.json" \
     "Pi file context" 0644 'ai/pi/config/file-context.json'

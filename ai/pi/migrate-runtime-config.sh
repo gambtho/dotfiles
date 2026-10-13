@@ -218,6 +218,16 @@ refresh_pi_preferences() {
   fi
 }
 
+remove_retired_subagent_grace_turns() {
+  local destination=$1 kind link_target snapshot_hash identity rendered
+  pi_migration_snapshot "$destination" 'ai/pi/config/subagents.json' || return 1
+  [[ "$kind" != absent ]] || return 0
+  jq -e 'has("graceTurns")' "$destination" >/dev/null || return 0
+  # Upstream ignores this key; do not translate it into a different turn budget.
+  rendered=$(jq 'del(.graceTurns)' "$destination") || return 1
+  publish_pi_migration "$destination" "$rendered" 0600
+}
+
 reconcile_child_exclusions() {
   local destination=$1 baseline=$2 kind link_target snapshot_hash identity rendered
   pi_migration_snapshot "$destination" 'ai/pi/config/subagents.json' || return 1

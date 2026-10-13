@@ -9,7 +9,7 @@ for committing Superpowers artifacts below.
 - Stop Pi before changing linked resources. Routine reconciliation runs native extension updates; packages may advance and cached files may be replaced. Host self-update remains operator-owned. Canonical rollout is not implied by isolated verification.
 - Superpowers planning is a process, not a read-only UI/security mode. Retired planner state is not migrated; start a fresh session after rollout without rewriting old sessions.
 - Codemode nested tool calls remain permission/worktree-guarded, but classifier/image models and extension-internal execution use separate ambient authority. These tripwires are not OS containment.
-- Existing mutable preferences are preserved unless a documented selective refresh/reset is requested. In particular, old `graceTurns` is not migrated to `wrapUpTurns`: warnings before a hard limit are different from grace after a soft limit.
+- Existing mutable preferences are preserved unless a documented selective refresh/reset is requested. Normal `make ai` removes the ignored top-level `graceTurns` key without setting `wrapUpTurns` or changing turn budgets. Old `graceTurns` is not migrated to `wrapUpTurns`: warnings before a hard limit are different from grace after a soft limit.
 
 ## Scope discipline
 
