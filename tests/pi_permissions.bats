@@ -783,7 +783,8 @@ setup() {
         "npm:pi-web-access",
         "npm:@narumitw/pi-lsp",
         "npm:@narumitw/pi-worktree",
-        "npm:@narumitw/pi-file-context"
+        "npm:@narumitw/pi-file-context",
+        "git:github.com/gambtho/pi-file-editor@v0.1.0"
       ]
     and all($excluded[]; . as $source | $sources | index($source) != null)
     and ($excluded | index("npm:@gotgenes/pi-permission-system") == null)
@@ -793,6 +794,20 @@ setup() {
     and ($excluded | index("git:github.com/obra/superpowers") == null)
     and ($excluded | index("~/.dotfiles/ai/marketplace/plugins/my") == null)
   ' "$SUBAGENT_CONFIG" "$SETTINGS"
+  [ "$status" -eq 0 ]
+}
+
+@test "Pi file editor pins the reviewed local release with parent-only resource filters" {
+  run jq -s -e --arg source 'git:github.com/gambtho/pi-file-editor@v0.1.0' '
+    [.[0].packages[] | select(type == "object" and .source == $source)] == [{
+      source: $source,
+      extensions: ["extensions/file-editor.ts"],
+      skills: [], prompts: [], themes: []
+    }]
+    and ([.[1].excludedExtensionPackages[] | select(. == $source)] | length) == 1
+    and ([.[0].packages[] | if type == "string" then . else .source end
+      | select(contains("pi-file-preview"))] | length) == 0
+  ' "$SETTINGS" "$SUBAGENT_CONFIG"
   [ "$status" -eq 0 ]
 }
 

@@ -345,6 +345,24 @@ refresh() {
   [ "$before" = "$(snapshot)" ]
 }
 
+@test "file editor exclusion converges to the reviewed Git release without changing preferences" {
+  printf '%s\n' '{"maxConcurrent":2,"wrapUpTurns":7,"custom":{"keep":true},"excludedExtensionPackages":["git:github.com/gambtho/pi-file-editor@old","git:github.com/gambtho/pi-file-editor@older","https://github.com/gambtho/pi-file-editor@old","npm:custom"]}' >"$AGENT/subagents.json"
+  migration reconcile_child_exclusions "$AGENT/subagents.json" "$REPO_ROOT/ai/pi/config/subagents.json"
+  [ "$status" -eq 0 ]
+  jq -e '
+    .maxConcurrent == 2 and .wrapUpTurns == 7 and .custom == {keep:true}
+    and ([.excludedExtensionPackages[] | select(. == "git:github.com/gambtho/pi-file-editor@v0.1.0")] | length) == 1
+    and ([.excludedExtensionPackages[] | select(test("^git:github.com/gambtho/pi-file-editor@old"))] | length) == 0
+    and (.excludedExtensionPackages | index("https://github.com/gambtho/pi-file-editor@old")) != null
+    and (.excludedExtensionPackages | index("npm:custom")) != null
+  ' "$AGENT/subagents.json"
+  local before
+  before=$(snapshot)
+  migration reconcile_child_exclusions "$AGENT/subagents.json" "$REPO_ROOT/ai/pi/config/subagents.json"
+  [ "$status" -eq 0 ]
+  [ "$before" = "$(snapshot)" ]
+}
+
 @test "retired owned child exclusions disappear without altering opaque lookalikes or preferences" {
   printf '%s\n' '{"maxConcurrent":2,"custom":{"keep":true},"excludedExtensionPackages":["npm:@narumitw/pi-caffeinate","npm:@narumitw/pi-caffeinate@0.49.11","npm:@narumitw/pi-caffeinate@0.50.0-beta.1","npm:@narumitw/pi-caffeinate-extra@1","./pi-caffeinate","https://github.com/narumiruna/pi-caffeinate","npm:@custom/pi-caffeinate@1","npm:@narumitw/pi-caffeinate@","npm:@narumitw/pi-caffeinate@1@custom","npm:@narumitw/pi-caffeinate@1 custom","npm:shitty-extensions","npm:shitty-extensions@1.0.4","npm:shitty-extensions@1.0.9","npm:shitty-extensions@1.1.0-beta.1","npm:shitty-extensions-extra@1","npm:@custom/shitty-extensions@1","https://github.com/hjanuschka/shitty-extensions","git:github.com/hjanuschka/shitty-extensions@old","./shitty-extensions","npm:shitty-extensions@","npm:shitty-extensions@1@custom","npm:shitty-extensions@1 custom","npm:custom@1","npm:custom@1","npm:pi-web-access@old"]}' >"$AGENT/subagents.json"
   cp "$AGENT/subagents.json" "$TEST_ROOT/prior-exclusions.json"

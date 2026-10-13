@@ -89,6 +89,7 @@ const authored = JSON.parse(readFileSync(${JSON.stringify(`${repoRoot}/ai/pi/set
 const selected = {
   "git:github.com/tmustier/pi-extensions": { extensions: ["raw-paste/index.ts", "session-recap/index.ts", "tab-status/tab-status.ts", "usage-extension/index.ts", "pi-ralph-wiggum/index.ts", "code-actions/index.ts"], skills: ["pi-ralph-wiggum/SKILL.md"], prompts: [], themes: [] },
   "npm:pi-amplike": { extensions: ["extensions/btw.ts", "extensions/handoff.ts", "extensions/modes.ts", "extensions/session-query.ts"], skills: ["skills/session-query/SKILL.md"], prompts: [], themes: [] },
+  "git:github.com/gambtho/pi-file-editor@v0.1.0": { extensions: ["extensions/file-editor.ts"], skills: [], prompts: [], themes: [] },
   "git:github.com/addyosmani/agent-skills": { extensions: [], skills: ["skills/security-and-hardening/SKILL.md", "skills/performance-optimization/SKILL.md"], prompts: [], themes: [] },
 };
 const extra = { extensions: ["extensions/unselected.ts"], skills: ["skills/unselected/SKILL.md"], prompts: ["prompts/unselected.md"], themes: ["themes/unselected.json"] };
@@ -96,7 +97,7 @@ const agent = process.env.PI_CODING_AGENT_DIR;
 function write(path, content) { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, content); }
 for (const entry of [...authored.packages, "npm:shitty-extensions", "npm:@narumitw/pi-caffeinate"]) {
   const source = typeof entry === "string" ? entry : entry.source;
-  const packageRoot = source.startsWith("npm:") ? join(agent, "npm/node_modules", source.slice(4)) : source.startsWith("git:") ? join(agent, "git", source.slice(4)) : join(process.env.HOME, ".dotfiles/ai/marketplace/plugins/my");
+  const packageRoot = source.startsWith("npm:") ? join(agent, "npm/node_modules", source.slice(4)) : source.startsWith("git:") ? join(agent, "git", source.slice(4).replace(/@[^@]+$/, "")) : join(process.env.HOME, ".dotfiles/ai/marketplace/plugins/my");
   const resources = selected[source] ? Object.fromEntries(Object.keys(extra).map(kind => [kind, [...selected[source][kind], ...extra[kind]]])) : extra;
   write(join(packageRoot, "package.json"), JSON.stringify({ name: "fixture", version: "1.0.0", pi: resources }));
   for (const paths of Object.values(resources)) for (const path of paths) write(join(packageRoot, path), "");

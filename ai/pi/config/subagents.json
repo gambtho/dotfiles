@@ -13,6 +13,7 @@
     "npm:pi-web-access",
     "npm:@narumitw/pi-lsp",
     "npm:@narumitw/pi-worktree",
-    "npm:@narumitw/pi-file-context"
+    "npm:@narumitw/pi-file-context",
+    "git:github.com/gambtho/pi-file-editor@v0.1.0"
   ]
 }

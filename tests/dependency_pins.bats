@@ -69,14 +69,15 @@ setup() {
   [ "$status" -eq 1 ]
 }
 
-@test "main Pi remote declarations float while local my remains local" {
-  run jq -e '
+@test "main Pi remotes float except the reviewed editor release while local my remains local" {
+  run jq -e --arg editor 'git:github.com/gambtho/pi-file-editor@v0.1.0' '
     [.packages[] | if type == "string" then . else .source end] as $sources
     | all($sources[];
         if startswith("npm:") then test("^npm:(@[^/]+/)?[^@]+$")
-        elif startswith("git:") then test("^git:github.com/[^@]+$")
+        elif startswith("git:") then . == $editor or test("^git:github.com/[^@]+$")
         else . == "~/.dotfiles/ai/marketplace/plugins/my" end)
     and ($sources | index("~/.dotfiles/ai/marketplace/plugins/my") != null)
+    and ($sources | map(select(. == $editor)) | length == 1)
     and ($sources | map(select(contains("pi-sandbox"))) | length == 0)
   ' "$REPO_ROOT/ai/pi/settings.json"
   [ "$status" -eq 0 ]

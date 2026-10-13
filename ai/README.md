@@ -35,8 +35,11 @@ Generic runtime behavior comes from floating npm and Git declarations, reconcile
 | Model/context/cost UI | `pi-powerline-footer`, `usage-extension`, `session-recap` | Existing display and recap behavior |
 | Worktree create/switch/remove UI | `@narumitw/pi-worktree` | Parent-only; uses normal Git worktrees and preserves the active conversation on switch |
 | File selection and quotes | `@narumitw/pi-file-context` | Parent-only; F8 opens the file-context picker without taking native copy shortcuts |
+| Click local files to edit | `gambtho/pi-file-editor@v0.1.0` | Parent-only; normal-click a local file link to open the configured external editor, then quit to return to Pi |
 | Native tool orchestration | Pi Codemode | Additive `+codemode`, mode `on`; ordinary tools remain available |
 | Primary-checkout write enforcement | `ai/pi/extensions/worktree-guard.ts` | Covers built-in writes and mutating `lsp_fix` with rooted path resolution |
+
+`pi-file-editor` is pinned to the reviewed local-only release, verified with Pi 1.2.0. It has no preview, search, or SSH support; `/edit-file` is the keyboard fallback. It uses the machine-local `externalEditor` setting, then `$VISUAL` / `$EDITOR`. Only existing regular files are accepted, but the launched editor retains normal user authority rather than agent-tool/worktree containment. Line positioning requires metadata inside the link (`#L42` or `#L42-49`). File Context remains available for browsing and quoting.
 
 Interactive browser automation remains opt-in rather than a default dependency.
 
