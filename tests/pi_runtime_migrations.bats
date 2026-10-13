@@ -246,6 +246,91 @@ refresh() {
   [ "$before" = "$(snapshot)" ]
 }
 
+@test "graceTurns retirement preserves all other settings and is privately backed up once" {
+  local subagents="$AGENT/subagents.json" before
+  printf '%s\n' '{"defaultMaxTurns":37,"graceTurns":5,"wrapUpTurns":7,"maxConcurrent":2,"custom":{"graceTurns":9},"excludedExtensionPackages":["npm:custom"]}' >"$subagents"
+  cp "$subagents" "$TEST_ROOT/original-subagents.json"
+  migration remove_retired_subagent_grace_turns "$subagents"
+  [ "$status" -eq 0 ]
+  jq -e '. == {"defaultMaxTurns":37,"wrapUpTurns":7,"maxConcurrent":2,"custom":{"graceTurns":9},"excludedExtensionPackages":["npm:custom"]}' "$subagents"
+  cmp "$TEST_ROOT/original-subagents.json" "$subagents.backup"
+  [ "$(stat -c %a "$subagents")" = 600 ]
+  [ "$(stat -c %a "$subagents.backup")" = 600 ]
+  before=$(snapshot)
+  migration remove_retired_subagent_grace_turns "$subagents"
+  [ "$status" -eq 0 ]
+  [ "$before" = "$(snapshot)" ]
+}
+
+@test "graceTurns retirement removes ignored values without adding wrapUpTurns" {
+  local value
+  for value in 5 0 null '"custom"'; do
+    printf '{"defaultMaxTurns":50,"graceTurns":%s}\n' "$value" >"$AGENT/subagents.json"
+    migration remove_retired_subagent_grace_turns "$AGENT/subagents.json"
+    [ "$status" -eq 0 ]
+    jq -e '. == {"defaultMaxTurns":50}' "$AGENT/subagents.json"
+  done
+}
+
+@test "graceTurns retirement leaves missing files and settings without the key untouched" {
+  local before
+  before=$(snapshot)
+  migration remove_retired_subagent_grace_turns "$AGENT/subagents.json"
+  [ "$status" -eq 0 ]
+  [ "$before" = "$(snapshot)" ]
+  printf '{"wrapUpTurns":4,"custom":true}\n' >"$AGENT/subagents.json"
+  before=$(snapshot)
+  migration remove_retired_subagent_grace_turns "$AGENT/subagents.json"
+  [ "$status" -eq 0 ]
+  [ "$before" = "$(snapshot)" ]
+}
+
+@test "graceTurns retirement check mode reports cleanup without writing" {
+  printf '{"graceTurns":5}\n' >"$AGENT/subagents.json"
+  local before
+  before=$(snapshot)
+  export TEST_MODE=check
+  migration remove_retired_subagent_grace_turns "$AGENT/subagents.json"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *Would*back*up* ]]
+  [ "$before" = "$(snapshot)" ]
+}
+
+@test "graceTurns retirement refuses invalid JSON and foreign links without publication" {
+  local value before
+  for value in '{bad' '[]' '{} {}'; do
+    printf '%s\n' "$value" >"$AGENT/subagents.json"
+    before=$(snapshot)
+    migration remove_retired_subagent_grace_turns "$AGENT/subagents.json"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *Invalid*JSON* ]]
+    [ "$before" = "$(snapshot)" ]
+  done
+  rm "$AGENT/subagents.json"
+  printf '{"graceTurns":5}\n' >"$TEST_ROOT/foreign.json"
+  ln -s "$TEST_ROOT/foreign.json" "$AGENT/subagents.json"
+  before=$(snapshot)
+  migration remove_retired_subagent_grace_turns "$AGENT/subagents.json"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *foreign*symlink* ]]
+  [ "$before" = "$(snapshot)" ]
+  cmp <(printf '{"graceTurns":5}\n') "$TEST_ROOT/foreign.json"
+}
+
+@test "graceTurns retirement refuses a detected concurrent replacement" {
+  printf '{"graceTurns":5}\n' >"$AGENT/subagents.json"
+  migration eval '
+    original=$(declare -f backup_regular_contents)
+    eval "${original/backup_regular_contents/original_backup}"
+    backup_regular_contents() { original_backup "$@"; printf "{\"custom\":\"concurrent\"}\n" >"$1"; }
+    remove_retired_subagent_grace_turns "$PI_AGENT_DIR/subagents.json"
+  '
+  [ "$status" -ne 0 ]
+  [[ "$output" == *changed*during* ]]
+  jq -e '. == {"custom":"concurrent"}' "$AGENT/subagents.json"
+  jq -e '. == {"graceTurns":5}' "$AGENT/subagents.json.backup"
+}
+
 @test "owned child exclusions converge source versions while preserving unknown entries and preferences" {
   printf '%s\n' '{"maxConcurrent":2,"excludedExtensionPackages":["npm:pi-web-access@0.27.0","npm:custom-local-ui@1.0.0","git:github.com/tmustier/pi-extensions@old","npm:pi-web-access@0.20.0","https://github.com/tmustier/pi-extensions@old","npm:pi-web-access-extra@1"]}' >"$AGENT/subagents.json"
   printf '%s\n' '{"maxConcurrent":4,"excludedExtensionPackages":["npm:pi-web-access","git:github.com/tmustier/pi-extensions","npm:pi-file-context","npm:pi-sub-bar"]}' >"$TEST_ROOT/subagents-baseline.json"

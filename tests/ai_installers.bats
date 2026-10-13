@@ -205,6 +205,28 @@ SCRIPT
   jq -e '.astraOverrideRetired == true' "$HOME/.pi/agent/dotfiles-migrations.json"
 }
 
+@test "normal make ai removes ignored graceTurns without changing subagent budgets" {
+  export PI_VERSION PI_AI_REFRESH_PREFERENCES=0
+  stub_existing_pi
+  local subagents="$HOME/.pi/agent/subagents.json" before
+  jq '.defaultMaxTurns = 55 | .graceTurns = 5 | del(.wrapUpTurns) | .custom = {"graceTurns":9}' \
+    "$REPO_ROOT/ai/pi/config/subagents.json" >"$subagents"
+  cp "$subagents" "$TEST_ROOT/original-subagents.json"
+  before=$(snapshot_home)
+
+  run make -C "$REPO_ROOT" ai-check
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Would back up and migrate $subagents"* ]]
+  [ "$before" = "$(snapshot_home)" ]
+
+  run make -C "$REPO_ROOT" ai
+  [ "$status" -eq 0 ]
+  jq -e '(has("graceTurns") | not) and (has("wrapUpTurns") | not) and .defaultMaxTurns == 55 and .custom == {"graceTurns":9}' "$subagents"
+  cmp "$TEST_ROOT/original-subagents.json" "$subagents.backup"
+  [ "$(stat -c %a "$subagents")" = 600 ]
+  [ "$(stat -c %a "$subagents.backup")" = 600 ]
+}
+
 @test "Pi explicit refresh changes old file-context default only and normal apply preserves new drift" {
   export PI_VERSION
   stub_existing_pi
