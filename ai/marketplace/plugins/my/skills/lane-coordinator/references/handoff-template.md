@@ -1,6 +1,7 @@
 # W<n> handoff
 
-Written by the lane before it closes or pauses for long. Local only; never commit it.
+Written by the lane before it closes or pauses for long, under the project folder
+(`~/<project>-local/…`), never `/tmp`. Local only; never commit it.
 
 - Repo / worktree / branch: <owner/repo>, <path>, <branch>
 - Base and HEAD: <base ref and SHA>, <local HEAD>; pushed? <yes/no>

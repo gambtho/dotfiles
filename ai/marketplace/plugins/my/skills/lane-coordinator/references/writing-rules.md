@@ -7,6 +7,10 @@ preferences, flagged phrases and per-person tone; follow those first.
 ## Voice
 
 - Short sentences, plain words. Lead with the point. Stop when it's made.
+- Draft the shortest version first; offer a longer one only if something is missing.
+  Team-chat messages are two to four sentences.
+- No "Thanks <name>" openers on reviews unless the user writes them; "lgtm" is fine.
+- Keep stated uncertainty ("didn't run live e2e") rather than smoothing it away.
 - No stock AI phrasing: "great question", "delve", "leverage", "it's worth noting",
   "happy to", "is the right shape", "holds up", plus the user's flagged phrases.
 - Chat messages are shorter than GitHub comments. Non-native readers get simpler words.

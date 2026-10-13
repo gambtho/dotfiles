@@ -13,3 +13,13 @@ skip a job if there's no tool for it.
 
 Background reviewers are read-only helpers, not lanes: say so in their prompt (no edits,
 commits, pushes or posts) and spot-check what they find.
+
+## Shell pitfalls (zsh)
+
+- `path` is tied to `$PATH`: never use it as a variable name (`read id path` breaks every
+  command after it).
+- `rm` may be aliased to `rm -i`; use `command rm -f` for non-interactive deletes.
+- Unquoted `$var` doesn't word-split in zsh, and unmatched globs (or `?` in an unquoted
+  URL) are errors. Quote URLs; loop over `gh` output in Python rather than `for x in $list`.
+- `diff` and other tools may be shell functions; prefer `git diff --no-index` or Python.
+- Long greps over transcripts can exceed the command timeout; narrow the path first.
