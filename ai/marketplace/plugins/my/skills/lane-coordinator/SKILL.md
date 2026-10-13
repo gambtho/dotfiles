@@ -23,8 +23,9 @@ unless the user says otherwise, with lane prompts in `lanes/`.
    can't find.
 2. **Re-check what's volatile.** For every open PR in STATE.md, `gh pr view <n> -R <repo>`:
    state, head, checks. Note anything that merged, closed or went red while you were away.
-3. **Give the user a short status:** what changed, what's waiting on whom, and the
-   next one or two decisions. Then wait for their lead.
+3. **Give the user a short status:** what changed, what's waiting on whom, the
+   critical path (anything unowned first), and the next one or two decisions. Then wait
+   for their lead.
 
 Also read each repo's `AGENTS.md`/`CLAUDE.md`/`CONTRIBUTING` once per session. If the
 harness has persistent memory, the state files are still the source of truth: memory
@@ -33,15 +34,22 @@ holds durable facts about people and preferences, not lane state.
 ## Keep STATE.md current
 
 Update it when a lane opens or closes, when what a lane waits on changes, when a decision
-lands, and before the session ends. Keep it to one screen: a table of open lanes, a
-waiting-on list by person, the last ~10 decisions with dates, and what's upcoming.
+lands, and before the session ends. Keep it to one screen: the critical path toward the
+current goal (each link with an owner), a table of open lanes, a waiting-on list by
+person, the last ~10 decisions with dates, session notes and what's upcoming.
 Closed lanes move to one "closed recently" line. A new chat should be able to pick up
 from STATE.md alone.
+
+If something took digging to find (an old URL, a process, who owns what), write it into
+COORDINATION.md right away. Copy lane handoffs that landed in `/tmp` into the project
+folder.
 
 ## Write a lane prompt
 
 - Check first whether an open lane, PR or issue already covers it. Extending one beats
   starting another.
+- Before telling a lane what another lane will deliver ("PR6 adds lift"), read that
+  lane's plan file. Don't infer scope from a PR number.
 - Next number: the highest `W<n>` in `lanes/` or STATE.md, plus one. One file per lane
   from [lane-template.md](references/lane-template.md). Hand the user one line in a code
   block: `Read <absolute path> and follow it.`
@@ -67,14 +75,34 @@ user doesn't remember which lane owns something; STATE.md answers that.
    the lane tested, the checks ran on that head, the diff stays in the lane's files, and
    nothing claims more than the evidence. Don't bounce a report for missing fields;
    look them up.
-2. **Reply in this order:** what's true, what's off (with file:line), your recommendation,
+2. **Check size and scope.** Split additions by kind:
+   `gh pr view <n> -R <repo> --json files --jq '[.files[]|{p:.path,a:.additions}]|{tests:(map(select(.p|test("_test\\.|/tests?/|test_")))|map(.a)|add),docs:(map(select(.p|test("\\.md$")))|map(.a)|add),product:(map(select(.p|test("_test\\.|/tests?/|test_|\\.md$")|not))|map(.a)|add)}'`.
+   Flag tests above ~1.5× product unless each test is a distinct safety invariant, and
+   flag new scripts or tools outside the lane's goal.
+3. **Check interactions.** List other open PRs touching the same files, commands or
+   flags. Recommend a merge order and say which lane absorbs the conflict (usually the
+   one that owns the rename or the broader change).
+4. **Reply in this order:** what's true, what's off (with file:line), your recommendation,
    then a paste-ready reply to the lane in its own code block.
-3. **Recommend; don't just list options.** Push back on over-engineering, timeout bumps,
+5. **Recommend; don't just list options.** Push back on over-engineering, timeout bumps,
    scope creep, and process noise leaking into public text.
-4. When a lane asks to bypass something (a hook, a guard, a policy), find out why it
+6. When a lane asks to bypass something (a hook, a guard, a policy), find out why it
    failed and give the narrowest fix, as a full command the user can paste.
-5. For deep reviews, run read-only background reviewers with a specific focus, then
+7. For deep reviews, run read-only background reviewers with a specific focus, then
    spot-check their top findings before drafting anything from them.
+
+## When something merges
+
+When the user says "merged #N", verify it, then list every lane it unblocks or conflicts
+with, each with its paste-ready next instruction, and update STATE.md. Do the same when
+a lane closes: what it frees up, and whether the critical path changed.
+
+## Live changes and demos
+
+Cloud, tenant, app-registration and cluster changes follow
+[live-changes.md](references/live-changes.md): propose exact commands, record each change
+with its undo, decide keep or delete explicitly. Recording and demo lanes follow
+[demo-lanes.md](references/demo-lanes.md).
 
 ## Outward text
 
@@ -91,7 +119,9 @@ reviews and chat messages.
 - No product code. Trivial changes are OK when the user asks (a license line, a policy
   nudge).
 - Never push to main, never merge (the user merges), no force push on someone else's
-  branch.
+  branch. Resolve conflicts by merging the base in, not rebasing.
+- Before pushing anything yourself, check the author (`git log -1 --format='%an <%ae>'`);
+  never commit with a placeholder identity, even in a scratch merge.
 - No secrets in logs, output or command-line arguments.
 - Say plainly when you got something wrong, and fix the record.
 

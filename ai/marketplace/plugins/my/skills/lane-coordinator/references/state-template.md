@@ -5,6 +5,15 @@ decision lands. Re-check GitHub before trusting any PR state here.
 Stable facts: `COORDINATION.md` in the same folder.
 Last updated: <date>. Last lane number used: **W<n>**.
 
+## Critical path
+
+Goal: <the outcome everything is driving toward, e.g. "demo recording", "release v1">
+1. <step> — <owner lane or person> — <PR / status>
+2. <step> — **unowned** ← raise this first
+
+Recheck this chain whenever a lane reports or something merges. A link without an owner
+is the most important thing to surface.
+
 ## Open lanes
 
 | Lane | What | State | Waiting on |
@@ -21,6 +30,11 @@ To reopen later: <W<n> (when)>
 ## Recent decisions
 
 - <date>: <decision, one line, with PR/issue link>
+
+## Session notes
+
+In-flight judgment that isn't a decision yet, so the next session doesn't re-ask
+(e.g. "waiting for <person>'s re-approval on #N after a push dismissed it").
 
 ## Upcoming
 
