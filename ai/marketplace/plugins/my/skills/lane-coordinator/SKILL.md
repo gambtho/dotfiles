@@ -91,6 +91,17 @@ user doesn't remember which lane owns something; STATE.md answers that.
 7. For deep reviews, run read-only background reviewers with a specific focus, then
    spot-check their top findings before drafting anything from them.
 
+## Maintainer review profiles
+
+For each repo where someone else merges, keep a review profile: a short checklist of what
+that maintainer asks for, each item with a one-line why and an example link (path recorded
+in COORDINATION.md's repo table). Lanes working in that repo read it first.
+- When a lane addresses that maintainer's review, it appends any new pattern before
+  closing.
+- Every so often (or when reviews keep catching the same things), run a read-only lane
+  that mines their recent review comments and their own merged PRs, sharpens or retires
+  items, and keeps the profile scannable.
+
 ## When something merges
 
 When the user says "merged #N", verify it, then list every lane it unblocks or conflicts

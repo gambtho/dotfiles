@@ -41,6 +41,9 @@ open PRs to stay off (or the shared rules file).>
 - Public text (PR bodies, comments) is a draft until the user approves it, unless this
   prompt says otherwise.
 
+- If the repo has a maintainer review profile (see COORDINATION.md), read it before
+  starting; when you address that maintainer's review, append any new pattern to it.
+
 ## Report
 
 The PR number and head SHA, CI result for that head, what changed (and anything outside
