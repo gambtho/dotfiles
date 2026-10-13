@@ -14,7 +14,8 @@ assignments, cluster objects, bot configuration.
    the user says so (e.g. a free resource a later lane will reuse), and record why.
 4. **Credentials:** prefer short-lived tokens; otherwise a private 0600 file that's
    deleted at the end. Never print, log or pass secrets as arguments.
-5. **Identity lookups:** if Graph is blocked, use the user's object ID from memory with an
-   explicit principal type rather than looking it up.
+5. **Identity lookups:** if Graph is blocked, a remembered object ID may be proposed, but
+   only after the user confirms it against an authoritative source (the portal, or a
+   role-assignment readback). Always pass an explicit principal type.
 6. Stop rather than silently changing region, tier, scope or permissions when something
    is refused.
