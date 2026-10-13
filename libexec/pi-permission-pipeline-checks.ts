@@ -279,7 +279,7 @@ const RELAXED_PIPELINE_CASES: PipelineCase[] = [
     command: "/usr/bin/gh api repos/o/r -f name=value",
     expected: "ask",
     surface: "bash",
-    pattern: "*gh *api *-f*",
+    pattern: "*gh *api * -f*",
   },
   {
     label: "gist creation asks",
@@ -893,6 +893,10 @@ for (const agentName of [undefined, "rush", "smart", "deep", "review"] as const)
       "api repos/gotgenes/pi-packages --jq '{full_name,default_branch}'",
       "api repos/gotgenes/pi-packages --jq .default_branch",
       "api repos/gotgenes/pi-packages/git/ref/heads/main --jq .object.sha",
+      "api repos/gambtho/pi-file-editor --jq .default_branch",
+      "api repos/example/pi-File-editor --jq .default_branch",
+      "api 'repos/gambtho/pi-file-editor' --jq .default_branch",
+      "api repos/{owner}/{repo}/contents/pi-file --jq .name",
     ]) {
       const command = `${gh} ${args}`;
       QUERY_PIPELINE_CASES.push(
@@ -904,13 +908,42 @@ for (const agentName of [undefined, "rush", "smart", "deep", "review"] as const)
     for (const args of [
       "api repos/gotgenes/pi-packages -X POST",
       "api repos/gotgenes/pi-packages --method PATCH",
-      "api repos/gotgenes/pi-packages -f name=example",
+      "api repos/gotgenes/pi-packages --raw-field name=example",
+      "api repos/gotgenes/pi-packages --field name=example",
       "api repos/gotgenes/pi-packages --input payload.json",
+      'api "$REPO/pi-file" --jq .default_branch',
+      'api $ENDPOINT/pi-file --jq .default_branch',
+      ...["-f", "-F"].flatMap((flag) => [
+        ...[flag, `${flag}name=example`, `'${flag}'`, `'${flag}name=example'`, `"${flag}"`, `"${flag}name=example"`].flatMap((spelling) => {
+          const argument = spelling.includes("=") ? spelling : `${spelling} name=example`;
+          return [
+            `api ${argument} repos/gotgenes/pi-packages`,
+            `api repos/gotgenes/pi-packages ${argument}`,
+          ];
+        }),
+        ...[
+          `''${flag}`, `""${flag}`, `$'${flag}'`, `$"${flag}"`, `\\${flag}`,
+          '${FLAG:-' + flag + '}', '"${FLAG:-' + flag + '}"',
+          `$EMPTY${flag}`, `''$EMPTY${flag}`, `""$EMPTY${flag}`,
+          `$1${flag}`, `$@${flag}`, `$*${flag}`, `$(true)${flag}`, '`true`' + flag,
+        ].map((spelling) => `api repos/gotgenes/pi-packages ${spelling} name=example`),
+        `api repos/gotgenes/pi-packages {${flag},name=example}`,
+        `api repos/gotgenes/pi-packages {name=example,${flag}}`,
+        `api repos/gotgenes/pi-packages {$EMPTY${flag},} name=example`,
+        `api repos/gotgenes/pi-packages {,$EMPTY${flag}} name=example`,
+        `api repos/gotgenes/pi-packages \t${flag} name=example`,
+        `api repos/gotgenes/pi-packages \t$EMPTY${flag} name=example`,
+        `api repos/gotgenes/pi-packages ${String.fromCharCode(92, 10)}${flag} name=example`,
+        `api repos/gotgenes/pi-packages ${String.fromCharCode(92, 10)}$EMPTY${flag} name=example`,
+        `api repos/gotgenes/pi-packages ${flag}`,
+      ]),
     ]) {
       const command = `${gh} ${args}`;
+      // Shell spellings with dollars retain the children’s existing variable denial.
+      const expected = agentName !== undefined && args.includes("$") ? "deny" : "ask";
       QUERY_PIPELINE_CASES.push(
-        { label: `${agentName ?? "global"} API mutation asks: ${command}`, command, agentName, expected: "ask", raw: true },
-        { label: `${agentName ?? "global"} composed API mutation asks: ${command}`, command: `pwd && ${command}`, agentName, expected: "ask" },
+        { label: `${agentName ?? "global"} API field/expansion guard: ${command}`, command, agentName, expected, raw: true },
+        { label: `${agentName ?? "global"} composed API field/expansion guard: ${command}`, command: `pwd && ${command}`, agentName, expected },
       );
     }
     for (const args of [

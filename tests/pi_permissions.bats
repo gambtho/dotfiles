@@ -206,9 +206,16 @@ setup() {
     and $bash["*/gh api *"] == "allow"
     and $bash["*gh *api *-X*"] == "ask"
     and $bash["*gh *api *--method*"] == "ask"
-    and $bash["*gh *api *-f*"] == "ask"
+    and all(["-f", "-F"][]; . as $flag
+      | all([
+          "*gh *api ", "*gh *api * ", "*gh *api *\u0027", "*gh *api *\"",
+          "*gh *api *\\", "*gh *api *`*", "*gh *api *{", "*gh *api *,", "*gh *api *{$*", "*gh *api *,$*",
+          "*gh *api *\t", "*gh *api *\n", "*gh *api $*", "*gh *api * $*",
+          "*gh *api *\u0027$*", "*gh *api *\"$*", "*gh *api *\t$*", "*gh *api *\n$*"
+        ][]; . as $prefix | $bash[$prefix + $flag + "*"] == "ask"))
+    and ($bash | has("*gh *api *-f*") | not)
+    and ($bash | has("*gh *api *-F*") | not)
     and $bash["*gh *api *--raw-field*"] == "ask"
-    and $bash["*gh *api *-F*"] == "ask"
     and $bash["*gh *api *--field*"] == "ask"
     and $bash["*gh *api *--input*"] == "ask"
     and $bash["curl *"] == "allow"
