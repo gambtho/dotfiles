@@ -96,8 +96,9 @@ user doesn't remember which lane owns something; STATE.md answers that.
 For each repo where someone else merges, keep a review profile: a short checklist of what
 that maintainer asks for, each item with a one-line why and an example link (path recorded
 in COORDINATION.md's repo table). Lanes working in that repo read it first.
-- When a lane addresses that maintainer's review, it appends any new pattern before
-  closing.
+- When a lane addresses that maintainer's review, it proposes any new pattern in its
+  report (exact line plus evidence link); you verify it against the review and update the
+  profile, so it stays accurate and deduplicated.
 - Every so often (or when reviews keep catching the same things), run a read-only lane
   that mines their recent review comments and their own merged PRs, sharpens or retires
   items, and keeps the profile scannable.

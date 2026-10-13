@@ -42,7 +42,9 @@ open PRs to stay off (or the shared rules file).>
   prompt says otherwise.
 
 - If the repo has a maintainer review profile (see COORDINATION.md), read it before
-  starting; when you address that maintainer's review, append any new pattern to it.
+  starting. When you address that maintainer's review, propose any new pattern in your
+  report (the exact line plus an evidence link); the coordinator decides and updates the
+  profile.
 
 ## Report
 
