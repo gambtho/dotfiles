@@ -70,6 +70,13 @@
     "npm:@narumitw/pi-worktree",
     "npm:@narumitw/pi-file-context",
     {
+      "source": "git:github.com/gambtho/pi-file-editor@v0.1.0",
+      "extensions": ["extensions/file-editor.ts"],
+      "skills": [],
+      "prompts": [],
+      "themes": []
+    },
+    {
       "source": "git:github.com/obra/superpowers"
     },
     {
