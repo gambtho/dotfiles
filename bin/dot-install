@@ -38,6 +38,9 @@ install_apt_packages() {
   log_info "Updating composed APT packages for $OS/$PROFILE..."
   setup_package_repositories || return
   sudo apt update >/dev/null || return
+  if [[ "$PROFILE" == work ]]; then
+    verify_asciinema_apt_candidate || return
+  fi
   package_list=$(compose_apt_packages) || return
   [[ -n "$package_list" ]] || return 1
   while IFS= read -r package; do
@@ -87,6 +90,21 @@ check_unsaved_apt_packages() {
   count=${count//[[:space:]]/}
   log_info "Unmanaged manual APT packages: $count (details: $audit_file)"
   rm -f -- "$manifest_file"
+}
+
+install_managed_tools() {
+  case "$OS" in
+    Ubuntu | WSL)
+      install_pinned_yq "$HOME/.local/bin/yq"
+      ;;
+    macOS)
+      return 0
+      ;;
+    *)
+      log_warning "Unsupported OS for managed tools: $OS"
+      return 1
+      ;;
+  esac
 }
 
 # ── Phase 2: Runtime tools ────────────────────────────────────────────────────
@@ -199,6 +217,7 @@ main() {
   detect_os
 
   run_phase required packages install_platform_packages
+  run_phase required tools install_managed_tools
 
   case "$OS" in
     Ubuntu)

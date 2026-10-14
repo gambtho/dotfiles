@@ -37,6 +37,44 @@ setup() {
   [ "$status" -eq 0 ]
 }
 
+@test "the sandbox preserves selected yq over an incompatible system namesake" {
+  local fixture="$TEST_ROOT/tool-order"
+  mkdir -p "$fixture/bin" "$fixture/system"
+  printf '#!/bin/sh\necho selected-yq\n' >"$fixture/bin/yq"
+  printf '#!/bin/sh\necho incompatible-yq\n' >"$fixture/system/yq"
+  chmod +x "$fixture/bin/yq" "$fixture/system/yq"
+
+  run bash -c '
+    PATH="$2/bin:$PATH"
+    source "$1/tests/test_helper.bash"
+    setup_dotfiles_test
+    system_path="/usr/bin:/bin"
+    PATH="${PATH/$system_path/$2/system:$system_path}"
+    yq
+  ' _ "$REPO_ROOT" "$fixture"
+
+  [ "$status" -eq 0 ]
+  [ "$output" = selected-yq ]
+}
+
+@test "the sandbox keeps explicit stubs ahead of captured tools" {
+  local fixture="$TEST_ROOT/tool-order"
+  mkdir -p "$fixture/bin"
+  printf '#!/bin/sh\necho selected-yq\n' >"$fixture/bin/yq"
+  chmod +x "$fixture/bin/yq"
+
+  run bash -c '
+    PATH="$2/bin:$PATH"
+    source "$1/tests/test_helper.bash"
+    setup_dotfiles_test
+    stub_command yq "echo stub-yq"
+    yq
+  ' _ "$REPO_ROOT" "$fixture"
+
+  [ "$status" -eq 0 ]
+  [ "$output" = stub-yq ]
+}
+
 @test "the sandbox exposes only the named tools, not their neighbours" {
   # The symlink farm exposes explicit test dependencies without leaking every
   # executable installed beside them in a user-level bin directory.

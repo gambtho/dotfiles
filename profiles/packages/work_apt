@@ -1,3 +1,4 @@
+asciinema
 azure-cli
 code
 containerd.io
@@ -5,7 +6,9 @@ docker-buildx-plugin
 docker-ce
 docker-ce-cli
 docker-compose-plugin
+ffmpeg
 flatpak
 fonts-powerline
 kubectl
 libfuse2
+rustup

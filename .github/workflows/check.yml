@@ -20,6 +20,14 @@ jobs:
           node-version: "26"
       - name: Install shell tooling
         run: sudo apt-get update && sudo apt-get install -y bats python3-jsonschema ripgrep shellcheck shfmt zsh
+      - name: Install pinned yq
+        shell: bash
+        run: |
+          set -euo pipefail
+          source libexec/lib/artifacts.sh
+          tools_dir="$RUNNER_TEMP/dotfiles-tools"
+          install_pinned_yq "$tools_dir/yq"
+          printf '%s\n' "$tools_dir" >>"$GITHUB_PATH"
       # Config/native-package tests consume the real SDK, not a private adapter.
       - name: Provision current Pi compatibility candidates
         shell: bash
@@ -36,10 +44,12 @@ jobs:
             "@narumitw/pi-lsp@latest"
           source libexec/lib/pi-runtime.sh
           resolve_pi_runtime "" "$package_prefix/lib/node_modules/@earendil-works/pi-coding-agent"
-          printf 'PI_TEST_HOST_ROOT=%s\n' "$PI_RUNTIME_PACKAGE_ROOT" >>"$GITHUB_ENV"
-          printf 'PI_TEST_PERMISSION_ROOT=%s\n' "$package_prefix/lib/node_modules/@gotgenes/pi-permission-system" >>"$GITHUB_ENV"
-          printf 'PI_TEST_SUBAGENTS_ROOT=%s\n' "$package_prefix/lib/node_modules/@gotgenes/pi-subagents" >>"$GITHUB_ENV"
-          printf 'PI_TEST_LSP_ROOT=%s\n' "$package_prefix/lib/node_modules/@narumitw/pi-lsp" >>"$GITHUB_ENV"
+          {
+            printf 'PI_TEST_HOST_ROOT=%s\n' "$PI_RUNTIME_PACKAGE_ROOT"
+            printf 'PI_TEST_PERMISSION_ROOT=%s\n' "$package_prefix/lib/node_modules/@gotgenes/pi-permission-system"
+            printf 'PI_TEST_SUBAGENTS_ROOT=%s\n' "$package_prefix/lib/node_modules/@gotgenes/pi-subagents"
+            printf 'PI_TEST_LSP_ROOT=%s\n' "$package_prefix/lib/node_modules/@narumitw/pi-lsp"
+          } >>"$GITHUB_ENV"
           printf '%s\n' "$package_prefix/bin" >>"$GITHUB_PATH"
           node - "$PI_RUNTIME_PACKAGE_ROOT" "$package_prefix/lib/node_modules/@gotgenes/pi-permission-system" \
             "$package_prefix/lib/node_modules/@gotgenes/pi-subagents" "$package_prefix/lib/node_modules/@narumitw/pi-lsp" \

@@ -174,8 +174,20 @@ setup() {
 @test "CI provisions isolated current candidates before SDK checks and fails on runtime regression" {
   local fixture="$TEST_ROOT/ci-repo" steps="$TEST_ROOT/steps.json"
   export RUNNER_TEMP="$TEST_ROOT/runner" GITHUB_ENV="$TEST_ROOT/github-env" GITHUB_PATH="$TEST_ROOT/github-path"
-  mkdir -p "$fixture/libexec/lib" "$RUNNER_TEMP"
-  cp "$REPO_ROOT/libexec/lib/pi-runtime.sh" "$fixture/libexec/lib/"
+  mkdir -p "$fixture/libexec/lib" "$fixture/config" "$RUNNER_TEMP"
+  cp "$REPO_ROOT/libexec/lib/pi-runtime.sh" "$REPO_ROOT/libexec/lib/artifacts.sh" "$fixture/libexec/lib/"
+  printf '#!/bin/sh\nexit 0\n' >"$TEST_ROOT/ci-yq-payload"
+  export CI_YQ_PAYLOAD="$TEST_ROOT/ci-yq-payload"
+  source "$REPO_ROOT/libexec/lib/artifacts.sh"
+  local yq_digest
+  yq_digest=$(sha256_file "$CI_YQ_PAYLOAD")
+  printf 'YQ_RELEASE_BASE=https://example.test/yq\nYQ_LINUX_AMD64_SHA256=%s\nYQ_LINUX_ARM64_SHA256=%s\n' "$yq_digest" "$yq_digest" >"$fixture/config/versions.env"
+  stub_command curl '
+    while (($#)); do
+      if [[ "$1" == --output ]]; then cp "$CI_YQ_PAYLOAD" "$2"; exit; fi
+      shift
+    done
+    exit 91'
   yq -o=json '.' "$REPO_ROOT/.github/workflows/check.yml" >"$steps"
   printf '' >"$GITHUB_ENV"
   stub_command npm '

@@ -1,0 +1,8 @@
+# Keep the 2.4.0 CLI while allowing distro packaging revisions, not downgrades.
+Package: asciinema
+Pin: version /^2[.]4[.]0-[0-9A-Za-z+.~]+$/
+Pin-Priority: 990
+
+Package: asciinema
+Pin: version *
+Pin-Priority: -1

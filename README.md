@@ -69,6 +69,19 @@ a machine-local `work/*.local.zsh` (gitignored — copy
 `work/aliases.local.zsh.example` to get started). All `work/*.zsh` files
 self-guard with `[[ -z "$WORK_PROFILE" ]] && return` to prevent accidental loading.
 
+The Linux `work` package list includes ffmpeg, asciinema, and rustup. Package
+provisioning installs `/etc/apt/preferences.d/dotfiles-asciinema` to keep asciinema
+on upstream **2.4.0**, allowing newer distro revisions of that release. It fails
+before installing or upgrading packages if no compatible APT candidate is
+available, including when a newer asciinema is already installed; it never
+silently downgrades. Other packages continue to receive normal distro upgrades.
+
+Linux provisioning also installs checksum-pinned Mike Farah `yq` into
+`~/.local/bin` as a required tools phase, using `config/versions.env`. This is not
+the Python/jq-wrapper package named `yq` in Ubuntu's APT repositories. macOS
+continues to install `yq` through the Homebrew package list. CI uses the same
+pinned artifact installer before running repository checks.
+
 ## Multiple GitHub Accounts
 
 Repositories are routed to a GitHub identity by **remote owner**, not by
