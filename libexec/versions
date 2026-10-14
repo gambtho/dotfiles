@@ -50,6 +50,9 @@ list_pins() {
   printf 'artifact yq %s\n' "$YQ_VERSION"
   printf 'artifact win32yank %s\n' "$WIN32YANK_VERSION"
   printf 'artifact herdr %s\n' "$HERDR_VERSION"
+  printf 'artifact neovim %s\n' "$NVIM_VERSION"
+  printf 'artifact tree-sitter-cli %s\n' "$TREE_SITTER_VERSION"
+  printf 'git herdr-devcontainer %s %s\n' "$HERDR_DEVCONTAINER_REPO" "$HERDR_DEVCONTAINER_REF"
   printf 'npm pi-webui-runtime %s\n' "$PI_VERSION"
   printf 'artifact nerd-fonts %s\n' "$NERD_FONTS_VERSION"
   printf 'artifact nerd-font-cascadia-mono %s %s\n' "$NERD_FONTS_VERSION" "$NERD_FONT_CASCADIA_MONO_SHA256"
@@ -103,21 +106,21 @@ latest_artifact_release() {
 }
 
 report_artifact_release() {
-  local name="$1" current="$2" latest="$3"
+  local name="$1" current="$2" latest="$3" kind="${4:-artifact}"
   if [[ "$current" == "$latest" ]]; then
-    printf 'current artifact %s %s\n' "$name" "$current"
+    printf 'current %s %s %s\n' "$kind" "$name" "$current"
   else
-    printf 'outdated artifact %s %s -> %s\n' "$name" "$current" "$latest"
+    printf 'outdated %s %s %s -> %s\n' "$kind" "$name" "$current" "$latest"
   fi
 }
 
 check_artifact_release() {
-  local name="$1" repository="$2" current="$3" latest
+  local name="$1" repository="$2" current="$3" kind="${4:-artifact}" latest
   latest=$(latest_artifact_release "$repository") || {
-    printf 'error artifact %s: unable to query latest release for %s\n' "$name" "$repository" >&2
+    printf 'error %s %s: unable to query latest release for %s\n' "$kind" "$name" "$repository" >&2
     return 1
   }
-  report_artifact_release "$name" "$current" "$latest"
+  report_artifact_release "$name" "$current" "$latest" "$kind"
 }
 
 latest_npm_package() {
@@ -168,6 +171,9 @@ check_pins() {
   check_npm_package pi-webui-runtime "@earendil-works/pi-coding-agent" "$PI_VERSION"
   check_artifact_release nerd-fonts ryanoasis/nerd-fonts "$NERD_FONTS_VERSION"
   check_artifact_release herdr herdrdev/herdr "$HERDR_VERSION"
+  check_artifact_release neovim neovim/neovim "v$NVIM_VERSION"
+  check_artifact_release tree-sitter-cli tree-sitter/tree-sitter "v$TREE_SITTER_VERSION"
+  check_artifact_release herdr-devcontainer "$HERDR_DEVCONTAINER_REPO" "$HERDR_DEVCONTAINER_REF" git
 }
 
 update_pin() {

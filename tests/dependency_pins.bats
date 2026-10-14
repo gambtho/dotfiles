@@ -21,12 +21,15 @@ setup() {
   [[ "$output" == *"mise go 1.26"* ]]
   [[ "$output" == *"git prezto $PREZTO_REF"* ]]
   [[ "$output" == *"git zsh-defer $ZSH_DEFER_REF"* ]]
-  [[ "$output" == *"channel kubernetes v1.28"* ]]
+  [[ "$output" == *"channel kubernetes $KUBERNETES_CHANNEL"* ]]
   [[ "$output" == *"artifact mise v2026.7.18"* ]]
   [[ "$output" == *"artifact krew v0.5.0"* ]]
   [[ "$output" == *"artifact yq v4.45.1"* ]]
   [[ "$output" == *"artifact win32yank v0.1.1"* ]]
   [[ "$output" == *"artifact herdr v0.8.0"* ]]
+  [[ "$output" == *"artifact neovim $NVIM_VERSION"* ]]
+  [[ "$output" == *"artifact tree-sitter-cli $TREE_SITTER_VERSION"* ]]
+  [[ "$output" == *"git herdr-devcontainer $HERDR_DEVCONTAINER_REPO $HERDR_DEVCONTAINER_REF"* ]]
   [[ "$output" == *"npm pi-webui-runtime $PI_VERSION"* ]]
   [[ "$output" != *"pi-queue-steer"* ]]
   [[ "$output" != *"pi-web-access"* ]]
@@ -305,6 +308,9 @@ case "$url" in
   *equalsraf/win32yank*) printf '{"tag_name":"v0.1.1"}\n' ;;
   *ryanoasis/nerd-fonts*) printf '{"tag_name":"v3.4.0"}\n' ;;
   *herdrdev/herdr*) printf '{"tag_name":"v0.8.0"}\n' ;;
+  *neovim/neovim*) printf '{"tag_name":"v0.12.4"}\n' ;;
+  *tree-sitter/tree-sitter*) printf '{"tag_name":"v0.26.11"}\n' ;;
+  *gambtho/herdr-devcontainer*) printf '{"tag_name":"v0.2.0"}\n' ;;
   *tmustier/pi-queue-steer*|*registry.npmjs.org/pi-web-access/*|*registry.npmjs.org/@narumitw/pi-lsp/*|*registry.npmjs.org/@gotgenes/pi-subagents/*|*registry.npmjs.org/@gotgenes/pi-permission-system/*) exit 91 ;;
   *registry.npmjs.org*) printf '{"version":"0.85.1"}\n' ;;
 esac
@@ -319,6 +325,9 @@ SCRIPT
   [[ "$output" == *"current artifact yq v4.45.1"* ]]
   [[ "$output" == *"current artifact win32yank v0.1.1"* ]]
   [[ "$output" == *"current artifact herdr v0.8.0"* ]]
+  [[ "$output" == *"current artifact neovim v0.12.4"* ]]
+  [[ "$output" == *"current artifact tree-sitter-cli v0.26.11"* ]]
+  [[ "$output" == *"current git herdr-devcontainer v0.2.0"* ]]
   [[ "$output" == *"current artifact nerd-fonts v3.4.0"* ]]
   [[ "$output" == *"current npm pi-webui-runtime $PI_VERSION"* ]]
   [[ "$output" != *"pi-queue-steer"* ]]
@@ -327,6 +336,47 @@ SCRIPT
   [[ "$output" != *"pi-subagents"* ]]
   [[ "$output" != *"pi-permission-system"* ]]
   [[ "$output" != *"pi-sandbox"* ]]
+}
+
+@test "versions check reports new pin drift and lookup failures" {
+  stub_command mise 'exit 0'
+  stub_command git 'printf "0000000000000000000000000000000000000000\tHEAD\n"'
+  stub_command curl '
+    url="${@: -1}"
+    case "$url" in
+      "https://api.github.com/repos/$PIN_LOOKUP_REPO/releases/latest")
+        case "$PIN_LOOKUP_RESULT" in
+          outdated) printf "{\"tag_name\":\"v9.9.9\"}\n" ;;
+          transport) exit 22 ;;
+          response) printf "{}\n" ;;
+        esac
+        ;;
+      *dl.k8s.io*) printf "v1.37.0\n" ;;
+      *registry.npmjs.org*) printf "{\"version\":\"0.85.1\"}\n" ;;
+      *api.github.com*) printf "{\"tag_name\":\"v0.0.0\"}\n" ;;
+      *) exit 91 ;;
+    esac
+  '
+
+  local name repository kind current result
+  while read -r name repository kind current; do
+    for result in outdated transport response; do
+      run bash -c 'export PIN_LOOKUP_REPO="$1" PIN_LOOKUP_RESULT="$2"; bash "$3/libexec/versions" check' \
+        _ "$repository" "$result" "$REPO_ROOT"
+      if [[ "$result" == outdated ]]; then
+        [ "$status" -eq 0 ]
+        [[ "$output" == *"outdated $kind $name $current -> v9.9.9"* ]]
+      else
+        [ "$status" -ne 0 ]
+        [[ "$output" == *"error $kind $name: unable to query latest release for $repository"* ]]
+        [[ "$output" != *"outdated $kind $name"* ]]
+      fi
+    done
+  done <<'PINS'
+neovim neovim/neovim artifact v0.12.4
+tree-sitter-cli tree-sitter/tree-sitter artifact v0.26.11
+herdr-devcontainer gambtho/herdr-devcontainer git v0.2.0
+PINS
 }
 
 @test "versions check reports artifact release lookup failures clearly" {
