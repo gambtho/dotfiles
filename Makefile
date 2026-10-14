@@ -1,4 +1,4 @@
-.PHONY: install bootstrap update relink ai ai-check ai-webui ai-webui-check ai-webui-domain-check ai-webui-domain-setup pins pins-check pins-update check syntax lint test python-test pi-runtime-test validate
+.PHONY: install bootstrap update relink ai ai-check ai-paseo ai-paseo-check ai-paseo-domain-check ai-paseo-domain-setup pins pins-check pins-update check syntax lint test python-test pi-runtime-test validate
 
 # ── Main targets ──────────────────────────────────────────────────────────────
 
@@ -33,17 +33,17 @@ ai-check: ## Dry-run: show what the Pi install would do
 	done; \
 	if [ -n "$$failed" ]; then echo "make ai-check: failed:$$failed" >&2; exit 1; fi
 
-ai-webui: ## Install/update the opt-in Pi Web UI
-	bash ai/pi/webui/install.sh --apply
+ai-paseo: ## Install/update the opt-in Paseo
+	bash ai/pi/paseo/install.sh --apply
 
-ai-webui-check: ## Inspect Pi Web UI state without mutation
-	bash ai/pi/webui/install.sh --check
+ai-paseo-check: ## Inspect Paseo state without mutation
+	bash ai/pi/paseo/install.sh --check
 
-ai-webui-domain-check: ## Inspect Pi Web UI custom-domain state without mutation
-	bash ai/pi/webui/custom-domain.sh check
+ai-paseo-domain-check: ## Inspect Paseo custom-domain state without mutation
+	bash ai/pi/paseo/custom-domain.sh check
 
-ai-webui-domain-setup: ## Build and install the opt-in custom-domain Caddy service
-	bash ai/pi/webui/custom-domain.sh setup
+ai-paseo-domain-setup: ## Build and install the opt-in custom-domain Caddy service
+	bash ai/pi/paseo/custom-domain.sh setup
 
 pins: ## List managed dependency versions and refs
 	bash libexec/versions list

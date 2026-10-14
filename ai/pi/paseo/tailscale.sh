@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Validate and explicitly manage tailnet-only Pi Web UI ingress.
+# Validate and explicitly manage tailnet-only Paseo ingress.
 
 set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
 # Reuse the installer's platform, identity, unit, and health contracts.
-# shellcheck source=ai/pi/webui/install.sh
-source "$SCRIPT_DIR/install.sh"
+# shellcheck source=ai/pi/paseo/common.sh
+source "$SCRIPT_DIR/common.sh"
 
 readonly LEGACY_BACKEND=http://127.0.0.1:31415
 readonly RAW_BACKEND=127.0.0.1:8443
@@ -17,7 +17,7 @@ readonly KEY_SHA=3e03dacf222698c60b8e2f990b809ca1b3e104de127767864284e6c228f1fb3
 readonly SOURCE_LINE='deb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg] https://pkgs.tailscale.com/stable/ubuntu noble main'
 
 set_tailscale_paths() {
-  local root=${PI_WEBUI_TAILSCALE_ROOT:-}
+  local root=${PI_PASEO_TAILSCALE_ROOT:-}
   if [[ -n "$root" ]]; then
     require_test_override "$root"
   fi
@@ -183,33 +183,33 @@ require_route_state() {
 
 check_local_service() {
   local strict=${1:-0}
-  resolve_source
-  resolve_mise
-  resolve_pi
-  "$SOURCE_ROOT/libexec/validate-pi-webui" --tracked-only
+  resolve_source || return 1
+  resolve_mise || return 1
+  resolve_pi || return 1
+  "$SOURCE_ROOT/libexec/validate-pi-paseo" --tracked-only || return 1
   set_managed_paths
-  validate_landing_worktree "$LANDING_WORKTREE"
-  if path_exists "$INSTALLED_RUNTIME"; then
-    "$SOURCE_ROOT/libexec/validate-pi-webui" --installed-runtime "$INSTALLED_RUNTIME"
-  else
+  validate_state_root || return 1
+  if ! path_exists "$INSTALLED_RUNTIME"; then
     [[ "$strict" -eq 0 ]] || {
       fail 'installed runtime is unavailable'
       return 1
     }
+    return 0
   fi
-  if path_exists "$UNIT_PATH"; then
-    validate_unit "$UNIT_PATH"
-  else
+  "$SOURCE_ROOT/libexec/validate-pi-paseo" --installed-runtime "$INSTALLED_RUNTIME" || return 1
+  validate_launcher || return 1
+  node "$SOURCE_ROOT/ai/pi/paseo/config.mjs" validate "$PASEO_HOME/config.json" "$PI_LAUNCHER" || return 1
+  if ! path_exists "$UNIT_PATH"; then
     [[ "$strict" -eq 0 ]] || {
       fail 'installed service unit is unavailable'
       return 1
     }
+    return 0
   fi
-  if systemctl --user is-active pi-webui.service >/dev/null 2>&1; then
-    validate_active_health "$PI_LAUNCHER"
-  else
+  validate_unit || return 1
+  if systemctl --user is-active paseo.service >/dev/null 2>&1; then validate_active_health || return 1; else
     [[ "$strict" -eq 0 ]] || {
-      fail 'Pi Web UI service is not active'
+      fail 'Paseo service is not active'
       return 1
     }
   fi
@@ -226,7 +226,7 @@ check_lan() {
     [[ -n "$address" && "$interface" != tailscale0 ]] || continue
     ((count += 1))
     if curl --silent --show-error --connect-timeout 1 --max-time 5 "http://$address:31415/" >/dev/null 2>&1; then
-      fail "Pi Web UI is reachable on LAN address $address"
+      fail "Paseo is reachable on LAN address $address"
       return 1
     fi
   done <<<"$addresses"
@@ -372,6 +372,19 @@ main() {
     usage >&2
     return 2
   }
+  local selection=0
+  if [[ "$1" != help ]]; then
+    paseo_selected || selection=$?
+    [[ "$selection" -ne 2 ]] || return 2
+    if [[ "$selection" -eq 1 ]]; then
+      [[ "$1" == check ]] || {
+        fail 'network mutation requires DOTFILES_PASEO_ENABLED=1'
+        return 1
+      }
+      printf 'Paseo not selected; skipping ingress check\n'
+      return 0
+    fi
+  fi
   case "$1" in
     help) usage ;;
     check) check_all ;;

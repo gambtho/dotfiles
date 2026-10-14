@@ -30,7 +30,8 @@ setup() {
   [[ "$output" == *"artifact neovim $NVIM_VERSION"* ]]
   [[ "$output" == *"artifact tree-sitter-cli $TREE_SITTER_VERSION"* ]]
   [[ "$output" == *"git herdr-devcontainer $HERDR_DEVCONTAINER_REPO $HERDR_DEVCONTAINER_REF"* ]]
-  [[ "$output" == *"npm pi-webui-runtime $PI_VERSION"* ]]
+  [[ "$output" == *"npm pi-paseo-runtime $PASEO_VERSION"* ]]
+  [[ "$output" != *"pi-webui-runtime"* ]]
   [[ "$output" != *"pi-queue-steer"* ]]
   [[ "$output" != *"pi-web-access"* ]]
   [[ "$output" != *"pi-lsp"* ]]
@@ -53,7 +54,7 @@ setup() {
 }
 
 @test "non-mise pins have one canonical manifest" {
-  run rg -l '^(PREZTO_REF|ZSH_DEFER_REF|KUBERNETES_CHANNEL|PI_VERSION|HERDR_VERSION|HERDR_RELEASE_BASE|HERDR_LINUX_(X86_64|AARCH64)_SHA256)=' "$REPO_ROOT" \
+  run rg -l '^(PREZTO_REF|ZSH_DEFER_REF|KUBERNETES_CHANNEL|PASEO_VERSION|HERDR_VERSION|HERDR_RELEASE_BASE|HERDR_LINUX_(X86_64|AARCH64)_SHA256)=' "$REPO_ROOT" \
     --glob '!docs/**' --glob '!tests/**'
   [ "$status" -eq 0 ]
   [ "$output" = "$REPO_ROOT/config/versions.env" ]
@@ -83,91 +84,6 @@ setup() {
     and ($sources | map(select(. == $editor)) | length == 1)
     and ($sources | map(select(contains("pi-sandbox"))) | length == 0)
   ' "$REPO_ROOT/ai/pi/settings.json"
-  [ "$status" -eq 0 ]
-}
-
-@test "Web UI Pi identity, Firstp1ck package, and lock agree with the canonical Pi pin" {
-  local webui_manifest="$REPO_ROOT/ai/pi/webui/runtime/package.json"
-  local webui_lock="$REPO_ROOT/ai/pi/webui/runtime/package-lock.json"
-  local readme="$REPO_ROOT/ai/pi/webui/README.md"
-  local validator="$REPO_ROOT/libexec/validate-pi-webui"
-  local install="$REPO_ROOT/ai/pi/webui/install.sh"
-  local custom_domain="$REPO_ROOT/ai/pi/webui/custom-domain.sh"
-  local webui_version
-
-  # The runtime manifest is the single source of truth for the exact
-  # Firstp1ck version; every other file must agree with it and with the
-  # canonical Pi pin, so a one-sided bump of only one of the two fails here.
-  webui_version=$(jq -er --arg name '@firstpick/pi-package-webui' \
-    '.dependencies[$name]' "$webui_manifest")
-  [ -n "$webui_version" ]
-
-  run jq -er --arg webui "$webui_version" \
-    '.packages[""].dependencies["@firstpick/pi-package-webui"] == $webui' "$webui_lock"
-  [ "$status" -eq 0 ]
-
-  run jq -er --arg webui "$webui_version" \
-    '.packages["node_modules/@firstpick/pi-package-webui"].version == $webui' "$webui_lock"
-  [ "$status" -eq 0 ]
-
-  # Every nested Earendil package the lock pulls in for the Pi CLI must
-  # resolve to the exact pinned Pi version -- no partial upgrade.
-  run jq -er --arg pi "$PI_VERSION" '
-    [.packages | to_entries[]
-      | select(.key == "node_modules/@earendil-works/pi-coding-agent"
-          or (.key | test("^node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/")))
-      | .value.version] as $versions
-    | ($versions | length) > 0 and (all($versions[]; . == $pi))
-  ' "$webui_lock"
-  [ "$status" -eq 0 ]
-
-  # The lock records Firstp1ck's own declared Pi range for its resolved
-  # version; the canonical Pi pin must actually satisfy that caret range, so
-  # bumping Pi without checking Firstp1ck's declared compatibility fails.
-  run jq -er '.packages["node_modules/@firstpick/pi-package-webui"].dependencies["@earendil-works/pi-coding-agent"]' "$webui_lock"
-  [ "$status" -eq 0 ]
-  local declared_range="$output"
-  run node -e '
-    const range = process.argv[1];
-    const pin = process.argv[2];
-    const match = /^\^(\d+)\.(\d+)\.(\d+)$/.exec(range);
-    if (!match) { console.error(`unsupported range shape: ${range}`); process.exit(1); }
-    const [, major, minor, patch] = match.map(Number);
-    const pinMatch = /^(\d+)\.(\d+)\.(\d+)$/.exec(pin);
-    if (!pinMatch) { console.error(`unsupported pin shape: ${pin}`); process.exit(1); }
-    const [, pMajor, pMinor, pPatch] = pinMatch.map(Number);
-    const lower = [major, minor, patch];
-    const upper = major > 0 ? [major + 1, 0, 0] : minor > 0 ? [major, minor + 1, 0] : [major, minor, patch + 1];
-    const cmp = (a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
-    const point = [pMajor, pMinor, pPatch];
-    if (cmp(point, lower) < 0 || cmp(point, upper) >= 0) {
-      console.error(`${pin} does not satisfy ${range}`);
-      process.exit(1);
-    }
-  ' "$declared_range" "$PI_VERSION"
-  [ "$status" -eq 0 ]
-
-  # The byte-pinned runtime validator's expected identities must match too.
-  run rg -F "const webuiVersion = '$webui_version';" "$validator"
-  [ "$status" -eq 0 ]
-  run rg -F "const piVersion = '$PI_VERSION';" "$validator"
-  [ "$status" -eq 0 ]
-
-  # The operator-facing README documents the same exact identities.
-  run rg -F "Firstp1ck \`$webui_version\`" "$readme"
-  [ "$status" -eq 0 ]
-  run rg -F "\`$PI_VERSION\` on Ubuntu" "$readme"
-  [ "$status" -eq 0 ]
-
-  # The installer's launcher identity check and health-endpoint identity
-  # check must both assert the canonical Pi pin.
-  run rg -F "Pi launcher is not @earendil-works/pi-coding-agent@$PI_VERSION" "$install"
-  [ "$status" -eq 0 ]
-  run rg -F "webuiVersion !== '$webui_version' || data?.piVersion !== '$PI_VERSION'" "$install"
-  [ "$status" -eq 0 ]
-
-  # The custom-domain health-endpoint identity check must match as well.
-  run rg -F "webuiVersion !== '$webui_version' || data?.piVersion !== '$PI_VERSION'" "$custom_domain"
   [ "$status" -eq 0 ]
 }
 
@@ -312,7 +228,8 @@ case "$url" in
   *tree-sitter/tree-sitter*) printf '{"tag_name":"v0.26.11"}\n' ;;
   *gambtho/herdr-devcontainer*) printf '{"tag_name":"v0.2.0"}\n' ;;
   *tmustier/pi-queue-steer*|*registry.npmjs.org/pi-web-access/*|*registry.npmjs.org/@narumitw/pi-lsp/*|*registry.npmjs.org/@gotgenes/pi-subagents/*|*registry.npmjs.org/@gotgenes/pi-permission-system/*) exit 91 ;;
-  *registry.npmjs.org*) printf '{"version":"0.85.1"}\n' ;;
+  *registry.npmjs.org/@getpaseo/cli/latest) printf '{"version":"0.11.2"}\n' ;;
+  *registry.npmjs.org*) exit 92 ;;
 esac
 SCRIPT
   chmod +x "$STUB_BIN/curl"
@@ -329,7 +246,8 @@ SCRIPT
   [[ "$output" == *"current artifact tree-sitter-cli v0.26.11"* ]]
   [[ "$output" == *"current git herdr-devcontainer v0.2.0"* ]]
   [[ "$output" == *"current artifact nerd-fonts v3.4.0"* ]]
-  [[ "$output" == *"current npm pi-webui-runtime $PI_VERSION"* ]]
+  [[ "$output" == *"current npm pi-paseo-runtime $PASEO_VERSION"* ]]
+  [[ "$output" != *"pi-webui-runtime"* ]]
   [[ "$output" != *"pi-queue-steer"* ]]
   [[ "$output" != *"pi-web-access"* ]]
   [[ "$output" != *"pi-lsp"* ]]
@@ -352,7 +270,8 @@ SCRIPT
         esac
         ;;
       *dl.k8s.io*) printf "v1.37.0\n" ;;
-      *registry.npmjs.org*) printf "{\"version\":\"0.85.1\"}\n" ;;
+      *registry.npmjs.org/@getpaseo/cli/latest) printf "{\"version\":\"0.11.2\"}\n" ;;
+      *registry.npmjs.org*) exit 92 ;;
       *api.github.com*) printf "{\"tag_name\":\"v0.0.0\"}\n" ;;
       *) exit 91 ;;
     esac

@@ -13,6 +13,8 @@ setup() {
   setup_dotfiles_test
   export DOTFILES="$REPO_ROOT"
   source "$REPO_ROOT/config/versions.env"
+  # Fixture host identity is independent of optional application runtime pins.
+  export PI_VERSION=1.2.0
   FIXTURE_PERMISSION_VERSION=29.2.0
   mkdir -p "$HOME/.pi/agent"
   export npm_config_prefix="$TEST_ROOT/global-prefix" npm_config_cache="$TEST_ROOT/npm-cache"

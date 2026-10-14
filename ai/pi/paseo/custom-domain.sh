@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Read-only checks, candidate-first setup, migration, and rollback for the
-# tailnet-only custom HTTPS hostname (pi.dpao.la) in front of Pi Web UI.
+# tailnet-only custom HTTPS hostname (pi.dpao.la) in front of Paseo.
 #
 # This file implements the static Caddy source contract (fixed managed paths,
 # the exact tracked Caddyfile/unit renderers, and a source-only integrity
-# check), the full read-only `check` CLI verb (strict Firstp1ck preflight,
+# check), the full read-only `check` CLI verb (strict Paseo preflight,
 # DNS, installed Caddy, listener, and TLS/health validation, plus route
 # classification), the candidate-first `setup` verb (credential
 # validation, pinned private Caddy build, bounded publication, and automatic
@@ -17,7 +17,7 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
 # Reuse platform, identity, unit, and Tailscale route helpers.
-# shellcheck source=ai/pi/webui/tailscale.sh
+# shellcheck source=ai/pi/paseo/tailscale.sh
 source "$SCRIPT_DIR/tailscale.sh"
 
 readonly CUSTOM_HOSTNAME=pi.dpao.la
@@ -69,7 +69,7 @@ export CUSTOM_HOSTNAME CADDY_VERSION XCADDY_VERSION GODADDY_MODULE_VERSION \
   CADDY_PREFIX CADDY_BINARY CADDY_ENTRYPOINT CADDY_CONFIG CADDY_UNIT CADDY_CREDENTIAL
 
 set_caddy_paths() {
-  local root=${PI_WEBUI_CADDY_ROOT:-}
+  local root=${PI_PASEO_CADDY_ROOT:-}
   if [[ -n "$root" ]]; then
     require_test_override "$root"
   fi
@@ -93,7 +93,7 @@ readonly -a CADDY_MANAGED_SOURCE_FILES=(
 )
 
 # Pinned SHA-256 identities of the two approved static templates, the same
-# exact-tracked-content contract libexec/validate-pi-webui uses for the runtime
+# exact-tracked-content contract libexec/validate-pi-paseo uses for the runtime
 # manifest/lock. Any drift in either template — even syntactically valid,
 # placeholder-free, secret-free drift — must be a reviewed source change
 # that updates this pin, not a silent pass.
@@ -146,29 +146,13 @@ validate_caddy_source() {
   done
 }
 
-# Strict Firstp1ck preflight: every managed component must already be
+# Strict Paseo preflight: every managed component must already be
 # installed, matched, active, and healthy. Unlike tailscale.sh's permissive
 # check_local_service(), any absent component here is a hard failure before
 # DNS, Caddy, or credential access.
-strict_firstpick_preflight() {
-  require_supported_platform
-  resolve_source
-  resolve_mise
-  resolve_pi
-  "$SOURCE_ROOT/libexec/validate-pi-webui" --tracked-only
-  set_managed_paths
-  path_exists "$INSTALLED_RUNTIME" || {
-    fail 'installed runtime is unavailable'
-    return 1
-  }
-  "$SOURCE_ROOT/libexec/validate-pi-webui" --installed-runtime "$INSTALLED_RUNTIME"
-  path_exists "$UNIT_PATH" || {
-    fail 'installed service unit is unavailable'
-    return 1
-  }
-  validate_landing_worktree "$LANDING_WORKTREE"
-  validate_unit "$UNIT_PATH"
-  validate_active_health "$PI_LAUNCHER"
+strict_paseo_preflight() {
+  require_supported_platform || return 1
+  check_local_service 1 || return 1
 }
 
 # Emits the node's single online Tailscale IPv4 in 100.64.0.0/10. Fails
@@ -472,9 +456,9 @@ validate_caddy_listener() {
 
 # Requires a currently trusted, unexpired, correctly named certificate at
 # $address:$port and a proxied /api/health response matching the exact
-# Firstp1ck health contract, without bypassing normal CA verification.
+# Paseo health contract, without bypassing normal CA verification.
 validate_caddy_certificate_and_health() {
-  local address=$1 port=$2 url=$3 certificate health
+  local address=$1 port=$2 url=$3 certificate
   certificate=$(timeout "$TLS_HANDSHAKE_TIMEOUT" \
     openssl s_client -connect "$address:$port" -servername "$CUSTOM_HOSTNAME" \
     -verify_return_error </dev/null 2>&1) || {
@@ -487,30 +471,12 @@ validate_caddy_certificate_and_health() {
     return 1
   }
 
-  health=$(curl --fail --silent --show-error \
-    --connect-timeout "$PROBE_CONNECT_TIMEOUT" --max-time "$PROBE_MAX_TIME" \
-    --resolve "$CUSTOM_HOSTNAME:$port:$address" \
-    "$url") || {
-    fail "Caddy-proxied Pi Web UI health endpoint failed at $url"
+  timeout --kill-after=2 "$PROBE_MAX_TIME" "$MISE_LAUNCHER" exec -- node \
+    "$SOURCE_ROOT/ai/pi/paseo/probe.mjs" health "$INSTALLED_RUNTIME" "$PASEO_HOME" \
+    "$url" "$CUSTOM_HOSTNAME:$port:$address" || {
+    fail "Caddy-proxied Paseo authenticated health identity is invalid"
     return 1
   }
-  node - "$PI_LAUNCHER" "$health" <<'NODE' || fail 'Caddy-proxied Pi Web UI health identity is invalid'
-const launcher = process.argv[2];
-const response = JSON.parse(process.argv[3]);
-const data = response;
-const network = data?.network;
-if (response.ok !== true || data?.webuiVersion !== '0.10.4' || data?.piVersion !== '0.85.1' ||
-    network?.open !== false || network?.host !== '127.0.0.1' || network?.port !== 31415 ||
-    !Array.isArray(network?.networkUrls) || network.networkUrls.length !== 0 ||
-    !Array.isArray(data?.tabs)) process.exit(1);
-const prefix = `${launcher} --mode rpc`;
-for (const tab of data.tabs) {
-  if (tab.running === true && !(tab.command === prefix ||
-      (typeof tab.command === 'string' && tab.command.startsWith(prefix) && /\s/.test(tab.command[prefix.length])))) {
-    process.exit(1);
-  }
-}
-NODE
 }
 
 # Verifies the loopback listener Caddy actually serves.
@@ -528,7 +494,7 @@ validate_caddy_tls_health_through_tailnet() {
   validate_caddy_certificate_and_health "$ipv4" 443 "https://$CUSTOM_HOSTNAME/api/health"
 }
 
-# Read-only custom-domain check. Runs the strict Firstp1ck preflight,
+# Read-only custom-domain check. Runs the strict Paseo preflight,
 # Tailscale version/online checks, DNS, source integrity, installed Caddy
 # state, listener/TLS health, and route classification, in that order, so
 # nothing mutation-adjacent runs before every boundary has been proven.
@@ -539,7 +505,7 @@ validate_caddy_tls_health_through_tailnet() {
 # case.
 check_domain() {
   local route
-  strict_firstpick_preflight
+  strict_paseo_preflight
   require_tailscale
   require_tailscale_version
   validate_public_dns
@@ -824,9 +790,9 @@ publish_caddy_artifact() {
 # default interval, with no attempt limit of its own (see wait_for_caddy_ready).
 caddy_ready_budget() {
   CADDY_READY_INTERVAL=$CADDY_READY_INTERVAL_DEFAULT
-  if [[ -n ${PI_WEBUI_TEST_READY_INTERVAL:-} ]]; then
+  if [[ -n ${PI_PASEO_TEST_READY_INTERVAL:-} ]]; then
     require_test_override "$STATE_ROOT"
-    CADDY_READY_INTERVAL=$PI_WEBUI_TEST_READY_INTERVAL
+    CADDY_READY_INTERVAL=$PI_PASEO_TEST_READY_INTERVAL
   fi
 }
 
@@ -835,9 +801,9 @@ caddy_ready_budget() {
 # shorten it through the usual Bats-only override guard.
 caddy_ready_deadline() {
   CADDY_READY_DEADLINE=$CADDY_READY_DEADLINE_DEFAULT
-  if [[ -n ${PI_WEBUI_TEST_READY_DEADLINE:-} ]]; then
+  if [[ -n ${PI_PASEO_TEST_READY_DEADLINE:-} ]]; then
     require_test_override "$STATE_ROOT"
-    CADDY_READY_DEADLINE=$PI_WEBUI_TEST_READY_DEADLINE
+    CADDY_READY_DEADLINE=$PI_PASEO_TEST_READY_DEADLINE
   fi
 }
 
@@ -1028,7 +994,7 @@ setup_domain() {
   require_supported_platform
   resolve_source
   validate_apply_source
-  strict_firstpick_preflight
+  strict_paseo_preflight
   require_tailscale
   require_tailscale_version
   require_route_state legacy-exact
@@ -1263,7 +1229,7 @@ migrate_domain() {
   local legacy_host
 
   require_supported_platform
-  strict_firstpick_preflight
+  strict_paseo_preflight
   require_tailscale
   require_tailscale_version
   validate_public_dns
@@ -1315,7 +1281,7 @@ migrate_domain() {
   trap - ERR INT TERM
   set +E
   printf 'custom domain migrated: https://%s is now canonical\n' "$CUSTOM_HOSTNAME"
-  printf 'the previous https://%s Web UI URL is no longer valid: raw TCP forwarding presents the %s certificate and site\n' \
+  printf 'the previous https://%s Paseo URL is no longer valid: raw TCP forwarding presents the %s certificate and site\n' \
     "$legacy_host" "$CUSTOM_HOSTNAME"
 }
 
@@ -1369,14 +1335,14 @@ remove_managed_caddy() {
 # Conservative custom-domain rollback: restore legacy ingress, prove the old
 # URL answers, then remove only the exact managed Caddy service artifacts.
 #
-# `--full` is the removal path the Web UI rollback needs instead: it takes the
+# `--full` is the removal path the Paseo rollback needs instead: it takes the
 # exact raw or exact transitional legacy route down to empty, removes the same
-# managed artifacts, and leaves Serve empty so ai/pi/webui/rollback.sh can run.
+# managed artifacts, and leaves Serve empty so ai/pi/paseo/rollback.sh can run.
 #
 # Certificates, ACME state, the encrypted credential, Pi state, the managed
-# Web UI runtime and worktree, and the Tailscale node identity are all
+# Paseo runtime and worktree, and the Tailscale node identity are all
 # preserved in both modes; deleting any of them would require its own explicit
-# flag and is deliberately not offered here. The strict Firstp1ck preflight is
+# flag and is deliberately not offered here. The strict Paseo preflight is
 # not repeated: restoration itself proves the legacy URL answers, which is the
 # behavior that matters, and rollback must stay available when other managed
 # state has drifted.
@@ -1405,7 +1371,7 @@ rollback_domain() {
     require_route_state empty
     remove_managed_caddy
     printf 'custom domain removed: Tailscale Serve is empty and %s is removed\n' "$CADDY_SERVICE"
-    printf 'run %s/rollback.sh next to remove the Pi Web UI service\n' "$SCRIPT_DIR"
+    printf 'run %s/rollback.sh next to remove the Paseo service\n' "$SCRIPT_DIR"
   else
     case "$route" in
       raw-exact)
@@ -1424,7 +1390,7 @@ rollback_domain() {
     printf 'custom domain rolled back: legacy HTTPS 443 -> %s is published and %s is removed\n' \
       "$LEGACY_BACKEND" "$CADDY_SERVICE"
   fi
-  printf 'preserved: %s, %s, Pi state, Web UI state, and the Tailscale node identity\n' \
+  printf 'preserved: %s, %s, Pi state, Paseo state, and the Tailscale node identity\n' \
     "$CADDY_CREDENTIAL" "$CADDY_STATE_DIRECTORY"
 }
 
@@ -1451,6 +1417,17 @@ main() {
       return 2
       ;;
   esac
+  local selection=0
+  paseo_selected || selection=$?
+  [[ "$selection" -ne 2 ]] || return 2
+  if [[ "$selection" -eq 1 ]]; then
+    [[ "$1" == check ]] || {
+      fail 'domain mutation requires DOTFILES_PASEO_ENABLED=1'
+      return 1
+    }
+    printf 'Paseo not selected; skipping domain check\n'
+    return 0
+  fi
   case "$1" in
     check) check_domain ;;
     setup) setup_domain ;;
