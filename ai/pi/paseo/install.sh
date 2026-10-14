@@ -9,6 +9,7 @@ apply_reconciliation() (
   umask 0077
   local stage='' runtime_changed=0 config_changed=0 launcher_changed=0 unit_changed=0 stopped=0 started=0 enablement_changed=0 prior_runtime=0 prior_config=0 prior_launcher=0 prior_unit=0 prior_active=0 prior_enabled=0
   local auth_status=0 path
+  resolve_node_dns_name || exit 1
   validate_state_root || exit 1
   read_service_state pi-webui.service || exit 1
   [[ "$SERVICE_ACTIVE_STATE" != active && "$SERVICE_FILE_STATE" != enabled ]] || {
@@ -113,8 +114,8 @@ apply_reconciliation() (
     prior_launcher=1
   fi
   if [[ "$prior_unit" -eq 1 ]]; then cp -p "$UNIT_PATH" "$stage/prior-unit" || exit 1; fi
-  node "$SOURCE_ROOT/ai/pi/paseo/config.mjs" reconcile "$stage/prior-config" "$stage/config" "$PI_LAUNCHER" "$SOURCE_ROOT/ai/pi/paseo/config.json" || exit 1
-  node "$SOURCE_ROOT/ai/pi/paseo/config.mjs" validate "$stage/config" "$PI_LAUNCHER" || auth_status=$?
+  node "$SOURCE_ROOT/ai/pi/paseo/config.mjs" reconcile "$stage/prior-config" "$stage/config" "$PI_LAUNCHER" "$SOURCE_ROOT/ai/pi/paseo/config.json" "$PASEO_NODE_DNS_NAME" || exit 1
+  node "$SOURCE_ROOT/ai/pi/paseo/config.mjs" validate "$stage/config" "$PI_LAUNCHER" "$PASEO_NODE_DNS_NAME" || auth_status=$?
   [[ "$auth_status" -eq 0 || "$auth_status" -eq 2 ]] || exit 1
   render_launcher >"$stage/launcher" || exit 1
   chmod 0700 "$stage/launcher" || exit 1
@@ -178,7 +179,8 @@ retire_trial() {
   validate_launcher || return 1
   validate_unit || return 1
   "$SOURCE_ROOT/libexec/validate-pi-paseo" --installed-runtime "$INSTALLED_RUNTIME" || return 1
-  node "$SOURCE_ROOT/ai/pi/paseo/config.mjs" validate "$PASEO_HOME/config.json" "$PI_LAUNCHER" || return 1
+  resolve_node_dns_name || return 1
+  node "$SOURCE_ROOT/ai/pi/paseo/config.mjs" validate "$PASEO_HOME/config.json" "$PI_LAUNCHER" "$PASEO_NODE_DNS_NAME" || return 1
   validate_active_health || return 1
   if ! path_exists "$TRIAL_ROOT"; then
     printf 'Trial already absent; nothing deleted\n'

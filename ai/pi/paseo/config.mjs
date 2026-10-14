@@ -11,6 +11,12 @@ function object(value, label) {
   return value;
 }
 function child(parent, key) { return object(parent[key] ??= {}, key); }
+function managedHosts(dnsName) {
+  const hostname = typeof dnsName === 'string' ? dnsName.replace(/\.$/, '') : '';
+  const label = '[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?';
+  if (hostname.length > 253 || !new RegExp(`^(?:${label}\\.)+${label}$`, 'i').test(hostname)) fail('invalid node DNS hostname');
+  return [...new Set([...hosts, hostname])];
+}
 function read(file, privateFile) {
   const st = fs.lstatSync(file);
   if (!st.isFile() || (privateFile && (st.uid !== process.getuid() || (st.mode & 0o077) !== 0))) fail('configuration must be a regular private file owned by the current user');
@@ -35,34 +41,37 @@ function checkOptionalListeners(config) {
   const m = typeof proxy.listen === 'string' && /^(?:127\.0\.0\.1|\[::1\]):([0-9]{1,5})$/.exec(proxy.listen);
   if (!m || Number(m[1]) < 1 || Number(m[1]) > 65535) fail('extra service proxy listener must be loopback-only');
 }
-function check(config, pi, required) {
+function check(config, pi, required, hostnames) {
   if (config.daemon?.listen !== '127.0.0.1:31415' || config.daemon?.relay?.enabled !== false ||
       config.app?.baseUrl !== 'https://pi.dpao.la' || config.features?.webUi?.enabled !== true) fail('managed networking configuration differs');
   try {
-    assert.deepEqual(config.daemon.hostnames, hosts);
+    assert.deepEqual(config.daemon.hostnames, hostnames);
     assert.deepEqual(config.agents?.providers?.pi?.command, [pi]);
   } catch { fail('managed hostname or native Pi command differs'); }
   checkPassword(config, required);
   checkOptionalListeners(config);
 }
 try {
-  if (mode === 'reconcile' && args.length === 3) {
-    const [output, pi, baseline] = args;
+  if (mode === 'hosts' && args.length === 0) {
+    console.log(JSON.stringify(managedHosts(input)));
+  } else if (mode === 'reconcile' && args.length === 4) {
+    const [output, pi, baseline, dnsName] = args;
+    const hostnames = managedHosts(dnsName);
     const config = fs.existsSync(input) || fs.lstatSync(input, {throwIfNoEntry: false}) ? read(input, true) : read(baseline, false);
     const daemon = child(config, 'daemon');
     daemon.listen = '127.0.0.1:31415';
-    daemon.hostnames = [...hosts];
+    daemon.hostnames = hostnames;
     child(daemon, 'relay').enabled = false;
     child(config, 'app').baseUrl = 'https://pi.dpao.la';
     child(child(config, 'features'), 'webUi').enabled = true;
     child(child(child(config, 'agents'), 'providers'), 'pi').command = [pi];
-    check(config, pi, false);
+    check(config, pi, false, hostnames);
     fs.writeFileSync(output, JSON.stringify(config, null, 2) + '\n', {mode: 0o600, flag: 'wx'});
     console.log('reconciled private Paseo configuration');
-  } else if (mode === 'validate' && args.length === 1) {
-    check(read(input, true), args[0], true);
+  } else if (mode === 'validate' && args.length === 2) {
+    check(read(input, true), args[0], true, managedHosts(args[1]));
     console.log('validated private Paseo configuration');
-  } else { fail('usage: config.mjs reconcile INPUT OUTPUT PI BASELINE | validate INPUT PI'); }
+  } else { fail('usage: config.mjs hosts DNSNAME | reconcile INPUT OUTPUT PI BASELINE DNSNAME | validate INPUT PI DNSNAME'); }
 } catch (error) {
   // Parser/assertion exceptions must not echo private configuration values.
   console.error(`error: ${error.message}`);

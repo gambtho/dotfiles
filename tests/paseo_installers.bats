@@ -142,7 +142,57 @@ run_common() {
 }
 
 run_config() {
-  run node "$REPO_ROOT/ai/pi/paseo/config.mjs" "$@"
+  run node "$REPO_ROOT/ai/pi/paseo/config.mjs" "$@" "${TEST_NODE_DNS_NAME:-wsl.test.ts.net.}"
+}
+
+@test "Paseo config manages the exact normalized node hostname beside static baseline hosts" {
+  run_config reconcile "$TEST_ROOT/absent.json" "$TEST_ROOT/config.json" /native/pi "$REPO_ROOT/ai/pi/paseo/config.json"
+  [ "$status" -eq 0 ]
+  run jq -e '.daemon.hostnames == ["localhost","127.0.0.1","pi.dpao.la","wsl.test.ts.net"]' "$TEST_ROOT/config.json"
+  [ "$status" -eq 0 ]
+  export PASEO_HOME="$TEST_ROOT"
+  write_test_password
+  run_config validate "$TEST_ROOT/config.json" /native/pi
+  [ "$status" -eq 0 ]
+  export TEST_NODE_DNS_NAME=renamed.test.ts.net.
+  run_config validate "$TEST_ROOT/config.json" /native/pi
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"managed hostname"* ]]
+  run_config reconcile "$TEST_ROOT/config.json" "$TEST_ROOT/renamed.json" /native/pi "$REPO_ROOT/ai/pi/paseo/config.json"
+  [ "$status" -eq 0 ]
+  run jq -e '.daemon.hostnames == ["localhost","127.0.0.1","pi.dpao.la","renamed.test.ts.net"]' "$TEST_ROOT/renamed.json"
+  [ "$status" -eq 0 ]
+  jq '.daemon.hostnames += ["*.ts.net"]' "$TEST_ROOT/config.json" >"$TEST_ROOT/extra.json"
+  chmod 600 "$TEST_ROOT/extra.json"
+  unset TEST_NODE_DNS_NAME
+  run_config validate "$TEST_ROOT/extra.json" /native/pi
+  [ "$status" -eq 1 ]
+}
+
+@test "Paseo config refuses missing or unsafe node hostname without publishing" {
+  for dns in "" "*.ts.net" "https://node.test.ts.net" "node..test.ts.net" "node.test.ts.net:443" "node.test.ts.net.."; do
+    export TEST_NODE_DNS_NAME="$dns"
+    run node "$REPO_ROOT/ai/pi/paseo/config.mjs" reconcile "$TEST_ROOT/absent.json" "$TEST_ROOT/config.json" /native/pi "$REPO_ROOT/ai/pi/paseo/config.json" "$dns"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"node DNS hostname"* ]]
+    [ ! -e "$TEST_ROOT/config.json" ]
+  done
+}
+
+@test "Paseo apply refuses unavailable or malformed node DNS before preparing state" {
+  prepare_paseo
+  for response in unavailable malformed invalid; do
+    case "$response" in
+      unavailable) stub_command tailscale 'exit 1' ;;
+      malformed) stub_command tailscale 'printf "{}\\n"' ;;
+      invalid) stub_command tailscale 'printf "{\"Self\":{\"DNSName\":\"*.ts.net\"}}\\n"' ;;
+    esac
+    run bash "$INSTALL" --apply
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"DNS hostname"* ]]
+    [ ! -e "$STATE_ROOT" ]
+    ! grep -q '^ci ' "$CALLS"
+  done
 }
 
 @test "Paseo fresh config defaults to the verified working feature set" {

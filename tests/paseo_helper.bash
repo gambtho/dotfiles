@@ -36,6 +36,7 @@ SCRIPT
 }
 
 fixture_service() {
+  stub_command tailscale '[[ "$*" == "status --json" ]] || exit 99; printf "{\"BackendState\":\"Running\",\"Self\":{\"Online\":true,\"DNSName\":\"wsl.test.ts.net.\"}}\\n"'
   export SERVICE_ACTIVE=0 SERVICE_ENABLED=0
   mkdir -p "$TEST_ROOT/service"
   printf '0\n' >"$TEST_ROOT/service/active"

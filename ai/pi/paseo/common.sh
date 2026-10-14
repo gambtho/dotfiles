@@ -121,6 +121,31 @@ validate_apply_source() {
   [[ "$head" == "$upstream" ]] || fail 'apply requires HEAD to equal origin/main'
 }
 
+resolve_node_dns_name() {
+  local status
+  status=$(tailscale status --json) || {
+    fail 'cannot read Tailscale node DNS hostname'
+    return 1
+  }
+  PASEO_NODE_DNS_NAME=$(printf '%s' "$status" | node -e '
+    let text="";
+    process.stdin.on("data", chunk => text+=chunk);
+    process.stdin.on("end", () => {
+      try {
+        const dns=JSON.parse(text).Self?.DNSName;
+        if(typeof dns!=="string" || !dns) process.exit(1);
+        process.stdout.write(dns);
+      } catch { process.exit(1); }
+    });
+  ') || {
+    fail 'cannot read Tailscale node DNS hostname'
+    return 1
+  }
+  # Use the same strict hostname boundary as reconciliation before any writes.
+  node "$SOURCE_ROOT/ai/pi/paseo/config.mjs" hosts "$PASEO_NODE_DNS_NAME" >/dev/null || return 1
+  export PASEO_NODE_DNS_NAME
+}
+
 resolve_mise() {
   MISE_LAUNCHER=$(command -v mise) || {
     fail 'mise launcher is unavailable'
@@ -402,7 +427,8 @@ check_paseo() {
     printf 'managed runtime not installed\n'
     return 0
   fi
-  node "$SOURCE_ROOT/ai/pi/paseo/config.mjs" validate "$PASEO_HOME/config.json" "$PI_LAUNCHER" || return $?
+  resolve_node_dns_name || return 1
+  node "$SOURCE_ROOT/ai/pi/paseo/config.mjs" validate "$PASEO_HOME/config.json" "$PI_LAUNCHER" "$PASEO_NODE_DNS_NAME" || return $?
   if path_exists "$UNIT_PATH"; then validate_unit "$UNIT_PATH" || return 1; else
     printf 'prepared; service not installed\n'
     return 0

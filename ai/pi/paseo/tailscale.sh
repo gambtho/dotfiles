@@ -198,7 +198,8 @@ check_local_service() {
   fi
   "$SOURCE_ROOT/libexec/validate-pi-paseo" --installed-runtime "$INSTALLED_RUNTIME" || return 1
   validate_launcher || return 1
-  node "$SOURCE_ROOT/ai/pi/paseo/config.mjs" validate "$PASEO_HOME/config.json" "$PI_LAUNCHER" || return 1
+  resolve_node_dns_name || return 1
+  node "$SOURCE_ROOT/ai/pi/paseo/config.mjs" validate "$PASEO_HOME/config.json" "$PI_LAUNCHER" "$PASEO_NODE_DNS_NAME" || return 1
   if ! path_exists "$UNIT_PATH"; then
     [[ "$strict" -eq 0 ]] || {
       fail 'installed service unit is unavailable'

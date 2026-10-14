@@ -35,6 +35,14 @@ Paseo service replacement, close active agents, approvals, terminals and running
 workspace scripts, and avoid starting new work during the maintenance window.
 The installer checks activity twice; unavailable/busy status refuses replacement.
 
+Reconciliation reads this node's `Self.DNSName` from `tailscale status --json`,
+removes its trailing dot, and adds that exact hostname to the static
+`config.json` baseline (`localhost`, `127.0.0.1`, `pi.dpao.la`). Validation
+requires that complete managed list; wildcards and stale node names are not
+accepted. Tailscale must already expose a valid node DNS name before preparation
+or reconciliation. This is runtime ingress configuration, not machine selection;
+`DOTFILES_PASEO_ENABLED` remains the sole provisioning opt-in.
+
 Managed paths (respecting XDG data/config overrides):
 
 - `~/.local/share/paseo/runtimes/current`: locked application runtime

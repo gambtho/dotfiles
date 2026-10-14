@@ -51,7 +51,7 @@ make_installed_runtime() {
   "$FAKE_INSTALLER" "$INSTALLED_RUNTIME"
   printf '{"kind":"dotfiles-paseo","schemaVersion":1}\n' >"$STATE_ROOT/.managed.json"
   chmod 600 "$STATE_ROOT/.managed.json"
-  node "$REPO_ROOT/ai/pi/paseo/config.mjs" reconcile "$TEST_ROOT/absent.json" "$PASEO_HOME/config.json" "$PI_LAUNCHER" "$REPO_ROOT/ai/pi/paseo/config.json"
+  node "$REPO_ROOT/ai/pi/paseo/config.mjs" reconcile "$TEST_ROOT/absent.json" "$PASEO_HOME/config.json" "$PI_LAUNCHER" "$REPO_ROOT/ai/pi/paseo/config.json" wsl.test.ts.net.
   write_test_password
   source "$PASEO_FIXTURE/ai/pi/paseo/common.sh"
   resolve_source
@@ -526,9 +526,9 @@ prepare_custom_domain_setup() {
   stub_command systemd-analyze 'printf "systemd-analyze %s\n" "$*" >>"$CALLS"
     [[ ${FAIL_POINT:-} != unit-verify ]]'
 
-  # Intercepts only the credential validator (node -e); every other Node
-  # program in the implementation still runs for real.
-  stub_command node 'if [[ "$1" == -e ]]; then
+  # Intercept only the external GoDaddy request; hostname parsing and other
+  # Node programs still run for real.
+  stub_command node 'if [[ "$1" == -e && "$2" == *"api.godaddy.com"* ]]; then
     token=$(cat)
     printf "godaddy-api-request\n" >>"$CREDENTIAL_CALLS"
     case "$token" in
