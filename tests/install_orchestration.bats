@@ -89,6 +89,94 @@ SCRIPT
   [ "$output" = $'<--help>\n<two words>\n<>\n<-->\n<-m>' ]
 }
 
+@test "Linux managed tools provision pinned yq despite an incompatible namesake" {
+  local os
+  for os in Ubuntu WSL; do
+    run env INSTALL_SOURCE_ONLY=1 bash -c '
+      source "$1/bin/dot-install"
+      OS="$2"
+      yq() { printf "incompatible yq\n"; }
+      download_verified_artifact() { printf "%s\n" "#!/bin/sh" "echo managed yq" >"$3"; chmod "$4" "$3"; }
+      install_managed_tools
+      test -x "$HOME/.local/bin/yq"
+      "$HOME/.local/bin/yq"
+    ' _ "$REPO_ROOT" "$os"
+
+    [ "$status" -eq 0 ]
+    [ "$output" = 'managed yq' ]
+  done
+}
+
+@test "macOS managed tools leave yq provisioning to Homebrew" {
+  run env INSTALL_SOURCE_ONLY=1 bash -c '
+    source "$1/bin/dot-install"
+    OS=macOS
+    install_pinned_yq() { printf "Linux artifact requested\n"; return 91; }
+    install_managed_tools
+  ' _ "$REPO_ROOT"
+
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "managed yq installation failure makes the full installer fail" {
+  run env INSTALL_SOURCE_ONLY=1 bash -c '
+    source "$1/bin/dot-install"
+    detect_os() { OS=WSL; }
+    install_platform_packages() { return 0; }
+    check_unsaved_apt_packages() { return 0; }
+    install_pinned_yq() { return 37; }
+    setup_shell() { return 0; }
+    setup_git() { return 0; }
+    install_languages() { return 0; }
+    setup_neovim() { return 0; }
+    setup_fonts() { return 0; }
+    setup_wt_theme() { return 0; }
+    setup_work() { return 0; }
+    setup_ai() { return 0; }
+    bash() { return 0; }
+    main
+  ' _ "$REPO_ROOT"
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'FAILED: tools'* ]]
+}
+
+@test "CI provisions pinned yq before checks and publishes its executable path" {
+  local fixture="$TEST_ROOT/ci-yq" payload="$TEST_ROOT/yq-payload" steps="$TEST_ROOT/ci-steps.json"
+  mkdir -p "$fixture/libexec/lib" "$fixture/config" "$TEST_ROOT/runner"
+  cp "$REPO_ROOT/libexec/lib/artifacts.sh" "$fixture/libexec/lib/artifacts.sh"
+  printf '#!/usr/bin/env bash\nprintf "managed CI yq\\n"\n' >"$payload"
+  local digest
+  digest=$(sha256_file "$payload")
+  printf 'YQ_RELEASE_BASE=https://example.test/yq\nYQ_LINUX_AMD64_SHA256=%s\nYQ_LINUX_ARM64_SHA256=%s\n' "$digest" "$digest" >"$fixture/config/versions.env"
+  : >"$TEST_ROOT/github-path"
+  stub_command curl '
+    while (($#)); do
+      if [[ "$1" == --output ]]; then cp "$YQ_TEST_PAYLOAD" "$2"; exit; fi
+      shift
+    done
+    exit 1'
+  yq -o=json '.' "$REPO_ROOT/.github/workflows/check.yml" >"$steps"
+  local install_index check_index script
+  install_index=$(jq -r '.jobs.validate.steps | to_entries[] | select(.value.name == "Install pinned yq") | .key' "$steps")
+  check_index=$(jq -r '.jobs.validate.steps | to_entries[] | select(.value.name == "Run checks") | .key' "$steps")
+  [ -n "$install_index" ]
+  [ "$install_index" -lt "$check_index" ]
+  script=$(jq -r '.jobs.validate.steps[] | select(.name == "Install pinned yq") | .run' "$steps")
+
+  run env PATH="$PATH" RUNNER_TEMP="$TEST_ROOT/runner" GITHUB_PATH="$TEST_ROOT/github-path" YQ_TEST_PAYLOAD="$payload" \
+    bash -c 'cd "$1"; bash -c "$2"' _ "$fixture" "$script"
+
+  [ "$status" -eq 0 ]
+  local tool_dir
+  tool_dir=$(cat "$TEST_ROOT/github-path")
+  [ "$tool_dir" = "$TEST_ROOT/runner/dotfiles-tools" ]
+  run "$tool_dir/yq"
+  [ "$status" -eq 0 ]
+  [ "$output" = 'managed CI yq' ]
+}
+
 @test "required phase failure makes summary fail" {
   run bash -c 'source "$1/libexec/common.sh"; run_phase required packages false; finish_phases' _ "$REPO_ROOT"
   [ "$status" -ne 0 ]

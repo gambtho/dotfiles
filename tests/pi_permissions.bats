@@ -3,6 +3,8 @@
 load test_helper
 
 setup() {
+  # Preserve discovery without requiring Pi for configuration-only tests.
+  HOST_PI=$(command -v pi) || HOST_PI=""
   setup_dotfiles_test
   CONFIG_DIR="$REPO_ROOT/ai/pi/config"
   PERMISSION_CONFIG="$CONFIG_DIR/permission-system.json"
@@ -1127,9 +1129,44 @@ make_permission_runtime_fixture() {
   [[ "$output" == *"fixture metadata: 30.0.0"* ]]
 }
 
+@test "permission fixture discovers user-level managed Pi and honors a host root without Pi on PATH" {
+  source "$REPO_ROOT/libexec/lib/pi-runtime.sh"
+  resolve_pi_runtime "${HOST_PI:-}" "${PI_TEST_HOST_ROOT:-}"
+  local host="$PI_RUNTIME_PACKAGE_ROOT" user_bin="$TEST_ROOT/user-bin" tool
+  make_runtime_fixture
+  rm -r "$RUNTIME_PACKAGE"
+  ln -s "$host" "$RUNTIME_PACKAGE"
+  mkdir -p "$user_bin"
+  ln -s "$RUNTIME_AGENT/bin/pi" "$user_bin/pi"
+
+  PATH="$user_bin:$PATH" PI_TEST_HOST_ROOT="" run bats --filter '^actual used evaluator modules exports' "$BATS_TEST_FILENAME"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"ok 1 actual used evaluator modules exports"* ]]
+  [ ! -e "$TEST_ROOT/launcher-executed" ]
+
+  local no_pi_path="$TEST_ROOT/no-pi-bin"
+  mkdir -p "$no_pi_path"
+  for tool in bats bash env readlink dirname basename cat mkdir mktemp rm ln touch nl sort uniq cut grep node jq; do
+    ln -s "$(command -v "$tool")" "$no_pi_path/$tool"
+  done
+  PATH="$no_pi_path" run command -v pi
+  [ "$status" -ne 0 ]
+  PATH="$no_pi_path" PI_TEST_HOST_ROOT="$host" run bats --filter '^actual used evaluator modules exports' "$BATS_TEST_FILENAME"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"ok 1 actual used evaluator modules exports"* ]]
+
+  PATH="$no_pi_path" PI_TEST_HOST_ROOT="" run bats --filter '^actual used evaluator modules exports' "$BATS_TEST_FILENAME"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Pi executable not found on PATH"* ]]
+  [[ "$output" != *"# skip"* ]]
+  PATH="$no_pi_path" PI_TEST_HOST_ROOT="" run bats --filter '^Pi runtime baselines are valid JSON' "$BATS_TEST_FILENAME"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"ok 1 Pi runtime baselines are valid JSON"* ]]
+}
+
 @test "actual used evaluator modules exports and session approval fail closed in owned copies" {
   source "$REPO_ROOT/libexec/lib/pi-runtime.sh"
-  resolve_pi_runtime "$(command -v pi)" "${PI_TEST_HOST_ROOT:-}"
+  resolve_pi_runtime "$HOST_PI" "${PI_TEST_HOST_ROOT:-}"
   local host="$PI_RUNTIME_PACKAGE_ROOT" source_root fixture version module damage
   source_root="${PI_TEST_PERMISSION_ROOT:-${host%/install/releases/*}/npm/node_modules/@gotgenes/pi-permission-system}"
   version=$(jq -r .version "$source_root/package.json")

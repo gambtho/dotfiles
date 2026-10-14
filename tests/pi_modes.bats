@@ -25,7 +25,7 @@ agent_frontmatter() {
   [ "$output" = "$STUB_BIN/pi" ]
   local no_pi_path="$TEST_ROOT/no-pi-bin" tool
   mkdir -p "$no_pi_path"
-  for tool in bats bash env readlink dirname basename cat mkdir mktemp rm ln touch nl sort uniq cut node yq; do
+  for tool in bats bash env readlink dirname basename cat mkdir mktemp rm ln touch nl sort uniq cut grep node yq; do
     ln -s "$(command -v "$tool")" "$no_pi_path/$tool"
   done
   PATH="$no_pi_path" run command -v pi

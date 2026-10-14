@@ -25,9 +25,9 @@ setup_dotfiles_test() {
     ln -sf "$tool_path" "$SANDBOX_TOOL_BIN/$tool"
   done
 
-  # $SANDBOX_TOOL_BIN goes last, after $STUB_BIN and the system directories,
-  # so a stub still shadows the real binary it is meant to replace.
-  export PATH="$STUB_BIN:/usr/bin:/bin:$SANDBOX_TOOL_BIN"
+  # Stubs win, followed by explicitly selected tools: a system namesake must
+  # not replace the runtime or yq implementation selected before sandboxing.
+  export PATH="$STUB_BIN:$SANDBOX_TOOL_BIN:/usr/bin:/bin"
   # Sanitizing PATH is not enough on a machine where the interactive shell ran
   # `mise activate` (languages/mise/env.zsh). That exports mise's session state,
   # including __MISE_ORIG_PATH -- the real login PATH. Tests that source zshrc

@@ -3,6 +3,7 @@
 load test_helper
 
 setup() {
+  LEGACY_VEKIL_PID=""
   local real_pi real_npm real_node
   real_pi=$(command -v pi) || real_pi=""
   real_npm=$(command -v npm)
@@ -22,6 +23,16 @@ setup() {
   printf '' >"$npm_config_globalconfig"
   mkdir -p "$HOME/.dotfiles/ai/marketplace/plugins/my"
   cp "$REPO_ROOT/ai/marketplace/plugins/my/package.json" "$HOME/.dotfiles/ai/marketplace/plugins/my/package.json"
+}
+
+teardown() {
+  if [[ -n "${LEGACY_VEKIL_PID:-}" ]]; then
+    # Only signal our still-running child, never a stale/reused marker PID.
+    if jobs -pr | grep -Fxq "$LEGACY_VEKIL_PID"; then
+      kill "$LEGACY_VEKIL_PID" 2>/dev/null || true
+    fi
+    wait "$LEGACY_VEKIL_PID" 2>/dev/null || true
+  fi
 }
 
 stub_runtime_validator() {
@@ -755,11 +766,21 @@ EOF
 
 @test "legacy cleanup stops only the Vekil process recorded with matching identity" {
   mkdir -p "$HOME/.local/bin" "$HOME/.local/state/vekil"
-  cp /bin/sleep "$HOME/.local/bin/vekil"
-  "$HOME/.local/bin/vekil" 60 &
-  local vekil_pid=$!
-  local start_id
+  # Ubuntu's uutils still rejects this renamed copy with argv[0]=sleep;
+  # prefer its standalone GNU alternative when available.
+  cp "$(command -v gnusleep || command -v sleep)" "$HOME/.local/bin/vekil"
+  # Keep /proc/exe pointing at the copied, owned Vekil binary.
+  bash -c 'exec -a sleep "$1" 60' _ "$HOME/.local/bin/vekil" &
+  LEGACY_VEKIL_PID=$!
+  local vekil_pid=$LEGACY_VEKIL_PID attempt start_id
+  for ((attempt = 0; attempt < 100; attempt++)); do
+    [[ "$(readlink -f "/proc/$vekil_pid/exe")" == "$HOME/.local/bin/vekil" ]] && break
+    sleep 0.01
+  done
+  [ "$(readlink -f "/proc/$vekil_pid/exe")" = "$HOME/.local/bin/vekil" ]
+  kill -0 "$vekil_pid"
   start_id=$(awk '{print $22}' "/proc/$vekil_pid/stat")
+  [ -n "$start_id" ]
   printf '%s|%s\n' "$vekil_pid" "$start_id" >"$HOME/.local/state/vekil/proxy.pid"
   printf 'v0.14.0\n' >"$HOME/.local/state/vekil/installed-version"
 
@@ -773,6 +794,81 @@ EOF
   ! kill -0 "$vekil_pid" 2>/dev/null
   [ ! -e "$HOME/.local/bin/vekil" ]
   [ ! -e "$HOME/.local/state/vekil" ]
+}
+
+@test "legacy cleanup preserves Vekil artifacts when the recorded start identity mismatches" {
+  mkdir -p "$HOME/.local/bin" "$HOME/.local/state/vekil" \
+    "$HOME/.config/systemd/user/vekil.service.d"
+  cp "$(command -v gnusleep || command -v sleep)" "$HOME/.local/bin/vekil"
+  printf '[Unit]\nDescription=Vekil AI model proxy\n' >"$HOME/.config/systemd/user/vekil.service"
+  printf '[Service]\nEnvironment=FIXTURE=1\n' >"$HOME/.config/systemd/user/vekil.service.d/override.conf"
+  printf 'v0.14.0\n' >"$HOME/.local/state/vekil/installed-version"
+  stub_command systemctl 'printf "%s\n" "$*" >>"$TEST_ROOT/systemctl-invocations"'
+
+  bash -c 'exec -a sleep "$1" 60' _ "$HOME/.local/bin/vekil" &
+  LEGACY_VEKIL_PID=$!
+  local attempt start_id before
+  for ((attempt = 0; attempt < 100; attempt++)); do
+    [[ "$(readlink -f "/proc/$LEGACY_VEKIL_PID/exe")" == "$HOME/.local/bin/vekil" ]] && break
+    sleep 0.01
+  done
+  [ "$(readlink -f "/proc/$LEGACY_VEKIL_PID/exe")" = "$HOME/.local/bin/vekil" ]
+  kill -0 "$LEGACY_VEKIL_PID"
+  start_id=$(awk '{print $22}' "/proc/$LEGACY_VEKIL_PID/stat")
+  [ -n "$start_id" ]
+  printf '%s|%s\n' "$LEGACY_VEKIL_PID" "$((start_id + 1))" >"$HOME/.local/state/vekil/proxy.pid"
+  before=$(snapshot_home)
+
+  run env PI_ALLOW_REDIRECTED_SYSTEMD=1 bash -c '
+    source "$REPO_ROOT/libexec/common.sh"
+    source "$REPO_ROOT/ai/pi/cleanup-legacy.sh"
+    cleanup_legacy_ai
+  '
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"could not be verified"* ]]
+  kill -0 "$LEGACY_VEKIL_PID"
+  [ "$(awk '{print $22}' "/proc/$LEGACY_VEKIL_PID/stat")" = "$start_id" ]
+  [ "$before" = "$(snapshot_home)" ]
+  [ ! -e "$TEST_ROOT/systemctl-invocations" ]
+}
+
+@test "legacy cleanup preserves Vekil artifacts when the recorded executable mismatches" {
+  mkdir -p "$HOME/.local/bin" "$HOME/.local/state/vekil" \
+    "$HOME/.config/systemd/user/vekil.service.d"
+  cp "$(command -v gnusleep || command -v sleep)" "$HOME/.local/bin/vekil"
+  cp "$HOME/.local/bin/vekil" "$TEST_ROOT/unrelated-sleep"
+  printf '[Unit]\nDescription=Vekil AI model proxy\n' >"$HOME/.config/systemd/user/vekil.service"
+  printf '[Service]\nEnvironment=FIXTURE=1\n' >"$HOME/.config/systemd/user/vekil.service.d/override.conf"
+  printf 'v0.14.0\n' >"$HOME/.local/state/vekil/installed-version"
+  stub_command systemctl 'printf "%s\n" "$*" >>"$TEST_ROOT/systemctl-invocations"'
+
+  bash -c 'exec -a sleep "$1" 60' _ "$TEST_ROOT/unrelated-sleep" &
+  LEGACY_VEKIL_PID=$!
+  local attempt start_id before
+  for ((attempt = 0; attempt < 100; attempt++)); do
+    [[ "$(readlink -f "/proc/$LEGACY_VEKIL_PID/exe")" == "$TEST_ROOT/unrelated-sleep" ]] && break
+    sleep 0.01
+  done
+  [ "$(readlink -f "/proc/$LEGACY_VEKIL_PID/exe")" = "$TEST_ROOT/unrelated-sleep" ]
+  kill -0 "$LEGACY_VEKIL_PID"
+  start_id=$(awk '{print $22}' "/proc/$LEGACY_VEKIL_PID/stat")
+  [ -n "$start_id" ]
+  printf '%s|%s\n' "$LEGACY_VEKIL_PID" "$start_id" >"$HOME/.local/state/vekil/proxy.pid"
+  before=$(snapshot_home)
+
+  run env PI_ALLOW_REDIRECTED_SYSTEMD=1 bash -c '
+    source "$REPO_ROOT/libexec/common.sh"
+    source "$REPO_ROOT/ai/pi/cleanup-legacy.sh"
+    cleanup_legacy_ai
+  '
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"could not be verified"* ]]
+  kill -0 "$LEGACY_VEKIL_PID"
+  [ "$(awk '{print $22}' "/proc/$LEGACY_VEKIL_PID/stat")" = "$start_id" ]
+  [ "$before" = "$(snapshot_home)" ]
+  [ ! -e "$TEST_ROOT/systemctl-invocations" ]
 }
 
 @test "Pi installer preserves machine-local authentication" {

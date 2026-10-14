@@ -48,10 +48,22 @@ setup_microsoft_repositories() {
 }
 
 setup_work_apt_repositories() {
-  sudo install -m 0755 -d /etc/apt/keyrings || return
+  sudo install -m 0755 -d /etc/apt/keyrings /etc/apt/preferences.d || return
   setup_docker_repository || return
   setup_kubernetes_repository || return
-  setup_microsoft_repositories
+  setup_microsoft_repositories || return
+  sudo install -m 0644 "$(dirname "${BASH_SOURCE[0]}")/apt-preferences/asciinema" \
+    /etc/apt/preferences.d/dotfiles-asciinema
+}
+
+verify_asciinema_apt_candidate() {
+  local candidate
+  candidate=$(LC_ALL=C apt-cache policy asciinema | awk '$1 == "Candidate:" { print $2 }') || return
+  if [[ "$candidate" =~ ^2[.]4[.]0-[0-9A-Za-z+.~]+$ ]]; then
+    return 0
+  fi
+  log_warning "asciinema 2.4.0 is required; APT candidate is ${candidate:-missing}. Check configured repositories and existing installations; no downgrade was authorized."
+  return 1
 }
 
 krew_bin_directory() {
