@@ -1,263 +1,101 @@
 #!/usr/bin/env bats
 
 load test_helper
+load paseo_helper
 
 setup() {
   setup_dotfiles_test
-  WEBUI_FIXTURE="$TEST_ROOT/repo"
-  STATE_ROOT="$HOME/.local/share/pi-webui"
+  PASEO_FIXTURE="$TEST_ROOT/repo"
+  STATE_ROOT="$HOME/.local/share/paseo"
   INSTALLED_RUNTIME="$STATE_ROOT/runtimes/current"
   LANDING_WORKTREE="$STATE_ROOT/worktrees/dotfiles"
-  UNIT_PATH="$XDG_CONFIG_HOME/systemd/user/pi-webui.service"
+  UNIT_PATH="$XDG_CONFIG_HOME/systemd/user/paseo.service"
   MUTATION_CALLS="$TEST_ROOT/mutation-calls"
   CREDENTIAL_CALLS="$TEST_ROOT/credential-calls"
   CALLS="$TEST_ROOT/calls"
   CADDY_ROOT="$TEST_ROOT/caddy-root"
-  export WEBUI_FIXTURE STATE_ROOT INSTALLED_RUNTIME LANDING_WORKTREE UNIT_PATH MUTATION_CALLS CREDENTIAL_CALLS CALLS CADDY_ROOT
-  export PI_WEBUI_CADDY_ROOT="$CADDY_ROOT"
+  export PASEO_FIXTURE STATE_ROOT INSTALLED_RUNTIME LANDING_WORKTREE UNIT_PATH MUTATION_CALLS CREDENTIAL_CALLS CALLS CADDY_ROOT
+  export PI_PASEO_CADDY_ROOT="$CADDY_ROOT"
   : >"$CALLS"
-  export PI_WEBUI_TESTING=1
-  export PI_WEBUI_TEST_OS_RELEASE="$TEST_ROOT/os-release"
-  export PI_WEBUI_TEST_UNAME_RELEASE='6.6.0-microsoft-standard-WSL2'
-  export PI_WEBUI_TEST_SOURCE_ROOT="$WEBUI_FIXTURE"
+  export DOTFILES_PASEO_ENABLED=1
+  export PASEO_HOME="$STATE_ROOT/home"
+  export PI_PASEO_TESTING=1
+  unset PI_CODING_AGENT_DIR
+  export PI_PASEO_TEST_OS_RELEASE="$TEST_ROOT/os-release"
+  export PI_PASEO_TEST_UNAME_RELEASE='6.6.0-microsoft-standard-WSL2'
+  export PI_PASEO_TEST_SOURCE_ROOT="$PASEO_FIXTURE"
   : >"$MUTATION_CALLS"
   : >"$CREDENTIAL_CALLS"
 }
 
-make_webui_fixture() {
-  mkdir -p "$WEBUI_FIXTURE/ai/pi/webui/runtime" "$WEBUI_FIXTURE/libexec"
-  cp "$REPO_ROOT/ai/pi/webui/runtime/package.json" \
-    "$WEBUI_FIXTURE/ai/pi/webui/runtime/package.json"
-  cp "$REPO_ROOT/ai/pi/webui/runtime/package-lock.json" \
-    "$WEBUI_FIXTURE/ai/pi/webui/runtime/package-lock.json"
-  cp "$REPO_ROOT/libexec/validate-pi-webui" "$WEBUI_FIXTURE/libexec/validate-pi-webui"
-  cp "$REPO_ROOT/ai/pi/webui/install.sh" "$WEBUI_FIXTURE/ai/pi/webui/install.sh"
-  cp "$REPO_ROOT/ai/pi/webui/tailscale.sh" "$WEBUI_FIXTURE/ai/pi/webui/tailscale.sh"
-  cp "$REPO_ROOT/ai/pi/webui/rollback.sh" "$WEBUI_FIXTURE/ai/pi/webui/rollback.sh"
-  cp "$REPO_ROOT/ai/pi/webui/pi-webui.service.in" \
-    "$WEBUI_FIXTURE/ai/pi/webui/pi-webui.service.in"
-  cp "$REPO_ROOT/ai/pi/webui/Caddyfile.in" "$WEBUI_FIXTURE/ai/pi/webui/Caddyfile.in"
-  cp "$REPO_ROOT/ai/pi/webui/pi-webui-caddy.service.in" \
-    "$WEBUI_FIXTURE/ai/pi/webui/pi-webui-caddy.service.in"
-  cp "$REPO_ROOT/ai/pi/webui/caddy-entrypoint.sh" "$WEBUI_FIXTURE/ai/pi/webui/caddy-entrypoint.sh"
-  cp "$REPO_ROOT/ai/pi/webui/custom-domain.sh" "$WEBUI_FIXTURE/ai/pi/webui/custom-domain.sh"
-  chmod +x "$WEBUI_FIXTURE/libexec/validate-pi-webui" \
-    "$WEBUI_FIXTURE/ai/pi/webui/"{install,tailscale,rollback,caddy-entrypoint,custom-domain}.sh
-  printf 'ID=ubuntu\nVERSION_ID="24.04"\nVERSION_CODENAME=noble\n' >"$PI_WEBUI_TEST_OS_RELEASE"
-  printf '.pi/\n' >"$WEBUI_FIXTURE/.gitignore"
-  git -C "$WEBUI_FIXTURE" init -q -b main
-  git -C "$WEBUI_FIXTURE" config user.name Test
-  git -C "$WEBUI_FIXTURE" config user.email test@example.invalid
-  git -C "$WEBUI_FIXTURE" add .
-  git -C "$WEBUI_FIXTURE" commit -qm fixture
-  git -C "$WEBUI_FIXTURE" remote add origin "$TEST_ROOT/origin.git"
-  git -C "$WEBUI_FIXTURE" update-ref refs/remotes/origin/main HEAD
+make_paseo_fixture() {
+  mkdir -p "$PASEO_FIXTURE/ai/pi" "$PASEO_FIXTURE/libexec/lib"
+  cp -R "$REPO_ROOT/ai/pi/paseo" "$PASEO_FIXTURE/ai/pi/"
+  cp "$REPO_ROOT/libexec/validate-pi-paseo" "$PASEO_FIXTURE/libexec/"
+  cp "$REPO_ROOT/libexec/lib/pi-runtime.sh" "$PASEO_FIXTURE/libexec/lib/"
+  chmod +x "$PASEO_FIXTURE/libexec/validate-pi-paseo" "$PASEO_FIXTURE/ai/pi/paseo/"*.sh
+  printf 'ID=ubuntu\nVERSION_ID="24.04"\nVERSION_CODENAME=noble\n' >"$PI_PASEO_TEST_OS_RELEASE"
+  printf '.pi/\n' >"$PASEO_FIXTURE/.gitignore"
+  git -C "$PASEO_FIXTURE" init -q -b main
+  git -C "$PASEO_FIXTURE" config user.name Test
+  git -C "$PASEO_FIXTURE" config user.email test@example.invalid
+  git -C "$PASEO_FIXTURE" add .
+  git -C "$PASEO_FIXTURE" commit -qm fixture
+  git -C "$PASEO_FIXTURE" update-ref refs/remotes/origin/main HEAD
 }
 
 make_installed_runtime() {
-  mkdir -p \
-    "$INSTALLED_RUNTIME/node_modules/.bin" \
-    "$INSTALLED_RUNTIME/node_modules/@firstpick/pi-package-webui/bin" \
-    "$INSTALLED_RUNTIME/node_modules/@earendil-works/pi-coding-agent/dist/bundle"
-  cp "$WEBUI_FIXTURE/ai/pi/webui/runtime/package.json" "$INSTALLED_RUNTIME/package.json"
-  cp "$WEBUI_FIXTURE/ai/pi/webui/runtime/package-lock.json" "$INSTALLED_RUNTIME/package-lock.json"
-  printf '%s\n' \
-    '{"name":"@firstpick/pi-package-webui","version":"0.10.4","bin":{"pi-webui":"./bin/pi-webui-launcher.mjs"}}' \
-    >"$INSTALLED_RUNTIME/node_modules/@firstpick/pi-package-webui/package.json"
-  printf '#!/usr/bin/env node\n' \
-    >"$INSTALLED_RUNTIME/node_modules/@firstpick/pi-package-webui/bin/pi-webui-launcher.mjs"
-  chmod +x "$INSTALLED_RUNTIME/node_modules/@firstpick/pi-package-webui/bin/pi-webui-launcher.mjs"
-  ln -s ../@firstpick/pi-package-webui/bin/pi-webui-launcher.mjs \
-    "$INSTALLED_RUNTIME/node_modules/.bin/pi-webui"
-  printf '%s\n' \
-    '{"name":"@earendil-works/pi-coding-agent","version":"0.85.1","bin":{"pi":"dist/bundle/cli.js"}}' \
-    >"$INSTALLED_RUNTIME/node_modules/@earendil-works/pi-coding-agent/package.json"
-  printf '#!/usr/bin/env node\n' \
-    >"$INSTALLED_RUNTIME/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js"
-  chmod +x "$INSTALLED_RUNTIME/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js"
+  fixture_runtime_installer
+  mkdir -p "$INSTALLED_RUNTIME" "$PASEO_HOME"
+  cp "$PASEO_FIXTURE/ai/pi/paseo/runtime/"*.json "$INSTALLED_RUNTIME/"
+  "$FAKE_INSTALLER" "$INSTALLED_RUNTIME"
+  printf '{"kind":"dotfiles-paseo","schemaVersion":1}\n' >"$STATE_ROOT/.managed.json"
+  chmod 600 "$STATE_ROOT/.managed.json"
+  node "$REPO_ROOT/ai/pi/paseo/config.mjs" reconcile "$TEST_ROOT/absent.json" "$PASEO_HOME/config.json" "$PI_LAUNCHER" "$REPO_ROOT/ai/pi/paseo/config.json" wsl.test.ts.net.
+  write_test_password
+  source "$PASEO_FIXTURE/ai/pi/paseo/common.sh"
+  resolve_source
+  resolve_mise
+  set_managed_paths
+  render_launcher >"$MANAGED_LAUNCHER"
+  chmod +x "$MANAGED_LAUNCHER"
 }
 
 make_external_pi() {
   PI_PACKAGE="$TEST_ROOT/mise/installs/node/1/lib/node_modules/@earendil-works/pi-coding-agent"
   PI_LAUNCHER="$PI_PACKAGE/dist/bundle/cli.js"
   export PI_PACKAGE PI_LAUNCHER
-  mkdir -p "$(dirname "$PI_LAUNCHER")"
+  export FIXTURE_PI_LAUNCHER="$PI_LAUNCHER"
+  mkdir -p "$(dirname "$PI_LAUNCHER")" "$TEST_ROOT/mise/installs/node/1/lib/node_modules/jiti/lib"
+  touch "$PI_PACKAGE/dist/index.js" "$TEST_ROOT/mise/installs/node/1/lib/node_modules/jiti/lib/jiti-cli.mjs"
   printf '%s\n' \
-    '{"name":"@earendil-works/pi-coding-agent","version":"0.85.1","bin":{"pi":"dist/bundle/cli.js"}}' \
+    '{"name":"@earendil-works/pi-coding-agent","version":"1.2.0","bin":{"pi":"dist/bundle/cli.js"}}' \
     >"$PI_PACKAGE/package.json"
   printf '#!/usr/bin/env node\n' >"$PI_LAUNCHER"
   chmod +x "$PI_LAUNCHER"
-  stub_command mise 'if [[ "$1 $2" == "which pi" ]]; then printf "%s\\n" "$PI_LAUNCHER"; else exec "${@:4}"; fi'
+  stub_command mise 'if [[ "$1 $2" == "which pi" ]]; then printf "%s\\n" "$FIXTURE_PI_LAUNCHER"; else exec "${@:3}"; fi'
   MISE_LAUNCHER="$STUB_BIN/mise"
   export MISE_LAUNCHER
-}
-
-make_landing_worktree() {
-  mkdir -p "$(dirname "$LANDING_WORKTREE")"
-  git -C "$WEBUI_FIXTURE" worktree add -q --detach "$LANDING_WORKTREE" HEAD
-}
-
-make_candidate_installer() {
-  cat >"$TEST_ROOT/install-candidate" <<'EOF'
-#!/usr/bin/env bash
-set -e
-runtime=$1
-mkdir -p \
-  "$runtime/node_modules/.bin" \
-  "$runtime/node_modules/@firstpick/pi-package-webui/bin" \
-  "$runtime/node_modules/@earendil-works/pi-coding-agent/dist/bundle"
-printf '%s\n' \
-  '{"name":"@firstpick/pi-package-webui","version":"0.10.4","bin":{"pi-webui":"./bin/pi-webui-launcher.mjs"}}' \
-  >"$runtime/node_modules/@firstpick/pi-package-webui/package.json"
-printf '#!/usr/bin/env node\n' \
-  >"$runtime/node_modules/@firstpick/pi-package-webui/bin/pi-webui-launcher.mjs"
-chmod +x "$runtime/node_modules/@firstpick/pi-package-webui/bin/pi-webui-launcher.mjs"
-ln -s ../@firstpick/pi-package-webui/bin/pi-webui-launcher.mjs \
-  "$runtime/node_modules/.bin/pi-webui"
-printf '%s\n' \
-  '{"name":"@earendil-works/pi-coding-agent","version":"0.85.1","bin":{"pi":"dist/bundle/cli.js"}}' \
-  >"$runtime/node_modules/@earendil-works/pi-coding-agent/package.json"
-printf '#!/usr/bin/env node\n' \
-  >"$runtime/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js"
-chmod +x "$runtime/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js"
-EOF
-  chmod +x "$TEST_ROOT/install-candidate"
-}
-
-prepare_apply_fixture() {
-  local identity=$1
-  make_webui_fixture
-  make_external_pi
-  make_candidate_installer
-  export HEALTH_JSON='{"ok":true,"webuiVersion":"0.10.4","piVersion":"0.85.1","network":{"open":false,"host":"127.0.0.1","port":31415,"networkUrls":[]},"tabs":[]}'
-  printf '%s\n' "$identity" >"$WEBUI_FIXTURE/prior-release"
-  git -C "$WEBUI_FIXTURE" add prior-release
-  git -C "$WEBUI_FIXTURE" commit -qm "prior $identity"
-  make_landing_worktree
-  PRIOR_COMMIT=$(git -C "$LANDING_WORKTREE" rev-parse HEAD)
-  export PRIOR_COMMIT
-  printf '%s\n' "$identity" >"$WEBUI_FIXTURE/release"
-  git -C "$WEBUI_FIXTURE" add release
-  git -C "$WEBUI_FIXTURE" commit -qm "release $identity"
-  git -C "$WEBUI_FIXTURE" update-ref refs/remotes/origin/main HEAD
-  make_installed_runtime
-  printf '%s\n' "$identity" >"$INSTALLED_RUNTIME/prior-$identity"
-  write_expected_unit
-  cp "$UNIT_PATH" "$TEST_ROOT/prior-unit"
-}
-
-stub_apply_system() {
-  stub_command mise 'if [[ "$1 $2" == "which pi" ]]; then
-    printf "%s\\n" "$PI_LAUNCHER"
-  elif [[ "$1 $2 $3 $4 $5 $7 $8" == "exec -- npm ci --prefix --ignore-scripts --omit=optional" ]]; then
-    printf "npm %s\\n" "$*" >>"$CALLS"
-    bash "$TEST_ROOT/install-candidate" "$6"
-  else
-    exit 97
-  fi'
-  MISE_LAUNCHER="$STUB_BIN/mise"
-  export MISE_LAUNCHER
-  stub_command systemd-analyze 'printf "systemd-analyze %s\\n" "$*" >>"$CALLS"
-    [[ ${FAIL_POINT:-} != candidate-verify ]]'
-  stub_command systemctl 'printf "systemctl %s\\n" "$*" >>"$CALLS"
-    case "$*" in
-      "--user show-environment") exit 0 ;;
-      "--user is-active pi-webui.service") [[ -f "$TEST_ROOT/service-active" ]] ;;
-      "--user is-enabled pi-webui.service") [[ -f "$TEST_ROOT/service-enabled" ]] ;;
-      "--user stop pi-webui.service")
-        if [[ ${STRICT_UNLOADED:-} == 1 && ! -f "$TEST_ROOT/unit-loaded" ]]; then exit 1; fi
-        rm -f "$TEST_ROOT/service-active" "$TEST_ROOT/candidate-running" ;;
-      "--user start pi-webui.service")
-        touch "$TEST_ROOT/service-active"
-        if compgen -G "$INSTALLED_RUNTIME/prior-*" >/dev/null; then
-          rm -f "$TEST_ROOT/candidate-running"
-        else
-          touch "$TEST_ROOT/candidate-running"
-        fi ;;
-      "--user enable pi-webui.service") touch "$TEST_ROOT/service-enabled" ;;
-      "--user disable pi-webui.service")
-        if [[ ${STRICT_UNLOADED:-} == 1 && ! -f "$TEST_ROOT/unit-loaded" ]]; then exit 1; fi
-        rm -f "$TEST_ROOT/service-enabled" ;;
-      "--user daemon-reload")
-        if [[ ${FAIL_POINT:-} == daemon-reload && ! -e "$TEST_ROOT/failed-once" ]]; then
-          touch "$TEST_ROOT/failed-once"
-          exit 1
-        fi
-        if [[ ${STRICT_UNLOADED:-} == 1 ]]; then
-          if [[ -f "$UNIT_PATH" ]]; then
-            touch "$TEST_ROOT/unit-loaded"
-          else
-            rm -f "$TEST_ROOT/unit-loaded"
-          fi
-        fi ;;
-      *) exit 96 ;;
-    esac'
-  stub_command ss 'if [[ -f "$TEST_ROOT/service-active" ]]; then
-    printf "%s\\n" "LISTEN 0 128 127.0.0.1:31415 0.0.0.0:*"
-  fi'
-  stub_command curl 'if [[ ${FAIL_POINT:-} == health ]] &&
-      ! compgen -G "$INSTALLED_RUNTIME/prior-*" >/dev/null; then
-    exit 22
-  fi
-  printf "%s\\n" "$HEALTH_JSON"'
-}
-
-assert_prior_apply_state() {
-  local identity=$1 expected_active=$2 expected_enabled=$3
-  [ "$(git -C "$LANDING_WORKTREE" rev-parse HEAD)" = "$PRIOR_COMMIT" ]
-  [ -f "$INSTALLED_RUNTIME/prior-$identity" ]
-  cmp "$UNIT_PATH" "$TEST_ROOT/prior-unit"
-  if [ "$expected_active" -eq 1 ]; then
-    [ -f "$TEST_ROOT/service-active" ]
-  else
-    [ ! -e "$TEST_ROOT/service-active" ]
-  fi
-  if [ "$expected_enabled" -eq 1 ]; then
-    [ -f "$TEST_ROOT/service-enabled" ]
-  else
-    [ ! -e "$TEST_ROOT/service-enabled" ]
-  fi
-  [ ! -e "$TEST_ROOT/candidate-running" ]
 }
 
 stub_healthy_system() {
-  if [[ -z ${HEALTH_JSON:-} ]]; then
-    HEALTH_JSON='{"ok":true,"webuiVersion":"0.10.4","piVersion":"0.85.1","network":{"open":false,"host":"127.0.0.1","port":31415,"networkUrls":[]},"tabs":[{"cwd":"/tmp/another-project","running":true,"command":"'
-    HEALTH_JSON+="$PI_LAUNCHER --mode rpc --session x"
-    HEALTH_JSON+='"}]}'
-    export HEALTH_JSON
-  fi
+  export HEALTH_JSON='{"status":"ok","timestamp":"2026-10-14T00:00:00.000Z"}'
+  export STATUS_JSON='{"status":"server_info","version":"0.11.2","listen":"127.0.0.1:31415","serverId":"fixture"}'
   stub_command systemctl 'case "$*" in
-    "--user show-environment"|"--user is-active pi-webui.service") exit 0 ;;
+    "--user show-environment"|"--user is-active paseo.service") exit 0 ;;
     *) printf "%s\\n" "$*" >>"$MUTATION_CALLS"; exit 99 ;;
   esac'
   stub_command ss 'printf "%s\\n" "LISTEN 0 128 127.0.0.1:31415 0.0.0.0:*"'
-  stub_command curl 'printf "%s\\n" "$HEALTH_JSON"'
+  stub_command curl 'if [[ "$*" == *"/api/status" ]]; then printf "%s\\n" "$STATUS_JSON"; else printf "%s\\n" "$HEALTH_JSON"; fi'
 }
 
 write_expected_unit() {
   mkdir -p "$(dirname "$UNIT_PATH")"
-  cat >"$UNIT_PATH" <<EOF
-[Unit]
-Description=Firstp1ck Pi Web UI remote interface
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
-ExecStart=$MISE_LAUNCHER exec -- "$INSTALLED_RUNTIME/node_modules/.bin/pi-webui" --host 127.0.0.1 --port 31415 --cwd "$LANDING_WORKTREE" --pi "$PI_LAUNCHER" --no-remote-auth --name pi-webui
-ExecStop=/usr/bin/curl --fail --silent --show-error -X POST http://127.0.0.1:31415/api/shutdown
-Restart=on-failure
-RestartSec=5
-TimeoutStopSec=15
-UMask=0077
-NoNewPrivileges=true
-PrivateTmp=true
-
-[Install]
-WantedBy=default.target
-EOF
+  source "$PASEO_FIXTURE/ai/pi/paseo/common.sh"
+  resolve_source
+  resolve_mise
+  set_managed_paths
+  render_unit >"$UNIT_PATH"
 }
 
 fingerprint_paths() {
@@ -273,24 +111,17 @@ fingerprint_paths() {
 }
 
 run_webui_validator() {
-  run "$WEBUI_FIXTURE/libexec/validate-pi-webui" "$@"
+  run "$PASEO_FIXTURE/libexec/validate-pi-paseo" "$@"
 }
 
 run_installer() {
-  run "$WEBUI_FIXTURE/ai/pi/webui/install.sh" "$@"
+  run "$PASEO_FIXTURE/ai/pi/paseo/install.sh" "$@"
 }
 
 run_installer_function() {
   local body=$1
   run bash -c 'source "$1"; shift; eval "$1"' bash \
-    "$WEBUI_FIXTURE/ai/pi/webui/install.sh" "$body"
-}
-
-@test "installer exposes the shared managed paths" {
-  make_webui_fixture
-  run_installer_function 'set_managed_paths; printf "%s\n" "$STATE_ROOT|$INSTALLED_RUNTIME|$LANDING_WORKTREE|$RUNTIME_LAUNCHER|$UNIT_PATH"'
-  [ "$status" -eq 0 ]
-  [ "$output" = "$STATE_ROOT|$STATE_ROOT/runtimes/current|$LANDING_WORKTREE|$STATE_ROOT/runtimes/current/node_modules/.bin/pi-webui|$UNIT_PATH" ]
+    "$PASEO_FIXTURE/ai/pi/paseo/install.sh" "$body"
 }
 
 write_route() {
@@ -344,7 +175,7 @@ stub_tailscale_system() {
   write_route "${1:-empty}"
   printf '%s\n' '{"BackendState":"Running","Version":"1.102.3","TailscaleIPs":["100.64.0.1","fd7a:115c:a1e0::1"],"Self":{"Online":true,"DNSName":"wsl.test.ts.net.","TailscaleIPs":["100.64.0.1","fd7a:115c:a1e0::1"]}}' >"$TEST_ROOT/tailscale-status.json"
   stub_command systemctl 'case "$*" in
-    "is-active tailscaled"|"--user show-environment"|"--user is-active pi-webui.service") exit 0 ;;
+    "is-active tailscaled"|"--user show-environment"|"--user is-active paseo.service") exit 0 ;;
     *) printf "systemctl %s\\n" "$*" >>"$MUTATION_CALLS"; exit 99 ;;
   esac'
   stub_command tailscale 'case "$*" in
@@ -367,6 +198,7 @@ stub_tailscale_system() {
     "4: tailscale0 inet 100.64.0.1/32 scope global tailscale0"'
   stub_command curl 'printf "curl %s\\n" "$*" >>"$CALLS"
     case " $* " in
+      *"/api/status "*) printf "%s\\n" "$STATUS_JSON" ;;
       *" http://127.0.0.1:31415/api/health "*) printf "%s\\n" "$HEALTH_JSON" ;;
       *" -o "*)
         if [[ ${BAD_KEY_DOWNLOAD:-} == 1 ]]; then printf bad-key; else printf key-bytes; fi >"${@: -1}" ;;
@@ -407,32 +239,31 @@ stub_tailscale_system() {
 }
 
 prepare_tailscale_check() {
-  make_webui_fixture
+  make_paseo_fixture
   make_external_pi
-  make_landing_worktree
   make_installed_runtime
   write_expected_unit
   stub_tailscale_system "${1:-empty}"
 }
 
 run_tailscale() {
-  run "$WEBUI_FIXTURE/ai/pi/webui/tailscale.sh" "$@"
+  run "$PASEO_FIXTURE/ai/pi/paseo/tailscale.sh" "$@"
 }
 
 run_tailscale_function() {
   local body=$1
   run bash -c 'source "$1"; shift; eval "$1"' bash \
-    "$WEBUI_FIXTURE/ai/pi/webui/tailscale.sh" "$body"
+    "$PASEO_FIXTURE/ai/pi/paseo/tailscale.sh" "$body"
 }
 
 run_custom_domain_function() {
   local body=$1
   run bash -c 'source "$1"; shift; eval "$1"' bash \
-    "$WEBUI_FIXTURE/ai/pi/webui/custom-domain.sh" "$body"
+    "$PASEO_FIXTURE/ai/pi/paseo/custom-domain.sh" "$body"
 }
 
 run_custom_domain() {
-  run "$WEBUI_FIXTURE/ai/pi/webui/custom-domain.sh" "$@"
+  run "$PASEO_FIXTURE/ai/pi/paseo/custom-domain.sh" "$@"
 }
 
 # Writes exactly one DNS record type for every dig view (client resolver and
@@ -478,6 +309,7 @@ case "$1" in
   version) printf '%s\n' "${CADDY_VERSION_OUTPUT:-v2.11.4 h1:test}" ;;
   list-modules)
     case " $* " in
+      *"/api/status "*) printf "%s\\n" "$STATUS_JSON" ;;
       *" --versions "*)
         printf '%s\n' "${CADDY_MODULE_VERSIONS:-dns.providers.godaddy v1.2.0 github.com/caddy-dns/godaddy}" ;;
       *) printf '%s\n' "${CADDY_MODULES:-dns.providers.godaddy github.com/caddy-dns/godaddy}" ;;
@@ -497,31 +329,30 @@ EOF
 
 # Writes a fixture private Caddy binary, entrypoint, Caddyfile, and unit
 # under $CADDY_ROOT, matching what set_caddy_paths() computes from
-# $PI_WEBUI_CADDY_ROOT. The Caddyfile and entrypoint are byte-identical to
+# $PI_PASEO_CADDY_ROOT. The Caddyfile and entrypoint are byte-identical to
 # the tracked sources; the unit is rendered with the real fixture entrypoint
 # path so validate_installed_caddy()'s byte-for-byte comparison succeeds.
 make_caddy_fixture() {
   mkdir -p "$CADDY_ROOT/usr/local/lib/pi-webui" "$CADDY_ROOT/etc/pi-webui-caddy" \
     "$CADDY_ROOT/etc/systemd/system"
-  cp "$WEBUI_FIXTURE/ai/pi/webui/Caddyfile.in" "$CADDY_ROOT/etc/pi-webui-caddy/Caddyfile"
+  cp "$PASEO_FIXTURE/ai/pi/paseo/Caddyfile.in" "$CADDY_ROOT/etc/pi-webui-caddy/Caddyfile"
   write_caddy_stub_binary "$CADDY_ROOT/usr/local/lib/pi-webui/caddy" 'installed fixture'
-  cp "$WEBUI_FIXTURE/ai/pi/webui/caddy-entrypoint.sh" \
+  cp "$PASEO_FIXTURE/ai/pi/paseo/caddy-entrypoint.sh" \
     "$CADDY_ROOT/usr/local/lib/pi-webui/caddy-entrypoint"
   chmod +x "$CADDY_ROOT/usr/local/lib/pi-webui/caddy-entrypoint"
   bash -c 'source "$1"; set_caddy_paths; render_caddy_unit "$CADDY_ENTRYPOINT"' bash \
-    "$WEBUI_FIXTURE/ai/pi/webui/custom-domain.sh" \
+    "$PASEO_FIXTURE/ai/pi/paseo/custom-domain.sh" \
     >"$CADDY_ROOT/etc/systemd/system/pi-webui-caddy.service"
 }
 
 # Full fixture for read-only custom-domain checks: the healthy managed
-# Firstp1ck/Tailscale/Caddy/DNS state at the given route, with every
+# Paseo/Tailscale/Caddy/DNS state at the given route, with every
 # external boundary (systemctl, ss, curl, dig, openssl, stat, and the
 # private Caddy binary) stubbed so nothing live is ever touched.
 prepare_custom_domain_check() {
   local mode=${1:-empty}
-  make_webui_fixture
+  make_paseo_fixture
   make_external_pi
-  make_landing_worktree
   make_installed_runtime
   write_expected_unit
   stub_tailscale_system "$mode"
@@ -551,7 +382,7 @@ prepare_custom_domain_check() {
     exec /usr/bin/timeout "$@"'
 
   stub_command systemctl 'case "$*" in
-    "--user show-environment"|"--user is-active pi-webui.service"|"is-active tailscaled") exit 0 ;;
+    "--user show-environment"|"--user is-active paseo.service"|"is-active tailscaled") exit 0 ;;
     "is-active pi-webui-caddy.service")
       if [[ ${CADDY_SERVICE_INACTIVE:-0} == 1 ]]; then printf "inactive\n"; exit 3; fi
       printf "active\n" ;;
@@ -582,7 +413,7 @@ prepare_custom_domain_check() {
 
   stub_command stat 'if [[ "$1 $2" == "-c %u" ]]; then
     case "$3" in
-      "$PI_WEBUI_CADDY_ROOT/usr/local/lib/pi-webui/caddy"|"$PI_WEBUI_CADDY_ROOT/usr/local/lib/pi-webui/caddy-entrypoint"|"$PI_WEBUI_CADDY_ROOT/etc/pi-webui-caddy/Caddyfile"|"$PI_WEBUI_CADDY_ROOT/etc/systemd/system/pi-webui-caddy.service")
+      "$PI_PASEO_CADDY_ROOT/usr/local/lib/pi-webui/caddy"|"$PI_PASEO_CADDY_ROOT/usr/local/lib/pi-webui/caddy-entrypoint"|"$PI_PASEO_CADDY_ROOT/etc/pi-webui-caddy/Caddyfile"|"$PI_PASEO_CADDY_ROOT/etc/systemd/system/pi-webui-caddy.service")
         if [[ ${CADDY_FOREIGN_OWNER:-0} == 1 ]]; then printf "1000\n"; else printf "0\n"; fi ;;
       *) exec /usr/bin/stat "$@" ;;
     esac
@@ -602,6 +433,7 @@ prepare_custom_domain_check() {
 
   stub_command curl 'printf "curl %s\n" "$*" >>"$CALLS"
     case " $* " in
+      *"/api/status "*) printf "%s\\n" "$STATUS_JSON" ;;
       *" http://127.0.0.1:31415/api/health "*) printf "%s\n" "$HEALTH_JSON" ;;
       *" https://pi.dpao.la:8443/api/health "*)
         if [[ ${CADDY_HEALTH_FAIL:-0} == 1 ]]; then exit 22; fi
@@ -660,10 +492,10 @@ prepare_custom_domain_setup() {
   write_caddy_stub_binary "$TEST_ROOT/candidate-caddy" 'candidate build'
   # No delay between attempts and no attempt limit: a bounded readiness wait
   # that never sleeps for real in the ordinary success-on-first-probe case.
-  export PI_WEBUI_TEST_READY_INTERVAL=0
+  export PI_PASEO_TEST_READY_INTERVAL=0
 
   stub_command mise 'if [[ "$1 $2" == "which pi" ]]; then
-    printf "%s\n" "$PI_LAUNCHER"
+    printf "%s\n" "$FIXTURE_PI_LAUNCHER"
   elif [[ "$1 $2" == "exec --" ]]; then
     shift 2
     exec "$@"
@@ -694,9 +526,9 @@ prepare_custom_domain_setup() {
   stub_command systemd-analyze 'printf "systemd-analyze %s\n" "$*" >>"$CALLS"
     [[ ${FAIL_POINT:-} != unit-verify ]]'
 
-  # Intercepts only the credential validator (node -e); every other Node
-  # program in the implementation still runs for real.
-  stub_command node 'if [[ "$1" == -e ]]; then
+  # Intercept only the external GoDaddy request; hostname parsing and other
+  # Node programs still run for real.
+  stub_command node 'if [[ "$1" == -e && "$2" == *"api.godaddy.com"* ]]; then
     token=$(cat)
     printf "godaddy-api-request\n" >>"$CREDENTIAL_CALLS"
     case "$token" in
@@ -714,11 +546,11 @@ prepare_custom_domain_setup() {
   fi'
 
   stub_command systemctl 'printf "systemctl %s\n" "$*" >>"$CALLS"
-    unit="$PI_WEBUI_CADDY_ROOT/etc/systemd/system/pi-webui-caddy.service"
-    unit_binary="$PI_WEBUI_CADDY_ROOT/usr/local/lib/pi-webui/caddy"
+    unit="$PI_PASEO_CADDY_ROOT/etc/systemd/system/pi-webui-caddy.service"
+    unit_binary="$PI_PASEO_CADDY_ROOT/usr/local/lib/pi-webui/caddy"
     case "$*" in
       "--user show-environment"|"is-active tailscaled") exit 0 ;;
-      "--user is-active pi-webui.service") [[ ${FIRSTPICK_INACTIVE:-0} != 1 ]] ;;
+      "--user is-active paseo.service") [[ ${PASEO_INACTIVE:-0} != 1 ]] ;;
       "is-active pi-webui-caddy.service")
         if [[ ${STATE_QUERY_FAILS:-} == is-active ]]; then exit 1; fi
         if [[ -f "$TEST_ROOT/caddy-active" ]]; then printf "active\n"; else printf "inactive\n"; exit 3; fi ;;
@@ -769,7 +601,7 @@ prepare_custom_domain_setup() {
     "$CADDY_CREDENTIAL")
       printf "stat: cannot statx '"'"'%s'"'"': Permission denied\n" "$CADDY_CREDENTIAL" >&2
       exit 1 ;;
-    "$PI_WEBUI_CADDY_ROOT/usr/local/lib/pi-webui/caddy"|"$PI_WEBUI_CADDY_ROOT/usr/local/lib/pi-webui/caddy-entrypoint"|"$PI_WEBUI_CADDY_ROOT/etc/pi-webui-caddy/Caddyfile"|"$PI_WEBUI_CADDY_ROOT/etc/systemd/system/pi-webui-caddy.service")
+    "$PI_PASEO_CADDY_ROOT/usr/local/lib/pi-webui/caddy"|"$PI_PASEO_CADDY_ROOT/usr/local/lib/pi-webui/caddy-entrypoint"|"$PI_PASEO_CADDY_ROOT/etc/pi-webui-caddy/Caddyfile"|"$PI_PASEO_CADDY_ROOT/etc/systemd/system/pi-webui-caddy.service")
       if [[ "$1 $2" == "-c %u" ]]; then
         if [[ ${CADDY_FOREIGN_OWNER:-0} == 1 ]]; then printf "1000\n"; else printf "0\n"; fi
       else
@@ -882,7 +714,7 @@ prepare_custom_domain_migration() {
   : >"$ROUTE_ORDER"
 
   # Preserved-state fingerprint sources: Caddy certificates and ACME state, the
-  # encrypted GoDaddy credential, Pi state, managed Web UI state, and the
+  # encrypted GoDaddy credential, Pi state, managed Paseo state, and the
   # Tailscale node identity.
   mkdir -p "$(dirname "$CADDY_CREDENTIAL")" "$CADDY_STATE_DIR" "$TAILSCALE_STATE_DIR" \
     "$HOME/.pi/agent/sessions"
@@ -905,7 +737,7 @@ prepare_custom_domain_migration() {
   stub_command systemctl 'printf "systemctl %s\n" "$*" >>"$CALLS"
     case "$*" in
       "--user show-environment"|"is-active tailscaled") exit 0 ;;
-      "--user is-active pi-webui.service") [[ ${FIRSTPICK_INACTIVE:-0} != 1 ]] ;;
+      "--user is-active paseo.service") [[ ${PASEO_INACTIVE:-0} != 1 ]] ;;
       "is-active pi-webui-caddy.service")
         if [[ ${CADDY_SERVICE_INACTIVE:-0} != 1 && -f "$TEST_ROOT/caddy-active" ]]; then
           printf "active\n"
@@ -924,6 +756,7 @@ prepare_custom_domain_migration() {
     raw=0
     if grep -q TCPForward "$TEST_ROOT/route.json" 2>/dev/null; then raw=1; fi
     case " $* " in
+      *"/api/status "*) printf "%s\\n" "$STATUS_JSON" ;;
       *" http://127.0.0.1:31415/api/health "*) printf "%s\n" "$HEALTH_JSON" ;;
       *" https://pi.dpao.la:8443/api/health "*)
         if [[ ${CADDY_HEALTH_FAIL:-0} == 1 ]]; then exit 22; fi
@@ -1042,592 +875,6 @@ assert_no_route_mutation() {
   ! grep -q 'tailscale serve' "$CALLS"
   [ ! -s "$MUTATION_CALLS" ]
   [ "$(current_route_fixture)" = "${1:-legacy-exact}" ]
-}
-
-prepare_rollback() {
-  make_webui_fixture
-  make_external_pi
-  make_landing_worktree
-  make_installed_runtime
-  write_expected_unit
-  stub_tailscale_system empty
-  stub_command systemctl 'case "$*" in
-    "--user show-environment") exit 0 ;;
-    "is-active tailscaled") [[ ${TAILSCALED_INACTIVE:-} != 1 ]] ;;
-    "--user is-active pi-webui.service") [[ -f "$TEST_ROOT/service-active" ]] ;;
-    "--user stop pi-webui.service") printf "%s\n" stop >>"$MUTATION_CALLS"; rm -f "$TEST_ROOT/service-active" "$TEST_ROOT/listener" ;;
-    "--user disable pi-webui.service") printf "%s\n" disable >>"$MUTATION_CALLS"; rm -f "$TEST_ROOT/service-enabled" ;;
-    "--user daemon-reload") printf "%s\n" reload >>"$MUTATION_CALLS" ;;
-    *) exit 97 ;;
-  esac'
-  stub_command ss '[[ ! -f "$TEST_ROOT/listener" ]]'
-}
-
-run_rollback() {
-  run "$WEBUI_FIXTURE/ai/pi/webui/rollback.sh" "$@"
-}
-
-@test "validator accepts only the exact tracked runtime" {
-  make_webui_fixture
-  run_webui_validator --tracked-only
-  [ "$status" -eq 0 ]
-  printf x >>"$WEBUI_FIXTURE/ai/pi/webui/runtime/package-lock.json"
-  run_webui_validator --tracked-only
-  [ "$status" -ne 0 ]
-  [[ "$output" == *"lock SHA-256"* ]]
-}
-
-@test "installed validation proves identities and omits node-pty" {
-  make_webui_fixture
-  make_installed_runtime
-  run_webui_validator --installed-runtime "$INSTALLED_RUNTIME"
-  [ "$status" -eq 0 ]
-  mkdir -p "$INSTALLED_RUNTIME/node_modules/node-pty"
-  run_webui_validator --installed-runtime "$INSTALLED_RUNTIME"
-  [ "$status" -ne 0 ]
-  [[ "$output" == *"node-pty must not be installed"* ]]
-}
-
-@test "installer refuses unsupported platforms before mutation" {
-  mkdir -p "$WEBUI_FIXTURE/ai/pi/webui"
-  cp "$REPO_ROOT/ai/pi/webui/install.sh" "$WEBUI_FIXTURE/ai/pi/webui/install.sh"
-  chmod +x "$WEBUI_FIXTURE/ai/pi/webui/install.sh"
-  printf 'ID=debian\nVERSION_ID="12"\nVERSION_CODENAME=bookworm\n' >"$PI_WEBUI_TEST_OS_RELEASE"
-  before=$(fingerprint_paths "$HOME" "$WEBUI_FIXTURE" "$MUTATION_CALLS")
-  run_installer --check
-  [ "$status" -ne 0 ]
-  [[ "$output" == *"Ubuntu 24.04 Noble under WSL"* ]]
-  after=$(fingerprint_paths "$HOME" "$WEBUI_FIXTURE" "$MUTATION_CALLS")
-  [ "$before" = "$after" ]
-}
-
-@test "mutation fingerprints remain content-sensitive with command stubs" {
-  make_webui_fixture
-  stub_tailscale_system empty
-  before=$(fingerprint_paths "$WEBUI_FIXTURE")
-  printf changed >>"$WEBUI_FIXTURE/ai/pi/webui/runtime/package.json"
-  after=$(fingerprint_paths "$WEBUI_FIXTURE")
-  [ "$before" != "$after" ]
-}
-
-@test "installer check preserves pre-install informational state" {
-  make_webui_fixture
-  make_external_pi
-  stub_tailscale_system empty
-  stub_command systemctl 'case "$*" in
-    "--user show-environment") exit 0 ;;
-    *) exit 3 ;;
-  esac'
-  run_installer --check
-  [ "$status" -ne 0 ]
-  [[ "$output" == *"installed runtime is absent"* ]]
-  [[ "$output" == *"installed service unit is absent"* ]]
-  [[ "$output" == *"tailscaled is not active"* ]]
-  [[ "$output" != *"installed runtime is unavailable"* ]]
-}
-
-@test "installer check is mutation-free and accepts the healthy managed layout" {
-  make_webui_fixture
-  make_external_pi
-  make_landing_worktree
-  mkdir -p "$LANDING_WORKTREE/.pi/plans"
-  make_installed_runtime
-  write_expected_unit
-  stub_tailscale_system empty
-  before=$(fingerprint_paths "$HOME" "$WEBUI_FIXTURE" "$MUTATION_CALLS")
-  run_installer --check
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"Tailscale state is valid"* ]]
-  after=$(fingerprint_paths "$HOME" "$WEBUI_FIXTURE" "$MUTATION_CALLS")
-  [ "$before" = "$after" ]
-
-  rm "$UNIT_PATH"
-  ln -s "$TEST_ROOT/missing-unit" "$UNIT_PATH"
-  run_installer --check
-  [ "$status" -ne 0 ]
-  [[ "$output" == *"service unit"* ]]
-}
-
-@test "installer refuses apply from a linked or non-origin-main checkout" {
-  make_webui_fixture
-  make_external_pi
-  stub_healthy_system
-  linked="$TEST_ROOT/review-worktree"
-  git -C "$WEBUI_FIXTURE" worktree add -q --detach "$linked" HEAD
-  export PI_WEBUI_TEST_SOURCE_ROOT="$linked"
-  run "$linked/ai/pi/webui/install.sh" --apply
-  [ "$status" -ne 0 ]
-  [[ "$output" == *"canonical primary checkout"* ]]
-
-  export PI_WEBUI_TEST_SOURCE_ROOT="$WEBUI_FIXTURE"
-  printf changed >"$WEBUI_FIXTURE/new-file"
-  git -C "$WEBUI_FIXTURE" add new-file
-  git -C "$WEBUI_FIXTURE" commit -qm newer
-  run_installer --apply
-  [ "$status" -ne 0 ]
-  [[ "$output" == *"origin/main"* ]]
-  [ ! -s "$MUTATION_CALLS" ]
-}
-
-@test "installer ordinary mode rejects a noncanonical primary checkout" {
-  make_webui_fixture
-  run_installer_function 'unset PI_WEBUI_TESTING PI_WEBUI_TEST_SOURCE_ROOT; resolve_source; validate_apply_source'
-  [ "$status" -ne 0 ]
-  [[ "$output" == *"canonical primary checkout"* ]]
-}
-
-@test "installer rejects a foreign or wrong-version Pi package launcher" {
-  make_webui_fixture
-  make_external_pi
-  run_installer_function 'resolve_pi'
-  [ "$status" -eq 0 ]
-
-  printf '%s\n' \
-    '{"name":"foreign-pi","version":"0.85.1","bin":{"pi":"dist/bundle/cli.js"}}' \
-    >"$PI_PACKAGE/package.json"
-  run_installer_function 'resolve_pi'
-  [ "$status" -ne 0 ]
-  [[ "$output" == *"Pi launcher is not @earendil-works/pi-coding-agent@0.85.1"* ]]
-
-  printf '%s\n' \
-    '{"name":"@earendil-works/pi-coding-agent","version":"0.85.0","bin":{"pi":"dist/bundle/cli.js"}}' \
-    >"$PI_PACKAGE/package.json"
-  run_installer_function 'resolve_pi'
-  [ "$status" -ne 0 ]
-  [[ "$output" == *"Pi launcher is not @earendil-works/pi-coding-agent@0.85.1"* ]]
-}
-
-@test "landing worktree accepts clean detached state and empty .pi/plans" {
-  make_webui_fixture
-  make_landing_worktree
-  run_installer_function 'resolve_source; validate_landing_worktree "$LANDING_WORKTREE"'
-  [ "$status" -eq 0 ]
-  mkdir -p "$LANDING_WORKTREE/.pi/plans"
-  run_installer_function 'resolve_source; validate_landing_worktree "$LANDING_WORKTREE"'
-  [ "$status" -eq 0 ]
-}
-
-@test "landing worktree refuses primary attached foreign and dirty state" {
-  make_webui_fixture
-  run_installer_function 'resolve_source; validate_landing_worktree "$WEBUI_FIXTURE"'
-  [ "$status" -ne 0 ]
-
-  attached="$TEST_ROOT/attached"
-  git -C "$WEBUI_FIXTURE" worktree add -q -b fixture-branch "$attached" HEAD
-  run_installer_function 'resolve_source; validate_landing_worktree "$TEST_ROOT/attached"'
-  [ "$status" -ne 0 ]
-
-  foreign="$TEST_ROOT/foreign"
-  git init -q -b main "$foreign"
-  run_installer_function 'resolve_source; validate_landing_worktree "$TEST_ROOT/foreign"'
-  [ "$status" -ne 0 ]
-
-  ln -s "$TEST_ROOT/missing-worktree" "$TEST_ROOT/worktree-link"
-  run_installer_function 'resolve_source; validate_landing_worktree "$TEST_ROOT/worktree-link"'
-  [ "$status" -ne 0 ]
-
-  make_landing_worktree
-  printf dirty >"$LANDING_WORKTREE/dirty"
-  run_installer_function 'resolve_source; validate_landing_worktree "$LANDING_WORKTREE"'
-  [ "$status" -ne 0 ]
-}
-
-@test "service template binds loopback and uses exact runtime worktree and Pi launchers" {
-  make_webui_fixture
-  make_external_pi
-  run_installer_function 'resolve_source; resolve_mise; render_unit "$INSTALLED_RUNTIME/node_modules/.bin/pi-webui" "$LANDING_WORKTREE" "$PI_LAUNCHER"'
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"ExecStart=$MISE_LAUNCHER exec -- \"$INSTALLED_RUNTIME/node_modules/.bin/pi-webui\" --host 127.0.0.1 --port 31415 --cwd \"$LANDING_WORKTREE\" --pi \"$PI_LAUNCHER\""* ]]
-  [[ "$output" == *"POST http://127.0.0.1:31415/api/shutdown"* ]]
-  [[ "$output" == *"WantedBy=default.target"* ]]
-  [[ "$output" != *"0.0.0.0"* ]]
-  [[ "$output" != *"Funnel"* ]]
-  [[ "$output" != *"network-open"* ]]
-  [[ "$output" != *"permission-system"* ]]
-  [ "$(printf '%s\n' "$output" | wc -l)" -eq 19 ]
-
-  run_installer_function 'resolve_source; MISE_LAUNCHER=/usr/bin/mise; render_unit "$INSTALLED_RUNTIME/node_modules/.bin/pi-webui" "$LANDING_WORKTREE" "$PI_LAUNCHER"'
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"ExecStart=/usr/bin/mise exec --"* ]]
-
-  bad_path="$TEST_ROOT/bad%path"
-  run_installer_function 'resolve_source; resolve_mise; render_unit "$bad_path" "$LANDING_WORKTREE" "$PI_LAUNCHER"'
-  [ "$status" -ne 0 ]
-}
-
-@test "active health permits empty tabs and project cwd tabs but rejects wrong launchers or open networking" {
-  make_webui_fixture
-  make_external_pi
-  export HEALTH_JSON='{"ok":true,"webuiVersion":"0.10.4","piVersion":"0.85.1","network":{"open":false,"host":"127.0.0.1","port":31415,"networkUrls":[]},"tabs":[]}'
-  stub_healthy_system
-  run_installer_function 'validate_active_health "$PI_LAUNCHER"'
-  [ "$status" -eq 0 ]
-
-  export HEALTH_JSON="{\"ok\":true,\"webuiVersion\":\"0.10.4\",\"piVersion\":\"0.85.1\",\"network\":{\"open\":false,\"host\":\"127.0.0.1\",\"port\":31415,\"networkUrls\":[]},\"tabs\":[{\"cwd\":\"/tmp/project\",\"running\":true,\"command\":\"$PI_LAUNCHER --mode rpc --session x\"}]}"
-  run_installer_function 'validate_active_health "$PI_LAUNCHER"'
-  [ "$status" -eq 0 ]
-
-  export HEALTH_JSON="{\"ok\":true,\"webuiVersion\":\"0.10.4\",\"piVersion\":\"0.85.1\",\"network\":{\"open\":false,\"host\":\"127.0.0.1\",\"port\":31415,\"networkUrls\":[]},\"tabs\":[{\"cwd\":\"/tmp/project\",\"running\":true,\"command\":\"/wrong/pi --mode rpc\"}]}"
-  run_installer_function 'validate_active_health "$PI_LAUNCHER"'
-  [ "$status" -ne 0 ]
-
-  export HEALTH_JSON="{\"ok\":true,\"webuiVersion\":\"0.10.4\",\"piVersion\":\"0.85.1\",\"network\":{\"open\":true,\"host\":\"127.0.0.1\",\"port\":31415,\"networkUrls\":[]},\"tabs\":[]}"
-  run_installer_function 'validate_active_health "$PI_LAUNCHER"'
-  [ "$status" -ne 0 ]
-}
-
-@test "active health rejects non-loopback or multiple listeners" {
-  make_webui_fixture
-  make_external_pi
-  export HEALTH_JSON='{"ok":true,"webuiVersion":"0.10.4","piVersion":"0.85.1","network":{"open":false,"host":"127.0.0.1","port":31415,"networkUrls":[]},"tabs":[]}'
-  stub_healthy_system
-
-  stub_command ss 'printf "%s\\n" "LISTEN 0 128 0.0.0.0:31415 0.0.0.0:*"'
-  run_installer_function 'validate_active_health "$PI_LAUNCHER"'
-  [ "$status" -ne 0 ]
-  [[ "$output" == *"listener is not loopback-only"* ]]
-
-  stub_command ss 'printf "%s\\n" "LISTEN 0 128 127.0.0.1:31415 0.0.0.0:*" "LISTEN 0 128 [::1]:31415 [::]:*"'
-  run_installer_function 'validate_active_health "$PI_LAUNCHER"'
-  [ "$status" -ne 0 ]
-  [[ "$output" == *"expected exactly one Pi Web UI listener"* ]]
-}
-
-@test "apply uses npm ci --ignore-scripts --omit=optional and preserves the lock" {
-  prepare_apply_fixture npm-flags
-  touch "$TEST_ROOT/service-active" "$TEST_ROOT/service-enabled"
-  stub_apply_system
-  before=$(sha256sum "$WEBUI_FIXTURE/ai/pi/webui/runtime/package-lock.json")
-
-  run_installer --apply
-
-  [ "$status" -eq 0 ]
-  grep -F "npm exec -- npm ci --prefix " "$CALLS"
-  grep -F -- "--ignore-scripts --omit=optional" "$CALLS"
-  after=$(sha256sum "$WEBUI_FIXTURE/ai/pi/webui/runtime/package-lock.json")
-  [ "$before" = "$after" ]
-  [ -x "$INSTALLED_RUNTIME/node_modules/.bin/pi-webui" ]
-  [ ! -e "$INSTALLED_RUNTIME/node_modules/node-pty" ]
-}
-
-@test "apply refuses a symlinked managed state directory before publication" {
-  prepare_apply_fixture symlinked-state
-  touch "$TEST_ROOT/service-active" "$TEST_ROOT/service-enabled"
-  stub_apply_system
-  mv "$STATE_ROOT" "$TEST_ROOT/state-target"
-  ln -s "$TEST_ROOT/state-target" "$STATE_ROOT"
-
-  run_installer --apply
-
-  [ "$status" -ne 0 ]
-  [[ "$output" == *"state root must be a real directory"* ]]
-  ! grep -F "systemd-analyze --user verify " "$CALLS"
-  ! grep -F "systemctl --user stop pi-webui.service" "$CALLS"
-  assert_prior_apply_state symlinked-state 1 1
-}
-
-@test "apply refuses a symlinked managed unit directory before publication" {
-  prepare_apply_fixture symlinked-unit
-  touch "$TEST_ROOT/service-active" "$TEST_ROOT/service-enabled"
-  stub_apply_system
-  mv "$(dirname "$UNIT_PATH")" "$TEST_ROOT/unit-target"
-  ln -s "$TEST_ROOT/unit-target" "$(dirname "$UNIT_PATH")"
-
-  run_installer --apply
-
-  [ "$status" -ne 0 ]
-  [[ "$output" == *"unit directory must be a real directory"* ]]
-  ! grep -F "systemd-analyze --user verify " "$CALLS"
-  ! grep -F "systemctl --user stop pi-webui.service" "$CALLS"
-  assert_prior_apply_state symlinked-unit 1 1
-}
-
-@test "apply rejects unsafe rendered paths before verification or publication" {
-  local unsafe
-  make_webui_fixture
-  make_external_pi
-  make_candidate_installer
-  export HEALTH_JSON='{"ok":true,"webuiVersion":"0.10.4","piVersion":"0.85.1","network":{"open":false,"host":"127.0.0.1","port":31415,"networkUrls":[]},"tabs":[]}'
-  stub_apply_system
-
-  for unsafe in "$TEST_ROOT/data%unsafe" "$TEST_ROOT/data\$unsafe" "$TEST_ROOT/data unsafe" \
-    "$TEST_ROOT/data'unsafe" "$TEST_ROOT/data\"unsafe" "$TEST_ROOT/data\\unsafe" "$TEST_ROOT/"$'data\nunsafe'; do
-    export XDG_DATA_HOME="$unsafe"
-    export XDG_CONFIG_HOME="$TEST_ROOT/config"
-    STATE_ROOT="$XDG_DATA_HOME/pi-webui"
-    INSTALLED_RUNTIME="$STATE_ROOT/runtimes/current"
-    LANDING_WORKTREE="$STATE_ROOT/worktrees/dotfiles"
-    UNIT_PATH="$XDG_CONFIG_HOME/systemd/user/pi-webui.service"
-    export STATE_ROOT INSTALLED_RUNTIME LANDING_WORKTREE UNIT_PATH
-    : >"$CALLS"
-
-    run_installer --apply
-
-    [ "$status" -ne 0 ]
-    [[ "$output" == *"unsafe path for systemd unit"* ]]
-    ! grep -F "systemd-analyze --user verify " "$CALLS"
-    ! grep -F "systemctl --user stop pi-webui.service" "$CALLS"
-    [ ! -e "$INSTALLED_RUNTIME" ]
-    [ ! -e "$UNIT_PATH" ]
-  done
-}
-
-@test "apply rejects retained transients and validates candidates before service stop" {
-  prepare_apply_fixture candidate-validation
-  touch "$TEST_ROOT/service-active" "$TEST_ROOT/service-enabled"
-  stub_apply_system
-  for retained in "$STATE_ROOT/runtimes/.candidate.retained" "$STATE_ROOT/.apply.retained"; do
-    mkdir -p "$retained"
-    run_installer --apply
-    [[ "$status" -ne 0 && -d "$retained" ]]
-    [[ -z $(grep -E '^(npm|systemd-analyze|systemctl --user stop)' "$CALLS") ]]
-    assert_prior_apply_state candidate-validation 1 1
-    rm -rf "$retained"
-  done
-  export FAIL_POINT=candidate-verify
-  run_installer --apply
-  [ "$status" -ne 0 ]
-  grep -F "systemd-analyze --user verify " "$CALLS"
-  [ "$(grep -c 'systemctl --user stop pi-webui.service' "$CALLS")" -eq 0 ]
-  assert_prior_apply_state candidate-validation 1 1
-}
-
-@test "apply creates or advances only a clean detached landing worktree" {
-  prepare_apply_fixture landing
-  stub_apply_system
-  rm -rf "$LANDING_WORKTREE"
-  git -C "$WEBUI_FIXTURE" worktree prune
-
-  run_installer --apply
-
-  [ "$status" -eq 0 ]
-  ! git -C "$LANDING_WORKTREE" symbolic-ref -q HEAD
-  [ "$(git -C "$LANDING_WORKTREE" rev-parse HEAD)" = "$(git -C "$WEBUI_FIXTURE" rev-parse refs/remotes/origin/main)" ]
-
-  printf dirty >"$LANDING_WORKTREE/dirty"
-  : >"$CALLS"
-  run_installer --apply
-  [ "$status" -ne 0 ]
-  [[ "$output" == *"landing worktree must be clean"* ]]
-  ! grep -F "systemctl --user stop pi-webui.service" "$CALLS"
-}
-
-@test "apply restores after runtime publication failure" {
-  prepare_apply_fixture runtime-failure
-  export FAIL_POINT=runtime-publication
-  touch "$TEST_ROOT/service-active" "$TEST_ROOT/service-enabled"
-  stub_apply_system
-  stub_command mv 'printf "mv %s\\n" "$*" >>"$CALLS"
-    if [[ ${FAIL_POINT:-} == runtime-publication && $2 == "$INSTALLED_RUNTIME" && $1 != *prior-runtime ]]; then
-      exit 1
-    fi
-    exec /usr/bin/mv "$@"'
-
-  run_installer --apply
-
-  [ "$status" -ne 0 ]
-  grep -F "systemctl --user stop pi-webui.service" "$CALLS"
-  grep -F "mv " "$CALLS"
-  assert_prior_apply_state runtime-failure 1 1
-}
-
-@test "apply restores after unit or daemon-reload failure" {
-  prepare_apply_fixture daemon-failure
-  export FAIL_POINT=daemon-reload
-  touch "$TEST_ROOT/service-active" "$TEST_ROOT/service-enabled"
-  stub_apply_system
-
-  run_installer --apply
-
-  [ "$status" -ne 0 ]
-  [ "$(grep -c 'systemctl --user daemon-reload' "$CALLS")" -eq 2 ]
-  assert_prior_apply_state daemon-failure 1 1
-}
-
-@test "apply restores an absent prior installation after partial worktree creation" {
-  prepare_apply_fixture absent-prior
-  export STRICT_UNLOADED=1
-  rm -rf "$INSTALLED_RUNTIME"
-  rm -f "$UNIT_PATH"
-  git -C "$WEBUI_FIXTURE" worktree remove --force "$LANDING_WORKTREE"
-  stub_apply_system
-  stub_command git 'if [[ "$*" == *" worktree add --detach "* ]]; then /usr/bin/git "$@"; exit 1; fi; exec /usr/bin/git "$@"'
-
-  run_installer --apply
-
-  [ "$status" -ne 0 ]
-  [[ "$output" != *"restoration failed"* ]]
-  [ ! -e "$INSTALLED_RUNTIME" ]
-  [ ! -e "$UNIT_PATH" ]
-  [ ! -e "$LANDING_WORKTREE" ]
-  [ ! -e "$TEST_ROOT/service-active" ]
-  [ ! -e "$TEST_ROOT/service-enabled" ]
-  [ "$(grep -c 'systemctl --user stop pi-webui.service' "$CALLS")" -eq 0 ]
-  [ -z "$(find "$STATE_ROOT" -maxdepth 1 -name '.apply.*' -print -quit)" ]
-  [ -z "$(find "$STATE_ROOT/runtimes" -maxdepth 1 -name '.candidate.*' -print -quit)" ]
-}
-
-@test "apply restores prior commit enablement and activity after health failure" {
-  prepare_apply_fixture health-failure
-  export FAIL_POINT=health
-  # A single readiness attempt keeps this fast: the strict authoritative
-  # check's own curl call fails immediately regardless of pacing, so no
-  # retry budget is needed to reach its exact error.
-  export PI_WEBUI_TEST_STARTUP_READY_BUDGET=1:0
-  stub_apply_system
-
-  run_installer --apply
-
-  [ "$status" -ne 0 ]
-  grep -F "systemctl --user start pi-webui.service" "$CALLS"
-  assert_prior_apply_state health-failure 0 0
-}
-
-@test "the startup readiness worker runs the strict listener and health checks inside one deadline" {
-  make_webui_fixture
-  make_external_pi
-  mkdir -p "$STATE_ROOT"
-  export HEALTH_JSON='{"ok":true,"webuiVersion":"0.10.4","piVersion":"0.85.1","network":{"open":false,"host":"127.0.0.1","port":31415,"networkUrls":[]},"tabs":[]}'
-  stub_command systemctl 'case "$*" in
-    "--user is-active pi-webui.service") exit 0 ;;
-    *) exit 97 ;;
-  esac'
-  stub_command ss 'printf "%s\\n" "LISTEN 0 128 127.0.0.1:31415 0.0.0.0:*"'
-  stub_command curl 'printf "%s\\n" "$HEALTH_JSON"'
-
-  # The worker runs in a subprocess that re-sources the script, so success
-  # here also proves the subprocess inherited PI_LAUNCHER and the stubbed
-  # commands, not just the parent test process's own state.
-  run_installer_function 'wait_for_active_health'
-  [ "$status" -eq 0 ]
-
-  # A failing authoritative check still reports its own exact strict-check
-  # error through the deadline wrapper, not a generic timeout. One attempt
-  # keeps this fast.
-  export PI_WEBUI_TEST_STARTUP_READY_BUDGET=1:0
-  stub_command curl 'exit 22'
-  run_installer_function 'wait_for_active_health'
-  [ "$status" -ne 0 ]
-  [[ "$output" == *'health endpoint failed'* ]]
-
-  # The deadline override is a Bats-only override like the budget.
-  run_installer_function 'unset PI_WEBUI_TESTING; PI_WEBUI_TEST_STARTUP_READY_DEADLINE=1 webui_ready_deadline'
-  [ "$status" -ne 0 ]
-  [[ "$output" == *'test overrides are unavailable outside Bats'* ]]
-}
-
-@test "readiness succeeds once the listener and health endpoint answer after a startup delay" {
-  make_webui_fixture
-  make_external_pi
-  mkdir -p "$STATE_ROOT"
-  export HEALTH_JSON='{"ok":true,"webuiVersion":"0.10.4","piVersion":"0.85.1","network":{"open":false,"host":"127.0.0.1","port":31415,"networkUrls":[]},"tabs":[]}'
-  export READY_AT=3
-  : >"$TEST_ROOT/curl-calls"
-  stub_command systemctl 'case "$*" in
-    "--user is-active pi-webui.service") exit 0 ;;
-    *) exit 97 ;;
-  esac'
-  # The listener and health endpoint both come up only once the cheap probe
-  # has been retried READY_AT times, the same shape as the real startup race:
-  # the service reports active immediately but the socket and endpoint are
-  # not ready until slightly later.
-  stub_command curl 'printf x >>"$TEST_ROOT/curl-calls"
-    count=$(wc -c <"$TEST_ROOT/curl-calls")
-    [ "$count" -ge "$READY_AT" ] || exit 7
-    printf "%s\\n" "$HEALTH_JSON"'
-  stub_command ss 'count=$(wc -c <"$TEST_ROOT/curl-calls" 2>/dev/null || printf 0)
-    if [ "$count" -ge "$READY_AT" ]; then
-      printf "%s\\n" "LISTEN 0 128 127.0.0.1:31415 0.0.0.0:*"
-    fi'
-  export PI_WEBUI_TEST_STARTUP_READY_BUDGET=5:0
-
-  run_installer_function 'wait_for_active_health'
-
-  [ "$status" -eq 0 ]
-  # Proves the loop actually retried rather than happening to succeed on the
-  # first probe: the cheap loop call plus the trailing authoritative call
-  # push the counter past READY_AT.
-  [ "$(wc -c <"$TEST_ROOT/curl-calls")" -gt "$READY_AT" ]
-}
-
-@test "the startup readiness budget and deadline fit the documented ~30-second bound" {
-  make_webui_fixture
-  run_installer_function 'webui_ready_deadline; printf "%s\\n" "$WEBUI_READY_DEADLINE"'
-  [ "$status" -eq 0 ]
-  deadline=$output
-  [ "$deadline" -le 30 ]
-
-  run_installer_function 'webui_ready_budget; printf "%s %s\\n" "$WEBUI_READY_ATTEMPTS" "$WEBUI_READY_INTERVAL"'
-  [ "$status" -eq 0 ]
-  attempts=${output% *}
-  interval=${output#* }
-
-  # The retry loop only paces inside the deadline: its own worst case (each
-  # cheap probe bounded by its 1-second connect/max-time) plus the
-  # authoritative check that always runs once more after the loop exits
-  # (bounded by validate_active_health's own 15-second curl max-time) still
-  # fits, so a still-unready service normally fails with the exact
-  # remaining strict-check error rather than the generic deadline error.
-  probe_max_time=1
-  authoritative_curl_max_time=15
-  [ $((attempts * probe_max_time + (attempts - 1) * interval + authoritative_curl_max_time)) -le "$deadline" ]
-}
-
-@test "readiness wait is bounded by wall clock and reports one clear error on expiry" {
-  make_webui_fixture
-  make_external_pi
-  mkdir -p "$STATE_ROOT"
-  stub_command systemctl 'case "$*" in
-    "--user is-active pi-webui.service") exit 0 ;;
-    *) exit 97 ;;
-  esac'
-  # The listener and health endpoint never come up, and the pacing interval
-  # (5s) alone outlasts the deadline (1s), so success requires the outer
-  # `timeout` to cut the operation off mid-sleep rather than merely letting
-  # the loop's own arithmetic run to completion.
-  stub_command curl 'exit 22'
-  stub_command ss ':'
-  export PI_WEBUI_TEST_STARTUP_READY_DEADLINE=1
-  export PI_WEBUI_TEST_STARTUP_READY_BUDGET=2:5
-
-  start=$(date +%s)
-  run_installer_function 'wait_for_active_health'
-  finish=$(date +%s)
-
-  [ "$status" -ne 0 ]
-  [[ "$output" == *'Pi Web UI readiness exceeded its 1-second deadline'* ]]
-  # Exactly one boundary error: the loop's own per-attempt probe failures
-  # never reach the caller.
-  [ "$(grep -c '^error: ' <<<"$output")" -eq 1 ]
-  [ $((finish - start)) -le 5 ]
-}
-
-@test "apply restores an absent prior installation after the readiness deadline expires" {
-  # The real observed failure: no unit, runtime, or listener existed before
-  # `systemctl start`, the service starts, but its listener and health
-  # endpoint are not ready before the bounded deadline expires.
-  prepare_apply_fixture readiness-timeout-absent
-  export STRICT_UNLOADED=1
-  rm -rf "$INSTALLED_RUNTIME"
-  rm -f "$UNIT_PATH"
-  git -C "$WEBUI_FIXTURE" worktree remove --force "$LANDING_WORKTREE"
-  export FAIL_POINT=health
-  export PI_WEBUI_TEST_STARTUP_READY_DEADLINE=1
-  export PI_WEBUI_TEST_STARTUP_READY_BUDGET=2:5
-  stub_apply_system
-
-  run_installer --apply
-
-  [ "$status" -ne 0 ]
-  [[ "$output" == *'readiness exceeded its 1-second deadline'* ]]
-  grep -F "systemctl --user start pi-webui.service" "$CALLS"
-  [ ! -e "$INSTALLED_RUNTIME" ]
-  [ ! -e "$UNIT_PATH" ]
-  [ ! -e "$LANDING_WORKTREE" ]
-  [ ! -e "$TEST_ROOT/service-active" ]
-  [ ! -e "$TEST_ROOT/service-enabled" ]
-  [ -z "$(find "$STATE_ROOT" -maxdepth 1 -name '.apply.*' -print -quit)" ]
-  [ -z "$(find "$STATE_ROOT/runtimes" -maxdepth 1 -name '.candidate.*' -print -quit)" ]
 }
 
 @test "route classifier distinguishes empty legacy and exact raw TCP" {
@@ -1853,6 +1100,7 @@ run_rollback() {
   ! grep -F 'http://100.64.0.1:31415/' "$CALLS"
 
   stub_command curl 'case " $* " in
+      *"/api/status "*) printf "%s\\n" "$STATUS_JSON" ;;
     *" http://127.0.0.1:31415/api/health "*) printf "%s\\n" "$HEALTH_JSON" ;;
     *" --fail "*) exit 22 ;;
     *) exit 0 ;;
@@ -1872,10 +1120,10 @@ run_rollback() {
 }
 
 @test "tailscale install verifies the Noble key before sudo publication" {
-  make_webui_fixture
+  make_paseo_fixture
   stub_tailscale_system empty
-  export PI_WEBUI_TAILSCALE_ROOT="$TEST_ROOT/system-root"
-  mkdir -p "$PI_WEBUI_TAILSCALE_ROOT"
+  export PI_PASEO_TAILSCALE_ROOT="$TEST_ROOT/system-root"
+  mkdir -p "$PI_PASEO_TAILSCALE_ROOT"
   run_tailscale install
   [ "$status" -eq 0 ]
   grep -F 'https://pkgs.tailscale.com/stable/ubuntu/noble.noarmor.gpg' "$CALLS"
@@ -1884,21 +1132,21 @@ run_rollback() {
   [ "$sha_line" -lt "$sudo_line" ]
   grep -F 'source deb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg] https://pkgs.tailscale.com/stable/ubuntu noble main' "$CALLS"
 
-  mkdir -p "$PI_WEBUI_TAILSCALE_ROOT/usr/share/keyrings"
-  ln -s "$TEST_ROOT/missing-key" "$PI_WEBUI_TAILSCALE_ROOT/usr/share/keyrings/tailscale-archive-keyring.gpg"
+  mkdir -p "$PI_PASEO_TAILSCALE_ROOT/usr/share/keyrings"
+  ln -s "$TEST_ROOT/missing-key" "$PI_PASEO_TAILSCALE_ROOT/usr/share/keyrings/tailscale-archive-keyring.gpg"
   : >"$CALLS"
   run_tailscale install
   [ "$status" -ne 0 ]
   [ ! -s "$CALLS" ]
 
-  rm "$PI_WEBUI_TAILSCALE_ROOT/usr/share/keyrings/tailscale-archive-keyring.gpg"
-  printf foreign-key >"$PI_WEBUI_TAILSCALE_ROOT/usr/share/keyrings/tailscale-archive-keyring.gpg"
+  rm "$PI_PASEO_TAILSCALE_ROOT/usr/share/keyrings/tailscale-archive-keyring.gpg"
+  printf foreign-key >"$PI_PASEO_TAILSCALE_ROOT/usr/share/keyrings/tailscale-archive-keyring.gpg"
   : >"$CALLS"
   run_tailscale install
   [ "$status" -ne 0 ]
   ! grep -E '^(curl|sudo) ' "$CALLS"
 
-  rm "$PI_WEBUI_TAILSCALE_ROOT/usr/share/keyrings/tailscale-archive-keyring.gpg"
+  rm "$PI_PASEO_TAILSCALE_ROOT/usr/share/keyrings/tailscale-archive-keyring.gpg"
   export BAD_KEY_DOWNLOAD=1
   : >"$CALLS"
   run_tailscale install
@@ -1908,7 +1156,7 @@ run_rollback() {
 }
 
 @test "tailscale up is interactive and accepts no auth key" {
-  make_webui_fixture
+  make_paseo_fixture
   stub_tailscale_system empty
   run_tailscale up
   [ "$status" -eq 0 ]
@@ -1918,98 +1166,13 @@ run_rollback() {
   [ "$(grep -c '^sudo tailscale up$' "$CALLS")" -eq 1 ]
 }
 
-@test "rollback removes only the managed service and preserves user state" {
-  prepare_rollback
-  touch "$TEST_ROOT/service-active" "$TEST_ROOT/service-enabled" "$TEST_ROOT/listener"
-  mkdir -p "$HOME/.pi/agent/sessions" "$STATE_ROOT/"{backups,evaluation} "$LANDING_WORKTREE/.pi" "$TEST_ROOT/tailscale/var/lib/tailscale"
-  printf settings >"$HOME/.pi/agent/settings.json"
-  printf transcript >"$HOME/.pi/agent/sessions/transcript.jsonl"
-  printf supervisor >"$HOME/.pi/agent/supervisor.json"
-  printf backup >"$STATE_ROOT/backups/old"
-  printf evidence >"$STATE_ROOT/evaluation/result"
-  printf history >"$LANDING_WORKTREE/.pi/history"
-  printf identity >"$TEST_ROOT/tailscale/var/lib/tailscale/tailscaled.state"
-  before=$(fingerprint_paths "$HOME/.pi" "$STATE_ROOT" "$TEST_ROOT/tailscale")
-  run_rollback
-  [ "$status" -eq 0 ]
-  [ ! -e "$UNIT_PATH" ]
-  [ "$(<"$MUTATION_CALLS")" = $'stop\ndisable\nreload' ]
-  after=$(fingerprint_paths "$HOME/.pi" "$STATE_ROOT" "$TEST_ROOT/tailscale")
-  [ "$before" = "$after" ]
-}
-
-@test "rollback requires the Tailscale daemon before route classification" {
-  prepare_rollback
-  export TAILSCALED_INACTIVE=1
-  rm "$TEST_ROOT/route.json"
-  run_rollback
-  [ "$status" -ne 0 ]
-  [[ "$output" == *"tailscaled is not active"* ]]
-  [ ! -s "$MUTATION_CALLS" ]
-}
-
-@test "rollback refuses nonempty Serve or a foreign unit" {
-  prepare_rollback
-  write_route legacy-exact
-  run_rollback
-  [ "$status" -ne 0 ]
-  [ ! -s "$MUTATION_CALLS" ]
-  write_route empty
-  printf foreign >"$UNIT_PATH"
-  run_rollback
-  [ "$status" -ne 0 ]
-  [ ! -s "$MUTATION_CALLS" ]
-  [ "$(<"$UNIT_PATH")" = foreign ]
-}
-
-@test "rollback remove-runtime requires an inactive exact runtime" {
-  prepare_rollback
-  touch "$TEST_ROOT/service-active" "$TEST_ROOT/listener"
-  run_rollback --remove-runtime
-  [ "$status" -ne 0 ]
-  [ -d "$INSTALLED_RUNTIME" ]
-  [ ! -s "$MUTATION_CALLS" ]
-  rm "$TEST_ROOT/service-active" "$TEST_ROOT/listener"
-  printf foreign >>"$INSTALLED_RUNTIME/package-lock.json"
-  run_rollback --remove-runtime
-  [ "$status" -ne 0 ]
-  [ ! -s "$MUTATION_CALLS" ]
-  cp "$WEBUI_FIXTURE/ai/pi/webui/runtime/package-lock.json" "$INSTALLED_RUNTIME/package-lock.json"
-  run_rollback --remove-runtime
-  [ "$status" -eq 0 ]
-  [ ! -e "$INSTALLED_RUNTIME" ]
-}
-
-@test "rollback remove-worktree requires a clean detached managed worktree without .pi" {
-  prepare_rollback
-  mkdir -p "$LANDING_WORKTREE/.pi"
-  run_rollback --remove-worktree
-  [ "$status" -ne 0 ]
-  [ -d "$LANDING_WORKTREE" ]
-  [ ! -s "$MUTATION_CALLS" ]
-  rmdir "$LANDING_WORKTREE/.pi"
-  run_rollback --remove-worktree
-  [ "$status" -eq 0 ]
-  [ ! -e "$LANDING_WORKTREE" ]
-}
-
-@test "rollback is idempotent when the managed service is absent" {
-  prepare_rollback
-  rm "$UNIT_PATH"
-  run_rollback
-  [ "$status" -eq 0 ]
-  run_rollback
-  [ "$status" -eq 0 ]
-  [ ! -s "$MUTATION_CALLS" ]
-}
-
 @test "tailscale uninstall preserves identity and refuses an active route" {
-  make_webui_fixture
+  make_paseo_fixture
   stub_tailscale_system legacy-exact
-  export PI_WEBUI_TAILSCALE_ROOT="$TEST_ROOT/system-root"
-  mkdir -p "$PI_WEBUI_TAILSCALE_ROOT/usr/share/keyrings" "$PI_WEBUI_TAILSCALE_ROOT/etc/apt/sources.list.d" "$PI_WEBUI_TAILSCALE_ROOT/var/lib/tailscale"
-  printf key-bytes >"$PI_WEBUI_TAILSCALE_ROOT/usr/share/keyrings/tailscale-archive-keyring.gpg"
-  printf '%s\n' 'deb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg] https://pkgs.tailscale.com/stable/ubuntu noble main' >"$PI_WEBUI_TAILSCALE_ROOT/etc/apt/sources.list.d/tailscale.list"
+  export PI_PASEO_TAILSCALE_ROOT="$TEST_ROOT/system-root"
+  mkdir -p "$PI_PASEO_TAILSCALE_ROOT/usr/share/keyrings" "$PI_PASEO_TAILSCALE_ROOT/etc/apt/sources.list.d" "$PI_PASEO_TAILSCALE_ROOT/var/lib/tailscale"
+  printf key-bytes >"$PI_PASEO_TAILSCALE_ROOT/usr/share/keyrings/tailscale-archive-keyring.gpg"
+  printf '%s\n' 'deb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg] https://pkgs.tailscale.com/stable/ubuntu noble main' >"$PI_PASEO_TAILSCALE_ROOT/etc/apt/sources.list.d/tailscale.list"
   run_tailscale uninstall
   [ "$status" -ne 0 ]
   ! grep -F 'apt-get remove' "$CALLS"
@@ -2021,16 +1184,16 @@ run_rollback() {
   [[ "$(<"$CALLS")" != *purge* && "$(<"$CALLS")" != *logout* && "$(<"$CALLS")" != *var/lib/tailscale* ]]
 }
 
-@test "public Web UI targets call only explicit Web UI helpers" {
+@test "public Paseo targets call only explicit Paseo helpers" {
   fixture="$TEST_ROOT/public-make"
-  mkdir -p "$fixture/ai/pi/webui"
+  mkdir -p "$fixture/ai/pi/paseo"
   cp "$REPO_ROOT/Makefile" "$fixture/Makefile"
-  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >>"$CALLS"\n' >"$fixture/ai/pi/webui/install.sh"
-  run make -s -C "$fixture" ai-webui
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >>"$CALLS"\n' >"$fixture/ai/pi/paseo/install.sh"
+  run make -s -C "$fixture" ai-paseo
   [ "$status" -eq 0 ]
   [ "$(<"$CALLS")" = --apply ]
   : >"$CALLS"
-  run make -s -C "$fixture" ai-webui-check
+  run make -s -C "$fixture" ai-paseo-check
   [ "$status" -eq 0 ]
   [ "$(<"$CALLS")" = --check ]
 }
@@ -2049,16 +1212,16 @@ run_rollback() {
 
 @test "custom-domain Make targets are explicit and ordinary AI targets are unchanged" {
   fixture="$TEST_ROOT/domain-make"
-  mkdir -p "$fixture/ai/pi/webui" "$fixture/ai/pi"
+  mkdir -p "$fixture/ai/pi/paseo" "$fixture/ai/pi"
   cp "$REPO_ROOT/Makefile" "$fixture/Makefile"
   printf '#!/usr/bin/env bash\nprintf "domain:%%s\\n" "$*" >>"$CALLS"\n' \
-    >"$fixture/ai/pi/webui/custom-domain.sh"
+    >"$fixture/ai/pi/paseo/custom-domain.sh"
   printf '#!/usr/bin/env bash\nprintf "ordinary:%%s\\n" "$*" >>"$CALLS"\n' \
     >"$fixture/ai/pi/install.sh"
 
-  run make -s -C "$fixture" ai-webui-domain-check
+  run make -s -C "$fixture" ai-paseo-domain-check
   [ "$status" -eq 0 ]
-  run make -s -C "$fixture" ai-webui-domain-setup
+  run make -s -C "$fixture" ai-paseo-domain-setup
   [ "$status" -eq 0 ]
   [ "$(<"$CALLS")" = $'domain:check\ndomain:setup' ]
 
@@ -2070,87 +1233,31 @@ run_rollback() {
   [ "$(<"$CALLS")" = $'ordinary:\nordinary:--check' ]
   ! grep -q '^domain:' "$CALLS"
 
-  # The two Web UI recipes stay isolated from the custom-domain subsystem as
+  # The two Paseo recipes stay isolated from the custom-domain subsystem as
   # well: they invoke only install.sh. The one intended behavior change is
   # reached transitively through `tailscale.sh check`, which install.sh
   # --check runs, and which now accepts empty or the raw route rather than
   # the legacy route.
   : >"$CALLS"
   printf '#!/usr/bin/env bash\nprintf "webui:%%s\\n" "$*" >>"$CALLS"\n' \
-    >"$fixture/ai/pi/webui/install.sh"
-  chmod +x "$fixture/ai/pi/webui/install.sh" "$fixture/ai/pi/webui/custom-domain.sh"
-  run make -s -C "$fixture" ai-webui
+    >"$fixture/ai/pi/paseo/install.sh"
+  chmod +x "$fixture/ai/pi/paseo/install.sh" "$fixture/ai/pi/paseo/custom-domain.sh"
+  run make -s -C "$fixture" ai-paseo
   [ "$status" -eq 0 ]
-  run make -s -C "$fixture" ai-webui-check
+  run make -s -C "$fixture" ai-paseo-check
   [ "$status" -eq 0 ]
   [ "$(<"$CALLS")" = $'webui:--apply\nwebui:--check' ]
   ! grep -q '^domain:' "$CALLS"
-  grep -Fq 'require_route_state empty raw-exact' "$REPO_ROOT/ai/pi/webui/tailscale.sh"
+  grep -Fq 'require_route_state empty raw-exact' "$REPO_ROOT/ai/pi/paseo/tailscale.sh"
 }
 
-@test "custom-domain runbook documents the complete live-operation sequence" {
-  runbook="$REPO_ROOT/ai/pi/webui/README.md"
-  for text in \
-    'pi.dpao.la' \
-    'A 100.84.88.33' \
-    'Certificate Transparency' \
-    'DNS-rebinding' \
-    '/etc/credstore.encrypted/godaddy-api-token' \
-    'Caddy `v2.11.4`' \
-    '127.0.0.1:8443' \
-    'Firstp1ck' \
-    'Funnel' \
-    'make ai-webui-domain-check' \
-    'make ai-webui-domain-setup' \
-    'custom-domain.sh migrate' \
-    'custom-domain.sh rollback' \
-    'custom-domain.sh rollback --full' \
-    'tailscale.sh serve-legacy' \
-    'propagation_delay 60s' \
-    'with no attempt limit' \
-    '290 seconds, plus' \
-    'HTTPS 443 -> http://127.0.0.1:31415' \
-    'TCP 443 -> tcp://127.0.0.1:8443' \
-    'browser WebSockets disconnect' \
-    'Pi drift' \
-    'separate approval' \
-    'certificates' \
-    'trusted' \
-    'off-tailnet' \
-    'restart' \
-    'reboot' \
-    '.ts.net` URL is no longer valid' \
-    'classic GoDaddy' \
-    'deprecated' \
-    '_acme-challenge.pi.dpao.la' \
-    'empty or exactly the raw route' \
-    'refused' \
-    'sudo systemd-creds encrypt --name=godaddy-api-token'; do
-    grep -Fq -- "$text" "$runbook"
-  done
-  # The automatic-restoration claim must not be unqualified.
-  ! grep -Fq 'Any preflight, verification, or confirmation failure automatically restores' "$runbook"
-}
-
-@test "runbook documents setup trust boundary accepted limitations and rollback" {
-  runbook="$REPO_ROOT/ai/pi/webui/README.md"
-  for text in 'make ai-webui-check' 'make ai-webui' 'http://127.0.0.1:31415' \
-    'full authority of the WSL account' 'loopback-only' 'initial landing worktree' \
-    'other project tabs' 'permission modal' 'Restart' 'Update the pins' 'preserves' \
-    'serve-legacy-off' 'custom-domain.sh rollback --full' \
-    'before Pi or mise is upgraded or removed' \
-    '--remove-runtime' '--remove-worktree' 'journalctl --user -u pi-webui.service -e'; do
-    grep -Fq -- "$text" "$runbook"
-  done
-}
-
-@test "public READMEs link to the Web UI runbook" {
-  grep -Fq '[Pi Web UI](ai/pi/webui/README.md)' "$REPO_ROOT/README.md"
-  grep -Fq '[Pi Web UI](pi/webui/README.md)' "$REPO_ROOT/ai/README.md"
+@test "public READMEs link to the Paseo runbook" {
+  grep -Fq '[Paseo](ai/pi/paseo/README.md)' "$REPO_ROOT/README.md"
+  grep -Fq '[Paseo](pi/paseo/README.md)' "$REPO_ROOT/ai/README.md"
 }
 
 @test "Caddy source fixes hostname listener backend and DNS provider" {
-  make_webui_fixture
+  make_paseo_fixture
   run_custom_domain_function 'render_caddyfile'
   [ "$status" -eq 0 ]
   [[ "$output" == *$'admin off'* ]]
@@ -2167,7 +1274,7 @@ run_rollback() {
 }
 
 @test "Caddy unit uses encrypted credential and no remote admin or secret argv" {
-  make_webui_fixture
+  make_paseo_fixture
   run_custom_domain_function 'render_caddy_unit'
   [ "$status" -eq 0 ]
   [[ "$output" == *'LoadCredentialEncrypted=godaddy-api-token'* ]]
@@ -2181,28 +1288,28 @@ run_rollback() {
 @test "tracked custom-domain files contain no credential or private key" {
   run grep -REn --include='*' \
     '(BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|[A-Za-z0-9]{20,}:[A-Za-z0-9]{20,})' \
-    "$REPO_ROOT/ai/pi/webui"
+    "$REPO_ROOT/ai/pi/paseo"
   [ "$status" -eq 1 ]
 }
 
 @test "Caddy source identity is pinned by exact SHA-256 and rejects harmless template drift" {
-  make_webui_fixture
+  make_paseo_fixture
   run_custom_domain_function 'validate_caddy_source'
   [ "$status" -eq 0 ]
 
-  printf '\n# harmless trailing comment\n' >>"$WEBUI_FIXTURE/ai/pi/webui/Caddyfile.in"
+  printf '\n# harmless trailing comment\n' >>"$PASEO_FIXTURE/ai/pi/paseo/Caddyfile.in"
   run_custom_domain_function 'validate_caddy_source'
   [ "$status" -ne 0 ]
   [[ "$output" == *'Caddyfile SHA-256'* ]]
 
-  cp "$REPO_ROOT/ai/pi/webui/Caddyfile.in" "$WEBUI_FIXTURE/ai/pi/webui/Caddyfile.in"
-  printf '\n# harmless trailing comment\n' >>"$WEBUI_FIXTURE/ai/pi/webui/pi-webui-caddy.service.in"
+  cp "$REPO_ROOT/ai/pi/paseo/Caddyfile.in" "$PASEO_FIXTURE/ai/pi/paseo/Caddyfile.in"
+  printf '\n# harmless trailing comment\n' >>"$PASEO_FIXTURE/ai/pi/paseo/pi-webui-caddy.service.in"
   run_custom_domain_function 'validate_caddy_source'
   [ "$status" -ne 0 ]
   [[ "$output" == *'Caddy unit template SHA-256'* ]]
 }
 
-@test "custom-domain preflight requires active exact Firstp1ck before credential access" {
+@test "custom-domain preflight requires active exact Paseo before credential access" {
   prepare_custom_domain_check legacy-exact
   rm -rf "$INSTALLED_RUNTIME"
   run_custom_domain check
@@ -2330,7 +1437,7 @@ run_rollback() {
   run_custom_domain_function 'validate_installed_caddy'
   [ "$status" -ne 0 ]
   [[ "$output" == *'installed Caddyfile differs'* ]]
-  cp "$WEBUI_FIXTURE/ai/pi/webui/Caddyfile.in" "$CADDY_ROOT/etc/pi-webui-caddy/Caddyfile"
+  cp "$PASEO_FIXTURE/ai/pi/paseo/Caddyfile.in" "$CADDY_ROOT/etc/pi-webui-caddy/Caddyfile"
 
   printf '\nforeign\n' >>"$CADDY_ROOT/etc/systemd/system/pi-webui-caddy.service"
   run_custom_domain_function 'validate_installed_caddy'
@@ -2391,7 +1498,7 @@ run_rollback() {
   export LAN_31415_REACHABLE=1
   run_custom_domain_function 'validate_caddy_listener'
   [ "$status" -ne 0 ]
-  [[ "$output" == *'Pi Web UI is reachable on LAN address'* ]]
+  [[ "$output" == *'Paseo is reachable on LAN address'* ]]
   unset LAN_31415_REACHABLE
 }
 
@@ -2455,7 +1562,7 @@ run_rollback() {
   export CADDY_HEALTH_FAIL=1
   run_custom_domain_function 'validate_caddy_tls_health'
   [ "$status" -ne 0 ]
-  [[ "$output" == *'health endpoint failed'* ]]
+  [[ "$output" == *'authenticated health identity is invalid'* ]]
   unset CADDY_HEALTH_FAIL
 
   export CADDY_HEALTH_JSON='{"ok":false}'
@@ -2489,7 +1596,7 @@ run_rollback() {
   export CURL_STALL=1
   run_custom_domain_function 'validate_caddy_tls_health'
   [ "$status" -ne 0 ]
-  [[ "$output" == *'health endpoint failed'* ]]
+  [[ "$output" == *'authenticated health identity is invalid'* ]]
   unset CURL_STALL
 
   # The documented readiness bound is enforced by wall clock, not by an
@@ -2616,7 +1723,7 @@ run_rollback() {
 }
 
 @test "custom-domain CLI accepts check setup migrate and rollback verbs" {
-  make_webui_fixture
+  make_paseo_fixture
   run_custom_domain
   [ "$status" -eq 2 ]
   [[ "$output" == *'usage: '*'check|setup|migrate|rollback'* ]]
@@ -2635,7 +1742,7 @@ run_rollback() {
   [ "$status" -eq 2 ]
 }
 
-@test "setup validates Firstp1ck route DNS and credential before publication" {
+@test "setup validates Paseo route DNS and credential before publication" {
   prepare_custom_domain_setup legacy-exact
   run_custom_domain setup
   [ "$status" -eq 0 ]
@@ -2668,8 +1775,8 @@ run_rollback() {
     [ "$(/usr/bin/stat -c %a "${managed[index]}")" = "${modes[index]}" ]
   done
   grep -Fq 'candidate build' "${managed[0]}"
-  cmp "${managed[1]}" "$WEBUI_FIXTURE/ai/pi/webui/caddy-entrypoint.sh"
-  cmp "${managed[2]}" "$WEBUI_FIXTURE/ai/pi/webui/Caddyfile.in"
+  cmp "${managed[1]}" "$PASEO_FIXTURE/ai/pi/paseo/caddy-entrypoint.sh"
+  cmp "${managed[2]}" "$PASEO_FIXTURE/ai/pi/paseo/Caddyfile.in"
   grep -Fq "ExecStart=${managed[1]}" "${managed[3]}"
 
   # The service is enabled and running, the staging directory is gone, and
@@ -2698,9 +1805,9 @@ run_rollback() {
     >"$PI_PACKAGE/package.json"
   run_custom_domain setup
   [ "$status" -ne 0 ]
-  [[ "$output" == *'Pi must be available through mise'* || "$output" == *'0.85.1'* ]]
+  [[ "$output" == *'native Pi launcher'* || "$output" == *'Pi 1.1+'* ]]
   printf '%s\n' \
-    '{"name":"@earendil-works/pi-coding-agent","version":"0.85.1","bin":{"pi":"dist/bundle/cli.js"}}' \
+    '{"name":"@earendil-works/pi-coding-agent","version":"1.2.0","bin":{"pi":"dist/bundle/cli.js"}}' \
     >"$PI_PACKAGE/package.json"
 
   mv "$INSTALLED_RUNTIME" "$TEST_ROOT/runtime-away"
@@ -2709,11 +1816,11 @@ run_rollback() {
   [[ "$output" == *'installed runtime is unavailable'* ]]
   mv "$TEST_ROOT/runtime-away" "$INSTALLED_RUNTIME"
 
-  export FIRSTPICK_INACTIVE=1
+  export PASEO_INACTIVE=1
   run_custom_domain setup
   [ "$status" -ne 0 ]
-  [[ "$output" == *'Pi Web UI service is not active'* ]]
-  unset FIRSTPICK_INACTIVE
+  [[ "$output" == *'Paseo service is not active'* ]]
+  unset PASEO_INACTIVE
 
   export TAILSCALE_CLIENT_VERSION=1.100.0
   run_custom_domain setup
@@ -2861,13 +1968,13 @@ run_rollback() {
   run_custom_domain setup
   [ "$status" -ne 0 ]
   [[ "$output" == *'refusing to replace a foreign managed Caddyfile'* ]]
-  cp "$WEBUI_FIXTURE/ai/pi/webui/Caddyfile.in" "$CADDY_ROOT/etc/pi-webui-caddy/Caddyfile"
+  cp "$PASEO_FIXTURE/ai/pi/paseo/Caddyfile.in" "$CADDY_ROOT/etc/pi-webui-caddy/Caddyfile"
 
   printf '\nforeign\n' >>"$CADDY_ROOT/usr/local/lib/pi-webui/caddy-entrypoint"
   run_custom_domain setup
   [ "$status" -ne 0 ]
   [[ "$output" == *'refusing to replace a foreign managed Caddy entrypoint'* ]]
-  cp "$WEBUI_FIXTURE/ai/pi/webui/caddy-entrypoint.sh" \
+  cp "$PASEO_FIXTURE/ai/pi/paseo/caddy-entrypoint.sh" \
     "$CADDY_ROOT/usr/local/lib/pi-webui/caddy-entrypoint"
 
   printf '\nforeign\n' >>"$CADDY_ROOT/etc/systemd/system/pi-webui-caddy.service"
@@ -3031,14 +2138,14 @@ run_rollback() {
 
   # A signal that never answers is still bounded, but only by the wall-clock
   # deadline now, and reports that deadline's own exact boundary error.
-  export CADDY_HEALTH_FAIL=1 PI_WEBUI_TEST_READY_DEADLINE=1
+  export CADDY_HEALTH_FAIL=1 PI_PASEO_TEST_READY_DEADLINE=1
   run_custom_domain_function 'wait_for_caddy_ready'
   [ "$status" -ne 0 ]
   [[ "$output" == *'readiness exceeded its 1-second deadline'* ]]
-  unset CADDY_HEALTH_FAIL PI_WEBUI_TEST_READY_DEADLINE
+  unset CADDY_HEALTH_FAIL PI_PASEO_TEST_READY_DEADLINE
 
   # The deadline override is a Bats-only override like the interval.
-  run_custom_domain_function 'unset PI_WEBUI_TESTING; PI_WEBUI_TEST_READY_DEADLINE=1 caddy_ready_deadline'
+  run_custom_domain_function 'unset PI_PASEO_TESTING; PI_PASEO_TEST_READY_DEADLINE=1 caddy_ready_deadline'
   [ "$status" -ne 0 ]
   [[ "$output" == *'test overrides are unavailable outside Bats'* ]]
 }
@@ -3050,7 +2157,7 @@ run_rollback() {
   # The readiness signal never answers and one pacing sleep alone outlasts
   # the whole deadline, so the operation is cut off by wall clock instead of
   # relying on any attempt limit.
-  export CADDY_HEALTH_FAIL=1 PI_WEBUI_TEST_READY_DEADLINE=1 PI_WEBUI_TEST_READY_INTERVAL=5
+  export CADDY_HEALTH_FAIL=1 PI_PASEO_TEST_READY_DEADLINE=1 PI_PASEO_TEST_READY_INTERVAL=5
   run_custom_domain setup
   [ "$status" -ne 0 ]
   [[ "$output" == *'readiness exceeded its 1-second deadline'* ]]
@@ -3078,7 +2185,7 @@ run_rollback() {
   export CADDY_HEALTH_FAIL_AFTER_ATTEMPTS=1
   run_custom_domain setup
   [ "$status" -ne 0 ]
-  [[ "$output" == *'Caddy-proxied Pi Web UI health endpoint failed at https://pi.dpao.la:8443/api/health'* ]]
+  [[ "$output" == *'Caddy-proxied Paseo authenticated health identity is invalid'* ]]
   # Proves the readiness signal and the strict validation are two distinct
   # curl calls against the same endpoint, not one call reused.
   [ "$(cat "$TEST_ROOT/caddy-health-ready-calls")" -ge 2 ]
@@ -3113,7 +2220,7 @@ run_rollback() {
 
 @test "setup reports the retained staging path when restoration fails" {
   prepare_custom_domain_setup legacy-exact prior
-  export CADDY_HEALTH_FAIL=1 RESTORE_FAIL=1 PI_WEBUI_TEST_READY_DEADLINE=1
+  export CADDY_HEALTH_FAIL=1 RESTORE_FAIL=1 PI_PASEO_TEST_READY_DEADLINE=1
   run_custom_domain setup
   [ "$status" -ne 0 ]
   [[ "$output" == *'restoration failed; preserving staging path: '*"$STATE_ROOT/.caddy-setup."* ]]
@@ -3225,7 +2332,7 @@ run_rollback() {
   export CADDY_HEALTH_FAIL=1
   run_custom_domain migrate
   [ "$status" -ne 0 ]
-  [[ "$output" == *'health endpoint failed'* ]]
+  [[ "$output" == *'authenticated health identity is invalid'* ]]
   assert_no_route_mutation
   unset CADDY_HEALTH_FAIL
 
@@ -3328,7 +2435,7 @@ run_rollback() {
     # default SIGINT disposition. Without it Bash marks asynchronous commands
     # SIG_IGN for INT, which no interactive operator ever sees.
     set -m
-    "$WEBUI_FIXTURE/ai/pi/webui/custom-domain.sh" migrate >"$TEST_ROOT/migrate-$signal.out" 2>&1 &
+    "$PASEO_FIXTURE/ai/pi/paseo/custom-domain.sh" migrate >"$TEST_ROOT/migrate-$signal.out" 2>&1 &
     local pid=$!
     set +m
     local attempt
@@ -3447,7 +2554,7 @@ run_rollback() {
   done < <(managed_caddy_paths)
 }
 
-@test "custom-domain rollback --full leaves Serve empty and permits Web UI rollback" {
+@test "custom-domain rollback --full leaves Serve empty and permits Paseo rollback" {
   prepare_custom_domain_migration raw
   run_custom_domain rollback --full
   [ "$status" -eq 0 ]
@@ -3501,7 +2608,7 @@ run_rollback() {
   [ "$status" -ne 0 ]
   [[ "$output" == *'refusing to remove a foreign managed Caddyfile'* ]]
   assert_no_route_mutation raw-exact
-  cp "$WEBUI_FIXTURE/ai/pi/webui/Caddyfile.in" "$CADDY_ROOT/etc/pi-webui-caddy/Caddyfile"
+  cp "$PASEO_FIXTURE/ai/pi/paseo/Caddyfile.in" "$CADDY_ROOT/etc/pi-webui-caddy/Caddyfile"
 
   reset_migration_state raw
   printf '\nforeign\n' >>"$CADDY_ROOT/usr/local/lib/pi-webui/caddy-entrypoint"
@@ -3509,7 +2616,7 @@ run_rollback() {
   [ "$status" -ne 0 ]
   [[ "$output" == *'refusing to remove a foreign managed Caddy entrypoint'* ]]
   assert_no_route_mutation raw-exact
-  cp "$WEBUI_FIXTURE/ai/pi/webui/caddy-entrypoint.sh" \
+  cp "$PASEO_FIXTURE/ai/pi/paseo/caddy-entrypoint.sh" \
     "$CADDY_ROOT/usr/local/lib/pi-webui/caddy-entrypoint"
 
   reset_migration_state raw
@@ -3543,22 +2650,6 @@ run_rollback() {
   assert_no_route_mutation empty
 
   [ "$(fingerprint_paths "$CADDY_ROOT")" = "$before" ]
-}
-
-@test "Web UI rollback points to custom-domain rollback while raw ingress is published" {
-  prepare_rollback
-  write_route raw
-  run_rollback
-  [ "$status" -ne 0 ]
-  [[ "$output" == *'custom-domain.sh rollback --full'* ]]
-  [ ! -s "$MUTATION_CALLS" ]
-
-  # The transitional legacy route names its own explicit removal verb.
-  write_route legacy-exact
-  run_rollback
-  [ "$status" -ne 0 ]
-  [[ "$output" == *'serve-legacy-off'* ]]
-  [ ! -s "$MUTATION_CALLS" ]
 }
 
 @test "migration refuses success when the route changes after verification" {
@@ -3630,4 +2721,15 @@ run_rollback() {
   while IFS= read -r path; do
     [ ! -e "$path" ]
   done < <(managed_caddy_paths)
+}
+
+@test "domain selection skips checks and refuses publication when unselected" {
+  make_paseo_fixture
+  unset DOTFILES_PASEO_ENABLED
+  run_custom_domain check
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"not selected"* ]]
+  run_custom_domain setup
+  [ "$status" -ne 0 ]
+  [ ! -s "$MUTATION_CALLS" ]
 }

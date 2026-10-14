@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "daemon": {
+    "listen": "127.0.0.1:31415",
+    "hostnames": ["localhost", "127.0.0.1", "pi.dpao.la"],
+    "relay": {"enabled": false},
+    "mcp": {"enabled": false, "injectIntoAgents": false},
+    "browserTools": {"enabled": false},
+    "serviceProxy": {"enabled": false}
+  },
+  "app": {"baseUrl": "https://pi.dpao.la"},
+  "pluginsEnabled": false,
+  "agents": {
+    "providers": {
+      "pi": {},
+      "claude": {"enabled": false},
+      "codex": {"enabled": false},
+      "copilot": {"enabled": false},
+      "opencode": {"enabled": false},
+      "omp": {"enabled": false},
+      "antigravity": {"enabled": false},
+      "muse": {"enabled": false}
+    }
+  },
+  "features": {"webUi": {"enabled": true}}
+}

@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+# Frozen application runtime validation; the native Pi host is managed separately.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+runtime="$ROOT/ai/pi/paseo/runtime"
+mode=tracked
+case "${1:---tracked-only}" in
+  --tracked-only)
+    shift "$(($# > 0 ? 1 : 0))"
+    [[ $# -eq 0 ]] || {
+      runtime=$1
+      shift
+    }
+    ;;
+  --installed-runtime)
+    [[ $# -eq 2 ]] || {
+      printf 'usage: %s --installed-runtime PATH\n' "$0" >&2
+      exit 2
+    }
+    mode=installed
+    runtime=$2
+    shift 2
+    ;;
+  *)
+    printf 'usage: %s [--tracked-only [PATH] | --installed-runtime PATH]\n' "$0" >&2
+    exit 2
+    ;;
+esac
+[[ $# -eq 0 ]] || exit 2
+if command -v node >/dev/null 2>&1; then
+  node_command=(node)
+else
+  node_command=(mise exec -- node)
+fi
+"${node_command[@]}" - "$runtime" "$mode" <<'NODE'
+const fs = require('node:fs');
+const path = require('node:path');
+const crypto = require('node:crypto');
+const {createRequire} = require('node:module');
+const [argument, mode] = process.argv.slice(2);
+const version = '0.11.2';
+const manifestHash = 'b6aed8a24face3ccaa304b3e9acde2c012ae18ec95bc25d0f44f78346da93f2f';
+const lockHash = '8f017b11f8eec9da5b893b450b7a9673827b6f2877bb2d1b892e317a804987c4';
+const cliIntegrity = 'sha512-eadp010kPIA/Sj43m5TJ5e0Kz1fApSO4h/Z8fBDU0erQCcPcJ3uw1B7CawnSiTBkPnnVoFoZ6E0HxFyYRi3B2A==';
+function fail(message) { throw new Error(message); }
+function read(file, label) {
+  try {
+    if (!fs.lstatSync(file).isFile()) fail(`${label} must be a regular file`);
+    return fs.readFileSync(file, 'utf8');
+  } catch (error) { fail(`${label}: ${error.message}`); }
+}
+function executable(file) {
+  if (!fs.statSync(file).isFile()) fail(`launcher must be a file: ${file}`);
+  fs.accessSync(file, fs.constants.X_OK);
+}
+async function main() {
+  const runtime = path.resolve(argument);
+  if (!fs.lstatSync(runtime).isDirectory()) fail('runtime root must be a real directory');
+  for (const [file, expected, label] of [
+    ['package.json', manifestHash, 'manifest'], ['package-lock.json', lockHash, 'lock']
+  ]) {
+    const raw = read(path.join(runtime, file), label);
+    if (crypto.createHash('sha256').update(raw).digest('hex') !== expected) fail(`${label} SHA-256 differs from the reviewed runtime`);
+  }
+  const manifest = JSON.parse(read(path.join(runtime, 'package.json'), 'manifest'));
+  const lock = JSON.parse(read(path.join(runtime, 'package-lock.json'), 'lock'));
+  const exact = (dependencies) => Object.keys(dependencies || {}).length === 1 && dependencies['@getpaseo/cli'] === version;
+  if (manifest.name !== 'pi-paseo-runtime' || manifest.version !== '0.0.0' || !manifest.private || !exact(manifest.dependencies)) fail('unexpected runtime manifest identity');
+  if (lock.name !== manifest.name || lock.lockfileVersion !== 3 || !exact(lock.packages?.['']?.dependencies)) fail('unexpected lock root');
+  const entries = Object.entries(lock.packages).filter(([key]) => key !== '');
+  if (entries.length !== 341 || entries.some(([,entry]) => !entry.resolved?.startsWith('https://registry.npmjs.org/') || !entry.integrity?.startsWith('sha512-'))) fail('unexpected registry graph');
+  if (lock.packages['node_modules/@getpaseo/cli']?.integrity !== cliIntegrity || lock.packages['node_modules/@earendil-works/pi-coding-agent']) fail('unexpected CLI integrity or bundled Pi');
+  if (mode === 'installed') {
+    const modules = path.join(runtime, 'node_modules');
+    for (const name of ['cli', 'client', 'server', 'protocol']) {
+      const pkg = JSON.parse(read(path.join(modules, '@getpaseo', name, 'package.json'), 'installed Paseo'));
+      if (pkg.name !== `@getpaseo/${name}` || pkg.version !== version) fail(`unexpected installed Paseo ${name} identity`);
+      if (name === 'cli' && pkg.bin?.paseo !== 'bin/paseo') fail('unexpected installed Paseo launcher');
+    }
+    const launcher = path.join(modules, '@getpaseo/cli/bin/paseo');
+    executable(launcher);
+    const bin = path.join(modules, '.bin/paseo');
+    executable(bin);
+    if (fs.realpathSync(bin) !== fs.realpathSync(launcher)) fail('installed Paseo bin targets a foreign launcher');
+    // Loading node-pty resolves its packaged platform binary without npm rebuild.
+    const requireRuntime = createRequire(path.join(runtime, 'package.json'));
+    const pty = requireRuntime('node-pty');
+    await new Promise((resolve, reject) => {
+      let output = '';
+      const child = pty.spawn(process.execPath, ['-e', 'process.stdout.write("paseo-pty-ready")'], {
+        cwd: runtime, env: {PATH: process.env.PATH || '/usr/bin:/bin', TERM: 'xterm'}
+      });
+      const timer = setTimeout(() => { child.kill(); reject(new Error('packaged node-pty readiness timed out')); }, 3000);
+      child.onData(data => { output += data; });
+      child.onExit(({exitCode}) => {
+        clearTimeout(timer);
+        if (exitCode !== 0 || output !== 'paseo-pty-ready') reject(new Error('packaged node-pty failed its isolated exercise'));
+        else resolve();
+      });
+    });
+  }
+  console.log(`validated Paseo ${version}: 341 registry packages${mode === 'installed' ? ', packaged node-pty ready' : ''}`);
+}
+main().catch(error => { console.error(`error: ${error.message}`); process.exitCode = 1; });
+NODE

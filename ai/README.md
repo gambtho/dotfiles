@@ -176,7 +176,7 @@ The installer refuses a production-agent-dir apply—including one reached throu
 
 Packages may advance during ordinary installation. Pi owns npm installation, Git tracking/ref behavior, dependency locks and cache reconciliation; cached files may be replaced. There is no repository package-health manager, exact tested-graph promotion, custom default-branch tracking or automatic package recovery. Missing or incompatible permission artifacts fail nonzero with native `pi install npm:@gotgenes/pi-permission-system` repair advice. Never weaken a schema gate to make a new package compatible.
 
-An existing managed Pi host is reused; host self-update stays operator-owned through `pi update`. First installation uses Pi's managed installer. The opt-in Web UI remains a separate pinned Pi 0.85.1 runtime, lockfile, and service lifecycle; extension refresh does not change them.
+An existing managed Pi host is reused; host self-update stays operator-owned through `pi update`. First installation uses Pi's managed installer. The opt-in Paseo application has a separate pinned runtime, lockfile and service lifecycle, and uses this native Pi host rather than bundling another Pi version. It is never a dependency of ordinary AI reconciliation.
 
 For standalone package updates, stop Pi sessions and use the supported native interface:
 
@@ -192,7 +192,7 @@ Permission publication uses best-effort compare-before-publish: it checks the ru
 
 The migration converts the old whole-extension link to a real directory, preserves unrelated extension entries, and publishes only the three authored links. It removes only exact managed Amp settings links and only the `.permissions` key from valid Amp state. The exact legacy Brave `brave-search` directory is moved intact below `disabled-skills`; sibling skills, mismatches, and collisions are preserved.
 
-The opt-in [Pi Web UI](pi/webui/README.md) has a separate installer and operations runbook.
+The opt-in [Paseo](pi/paseo/README.md) has a separate installer and operations runbook. Select a machine explicitly with `DOTFILES_PASEO_ENABLED=1 make ai-paseo`; there is no enabling default or hostname/fingerprint registry. Existing private-domain proxy identities remain unchanged.
 
 ## Unattended operation
 
