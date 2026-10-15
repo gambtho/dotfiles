@@ -31,6 +31,15 @@ already has it.
 
 `bash tools/herdr/install.sh --check` prints the plan and writes nothing.
 
+## Optional native iPhone access
+
+[Heeler access](heeler/README.md) adds explicit, opt-in boot persistence for the
+normal **default** Herdr session and a private key-only SSH listener over
+Tailscale. Run `DOTFILES_HEELER_ENABLED=1 make ai-heeler` from the canonical
+checkout to prepare it without restarting live agents; root publication and
+controlled cutover remain separate operator steps. Ordinary bootstrap and
+updates do not enable this access. Paseo remains an independent fallback.
+
 ## The Dev Container plugin
 
 The shipped config binds `prefix+d` to a shell inside the repository's Dev

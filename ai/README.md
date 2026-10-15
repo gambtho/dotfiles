@@ -194,6 +194,12 @@ The migration converts the old whole-extension link to a real directory, preserv
 
 The opt-in [Paseo](pi/paseo/README.md) has a separate installer and operations runbook. Select a machine explicitly with `DOTFILES_PASEO_ENABLED=1 make ai-paseo`; there is no enabling default or hostname/fingerprint registry. Existing private-domain proxy identities remain unchanged.
 
+For native iPhone access to the actual default Herdr/Pi terminal, use the separate
+opt-in [Heeler setup](../tools/herdr/heeler/README.md):
+`DOTFILES_HEELER_ENABLED=1 make ai-heeler` prepares persistence without live
+agent takeover. Root SSH publication and controlled reboot/cutover are explicit
+operator steps; ordinary `make ai` does not select this feature or change Paseo.
+
 ## Unattended operation
 
 Before `overnight-improve`:

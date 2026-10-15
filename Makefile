@@ -1,4 +1,4 @@
-.PHONY: install bootstrap update relink ai ai-check ai-paseo ai-paseo-check ai-paseo-domain-check ai-paseo-domain-setup pins pins-check pins-update check syntax lint test python-test pi-runtime-test validate
+.PHONY: install bootstrap update relink ai ai-check ai-paseo ai-paseo-check ai-paseo-domain-check ai-paseo-domain-setup ai-heeler ai-heeler-check pins pins-check pins-update check syntax lint test python-test pi-runtime-test validate
 
 # ── Main targets ──────────────────────────────────────────────────────────────
 
@@ -44,6 +44,12 @@ ai-paseo-domain-check: ## Inspect Paseo custom-domain state without mutation
 
 ai-paseo-domain-setup: ## Build and install the opt-in custom-domain Caddy service
 	bash ai/pi/paseo/custom-domain.sh setup
+
+ai-heeler: ## Prepare opt-in default Herdr/Heeler persistence without live takeover
+	bash tools/herdr/heeler/install.sh --apply
+
+ai-heeler-check: ## Inspect prepared or live managed Heeler state without mutation
+	bash tools/herdr/heeler/install.sh --check
 
 pins: ## List managed dependency versions and refs
 	bash libexec/versions list

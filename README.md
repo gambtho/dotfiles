@@ -442,7 +442,7 @@ The installer links the authored extension directory, and `ai/pi/settings.json` 
 
 The personal package provides `/fix-pr`, `/polish`, `/polish-pr`, `/review-prs`, and `/second-opinion`, plus the `improve`, `overnight-improve`, `polish-core`, `blindspot-pass`, `implementation-plan`, and `change-explainer` skills. See `AGENTS.md` and `ai/marketplace/plugins/my/README.md` for details.
 
-Pi's always-loaded global working agreement is `ai/pi/AGENTS.md`; project instructions override it through repository `AGENTS.md` files. Remote browser access is an opt-in [Paseo](ai/pi/paseo/README.md).
+Pi's always-loaded global working agreement is `ai/pi/AGENTS.md`; project instructions override it through repository `AGENTS.md` files. Remote browser access is an opt-in [Paseo](ai/pi/paseo/README.md). Native iPhone access to the actual default Herdr/Pi terminal is a separate opt-in [Heeler setup](tools/herdr/heeler/README.md), with explicit boot preparation and operator-only SSH publication.
 
 ### Validation
 

@@ -1,0 +1,17 @@
+# Managed by dotfiles: Heeler
+[Unit]
+Description=Default Herdr session for terminal and Heeler access
+
+[Service]
+Type=exec
+WorkingDirectory=%h
+Environment="PATH=@SERVICE_PATH@"
+ExecStart=/usr/bin/mise exec -- %h/.local/bin/herdr server
+Restart=on-failure
+RestartSec=5
+KillMode=mixed
+TimeoutStopSec=30
+UMask=0077
+
+[Install]
+WantedBy=default.target
