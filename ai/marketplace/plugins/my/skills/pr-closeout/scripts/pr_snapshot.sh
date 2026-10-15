@@ -30,18 +30,27 @@ compact=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --repo)
-      [[ $# -ge 2 ]] || { echo "missing value for --repo" >&2; exit 2; }
+      [[ $# -ge 2 ]] || {
+        echo "missing value for --repo" >&2
+        exit 2
+      }
       repo_path="$2"
       shift 2
       ;;
     --github-repo)
-      [[ $# -ge 2 ]] || { echo "missing value for --github-repo" >&2; exit 2; }
+      [[ $# -ge 2 ]] || {
+        echo "missing value for --github-repo" >&2
+        exit 2
+      }
       github_repo="$2"
       github_repo_explicit=1
       shift 2
       ;;
     --pr)
-      [[ $# -ge 2 ]] || { echo "missing value for --pr" >&2; exit 2; }
+      [[ $# -ge 2 ]] || {
+        echo "missing value for --pr" >&2
+        exit 2
+      }
       pr_selector="$2"
       shift 2
       ;;
@@ -53,7 +62,7 @@ while [[ $# -gt 0 ]]; do
       compact=1
       shift
       ;;
-    -h|--help)
+    -h | --help)
       usage
       exit 0
       ;;
@@ -66,7 +75,10 @@ while [[ $# -gt 0 ]]; do
 done
 
 require_cmd() {
-  command -v "$1" >/dev/null 2>&1 || { echo "required command not found: $1" >&2; exit 127; }
+  command -v "$1" >/dev/null 2>&1 || {
+    echo "required command not found: $1" >&2
+    exit 127
+  }
 }
 
 require_cmd git
@@ -190,7 +202,7 @@ read_checks() {
   if [[ "$mode" == "required" ]]; then
     args+=(--required)
   fi
-  args+=(--json name,state,bucket,link,workflow,startedAt,completedAt)
+  args+=(--json "name,state,bucket,link,workflow,startedAt,completedAt")
 
   checks_tmp="$(mktemp)"
   checks_err="$(mktemp)"
@@ -278,7 +290,7 @@ else
   pr_state_blocking=true
 fi
 case "$merge_state" in
-  DIRTY|UNKNOWN|BLOCKED|BEHIND|DRAFT|UNSTABLE)
+  DIRTY | UNKNOWN | BLOCKED | BEHIND | DRAFT | UNSTABLE)
     merge_blocking=true
     ;;
   *)
