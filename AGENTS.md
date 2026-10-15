@@ -55,6 +55,7 @@ Pi authenticates directly to the GitHub Copilot subscription through `/login`. S
 - `implementation-plan` — evidence-based implementation plan.
 - `lane-coordinator` — coordinate manually started lanes (Pi or Claude Code): keep STATE.md current, verify reports, and gate outward publication.
 - `change-explainer` — reviewer-facing completed-change write-up.
+- `pr-closeout` — drive a PR to merge-ready in any repository (project review profiles, bot vs human thread rules, flake discipline, size check).
 - `second-opinion-core` — cross-model spec/plan review; runs automatically after a spec or plan is written and backs `/second-opinion`.
 
 ## Conventions
