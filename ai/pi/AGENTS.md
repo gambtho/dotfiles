@@ -100,6 +100,17 @@ Each `subagent` call launches exactly one agent and supplies a self-contained `p
 - Comment intent and tradeoffs rather than restating code.
 - Never use `--no-verify` unless the user explicitly requests it. If a hook fails for unrelated reasons, stop and ask rather than fixing unrelated code.
 
+## Local file references
+
+- In interactive Pi responses, render references to existing local files as
+  Markdown links, not bare paths or inline code.
+- Use a readable project-relative label and an absolute, percent-encoded
+  file:// URL as the destination.
+- Put line positions inside the URL: #L42 or #L42-49.
+- Link only files known to exist; do not invent paths.
+- Keep repository documentation, PR descriptions, and other shared artifacts
+  portable—do not put machine-local file:// URLs in them.
+
 ## Completion
 
 Before finishing:

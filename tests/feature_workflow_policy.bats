@@ -188,6 +188,23 @@ setup() {
   done
 }
 
+@test "Pi global guidance requests clickable local references only in interactive responses" {
+  local rule
+  for rule in \
+    '## Local file references' \
+    'In interactive Pi responses, render references to existing local files as' \
+    'Markdown links, not bare paths or inline code.' \
+    'Use a readable project-relative label and an absolute, percent-encoded' \
+    'file:// URL as the destination.' \
+    'Put line positions inside the URL: #L42 or #L42-49.' \
+    'Link only files known to exist; do not invent paths.' \
+    'Keep repository documentation, PR descriptions, and other shared artifacts' \
+    'portable—do not put machine-local file:// URLs in them.'; do
+    run grep -F "$rule" "$PI_GUIDANCE"
+    [ "$status" -eq 0 ]
+  done
+}
+
 @test "Pi global guidance defines the automatic worktree workflow" {
   run grep -F "create or reuse a linked worktree before the first repository write" "$PI_GUIDANCE"
   [ "$status" -eq 0 ]
