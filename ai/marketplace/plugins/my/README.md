@@ -18,6 +18,7 @@ Personal prompt templates and skills loaded directly from this dotfiles reposito
 - `improve` — holistic codebase audit with ranked findings.
 - `jekyll-media-gallery` — Jekyll media-gallery workflow.
 - `overnight-improve` — iterative improvement loop using Pi Ralph tooling.
+- `pr-closeout` — drive a PR to merge-ready in any repo: conflicts, CI (with flake discipline), review threads (bots answered, human replies drafted), project review profiles, size check.
 - `polish-core` — shared diff review, maintainer checklist, project profiles, and conservative auto-fix engine.
 - `product-owner` — project-specific product strategy conversation and outcome-focused feature briefs.
 
