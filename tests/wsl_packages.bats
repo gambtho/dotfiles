@@ -60,6 +60,47 @@ run_guard() {
   [ -f "$MASK_STATE" ]
 }
 
+@test "remembered but not installed OpenSSH is fresh when units config and listeners are absent" {
+  export DPKG_FIXTURE="$TEST_ROOT/dpkg"
+  mkdir -p "$DPKG_FIXTURE"
+  stub_command dpkg-query 'exec /usr/bin/dpkg-query --admindir="$DPKG_FIXTURE" "$@"'
+  local wanted
+  for wanted in unknown install hold deinstall purge; do
+    printf 'Package: openssh-server\nStatus: %s ok not-installed\nArchitecture: amd64\n\n' "$wanted" >"$DPKG_FIXTURE/status"
+    run_guard
+    [ "$status" -eq 0 ]
+    [ "$(<"$EVENTS")" = 'systemctl mask ssh.service ssh.socket' ]
+    rm "$MASK_STATE"
+    : >"$EVENTS"
+  done
+}
+
+@test "dpkg residual config installed and repair required states still refuse before masking" {
+  export DPKG_FIXTURE="$TEST_ROOT/dpkg"
+  mkdir -p "$DPKG_FIXTURE"
+  stub_command dpkg-query 'exec /usr/bin/dpkg-query --admindir="$DPKG_FIXTURE" "$@"'
+  local package_status
+  for package_status in 'deinstall ok config-files' 'install ok installed' 'unknown reinstreq not-installed'; do
+    printf 'Package: openssh-server\nStatus: %s\nArchitecture: amd64\nVersion: 1\nMaintainer: Fixture <fixture@example.invalid>\nDescription: Test fixture\n\n' "$package_status" >"$DPKG_FIXTURE/status"
+    run /usr/bin/dpkg-query --admindir="$DPKG_FIXTURE" -W '-f=${Status}' openssh-server
+    [ "$status" -eq 0 ]
+    [ "$output" = "$package_status" ]
+    run_guard
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Existing or unknown OpenSSH deployment"* ]]
+    [ ! -s "$EVENTS" ]
+  done
+}
+
+@test "not installed OpenSSH with leftover configuration still refuses before masking" {
+  export SSH_CONFIGURED=1
+  stub_command dpkg-query 'printf "unknown ok not-installed"'
+  run_guard
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Existing or unknown OpenSSH deployment"* ]]
+  [ ! -s "$EVENTS" ]
+}
+
 @test "already onboarded WSL with masked stock SSH needs no changes" {
   export SSH_STATE=masked SSH_PACKAGE=installed
   run_guard

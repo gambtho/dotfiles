@@ -39,7 +39,7 @@ wsl_ssh_migration_guidance() {
 
 ensure_wsl_ssh_closed() {
   [[ ${OS:-} == WSL ]] || return 0
-  local version listeners state package rc=0
+  local version listeners state package rc=0 package_absent=0
   version=$(systemctl show --property=Version --value) || {
     printf 'WSL systemd is required before package installation; enable systemd for this distro and restart it. SSH was not changed.\n' >&2
     return 1
@@ -58,7 +58,13 @@ ensure_wsl_ssh_closed() {
   }
   [[ "$state" != masked ]] || return 0
   package=$(dpkg-query -W '-f=${Status}' openssh-server 2>/dev/null) || rc=$?
-  if [[ "$rc" != 1 || -n "$package" ]] || wsl_ssh_configuration_exists; then
+  # A successful query can describe a remembered but uninstalled package.
+  # Only a clean not-installed state is absent; residual config/repair is not.
+  if [[ "$rc" == 1 && -z "$package" ]] ||
+    [[ "$rc" == 0 && "$package" =~ ^(unknown|install|hold|deinstall|purge)' ok not-installed'$ ]]; then
+    package_absent=1
+  fi
+  if [[ "$package_absent" != 1 ]] || wsl_ssh_configuration_exists; then
     printf 'Existing or unknown OpenSSH deployment: migration required; no policy changed.\n' >&2
     wsl_ssh_migration_guidance
     return 1
