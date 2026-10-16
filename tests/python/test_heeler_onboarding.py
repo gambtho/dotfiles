@@ -134,6 +134,38 @@ class OnboardingTests(unittest.TestCase):
         self.assertFalse(self.keys.exists())
         self.board.invoke_publication.assert_not_called()
 
+    def test_discovery_validates_live_owned_policy_instead_of_candidate_bytes(self):
+        entry = self.home / 'old-entry.py'
+        unit = self.home / 'old-unit.service'
+        entry.write_bytes(b'# trusted older published runtime')
+        unit.write_bytes(b'# trusted older published unit')
+        old_runtime = object()
+        def metadata(args, **kwargs):
+            if 'show' in args:
+                output = '\n'.join(k + '=' + v for k, v in self.identity.items())
+            elif 'is-enabled' in args:
+                output = 'masked\n'
+            elif args[0] == '/usr/bin/tailscale':
+                output = '{"BackendState":"Running","Self":{"Online":true,"TailscaleIPs":["100.84.88.33"]}}'
+            elif args[-1] == 'sport = :2222':
+                output = 'LISTEN 0 128 100.84.88.33:2222 0.0.0.0:*\n'
+            else:
+                output = ''
+            return subprocess.CompletedProcess(args, 0, output, '')
+        with patch.object(self.board.prepare, 'prerequisites'), \
+             patch.object(self.board.prepare, 'command', side_effect=metadata), \
+             patch.object(self.board.prepare, 'PUBLISHED_ENTRY', entry), \
+             patch.object(self.board.prepare, 'PUBLISHED_UNIT', unit), \
+             patch.object(self.board.prepare, 'trusted_root_path', return_value=True), \
+             patch.object(self.board.prepare, 'render_units', return_value=('future user', 'future system')), \
+             patch.object(self.board.publisher, 'load_runtime', return_value=old_runtime) as loader, \
+             patch.object(self.board.publisher, 'verify_listener') as verifier:
+            info = self.real_discover(ROOT, 'someone', os.getuid(), self.home)
+        self.assertEqual(info['address'], '100.84.88.33')
+        loader.assert_called_once_with(entry)
+        verifier.assert_called_once_with(old_runtime, self.account, '100.84.88.33',
+                                         {entry: entry.read_bytes(), unit: unit.read_bytes()})
+
     def test_unavailable_system_manager_has_actionable_pending_without_privilege(self):
         with patch.object(self.board.prepare, 'command', side_effect=subprocess.CalledProcessError(1, ['/usr/bin/systemctl'])), \
              self.assertRaisesRegex(self.board.Pending, 'manager'):
@@ -348,6 +380,37 @@ class PublisherTests(unittest.TestCase):
         self.assertEqual(len(backups), 1)
         self.assertTrue((backups[0] / 'manifest.json').is_file())
         self.assertEqual(backups[0].stat().st_mode & 0o777, 0o700)
+
+    def test_published_runtime_not_candidate_defines_live_listener_policy_during_upgrade(self):
+        staged = self.stage / 'sshd-entrypoint.py'
+        staged.write_bytes(staged.read_bytes() + b'\nPOLICY_REVISION = "old"\n')
+        self.publish()
+        staged.write_bytes(staged.read_bytes().replace(b'"old"', b'"new"'))
+        observed = []
+        with patch.object(self.pub, 'verify_listener', side_effect=lambda runtime, *args: observed.append(runtime.POLICY_REVISION)):
+            self.publish()
+        self.assertEqual(observed, ['old'])
+        self.assertIn(b'POLICY_REVISION = "new"', (self.pub.LIB / 'sshd-entrypoint.py').read_bytes())
+
+    def test_configuration_validation_failure_preserves_native_diagnostic(self):
+        def invalid(args, **kwargs):
+            if '--check' in args:
+                raise subprocess.CalledProcessError(255, args, stderr='synthetic missing host key diagnostic')
+            return self.run_command(args, **kwargs)
+        with patch.object(self.pub, 'run', side_effect=invalid), \
+             self.assertRaisesRegex(ValueError, 'synthetic missing host key diagnostic'):
+            self.publish()
+        self.assertFalse(self.pub.UNIT.exists())
+
+    def test_successful_publication_with_cleanup_failure_is_reported_as_completed(self):
+        errors = io.StringIO()
+        with patch.object(self.pub.shutil, 'rmtree', side_effect=OSError('cleanup failed')), patch('sys.stderr', errors):
+            result = self.publish()
+        self.assertEqual(result['root_policy'], 'published')
+        self.assertIn('cleanup', result)
+        self.assertIn('cleanup', errors.getvalue())
+        self.assertTrue((self.pub.STATE / 'ownership.json').is_file())
+        self.assertEqual(len(list(self.pub.STATE.glob('recovery-*'))), 1)
 
     def test_unresolved_root_recovery_blocks_retry_without_overwriting_evidence(self):
         self.pub.STATE.mkdir(mode=0o700)

@@ -45,7 +45,11 @@ preserving existing `/etc/wsl.conf` settings, then restart the affected distro.
 The installer does not edit that file or terminate WSL for you.
 
 All WSL profiles install OpenSSH server and Tailscale from its official signed
-APT repository. On fresh hosts, both stock SSH units are masked before package
+APT repository. An existing Root-controlled repository with the expected signed
+source declaration and official signing-key fingerprint is reused without fetching
+setup artifacts again; comments are preserved. Signing-key rotation or a foreign
+repository layout requires explicit maintenance rather than silent replacement.
+On fresh hosts, both stock SSH units are masked before package
 installation or upgrade, so installing the server does not enable port 22.
 Already-masked stock SSH is preserved; active, customized or unknown SSH deployments
 require explicit migration rather than being stopped or replaced. Heeler's separate

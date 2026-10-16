@@ -23,7 +23,11 @@ setup() {
       https://pkgs.tailscale.com/stable/ubuntu/noble.tailscale-keyring.list) cp "$VENDOR_LIST" "$output" ;;
       *) exit 93 ;;
     esac'
-  stub_command gpg 'grep -Fxq valid-key "${@: -1}" || exit 1; printf "pub:-:255:22:synthetic:0:0:::::\n"'
+  stub_command gpg '
+    fingerprint=2596A99EAAB33821893C0A79458CA832957F5868
+    if grep -Fxq foreign-valid-key "${@: -1}"; then fingerprint=0000000000000000000000000000000000000001
+    else grep -Fxq valid-key "${@: -1}" || exit 1; fi
+    printf "pub:-:255:22:synthetic:0:0:::::\nfpr:::::::::%s:\n" "$fingerprint"'
   stub_command stat '
     if [[ "$1 $2" == "-c %u %a" ]]; then
       printf "0 %s\n" "$(/usr/bin/stat -c %a "$3")"
@@ -75,6 +79,18 @@ run_repository() {
   [ ! -s "$EVENTS" ]
 }
 
+@test "matching local vendor configuration is reused offline without rewriting comments" {
+  run_repository
+  [ "$status" -eq 0 ]
+  printf '# local documentation\n' >>"$FIXTURE_ROOT/etc/apt/sources.list.d/tailscale.list"
+  : >"$EVENTS"
+  export DOWNLOAD_FAIL=1
+  run_repository
+  [ "$status" -eq 0 ]
+  [ ! -s "$EVENTS" ]
+  grep -q '# local documentation' "$FIXTURE_ROOT/etc/apt/sources.list.d/tailscale.list"
+}
+
 @test "foreign and duplicate sources are preserved without privileged writes" {
   printf 'foreign\n' >"$FIXTURE_ROOT/etc/apt/sources.list.d/tailscale.list"
   chmod 0644 "$FIXTURE_ROOT/etc/apt/sources.list.d/tailscale.list"
@@ -118,6 +134,15 @@ run_repository() {
   printf 'deb [trusted=yes] https://example.invalid noble main\n' >"$VENDOR_LIST"
   run_repository
   [ "$status" -ne 0 ]
+  [ ! -s "$EVENTS" ]
+  [ ! -e "$FIXTURE_ROOT/usr/share/keyrings/tailscale-archive-keyring.gpg" ]
+}
+
+@test "well formed foreign signing key cannot replace the official trust anchor" {
+  printf 'foreign-valid-key\n' >"$VENDOR_KEY"
+  run_repository
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"unknown Tailscale signing key"* ]]
   [ ! -s "$EVENTS" ]
   [ ! -e "$FIXTURE_ROOT/usr/share/keyrings/tailscale-archive-keyring.gpg" ]
 }

@@ -108,9 +108,19 @@ wsl_publish_repository_file() {
   }
 }
 
+wsl_tailscale_key_valid() {
+  local keyinfo fingerprints
+  keyinfo=$(gpg --batch --no-options --homedir "$2" --with-colons --show-keys "$1" 2>/dev/null) || return 1
+  [[ "$keyinfo" == *'pub:'* && "$keyinfo" != *'sec:'* ]] || return 1
+  fingerprints=$(awk -F: '$1 == "pub" { primary=1; next } primary && $1 == "fpr" { print $10; primary=0 }' <<<"$keyinfo")
+  # Official stable primary key, verified from the vendor's HTTPS artifact.
+  # This trust anchor permits offline reuse, not silent signing-key rotation.
+  [[ "$fingerprints" == 2596A99EAAB33821893C0A79458CA832957F5868 ]]
+}
+
 setup_wsl_tailscale_repository() (
   [[ ${OS:-} == WSL ]] || return 0
-  local root codename key source_file candidate expected declarations file status keyinfo
+  local root codename key source_file candidate expected declarations file status
   root=$(wsl_package_root) || return
   [[ "$root" == /* && "$root" != *'/../'* ]] || return 1
   root=${root%/}
@@ -137,6 +147,24 @@ setup_wsl_tailscale_repository() (
   done
   temporary=$(mktemp -d) || return
   trap 'rm -r -- "$temporary"' EXIT
+  mkdir -m 0700 "$temporary/gpg" || return
+  expected="deb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg] https://pkgs.tailscale.com/stable/ubuntu $codename main"
+  if [[ -e "$source_file" ]]; then
+    declarations=$(awk 'NF && $0 !~ /^[[:space:]]*#/' "$source_file") || return
+    [[ "$declarations" == "$expected" ]] || {
+      printf 'Foreign Tailscale source declaration requires migration\n' >&2
+      return 1
+    }
+  fi
+  if [[ -e "$key" ]]; then
+    wsl_tailscale_key_valid "$key" "$temporary/gpg" || {
+      printf 'Unknown Tailscale signing key requires inspection\n' >&2
+      return 1
+    }
+  fi
+  # A known, Root-controlled local repository remains usable without fetching
+  # its setup artifacts on every OS/security update. APT verifies Release data.
+  [[ ! -e "$key" || ! -e "$source_file" ]] || return 0
   for candidate in noarmor.gpg tailscale-keyring.list; do
     curl --fail --show-error --location --proto '=https' --proto-redir '=https' \
       --connect-timeout 10 --max-time 120 --max-filesize 1048576 --retry 3 \
@@ -145,29 +173,21 @@ setup_wsl_tailscale_repository() (
     [[ -s "$temporary/$candidate" ]] || return 1
     [[ $(stat -c %s "$temporary/$candidate") -le 1048576 ]] || return 1
   done
-  mkdir -m 0700 "$temporary/gpg" || return
-  keyinfo=$(gpg --batch --no-options --homedir "$temporary/gpg" --with-colons \
-    --show-keys "$temporary/noarmor.gpg" 2>/dev/null) || {
-    printf 'Invalid Tailscale signing key\n' >&2
+  wsl_tailscale_key_valid "$temporary/noarmor.gpg" "$temporary/gpg" || {
+    printf 'Invalid or unknown Tailscale signing key\n' >&2
     return 1
   }
-  [[ "$keyinfo" == *'pub:'* && "$keyinfo" != *'sec:'* ]] || return 1
-  expected="deb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg] https://pkgs.tailscale.com/stable/ubuntu $codename main"
   declarations=$(awk 'NF && $0 !~ /^[[:space:]]*#/' "$temporary/tailscale-keyring.list") || return
   [[ "$declarations" == "$expected" ]] || {
     printf 'Unexpected Tailscale signed repository declaration\n' >&2
     return 1
   }
-  # Validate BOTH existing files before publishing either one.
-  for candidate in "$key" "$source_file"; do
-    if [[ -e "$candidate" ]]; then
-      if [[ "$candidate" == "$key" ]]; then file=$temporary/noarmor.gpg; else file=$temporary/tailscale-keyring.list; fi
-      cmp -s "$candidate" "$file" || {
-        printf 'Refusing a foreign Tailscale repository artifact: %s\n' "$candidate" >&2
-        return 1
-      }
-    fi
-  done
-  wsl_publish_repository_file "$temporary/noarmor.gpg" "$key" || return
-  wsl_publish_repository_file "$temporary/tailscale-keyring.list" "$source_file"
+  # Both existing and downloaded artifacts have been validated before writes.
+  if [[ ! -e "$key" ]]; then
+    wsl_publish_repository_file "$temporary/noarmor.gpg" "$key" || return
+  fi
+  if [[ ! -e "$source_file" ]]; then
+    wsl_publish_repository_file "$temporary/tailscale-keyring.list" "$source_file" || return
+  fi
+  return 0
 )

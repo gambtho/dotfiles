@@ -107,7 +107,13 @@ Root recovery metadata is private under `/var/lib/dotfiles-heeler/` (0700): a
 and enablement state. Unknown policy is refused, not adopted. Incomplete recovery
 retains originals and blocks another publication until operator inspection.
 The doctor still compares published bytes against authored runtime/staged unit
-bytes, not a marker or receipt. Newly enabled lingering is not undone by stopping
+bytes, not a marker or receipt. During an owned policy upgrade, discovery validates
+the live listener against the currently published policy; the Root phase verifies
+the private receipt before replacing it with the candidate for a later restart.
+Manual legacy installations without a receipt are adopted only when both published
+files already match the current reviewed policy; otherwise explicit migration is
+required. If publication commits but backup cleanup fails, setup reports completion
+and the retained private cleanup path instead of claiming a rollback. Newly enabled lingering is not undone by stopping
 the manager during recovery. Root and user phases are separate: if Root succeeds
 but user preparation fails, that completed Root phase is reported and phone keys
 remain enrolled; no session/credential rollback is claimed.

@@ -73,13 +73,15 @@ def discover(repo, name, uid, home):
     # Refuse an unknown existing listener before asking for authorization. The
     # Root phase repeats this check; discovery is not cross-authority atomicity.
     if prepare.command(['/usr/bin/ss', '-H', '-ltn', 'sport = :2222'], check=True).stdout.strip():
-        _, system = prepare.render_units(repo, name, uid, home)
-        expected = {prepare.PUBLISHED_ENTRY: (SOURCE / 'sshd-entrypoint.py').read_bytes(),
-                    prepare.PUBLISHED_UNIT: system.encode()}
-        for path, data in expected.items():
-            if not prepare.trusted_root_path(path) or path.read_bytes() != data:
+        published = {}
+        for path in [prepare.PUBLISHED_ENTRY, prepare.PUBLISHED_UNIT]:
+            if not prepare.trusted_root_path(path):
                 raise Pending('Existing port-2222 listener requires explicit migration; no policy was published')
-        publisher.verify_listener(prepare.runtime, pwd.getpwuid(uid), address, expected)
+            published[path] = path.read_bytes()
+        live_runtime = publisher.load_runtime(prepare.PUBLISHED_ENTRY)
+        publisher.verify_listener(live_runtime, pwd.getpwuid(uid), address, published)
+        # Discovery establishes provenance, not ownership adoption. Only the
+        # Root phase can validate its private receipt before changing old policy.
     return {'name': name, 'uid': uid, 'home': home, 'manager': manager, 'address': address}
 
 

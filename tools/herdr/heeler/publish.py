@@ -167,6 +167,14 @@ def read_owned(path):
     return data
 
 
+def load_runtime(path):
+    read_owned(path)
+    spec = importlib.util.spec_from_file_location('heeler_root_runtime', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def directory(path, mode):
     trusted(path, directory=True)
     if not path.exists():
@@ -232,9 +240,7 @@ def publish_for_account(name, manager):
     verify_manager(account.pw_uid, manager)
     for filename in PAYLOADS:
         read_owned(STAGE / filename)
-    spec = importlib.util.spec_from_file_location('heeler_root_runtime', STAGE / 'sshd-entrypoint.py')
-    runtime = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(runtime)
+    runtime = load_runtime(STAGE / 'sshd-entrypoint.py')
     runtime.validate_identity(name, account.pw_uid, account.pw_dir)
     status = json.loads(run(['/usr/bin/tailscale', 'status', '--json']).stdout)
     address = runtime.tailnet_ipv4(status)
@@ -259,7 +265,10 @@ def publish_for_account(name, manager):
             raise ValueError('foreign or modified Root publication receipt/policy')
     elif existing and (len(existing) != 2 or any(read_owned(p) != data for p, (data, _) in desired.items())):
         raise ValueError('foreign or partial pre-existing Root policy requires migration')
-    verify_listener(runtime, account, address, existing)
+    # Ownership is checked above. A managed live process still uses the old
+    # published policy until controlled cutover, not the candidate being staged.
+    live_runtime = load_runtime(entry) if entry.exists() else runtime
+    verify_listener(live_runtime, account, address, existing)
     directory(STATE, 0o700)
     lock = STATE / '.publish.lock'
     trusted(lock)
@@ -275,7 +284,11 @@ def publish_for_account(name, manager):
         directory(LIB, 0o755)
         directory(UNIT.parent, 0o755)
         directory(PRIVSEP, 0o755)
-        run(['/usr/bin/python3', '-I', '-B', str(STAGE / 'sshd-entrypoint.py'), '--user', name, '--check'])
+        try:
+            run(['/usr/bin/python3', '-I', '-B', str(STAGE / 'sshd-entrypoint.py'), '--user', name, '--check'])
+        except subprocess.CalledProcessError as error:
+            diagnostic = (error.stderr or '').strip()[:4096] or 'no native diagnostic was returned'
+            raise ValueError('SSH policy prevalidation failed: ' + diagnostic) from error
         was_enabled = False
         if UNIT.exists():
             state = run(['/usr/bin/systemctl', 'is-enabled', UNIT.name], check=False).stdout.strip()
@@ -341,9 +354,14 @@ def publish_for_account(name, manager):
             except (ValueError, OSError, subprocess.SubprocessError) as recovery:
                 raise RuntimeError(f'publication failed ({original}); recovery failed ({recovery}); retained {backup}') from original
             raise
-        shutil.rmtree(backup)
-        return {'root_policy': 'published', 'system_unit': 'enabled without start',
-                'lingering': 'already enabled' if linger == 'yes' else 'enabled; not automatically undone on later failure'}
+        result = {'root_policy': 'published', 'system_unit': 'enabled without start',
+                  'lingering': 'already enabled' if linger == 'yes' else 'enabled; not automatically undone on later failure'}
+        try:
+            shutil.rmtree(backup)
+        except OSError as cleanup:
+            result['cleanup'] = f'operator inspection required: {backup} ({cleanup})'
+            print('Root publication completed; private recovery cleanup pending: ' + result['cleanup'], file=sys.stderr)
+        return result
 
 
 def main():
