@@ -434,7 +434,7 @@ pi update --extensions   # independently update extension packages (stop Pi sess
 pi update                # update the managed Pi release independently of make ai
 ```
 
-On first use, `make ai` runs Pi's official managed installer, which installs the latest release with locked dependencies and migrates a user-local npm Pi installation if present. Later runs reuse that managed installation without downgrading or updating Pi itself. The separately opted-in Paseo application keeps its own runtime version pin and uses the native Pi host. The full installer also runs Pi setup during Phase 9. Authentication remains machine-local: start `pi`, run `/login`, and choose **GitHub Copilot**. Use `/model` to select any Copilot model enabled for the subscription and Ctrl+S to save the highlighted model as the default.
+On first use, `make ai` runs Pi's official managed installer, which installs the latest release with locked dependencies and migrates a user-local npm Pi installation if present. Later runs reuse that managed installation without downgrading or updating Pi itself. The full installer also runs Pi setup during Phase 9. Authentication remains machine-local: start `pi`, run `/login`, and choose **GitHub Copilot**. Use `/model` to select any Copilot model enabled for the subscription and Ctrl+S to save the highlighted model as the default.
 
 GPT-6 Astra now uses Pi's native Copilot transport. The installer retires only the obsolete Astra override with a private backup and migration receipt, preserving unrelated custom models and provider settings. Ordinary `make ai` delegates extension reconciliation to `pi update --extensions --no-approve`; packages may advance and cached files may be replaced. Installed permission schema/evaluator checks precede policy publication. Stop Pi sessions before applying. See [AI setup documentation](ai/README.md) for mutable ownership, native updates, and configuration backups.
 
@@ -442,7 +442,7 @@ The installer links the authored extension directory, and `ai/pi/settings.json` 
 
 The personal package provides `/fix-pr`, `/polish`, `/polish-pr`, `/review-prs`, and `/second-opinion`, plus the `improve`, `overnight-improve`, `polish-core`, `blindspot-pass`, `implementation-plan`, and `change-explainer` skills. See `AGENTS.md` and `ai/marketplace/plugins/my/README.md` for details.
 
-Pi's always-loaded global working agreement is `ai/pi/AGENTS.md`; project instructions override it through repository `AGENTS.md` files. Remote browser access is an opt-in [Paseo](ai/pi/paseo/README.md).
+Pi's always-loaded global working agreement is `ai/pi/AGENTS.md`; project instructions override it through repository `AGENTS.md` files. Native iPhone access to the actual default Herdr/Pi terminal uses the opt-in [Heeler setup](tools/herdr/heeler/README.md), with explicit boot preparation and operator-only SSH publication. No browser backend, reverse proxy or DNS-provider API credential is required.
 
 ### Validation
 

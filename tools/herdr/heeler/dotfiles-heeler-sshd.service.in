@@ -1,0 +1,22 @@
+# Managed by dotfiles: Heeler
+[Unit]
+Description=Private Heeler SSH access to the default Herdr session
+After=network.target tailscaled.service
+Requires=tailscaled.service
+PartOf=tailscaled.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=exec
+RuntimeDirectory=dotfiles-heeler
+RuntimeDirectoryMode=0755
+ExecStartPre=/usr/bin/install -d -o root -g root -m 0755 /run/sshd
+ExecStart=/usr/bin/python3 -I /usr/local/lib/dotfiles-heeler/sshd-entrypoint.py --user @USER@
+Restart=on-failure
+RestartSec=5
+KillMode=control-group
+TimeoutStopSec=30
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target tailscaled.service
