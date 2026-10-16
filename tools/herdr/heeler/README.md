@@ -5,9 +5,10 @@ Herdr. It attaches to the **real terminal running native Pi**, rather than
 starting a separate Pi RPC session. The desktop command remains `herdr`.
 
 This optional configuration persists the **default** Herdr session and a
-key-only SSH listener on the current Tailscale IPv4, port **2222**. It does not
-replace or change [Paseo](../../../ai/pi/paseo/README.md), Caddy, DNS, certificates,
-Tailscale Serve/Funnel, native Pi resources, or the ordinary provisioning phases.
+key-only SSH listener on the current Tailscale IPv4, port **2222**. It connects
+directly over SSH: no browser backend, reverse proxy, DNS-provider credential or
+Tailscale Serve/Funnel route is required. Native Pi resources and ordinary
+provisioning phases are unchanged.
 The Heeler plugin, pairing bootstrap, notifications and push relay are not installed.
 
 ## Boundaries and prerequisites
@@ -200,8 +201,8 @@ Verify after the controlled boot:
 - Heeler checks pass for **default**, displaying the expected real agents.
 - Desktop `herdr` and the phone operate the same conversation; test reconnect
   and cellular with Tailscale connected.
-- `https://pi.dpao.la` still provides the unchanged Paseo fallback on its existing
-  private gateway; no SSH port, key or proxy settings are shared with that UI.
+- Native Pi authentication and conversation history remain in their original
+  locations; no browser state or proxy service is needed for terminal access.
 
 ## Disable and rollback
 
@@ -215,7 +216,8 @@ update, reload the relevant manager, and restore the previous enablement. The
 preparer removes automatic transaction backups after success: they are not a
 successful-update archive. To revert user policy after a successful update,
 re-prepare the previous reviewed canonical revision, or restore an explicit
-operator backup; stop Pi first if changing any of its linked resources. Do not unmask ordinary SSH, resurrect
-an old web backend, change Tailscale/Caddy/DNS, delete trial state, rotate keys, or
-rewrite Pi sessions as a rollback side effect. Trial retirement, old password-file
-cleanup and WSL reboot testing are separately approved operator operations.
+operator backup; stop Pi first if changing any of its linked resources. Do not
+unmask ordinary SSH, change Tailscale networking, delete Herdr trial state, rotate
+keys, or rewrite Pi sessions as a rollback side effect. The historical
+`heeler-trial/authorized_keys` file is still the active phone key, not disposable
+trial data. Controlled WSL restarts remain explicit operator operations.

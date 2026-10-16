@@ -30,7 +30,8 @@ setup() {
   [[ "$output" == *"artifact neovim $NVIM_VERSION"* ]]
   [[ "$output" == *"artifact tree-sitter-cli $TREE_SITTER_VERSION"* ]]
   [[ "$output" == *"git herdr-devcontainer $HERDR_DEVCONTAINER_REPO $HERDR_DEVCONTAINER_REF"* ]]
-  [[ "$output" == *"npm pi-paseo-runtime $PASEO_VERSION"* ]]
+  [[ "$output" != *"paseo"* ]]
+  [[ "$output" != *"npm "* ]]
   [[ "$output" != *"pi-webui-runtime"* ]]
   [[ "$output" != *"pi-queue-steer"* ]]
   [[ "$output" != *"pi-web-access"* ]]
@@ -54,7 +55,7 @@ setup() {
 }
 
 @test "non-mise pins have one canonical manifest" {
-  run rg -l '^(PREZTO_REF|ZSH_DEFER_REF|KUBERNETES_CHANNEL|PASEO_VERSION|HERDR_VERSION|HERDR_RELEASE_BASE|HERDR_LINUX_(X86_64|AARCH64)_SHA256)=' "$REPO_ROOT" \
+  run rg -l '^(PREZTO_REF|ZSH_DEFER_REF|KUBERNETES_CHANNEL|HERDR_VERSION|HERDR_RELEASE_BASE|HERDR_LINUX_(X86_64|AARCH64)_SHA256)=' "$REPO_ROOT" \
     --glob '!docs/**' --glob '!tests/**'
   [ "$status" -eq 0 ]
   [ "$output" = "$REPO_ROOT/config/versions.env" ]
@@ -240,7 +241,6 @@ case "$url" in
   *tree-sitter/tree-sitter*) printf '{"tag_name":"v0.26.11"}\n' ;;
   *gambtho/herdr-devcontainer*) printf '{"tag_name":"v0.2.0"}\n' ;;
   *tmustier/pi-queue-steer*|*registry.npmjs.org/pi-web-access/*|*registry.npmjs.org/@narumitw/pi-lsp/*|*registry.npmjs.org/@gotgenes/pi-subagents/*|*registry.npmjs.org/@gotgenes/pi-permission-system/*) exit 91 ;;
-  *registry.npmjs.org/@getpaseo/cli/latest) printf '{"version":"0.11.2"}\n' ;;
   *registry.npmjs.org*) exit 92 ;;
 esac
 SCRIPT
@@ -258,7 +258,8 @@ SCRIPT
   [[ "$output" == *"current artifact tree-sitter-cli v0.26.11"* ]]
   [[ "$output" == *"current git herdr-devcontainer v0.2.0"* ]]
   [[ "$output" == *"current artifact nerd-fonts v3.4.0"* ]]
-  [[ "$output" == *"current npm pi-paseo-runtime $PASEO_VERSION"* ]]
+  [[ "$output" != *"paseo"* ]]
+  [[ "$output" != *"npm "* ]]
   [[ "$output" != *"pi-webui-runtime"* ]]
   [[ "$output" != *"pi-queue-steer"* ]]
   [[ "$output" != *"pi-web-access"* ]]
@@ -282,7 +283,6 @@ SCRIPT
         esac
         ;;
       *dl.k8s.io*) printf "v1.37.0\n" ;;
-      *registry.npmjs.org/@getpaseo/cli/latest) printf "{\"version\":\"0.11.2\"}\n" ;;
       *registry.npmjs.org*) exit 92 ;;
       *api.github.com*) printf "{\"tag_name\":\"v0.0.0\"}\n" ;;
       *) exit 91 ;;

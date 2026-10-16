@@ -38,7 +38,7 @@ normal **default** Herdr session and a private key-only SSH listener over
 Tailscale. Run `DOTFILES_HEELER_ENABLED=1 make ai-heeler` from the canonical
 checkout to prepare it without restarting live agents; root publication and
 controlled cutover remain separate operator steps. Ordinary bootstrap and
-updates do not enable this access. Paseo remains an independent fallback.
+updates do not enable this access. No browser backend or reverse proxy is required.
 
 ## The Dev Container plugin
 
