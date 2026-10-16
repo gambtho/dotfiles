@@ -126,7 +126,9 @@ if [[ -n "${WT_SETTINGS_PATH:-}" ]]; then
   SETTINGS="$WT_SETTINGS_PATH"
   [[ -f "$SETTINGS" ]] || die "WT_SETTINGS_PATH does not exist: $SETTINGS"
 else
-  [[ -n "${WSL_DISTRO_NAME:-}" ]] || die "Not inside WSL (\$WSL_DISTRO_NAME unset). Run this from a WSL shell."
+  # Service-launched terminals may not inherit WSL_DISTRO_NAME.
+  detect_os
+  [[ "$OS" == WSL ]] || die "Not inside WSL. Run this from a WSL shell."
 
   if [[ -n "$WIN_USER_CHOICE" ]]; then
     WIN_USER="$WIN_USER_CHOICE"
