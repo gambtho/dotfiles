@@ -37,6 +37,21 @@ after reviewing the installer source.`
 
 After bootstrap, run `bin/dot-install` (or `bin/dot-update`) to install packages and language runtimes.
 
+### WSL service prerequisites
+
+WSL provisioning requires a running systemd instance before its first APT action.
+If unavailable, follow Microsoft's [systemd enablement instructions](https://learn.microsoft.com/en-us/windows/wsl/systemd),
+preserving existing `/etc/wsl.conf` settings, then restart the affected distro.
+The installer does not edit that file or terminate WSL for you.
+
+All WSL profiles install OpenSSH server and Tailscale from its official signed
+APT repository. On fresh hosts, both stock SSH units are masked before package
+installation or upgrade, so installing the server does not enable port 22.
+Already-masked stock SSH is preserved; active, customized or unknown SSH deployments
+require explicit migration rather than being stopped or replaced. Heeler's separate
+opt-in listener on port 2222 is unaffected by this stock-SSH gate.
+Installing Tailscale does not join a tailnet or enable Tailscale SSH, Serve or Funnel.
+
 ## Structure
 
 ```

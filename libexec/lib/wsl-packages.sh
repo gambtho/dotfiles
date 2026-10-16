@@ -61,3 +61,113 @@ ensure_wsl_ssh_closed() {
   listeners=$(ss -H -ltn 'sport = :22') || return 1
   [[ -z "$listeners" ]]
 }
+
+wsl_package_root() { printf '/\n'; }
+
+wsl_ubuntu_codename() (
+  # OS metadata is root-controlled; never execute a downloaded installer.
+  source /etc/os-release
+  [[ "$ID" == ubuntu ]] || return 1
+  printf '%s\n' "$VERSION_CODENAME"
+)
+
+wsl_repository_safe_path() {
+  local path=$1 root=$2 metadata owner mode
+  while :; do
+    [[ ! -L "$path" ]] || return 1
+    if [[ -e "$path" ]]; then
+      metadata=$(stat -c '%u %a' "$path") || return 1
+      read -r owner mode <<<"$metadata"
+      [[ "$owner" == 0 && "$mode" =~ ^[0-7]{3,4}$ ]] || return 1
+      (((8#$mode & 8#022) == 0)) || return 1
+    fi
+    [[ "$path" != "$root" ]] || break
+    path=$(dirname "$path")
+  done
+}
+
+wsl_publish_repository_file() {
+  local input=$1 destination=$2 temporary parent
+  if [[ -e "$destination" ]]; then
+    cmp -s "$input" "$destination" || {
+      printf 'Refusing a different existing Tailscale repository artifact: %s\n' "$destination" >&2
+      return 1
+    }
+    return 0
+  fi
+  temporary=$destination.dotfiles-new
+  [[ ! -e "$temporary" && ! -L "$temporary" ]] || return 1
+  parent=$(dirname "$destination")
+  if [[ ! -d "$parent" ]]; then
+    sudo install -d -o root -g root -m 0755 "$parent" || return
+  fi
+  sudo install -o root -g root -m 0644 "$input" "$temporary" || return
+  sudo mv -T -- "$temporary" "$destination" || {
+    printf 'Repository publication incomplete; inspect retained candidate: %s\n' "$temporary" >&2
+    return 1
+  }
+}
+
+setup_wsl_tailscale_repository() (
+  [[ ${OS:-} == WSL ]] || return 0
+  local root codename key source_file candidate expected declarations file status keyinfo
+  root=$(wsl_package_root) || return
+  [[ "$root" == /* && "$root" != *'/../'* ]] || return 1
+  root=${root%/}
+  codename=$(wsl_ubuntu_codename) || return
+  [[ "$codename" =~ ^[a-z]+$ ]] || return 1
+  key=$root/usr/share/keyrings/tailscale-archive-keyring.gpg
+  source_file=$root/etc/apt/sources.list.d/tailscale.list
+  for candidate in "$key" "$source_file"; do
+    wsl_repository_safe_path "$candidate" "${root:-/}" || {
+      printf 'Unsafe Tailscale repository destination: %s\n' "$candidate" >&2
+      return 1
+    }
+  done
+  for file in "$root/etc/apt/sources.list" "$root/etc/apt/sources.list.d/"*.list "$root/etc/apt/sources.list.d/"*.sources; do
+    [[ -e "$file" || -L "$file" ]] || continue
+    [[ ! -L "$file" ]] || return 1
+    [[ "$file" != "$source_file" ]] || continue
+    status=0
+    grep -Eq '^[[:space:]]*[^#].*pkgs[.]tailscale[.]com' "$file" || status=$?
+    if [[ "$status" != 1 ]]; then
+      printf 'Existing or unreadable Tailscale source configuration requires inspection: %s\n' "$file" >&2
+      return 1
+    fi
+  done
+  temporary=$(mktemp -d) || return
+  trap 'rm -r -- "$temporary"' EXIT
+  for candidate in noarmor.gpg tailscale-keyring.list; do
+    curl --fail --show-error --location --proto '=https' --proto-redir '=https' \
+      --connect-timeout 10 --max-time 120 --max-filesize 1048576 --retry 3 \
+      "https://pkgs.tailscale.com/stable/ubuntu/$codename.$candidate" \
+      --output "$temporary/$candidate" || return
+    [[ -s "$temporary/$candidate" ]] || return 1
+    [[ $(stat -c %s "$temporary/$candidate") -le 1048576 ]] || return 1
+  done
+  mkdir -m 0700 "$temporary/gpg" || return
+  keyinfo=$(gpg --batch --no-options --homedir "$temporary/gpg" --with-colons \
+    --show-keys "$temporary/noarmor.gpg" 2>/dev/null) || {
+    printf 'Invalid Tailscale signing key\n' >&2
+    return 1
+  }
+  [[ "$keyinfo" == *'pub:'* && "$keyinfo" != *'sec:'* ]] || return 1
+  expected="deb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg] https://pkgs.tailscale.com/stable/ubuntu $codename main"
+  declarations=$(awk 'NF && $0 !~ /^[[:space:]]*#/' "$temporary/tailscale-keyring.list") || return
+  [[ "$declarations" == "$expected" ]] || {
+    printf 'Unexpected Tailscale signed repository declaration\n' >&2
+    return 1
+  }
+  # Validate BOTH existing files before publishing either one.
+  for candidate in "$key" "$source_file"; do
+    if [[ -e "$candidate" ]]; then
+      if [[ "$candidate" == "$key" ]]; then file=$temporary/noarmor.gpg; else file=$temporary/tailscale-keyring.list; fi
+      cmp -s "$candidate" "$file" || {
+        printf 'Refusing a foreign Tailscale repository artifact: %s\n' "$candidate" >&2
+        return 1
+      }
+    fi
+  done
+  wsl_publish_repository_file "$temporary/noarmor.gpg" "$key" || return
+  wsl_publish_repository_file "$temporary/tailscale-keyring.list" "$source_file"
+)

@@ -199,6 +199,11 @@ agent takeover. Root SSH publication and controlled reboot/cutover are explicit
 operator steps; ordinary `make ai` does not select this feature. The retired browser
 backend and its Caddy/DNS-provider integration are no longer provisioned.
 
+Normal WSL package installation supplies OpenSSH server and Tailscale for every
+profile, but keeps both stock SSH units masked and refuses ambiguous existing SSH
+deployments. Those packages alone do not select Heeler, publish port 2222 policy,
+enroll a phone key or join a tailnet.
+
 ## Unattended operation
 
 Before `overnight-improve`:
