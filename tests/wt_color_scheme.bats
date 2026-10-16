@@ -18,6 +18,25 @@ write_bare_settings() {
 JSON
 }
 
+@test "WSL kernel is recognized without distro environment inherited by a service terminal" {
+  stub_command uname 'printf "Linux\n"'
+  stub_command grep 'if [[ "${@: -1}" == /proc/version ]]; then exit 0; fi; exec /usr/bin/grep "$@"'
+  local missing_user='__dotfiles_test_no_windows_user__'
+  [ ! -e "/mnt/c/Users/$missing_user" ]
+  run bash -c 'unset WSL_DISTRO_NAME WT_SETTINGS_PATH; exec bash "$1" --check --win-user "$2"' _ "$(SCRIPT_PATH)" "$missing_user"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"No such Windows user directory"* ]]
+  [[ "$output" != *"Not inside WSL"* ]]
+}
+
+@test "distro environment alone does not make a non WSL kernel eligible" {
+  stub_command uname 'printf "Linux\n"'
+  stub_command grep 'if [[ "${@: -1}" == /proc/version ]]; then exit 1; fi; exec /usr/bin/grep "$@"'
+  run bash -c 'unset WT_SETTINGS_PATH; export WSL_DISTRO_NAME=Ubuntu; exec bash "$1" --check --win-user __dotfiles_test_no_windows_user__' _ "$(SCRIPT_PATH)"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"Not inside WSL"* ]]
+}
+
 @test "the scheme is installed and made the profile default" {
   write_bare_settings
 
