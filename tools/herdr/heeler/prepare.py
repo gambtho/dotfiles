@@ -23,6 +23,7 @@ USER_UNIT = 'dotfiles-herdr.service'
 SYSTEM_UNIT = 'dotfiles-heeler-sshd.service'
 PUBLISHED_ENTRY = Path('/usr/local/lib/dotfiles-heeler/sshd-entrypoint.py')
 PUBLISHED_UNIT = Path('/etc/systemd/system') / SYSTEM_UNIT
+SYSTEM_MISE = Path('/usr/bin/mise')
 MARKER = '# Managed by dotfiles: Heeler\n'
 SERVICE_PATH = '%h/.pi/agent/bin:@DOTFILES@/bin:%h/.local/bin:/usr/local/bin:/usr/bin:/bin'
 spec = importlib.util.spec_from_file_location('heeler_sshd', SOURCE / 'sshd-entrypoint.py')
@@ -38,12 +39,23 @@ def userctl(*args, check=True):
     return command(['/usr/bin/systemctl', '--user', *args], check=check)
 
 
+def resolve_mise(home):
+    for candidate in [home / '.local/bin/mise', SYSTEM_MISE]:
+        if not re.fullmatch(r'/[A-Za-z0-9_./-]+', str(candidate)) or '..' in candidate.parts:
+            raise ValueError('unsupported Mise launcher path')
+        if any(item.is_symlink() for item in [candidate, *candidate.parents]):
+            raise ValueError(f'refusing symlink in Mise launcher: {candidate}')
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return candidate
+    raise ValueError('Mise must be installed in ~/.local/bin or /usr/bin')
+
+
 def render_units(repo, name, uid, home):
     runtime.validate_identity(name, uid, str(home))
     if not re.fullmatch(r'/[A-Za-z0-9_./-]+', str(repo)) or '..' in Path(repo).parts:
         raise ValueError('unsupported dotfiles path for a systemd environment')
     user = (SOURCE / 'dotfiles-herdr.service.in').read_text().replace(
-        '@SERVICE_PATH@', SERVICE_PATH.replace('@DOTFILES@', str(repo)))
+        '@SERVICE_PATH@', SERVICE_PATH.replace('@DOTFILES@', str(repo))).replace('@MISE@', str(resolve_mise(home)))
     system = (SOURCE / 'dotfiles-heeler-sshd.service.in').read_text().replace('@USER@', name)
     return user, system
 
@@ -120,18 +132,19 @@ def preflight(repo, name, uid, home):
                       '--git-dir', '--git-common-dir'], check=True).stdout.splitlines()
     if len(gitdir) != 2 or gitdir[0] != gitdir[1]:
         raise ValueError('prepare only from the canonical checkout, never an implementation worktree')
-    for executable in ['/usr/bin/mise', '/usr/bin/tailscale', '/usr/sbin/sshd', '/usr/bin/busctl',
+    mise = str(resolve_mise(home))
+    for executable in ['/usr/bin/tailscale', '/usr/sbin/sshd', '/usr/bin/busctl',
                        str(home / '.local/bin/herdr'), str(home / '.pi/agent/bin/pi')]:
         if not os.access(executable, os.X_OK):
             raise ValueError(f'missing prerequisite: {executable}; see the Heeler runbook')
     environment = service_environment(repo, home)
-    version = command(['/usr/bin/mise', 'exec', '--', str(home / '.local/bin/herdr'), '--version'],
+    version = command([mise, 'exec', '--', str(home / '.local/bin/herdr'), '--version'],
                       cwd=home, env=environment, check=True).stdout.strip()
     match = re.fullmatch(r'herdr (\d+)\.(\d+)\.(\d+)', version)
     if not match or tuple(map(int, match.groups())) < (0, 8, 0):
         raise ValueError(f'unsupported Herdr version: {version}')
     try:
-        command(['/usr/bin/mise', 'exec', '--', 'node', '--version'], cwd=home, env=environment, check=True)
+        command([mise, 'exec', '--', 'node', '--version'], cwd=home, env=environment, check=True)
     except subprocess.CalledProcessError as error:
         raise ValueError('Node must be available through mise before preparing Herdr startup') from error
     linger = command(['/usr/bin/loginctl', 'show-user', name, '--property=Linger', '--value'],

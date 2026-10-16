@@ -144,6 +144,10 @@ class HeelerPreparationTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.home = Path(self.temp.name) / 'home'
         self.home.mkdir()
+        self.mise = self.home / '.local/bin/mise'
+        self.mise.parent.mkdir(parents=True)
+        self.mise.write_text('#!/bin/sh\nexit 0\n')
+        self.mise.chmod(0o755)
         self.uid = os.getuid()
         self.name = 'someone'
         self.calls = []
@@ -164,7 +168,7 @@ class HeelerPreparationTests(unittest.TestCase):
 
     def test_rendered_units_have_separate_authority_and_boot_dependencies(self):
         user, system = self.prep.render_units(ROOT, self.name, self.uid, self.home)
-        self.assertIn('/usr/bin/mise exec -- %h/.local/bin/herdr server', user)
+        self.assertIn(f'{self.mise} exec -- %h/.local/bin/herdr server', user)
         self.assertIn('KillMode=mixed', user)
         self.assertNotIn('heeler-trial server', user)
         self.assertIn(str(ROOT / 'bin'), user)
@@ -175,6 +179,24 @@ class HeelerPreparationTests(unittest.TestCase):
             self.assertIn(text, system)
         self.assertNotIn('100.84.', system)
         self.assertNotIn('/home/someone', system)
+
+    def test_mise_selection_prefers_managed_user_binary_and_falls_back_to_system(self):
+        system = self.home / 'system-mise'
+        system.write_text('#!/bin/sh\nexit 0\n')
+        system.chmod(0o755)
+        with patch.object(self.prep, 'SYSTEM_MISE', system):
+            self.assertEqual(self.prep.resolve_mise(self.home), self.mise)
+            self.mise.unlink()
+            self.assertEqual(self.prep.resolve_mise(self.home), system)
+            system.unlink()
+            with self.assertRaisesRegex(ValueError, 'Mise'):
+                self.prep.resolve_mise(self.home)
+
+    def test_symlinked_mise_cannot_be_selected(self):
+        self.mise.unlink()
+        self.mise.symlink_to('/usr/bin/true')
+        with self.assertRaisesRegex(ValueError, 'symlink'):
+            self.prep.resolve_mise(self.home)
 
     def test_apply_stages_and_enables_without_starting_any_service(self):
         self.apply()
@@ -527,7 +549,7 @@ class HeelerPreparationTests(unittest.TestCase):
     def test_preflight_uses_manager_preferences_and_the_rendered_service_path(self):
         probes = []
         def metadata(args, **kwargs):
-            if args[0] == '/usr/bin/mise':
+            if args[0] == str(self.mise):
                 probes.append(kwargs)
             return self.preflight_metadata(args, **kwargs)
         with patch.object(self.prep, 'command', side_effect=metadata), \

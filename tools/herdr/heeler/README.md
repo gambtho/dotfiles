@@ -16,10 +16,13 @@ The Heeler plugin, pairing bootstrap, notifications and push relay are not insta
 - Linux with systemd, its user manager and cgroup v2. Tested on Ubuntu 24.04 WSL,
   Herdr 0.8.0/protocol 19, native Pi 1.2.0 with its existing Herdr integration,
   and OpenSSH 9.6. Herdr stays managed by the existing [pinned installer](../README.md).
-- Existing `/usr/bin/mise`, native Pi in `~/.pi/agent/bin`, Herdr in
+- Existing Mise at `~/.local/bin/mise` (normal bootstrap) or `/usr/bin/mise`,
+  native Pi in `~/.pi/agent/bin`, Herdr in
   `~/.local/bin`, Tailscale, OpenSSH server and systemd's `busctl`. This feature
   does not install or update these dependencies. The user service uses `mise exec`
   so Node is available without relying on an interactive shell's startup timing.
+  The same selected absolute Mise launcher is rendered into the user unit and
+  used by preparation probes; a user-local installation takes precedence.
   Preparation tests Node/Herdr with the same PATH and user-manager environment
   the service inherits, not shell-only tool overrides. Manager preferences and
   credentials stay in memory for these probes and are never printed or saved;
