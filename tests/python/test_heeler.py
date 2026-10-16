@@ -243,6 +243,46 @@ class HeelerPreparationTests(unittest.TestCase):
         self.assertFalse(self.prep.owned_cgroup(expected, '0::' + expected + '-foreign\n'))
         self.assertTrue(self.prep.owned_cgroup(expected, '0::' + expected + '\n'))
 
+    def test_backup_write_failures_leave_policy_unchanged_and_allow_retry(self):
+        self.apply()
+        paths = self.prep.paths(self.home)
+        original = {path: path.read_bytes() for path in paths}
+        for method in ['write_bytes', 'write_text']:
+            with self.subTest(method=method):
+                self.calls.clear()
+                write = getattr(Path, method)
+                def fail_backup(path, data, *args, write=write, **kwargs):
+                    if path.parent.name.startswith('.rollback-'):
+                        raise OSError('simulated backup write failure')
+                    return write(path, data, *args, **kwargs)
+                with patch.object(Path, method, fail_backup), \
+                     patch.object(self.prep, 'atomic_write') as publish, \
+                     self.assertRaisesRegex(OSError, 'backup write failure'):
+                    self.apply()
+                publish.assert_not_called()
+                self.assertFalse(list(paths[1].parent.glob('.rollback-*')))
+                self.assertEqual({path: path.read_bytes() for path in paths}, original)
+                self.assertFalse(any('enable' in call or 'daemon-reload' in call for call in self.calls))
+                self.apply()
+
+    def test_backup_cleanup_failure_reports_retained_path_without_mutating_policy(self):
+        self.apply()
+        paths = self.prep.paths(self.home)
+        original = {path: path.read_bytes() for path in paths}
+        self.calls.clear()
+        with patch.object(Path, 'write_text', side_effect=OSError('manifest write failure')), \
+             patch.object(self.prep.shutil, 'rmtree', side_effect=OSError('cleanup failure')), \
+             patch.object(self.prep, 'atomic_write') as publish, \
+             self.assertRaisesRegex(RuntimeError, 'manifest write failure.*retained at.*cleanup failure'):
+            self.apply()
+        publish.assert_not_called()
+        backups = list(paths[1].parent.glob('.rollback-*'))
+        self.assertEqual(len(backups), 1)
+        self.assertEqual(backups[0].stat().st_mode & 0o777, 0o700)
+        self.assertEqual((backups[0] / '0').read_bytes(), original[paths[0]])
+        self.assertEqual({path: path.read_bytes() for path in paths}, original)
+        self.assertFalse(any('enable' in call or 'daemon-reload' in call for call in self.calls))
+
     def test_failed_rollback_retains_original_policy_for_operator_recovery(self):
         self.apply()
         unit = self.home / '.config/systemd/user/dotfiles-herdr.service'

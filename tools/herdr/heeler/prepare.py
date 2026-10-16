@@ -204,12 +204,20 @@ def publish(repo, name, uid, home):
             print(f'Phone enrollment required: add a public key to {key} (never a private key)')
         return
     backup = Path(tempfile.mkdtemp(prefix='.rollback-', dir=staged.parent))
-    manifest = {'enabled': enabled, 'files': []}
-    for index, (target, data, mode) in enumerate(old):
-        if data is not None:
-            (backup / str(index)).write_bytes(data)
-        manifest['files'].append({'path': str(target), 'mode': mode, 'present': data is not None})
-    (backup / 'manifest.json').write_text(json.dumps(manifest))
+    try:
+        manifest = {'enabled': enabled, 'files': []}
+        for index, (target, data, mode) in enumerate(old):
+            if data is not None:
+                (backup / str(index)).write_bytes(data)
+            manifest['files'].append({'path': str(target), 'mode': mode, 'present': data is not None})
+        (backup / 'manifest.json').write_text(json.dumps(manifest))
+    except OSError as failure:
+        # No policy was published yet; discard the partial snapshot, not live state.
+        try:
+            shutil.rmtree(backup)
+        except OSError as cleanup:
+            raise RuntimeError(f'backup incomplete ({failure}); partial preparation retained at {backup}: {cleanup}') from failure
+        raise
     try:
         for target, wanted in zip([user, staged], expected):
             atomic_write(target, wanted.encode())

@@ -75,6 +75,8 @@ only at a later controlled restart. A private preparation lock serializes applie
 Failed policy publication restores previous files/enablement; incomplete rollback
 retains originals and `manifest.json` under a `.rollback-*` directory in
 `~/.local/share/heeler/` and refuses another apply until an operator resolves it.
+A snapshot-write failure before publication removes its partial backup so retry is
+possible; if cleanup fails, the error identifies the retained directory instead.
 Never restore or delete live session data as part of policy rollback.
 
 For a new phone, copy its **public** `authorized_keys` line into the dedicated
