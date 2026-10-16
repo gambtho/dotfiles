@@ -6,6 +6,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 DOTFILES_ROOT=$(pwd -P)
+source "$DOTFILES_ROOT/libexec/lib/wsl-packages.sh"
 
 BOOTSTRAP_PROFILE=""
 NON_INTERACTIVE=false
@@ -385,6 +386,7 @@ install_dotfiles() {
 
 linux_prep() {
   log_info "Preparing Linux environment"
+  ensure_wsl_ssh_closed || return
 
   sudo apt update
   sudo apt-get install -y ca-certificates curl gnupg build-essential \

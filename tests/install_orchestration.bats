@@ -12,6 +12,8 @@ run_installer() {
   local fixture="$TEST_ROOT/entrypoint"
   mkdir -p "$fixture/bin" "$fixture/libexec"
   cp "$REPO_ROOT/bin/dot-install" "$fixture/bin/dot-install"
+  mkdir -p "$fixture/libexec/lib"
+  cp "$REPO_ROOT/libexec/lib/wsl-packages.sh" "$fixture/libexec/lib/"
   # Execute the real entrypoint, but stop at its first provisioning boundary.
   # Even dropping "$@" at that entrypoint must fail safely, not configure a host.
   cat >"$fixture/libexec/common.sh" <<'SCRIPT'

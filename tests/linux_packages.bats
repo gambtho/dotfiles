@@ -160,6 +160,7 @@ setup_asciinema_apt_fixture() {
     WORK_INSTALL_SOURCE_ONLY=1 source "$1/work/install.sh"
     OS=WSL
     PROFILE=work
+    ensure_wsl_ssh_closed() { return 0; }
     setup_package_repositories() { return 0; }
     apt-cache() { /usr/bin/apt-cache -c "$APT_FIXTURE/config" "$@"; }
     sudo() { printf "%s\n" "$*" >>"$EVENTS"; }
