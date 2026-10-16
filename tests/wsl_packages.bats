@@ -65,8 +65,12 @@ run_guard() {
   mkdir -p "$DPKG_FIXTURE"
   stub_command dpkg-query 'exec /usr/bin/dpkg-query --admindir="$DPKG_FIXTURE" "$@"'
   local wanted
-  for wanted in unknown install hold deinstall purge; do
+  # dpkg may normalize deinstall/purge plus not-installed back to unknown.
+  for wanted in unknown install hold; do
     printf 'Package: openssh-server\nStatus: %s ok not-installed\nArchitecture: amd64\n\n' "$wanted" >"$DPKG_FIXTURE/status"
+    run /usr/bin/dpkg-query --admindir="$DPKG_FIXTURE" -W '-f=${Status}' openssh-server
+    [ "$status" -eq 0 ]
+    [ "$output" = "$wanted ok not-installed" ]
     run_guard
     [ "$status" -eq 0 ]
     [ "$(<"$EVENTS")" = 'systemctl mask ssh.service ssh.socket' ]
