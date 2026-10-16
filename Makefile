@@ -1,4 +1,4 @@
-.PHONY: install bootstrap update relink ai ai-check ai-heeler ai-heeler-check pins pins-check pins-update check syntax lint test python-test pi-runtime-test validate
+.PHONY: install bootstrap update relink ai ai-check ai-heeler ai-heeler-check ai-heeler-setup pins pins-check pins-update check syntax lint test python-test pi-runtime-test validate
 
 # ── Main targets ──────────────────────────────────────────────────────────────
 
@@ -38,6 +38,9 @@ ai-heeler: ## Prepare opt-in default Herdr/Heeler persistence without live takeo
 
 ai-heeler-check: ## Inspect prepared or live managed Heeler state without mutation
 	bash tools/herdr/heeler/install.sh --check
+
+ai-heeler-setup: ## Guide explicit per-host enrollment and one operator-approved Root publication
+	bash tools/herdr/heeler/setup.sh
 
 pins: ## List managed dependency versions and refs
 	bash libexec/versions list

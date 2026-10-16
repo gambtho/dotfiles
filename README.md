@@ -37,6 +37,39 @@ after reviewing the installer source.`
 
 After bootstrap, run `bin/dot-install` (or `bin/dot-update`) to install packages and language runtimes.
 
+### WSL service prerequisites
+
+WSL provisioning requires a running systemd instance before its first APT action.
+If unavailable, follow Microsoft's [systemd enablement instructions](https://learn.microsoft.com/en-us/windows/wsl/systemd),
+preserving existing `/etc/wsl.conf` settings, then restart the affected distro.
+The installer does not edit that file or terminate WSL for you.
+
+All WSL profiles install OpenSSH server and Tailscale from its official signed
+APT repository. An existing Root-controlled repository with the expected signed
+source declaration and official signing-key fingerprint is reused without fetching
+setup artifacts again; comments are preserved. Signing-key rotation or a foreign
+repository layout requires explicit maintenance rather than silent replacement.
+On fresh hosts, both stock SSH units are masked before package
+installation or upgrade, so installing the server does not enable port 22.
+Already-masked stock SSH is preserved; active, customized or unknown SSH deployments
+require explicit migration rather than being stopped or replaced. Heeler's separate
+opt-in listener on port 2222 is unaffected by this stock-SSH gate.
+Installing Tailscale does not join a tailnet or enable Tailscale SSH, Serve or Funnel.
+
+For an existing host, the accepted stock-SSH state is **both units inactive and
+masked, with no port-22 listener**. Inspect before deciding to migrate:
+
+```bash
+systemctl show ssh.service ssh.socket -p ActiveState -p UnitFileState -p FragmentPath -p DropInPaths
+ss -H -ltn 'sport = :22'
+```
+
+If the stock units are **already inactive and unneeded**, the operator may run
+`sudo systemctl mask ssh.service ssh.socket`, then rerun the installer. This does
+not stop an active service. If SSH is active, needed, customized or uncertain,
+arrange a separate migration that preserves access; do not force replacement of
+custom units. The installer never performs that migration for you.
+
 ## Structure
 
 ```

@@ -16,17 +16,23 @@ The Heeler plugin, pairing bootstrap, notifications and push relay are not insta
 - Linux with systemd, its user manager and cgroup v2. Tested on Ubuntu 24.04 WSL,
   Herdr 0.8.0/protocol 19, native Pi 1.2.0 with its existing Herdr integration,
   and OpenSSH 9.6. Herdr stays managed by the existing [pinned installer](../README.md).
-- Existing `/usr/bin/mise`, native Pi in `~/.pi/agent/bin`, Herdr in
+- Existing Mise at `~/.local/bin/mise` (normal bootstrap) or `/usr/bin/mise`,
+  native Pi in `~/.pi/agent/bin`, Herdr in
   `~/.local/bin`, Tailscale, OpenSSH server and systemd's `busctl`. This feature
   does not install or update these dependencies. The user service uses `mise exec`
   so Node is available without relying on an interactive shell's startup timing.
+  The same selected absolute Mise launcher is rendered into the user unit and
+  used by preparation probes; a user-local installation takes precedence.
   Preparation tests Node/Herdr with the same PATH and user-manager environment
   the service inherits, not shell-only tool overrides. Manager preferences and
   credentials stay in memory for these probes and are never printed or saved;
   the manager's HOME must match the account.
-- User lingering must be enabled for startup before login. Inspect with
-  `loginctl show-user "$USER" --property=Linger`; if necessary, the operator
-  explicitly runs `sudo loginctl enable-linger "$USER"`.
+- User lingering must be enabled for startup before login. The guided command
+  below can enable it, but only with an **already-running** correct-user manager
+  and bus. It binds the manager's InvocationID/MainPID into the approved request
+  and rechecks immediately before enabling lingering. Inactive or changed managers
+  are refused: enabling lingering must not start dormant previously enabled units.
+  The lower-level `make ai-heeler` still requires lingering to be enabled first.
 - The ordinary `ssh.service` and `ssh.socket` must be **masked**. Do not disable
   someone else's SSH deployment to satisfy this requirement. On a new Noble
   host with no existing SSH deployment, an operator may mask both units **before**
@@ -43,6 +49,77 @@ root login, agent forwarding, X11 forwarding or wildcard/LAN listener is enabled
 
 WSL startup is not Windows startup: this starts services **when WSL boots**;
 it does not launch WSL, wake Windows, or keep a powered-off machine reachable.
+
+## Guided per-host WSL setup
+
+Each computer keeps its own default Herdr/Pi sessions, Tailscale identity and SSH
+host keys. Add a separate Heeler host on the phone for each machine; this does not
+synchronize or migrate conversations. The same phone public key can be enrolled
+independently on each host.
+
+1. Run normal bootstrap and `bin/dot-install` for the selected WSL profile.
+   This supplies OpenSSH server and Tailscale, with both stock SSH units masked
+   **before** package mutations. Existing/custom SSH requires explicit migration.
+2. Finish native Tailscale sign-in and get the node online. Authentication may
+   separately need administrator access; setup never joins a tailnet, resets
+   preferences, enables Tailscale SSH or configures Serve/Funnel for you.
+3. From an ordinary interactive login and the reviewed **canonical checkout**:
+
+   ```bash
+   DOTFILES_HEELER_ENABLED=1 make ai-heeler-setup
+   ```
+
+   Paste the phone's plain SSH **public** key when requested, never a private key.
+   To read a public-key file instead, use the private entrypoint:
+   `DOTFILES_HEELER_ENABLED=1 bash tools/herdr/heeler/setup.sh --key-file /path/to/phone.pub`.
+4. Review the exact administrator command, fixed payload filenames and SHA256
+   digests. Type `publish` to authorize the single Root transaction. Sudo may use
+   cached authentication or ask for a password; setup does not force a fresh
+   password or collect it. Cancellation before authorization leaves enrollment
+   untouched. A valid existing phone-key file is preserved byte-for-byte; an empty
+   legacy file is reported for explicit enrollment rather than overwritten.
+5. Setup installs the approved bytes into private Root staging before executing
+   the isolated publisher. It validates policy, then publishes/enables the system
+   and user units **without starting/restarting them**. It prints a connection
+   card with the tailnet IP, port 2222, Linux user, `default` session and SSH host
+   public-key fingerprint. Verify that fingerprint on the phone.
+6. If pending, save work and perform a controlled restart of **only the selected
+   WSL distro** yourself. Setup never terminates WSL or adopts existing daemons.
+   Run `DOTFILES_HEELER_ENABLED=1 make ai-heeler-check`, then verify an actual
+   phone connection. Enabled units and mocked tests alone are not live proof.
+
+Missing prerequisites, an inactive user manager/bus or an offline/unjoined node
+stop before authorization. Already-healthy setups print the card without another
+Root command. Ordinary install/update/AI/profile flows never invoke guided setup.
+Direct launcher exits are healthy/unselected `0`, pending/canceled `2`, error `1`;
+Make reports only command success/failure.
+
+Root executes only the digest-bound, Root-owned staged publisher/runtime and
+absolute system tools; Mise, Herdr and Pi remain user-side. Initial trust is the
+operator-approved canonical source and exact command: hashes prevent subsequent
+payload substitution, not compromise of that same-user command itself. A fresh
+host may need Root-owned `/run/sshd` (0755) before OpenSSH configuration validation;
+this temporary privilege-separation directory contains no SSH keys and opens no
+listener. It is recreated at service startup after a reboot.
+
+Root recovery metadata is private under `/var/lib/dotfiles-heeler/` (0700): a
+0600 ownership receipt/lock and 0700 `recovery-*` snapshots of only the owned policy
+and enablement state. Unknown policy is refused, not adopted. Incomplete recovery
+retains originals and blocks another publication until operator inspection.
+The doctor still compares published bytes against authored runtime/staged unit
+bytes, not a marker or receipt. During an owned policy upgrade, discovery validates
+the live listener against the currently published policy; the Root phase verifies
+the private receipt before replacing it with the candidate for a later restart.
+Manual legacy installations without a receipt are adopted only when both published
+files already match the current reviewed policy; otherwise explicit migration is
+required. If publication commits but backup cleanup fails, setup reports completion
+and the retained private cleanup path instead of claiming a rollback. Newly enabled lingering is not undone by stopping
+the manager during recovery. Root and user phases are separate: if Root succeeds
+but user preparation fails, that completed Root phase is reported and phone keys
+remain enrolled; no session/credential rollback is claimed.
+
+The following lower-level preparation/publication steps remain available for
+advanced use and recovery.
 
 ## Explicit preparation — no live takeover
 

@@ -6,6 +6,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/../libexec/common.sh"
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 DOTFILES_ROOT=$(pwd -P)
+source "$DOTFILES_ROOT/libexec/lib/wsl-packages.sh"
 
 # ── Phase 1: OS packages ──────────────────────────────────────────────────────
 
@@ -36,6 +37,7 @@ install_apt_packages() {
   local -a apt_packages=()
 
   log_info "Updating composed APT packages for $OS/$PROFILE..."
+  ensure_wsl_ssh_closed || return
   setup_package_repositories || return
   sudo apt update >/dev/null || return
   if [[ "$PROFILE" == work ]]; then
@@ -53,6 +55,7 @@ install_apt_packages() {
 }
 
 setup_package_repositories() {
+  setup_wsl_tailscale_repository || return
   [[ "$PROFILE" == work ]] || return 0
   WORK_INSTALL_SOURCE_ONLY=1 source "$DOTFILES_ROOT/work/install.sh"
   setup_work_apt_repositories

@@ -6,7 +6,7 @@ Description=Default Herdr session for terminal and Heeler access
 Type=exec
 WorkingDirectory=%h
 Environment="PATH=@SERVICE_PATH@"
-ExecStart=/usr/bin/mise exec -- %h/.local/bin/herdr server
+ExecStart=@MISE@ exec -- %h/.local/bin/herdr server
 Restart=on-failure
 RestartSec=5
 KillMode=mixed
