@@ -56,6 +56,20 @@ require explicit migration rather than being stopped or replaced. Heeler's separ
 opt-in listener on port 2222 is unaffected by this stock-SSH gate.
 Installing Tailscale does not join a tailnet or enable Tailscale SSH, Serve or Funnel.
 
+For an existing host, the accepted stock-SSH state is **both units inactive and
+masked, with no port-22 listener**. Inspect before deciding to migrate:
+
+```bash
+systemctl show ssh.service ssh.socket -p ActiveState -p UnitFileState -p FragmentPath -p DropInPaths
+ss -H -ltn 'sport = :22'
+```
+
+If the stock units are **already inactive and unneeded**, the operator may run
+`sudo systemctl mask ssh.service ssh.socket`, then rerun the installer. This does
+not stop an active service. If SSH is active, needed, customized or uncertain,
+arrange a separate migration that preserves access; do not force replacement of
+custom units. The installer never performs that migration for you.
+
 ## Structure
 
 ```

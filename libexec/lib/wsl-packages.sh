@@ -31,6 +31,12 @@ wsl_stock_ssh_state() {
   if [[ "$masked" -eq 2 ]]; then printf 'masked\n'; else printf 'fresh\n'; fi
 }
 
+wsl_ssh_migration_guidance() {
+  printf 'Required end state: ssh.service and ssh.socket both inactive and masked; port 22 closed.\n' >&2
+  printf 'If they are already inactive and unneeded, the operator may run: sudo systemctl mask ssh.service ssh.socket, then retry.\n' >&2
+  printf 'Otherwise arrange explicit migration without interrupting existing access; do not force replacement of custom units.\n' >&2
+}
+
 ensure_wsl_ssh_closed() {
   [[ ${OS:-} == WSL ]] || return 0
   local version listeners state package rc=0
@@ -42,16 +48,19 @@ ensure_wsl_ssh_closed() {
   listeners=$(ss -H -ltn 'sport = :22') || return 1
   if [[ -n "$listeners" ]]; then
     printf 'Existing port-22 listener: SSH migration required; no access was disabled.\n' >&2
+    wsl_ssh_migration_guidance
     return 1
   fi
   state=$(wsl_stock_ssh_state) || {
     printf 'Existing or unknown SSH unit state: migration required before WSL package changes.\n' >&2
+    wsl_ssh_migration_guidance
     return 1
   }
   [[ "$state" != masked ]] || return 0
   package=$(dpkg-query -W '-f=${Status}' openssh-server 2>/dev/null) || rc=$?
   if [[ "$rc" != 1 || -n "$package" ]] || wsl_ssh_configuration_exists; then
     printf 'Existing or unknown OpenSSH deployment: migration required; no policy changed.\n' >&2
+    wsl_ssh_migration_guidance
     return 1
   fi
   # Mask before install AND upgrade; never stop an existing deployment here.

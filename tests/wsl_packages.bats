@@ -20,6 +20,7 @@ setup() {
         case "$state" in
           fresh) load=not-found; unit=; fragment= ;;
           masked) load=masked; unit=masked; fragment=/etc/systemd/system/$2 ;;
+          stock) load=loaded; unit=disabled; fragment=/usr/lib/systemd/system/$2 ;;
           *) load=loaded; unit=enabled; fragment=/etc/systemd/system/ssh.service ;;
         esac
         printf "LoadState=%s\nUnitFileState=%s\nFragmentPath=%s\nActiveState=%s\nDropInPaths=%s\n" "$load" "$unit" "$fragment" "${SSH_ACTIVE:-inactive}" "${SSH_DROPINS:-}" ;;
@@ -79,6 +80,16 @@ run_guard() {
     [ "$status" -ne 0 ]
     [ ! -s "$EVENTS" ]
   done
+}
+
+@test "inactive unmasked SSH refusal gives conditional operator guidance without policy changes" {
+  export SSH_STATE=stock SSH_PACKAGE=installed
+  run_guard
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"both inactive and masked"* ]]
+  [[ "$output" == *"already inactive and unneeded"* ]]
+  [[ "$output" == *"sudo systemctl mask ssh.service ssh.socket"* ]]
+  [ ! -s "$EVENTS" ]
 }
 
 @test "mask failure is returned and never unmasked or stopped" {
