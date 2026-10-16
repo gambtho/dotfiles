@@ -83,7 +83,10 @@ def validate_keys(path, uid):
         return False
     if path.stat().st_mode & 0o177:
         raise ValueError(f'key file must be private (0600 or 0400): {path}')
-    text = path.read_text()
+    return validate_key_text(path.read_text())
+
+
+def validate_key_text(text):
     for line in text.splitlines():
         if not line.strip() or line.lstrip().startswith('#'):
             continue
@@ -124,7 +127,7 @@ def service_environment(repo, home):
     return environment
 
 
-def preflight(repo, name, uid, home):
+def prerequisites(repo, name, uid, home):
     if not sys.platform.startswith('linux'):
         raise ValueError('Heeler persistence is supported on Linux/systemd only')
     runtime.validate_identity(name, uid, str(home))
@@ -147,10 +150,18 @@ def preflight(repo, name, uid, home):
         command([mise, 'exec', '--', 'node', '--version'], cwd=home, env=environment, check=True)
     except subprocess.CalledProcessError as error:
         raise ValueError('Node must be available through mise before preparing Herdr startup') from error
+
+
+def preflight(repo, name, uid, home):
+    prerequisites(repo, name, uid, home)
     linger = command(['/usr/bin/loginctl', 'show-user', name, '--property=Linger', '--value'],
                      check=True).stdout.strip()
     if linger != 'yes':
         raise ValueError('user lingering is required; enable it explicitly as documented')
+    stock_ssh_masked()
+
+
+def stock_ssh_masked():
     for unit in ['ssh.service', 'ssh.socket']:
         if command(['/usr/bin/systemctl', 'is-enabled', unit], check=False).stdout.strip() != 'masked':
             raise ValueError(f'{unit} must remain masked; do not replace a pre-existing SSH deployment')

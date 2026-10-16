@@ -1,6 +1,8 @@
 """Operator publication and onboarding without real privilege or live services."""
+import base64
 import hashlib
 import importlib.util
+import io
 import json
 import os
 import subprocess
@@ -20,6 +22,161 @@ def load(name):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+PUBLIC_KEY = b'ssh-ed25519 ' + base64.b64encode(b'\x00\x00\x00\x0bssh-ed25519\x00\x00\x00\x20' + b'k' * 32) + b' phone\n'
+
+
+class OnboardingTests(unittest.TestCase):
+    def setUp(self):
+        self.assertTrue((SOURCE / 'onboard.py').is_file(), 'guided onboarding is missing')
+        self.board = load('onboard')
+        self.real_discover = self.board.discover
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.home = Path(self.temp.name) / 'home'
+        self.home.mkdir()
+        self.account = types.SimpleNamespace(pw_name='someone', pw_uid=os.getuid(), pw_dir=str(self.home))
+        self.identity = {'InvocationID': 'a' * 32, 'MainPID': '123', 'ActiveState': 'active'}
+        self.info = {'name': 'someone', 'uid': os.getuid(), 'home': self.home,
+                     'manager': self.identity, 'address': '100.84.88.33'}
+        self.output = io.StringIO()
+        patches = [patch.dict(os.environ, {'DOTFILES_HEELER_ENABLED': '1', 'HOME': str(self.home)}),
+                   patch.object(self.board.pwd, 'getpwuid', return_value=self.account),
+                   patch.object(self.board.sys.stdin, 'isatty', return_value=True),
+                   patch.object(self.board, 'discover', return_value=self.info),
+                   patch.object(self.board.prepare, 'inspect', return_value=2),
+                   patch.object(self.board.prepare, 'apply'),
+                   patch.object(self.board, 'invoke_publication', return_value=0),
+                   patch.object(self.board, 'connection_card', return_value='Host 100.84.88.33 / Port 2222 / default'),
+                   patch('sys.stdout', self.output)]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        self.keys = self.board.prepare.paths(self.home)[2]
+
+    def setup_host(self, answers):
+        answers = iter(answers)
+        return self.board.setup(ROOT, None, input_fn=lambda _: next(answers))
+
+    def test_setup_creates_key_and_invokes_one_privilege_phase_then_existing_apply(self):
+        self.assertEqual(self.setup_host([PUBLIC_KEY.decode(), 'publish']), 2)
+        self.assertEqual(self.keys.read_bytes(), PUBLIC_KEY)
+        self.assertEqual(self.keys.stat().st_mode & 0o777, 0o600)
+        self.board.invoke_publication.assert_called_once()
+        self.board.prepare.apply.assert_called_once_with(ROOT, 'someone', os.getuid(), self.home)
+        argv = self.board.invoke_publication.call_args.args[0]
+        self.assertEqual(argv[0], '/usr/bin/sudo')
+        self.assertIn('Root phase completed', self.output.getvalue())
+        self.assertIn('default', self.output.getvalue())
+
+    def test_cancel_before_root_keeps_missing_enrollment_missing(self):
+        self.assertEqual(self.setup_host([PUBLIC_KEY.decode(), 'no']), 2)
+        self.assertFalse(self.keys.exists())
+        self.board.invoke_publication.assert_not_called()
+        self.board.prepare.apply.assert_not_called()
+
+    def test_root_failure_retains_enrollment_but_does_not_apply_or_claim_health(self):
+        self.board.invoke_publication.return_value = 1
+        self.assertEqual(self.setup_host([PUBLIC_KEY.decode(), 'publish']), 1)
+        self.assertEqual(self.keys.read_bytes(), PUBLIC_KEY)
+        self.board.prepare.apply.assert_not_called()
+        self.assertNotIn('Root phase completed', self.output.getvalue())
+
+    def test_user_phase_failure_reports_root_already_completed_and_preserves_key(self):
+        self.board.prepare.apply.side_effect = OSError('user write failed')
+        self.assertEqual(self.setup_host([PUBLIC_KEY.decode(), 'publish']), 1)
+        self.assertIn('Root phase completed', self.output.getvalue())
+        self.assertIn('user write failed', self.output.getvalue())
+        self.assertTrue(self.keys.exists())
+
+    def test_already_healthy_preserves_key_and_uses_no_privilege_or_apply(self):
+        self.board.enroll_public_key(self.home, PUBLIC_KEY)
+        before = self.keys.read_bytes()
+        self.board.prepare.inspect.return_value = 0
+        self.assertEqual(self.setup_host([]), 0)
+        self.assertEqual(self.keys.read_bytes(), before)
+        self.board.invoke_publication.assert_not_called()
+        self.board.prepare.apply.assert_not_called()
+
+    def test_selector_optout_and_discovery_blockers_have_no_enrollment_or_privilege(self):
+        with patch.dict(os.environ, {'DOTFILES_HEELER_ENABLED': '0'}):
+            self.assertEqual(self.setup_host([]), 0)
+        self.board.discover.assert_not_called()
+        self.board.discover.side_effect = self.board.Pending('active user manager required')
+        self.assertEqual(self.setup_host([]), 2)
+        self.assertFalse(self.keys.exists())
+        self.board.invoke_publication.assert_not_called()
+
+    def test_private_keys_and_empty_existing_key_files_never_reach_privilege(self):
+        self.assertEqual(self.setup_host(['-----BEGIN OPENSSH PRIVATE KEY-----']), 1)
+        self.assertFalse(self.keys.exists())
+        self.keys.parent.mkdir(parents=True, mode=0o700)
+        self.keys.write_bytes(b'')
+        self.keys.chmod(0o600)
+        self.assertEqual(self.setup_host([]), 2)
+        self.assertEqual(self.keys.read_bytes(), b'')
+        self.board.invoke_publication.assert_not_called()
+
+    def test_discovery_rejects_inactive_manager_and_linked_worktree_before_enrollment(self):
+        def metadata(args, **kwargs):
+            if 'show' in args:
+                output = '\n'.join(k + '=' + v for k, v in self.identity.items())
+            else:
+                output = '/repo/.git/worktrees/feature\n/repo/.git\n'
+            return subprocess.CompletedProcess(args, 0, output, '')
+        with patch.object(self.board.prepare, 'command', side_effect=metadata):
+            with self.assertRaisesRegex(ValueError, 'canonical'):
+                self.real_discover(ROOT, 'someone', os.getuid(), self.home)
+            self.identity['ActiveState'] = 'inactive'
+            with self.assertRaises(self.board.Pending):
+                self.real_discover(ROOT, 'someone', os.getuid(), self.home)
+        self.assertFalse(self.keys.exists())
+        self.board.invoke_publication.assert_not_called()
+
+    def test_unavailable_system_manager_has_actionable_pending_without_privilege(self):
+        with patch.object(self.board.prepare, 'command', side_effect=subprocess.CalledProcessError(1, ['/usr/bin/systemctl'])), \
+             self.assertRaisesRegex(self.board.Pending, 'manager'):
+            self.real_discover(ROOT, 'someone', os.getuid(), self.home)
+        self.board.invoke_publication.assert_not_called()
+
+    def test_offline_tailnet_is_pending_without_join_or_privilege(self):
+        calls = []
+        def metadata(args, **kwargs):
+            calls.append(args)
+            if 'show' in args:
+                output = '\n'.join(k + '=' + v for k, v in self.identity.items())
+            elif 'is-enabled' in args:
+                output = 'masked\n'
+            elif args[0] == '/usr/bin/tailscale':
+                output = '{"BackendState":"NeedsLogin"}'
+            else:
+                output = ''
+            return subprocess.CompletedProcess(args, 0, output, '')
+        with patch.object(self.board.prepare, 'prerequisites'), \
+             patch.object(self.board.prepare, 'command', side_effect=metadata), \
+             self.assertRaises(self.board.Pending):
+            self.real_discover(ROOT, 'someone', os.getuid(), self.home)
+        self.assertEqual([c[1:] for c in calls if c[0] == '/usr/bin/tailscale'], [['status', '--json']])
+        self.board.invoke_publication.assert_not_called()
+
+    def test_enrollment_race_never_replaces_the_winner(self):
+        original = self.board.os.open
+        winner = PUBLIC_KEY.replace(b'phone', b'other-phone')
+        def race(path, flags, mode=0o777, **kwargs):
+            if Path(path) == self.keys and flags & os.O_EXCL:
+                with os.fdopen(original(path, flags, mode), 'wb') as stream:
+                    stream.write(winner)
+            return original(path, flags, mode, **kwargs)
+        with patch.object(self.board.os, 'open', side_effect=race), self.assertRaisesRegex(ValueError, 'concurrent'):
+            self.board.enroll_public_key(self.home, PUBLIC_KEY)
+        self.assertEqual(self.keys.read_bytes(), winner)
+
+    def test_noninteractive_setup_does_not_enroll_or_invoke_privilege(self):
+        with patch.object(self.board.sys.stdin, 'isatty', return_value=False):
+            self.assertEqual(self.setup_host([]), 2)
+        self.assertFalse(self.keys.exists())
+        self.board.invoke_publication.assert_not_called()
 
 
 class PublisherTests(unittest.TestCase):
@@ -191,6 +348,34 @@ class PublisherTests(unittest.TestCase):
         self.assertEqual(len(backups), 1)
         self.assertTrue((backups[0] / 'manifest.json').is_file())
         self.assertEqual(backups[0].stat().st_mode & 0o777, 0o700)
+
+    def test_unresolved_root_recovery_blocks_retry_without_overwriting_evidence(self):
+        self.pub.STATE.mkdir(mode=0o700)
+        recovery = self.pub.STATE / 'recovery-unresolved'
+        recovery.mkdir(mode=0o700)
+        (recovery / 'manifest.json').write_bytes(b'original recovery evidence')
+        with self.assertRaisesRegex(ValueError, 'recovery'):
+            self.publish()
+        self.assertEqual((recovery / 'manifest.json').read_bytes(), b'original recovery evidence')
+        self.assertFalse(self.pub.UNIT.exists())
+
+    def test_failure_after_linger_reports_persisting_lingering_honestly(self):
+        original_write = self.pub.write_owned
+        def no_linger(args, **kwargs):
+            if 'show-user' in args:
+                return subprocess.CompletedProcess(args, 0, 'no\n', '')
+            return self.run_command(args, **kwargs)
+        def fail_receipt(path, data, mode):
+            if path.name == 'ownership.json':
+                raise OSError('receipt write failed')
+            return original_write(path, data, mode)
+        errors = io.StringIO()
+        with patch.object(self.pub, 'run', side_effect=no_linger), \
+             patch.object(self.pub, 'write_owned', side_effect=fail_receipt), \
+             patch('sys.stderr', errors), self.assertRaisesRegex(OSError, 'receipt write'):
+            self.publish()
+        self.assertIn('lingering may now be enabled', errors.getvalue())
+        self.assertFalse(self.pub.UNIT.exists())
 
     def test_lingering_is_enabled_only_after_active_manager_recheck(self):
         def no_linger(args, **kwargs):

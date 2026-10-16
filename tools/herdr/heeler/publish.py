@@ -266,6 +266,8 @@ def publish_for_account(name, manager):
     fd = os.open(lock, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
     with os.fdopen(fd, 'r+') as held:
         fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if any(STATE.glob('recovery-*')):
+            raise ValueError(f'unresolved Root recovery evidence under {STATE}; operator inspection required')
         # Recheck ownership after acquiring the publication lock.
         for p in desired:
             if (p.exists() and hashlib.sha256(read_owned(p)).hexdigest() != existing.get(str(p), {}).get('sha256')) or (not p.exists() and str(p) in existing):
@@ -300,6 +302,7 @@ def publish_for_account(name, manager):
             raise
         mutated = False
         enable_attempted = False
+        linger_attempted = False
         try:
             for p, (data, mode) in desired.items():
                 mutated = True
@@ -313,12 +316,15 @@ def publish_for_account(name, manager):
                 raise ValueError('unknown user lingering state')
             if linger == 'no':
                 verify_manager(account.pw_uid, manager)
+                linger_attempted = True
                 run(['/usr/bin/loginctl', 'enable-linger', name])
             record = {'schema_version': 1, 'account': name,
                       'files': {str(p): {'sha256': hashlib.sha256(data).hexdigest(), 'uid': ROOT_UID, 'mode': mode}
                                 for p, (data, mode) in desired.items()}}
             write_owned(receipt, json.dumps(record, sort_keys=True).encode(), 0o600)
         except (ValueError, OSError, subprocess.SubprocessError) as original:
+            if linger_attempted:
+                print('User lingering may now be enabled; policy recovery does not undo it or stop the user manager.', file=sys.stderr)
             try:
                 if enable_attempted and not was_enabled:
                     run(['/usr/bin/systemctl', 'disable', '--no-reload', UNIT.name])

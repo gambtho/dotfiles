@@ -60,6 +60,18 @@ setup() {
   [[ "$output" != *"tools/herdr/heeler/install.sh"* ]]
 }
 
+@test "guided setup is separate opt-in and does not run during ordinary AI provisioning" {
+  run make -n -C "$REPO_ROOT" ai-heeler-setup
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"bash tools/herdr/heeler/setup.sh"* ]]
+  run make -n -C "$REPO_ROOT" ai ai-check ai-heeler ai-heeler-check
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"tools/herdr/heeler/setup.sh"* ]]
+  run bash -c 'cd "$1"; DOTFILES_HEELER_ENABLED=0 bash tools/herdr/heeler/setup.sh' _ "$REPO_ROOT"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"not selected"* ]]
+}
+
 @test "nested Heeler shell launcher is included in syntax discovery" {
   run bash -c '"$1/libexec/list-check-files" bash | tr "\0" "\n"' _ "$REPO_ROOT"
   [ "$status" -eq 0 ]
