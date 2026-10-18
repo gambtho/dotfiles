@@ -36,7 +36,7 @@ For fork branches, OWNER/REPO identifies the PR's base repository; without PR
 metadata, `upstream` takes precedence over `origin`. Local overlays use verified
 GitHub identities only; other hosts still get repository-owned profiles and the
 built-in checklist. Loaded sources are printed.
-One fresh read-oriented whole-change reviewer checks profiles, correctness, silent failures and relevant language/type concerns together, in both standalone polish and closeout. Extra specialists require a named risk or explicit intensive-review request; repository-required review methods still take precedence. Closeout reuses matching head/base/scope/profile review evidence rather than dispatching another automatic pass.
+One fresh read-oriented whole-change reviewer checks profiles, correctness, silent failures and relevant language/type concerns together, in both standalone polish and closeout. Extra specialists require a named risk or explicit intensive-review request; repository-required review methods still take precedence. Closeout reuses matching base/scope/profile/working-content review evidence (HEAD is provenance) rather than dispatching another automatic pass.
 The **Project review** report groups findings by source and checklist item;
 these findings are never auto-fixed, even with `--fix`. `/polish-pr` carries them
 into its deferred summary and preserves the worktree when project coverage is

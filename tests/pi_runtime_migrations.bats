@@ -18,6 +18,7 @@ migration() {
     eval "$installer"
     [[ ! -f "$ROOT/ai/pi/migrate-runtime-config.sh" ]] || source "$ROOT/ai/pi/migrate-runtime-config.sh"
     PI_AGENT_DIR=$AGENT
+    PI_HOST_ROOT=${PI_TEST_HOST_ROOT:-}
     MANAGED_SOURCE_ROOTS=("$OWNED" "$REPO_ROOT")
     MODE=${TEST_MODE:-apply}
     "$@"

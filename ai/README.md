@@ -146,7 +146,8 @@ model without usable authentication produces no recap rather than falling back.
 No package-cache patch, shell wrapper or invented persistent JSON key is used.
 Recap's standalone model calls retain ambient provider authority, not tool-call
 permission containment. Selection/auth paths have a no-paid-provider
-characterization test:
+characterization test (skipped when no recap root is selected; an incomplete
+explicit selection still fails):
 
 ```bash
 PI_TEST_HOST_ROOT=/path/to/selected/pi-coding-agent \
@@ -167,7 +168,8 @@ for repository type/lint/test commands. Report missing/skipped routes as uncheck
 select the SDK/LSP roots and `PI_TEST_LSP_FIXTURE`, an owned `/tmp/pi-lsp-fixture-*`
 root. HOME, agent configuration, caches, test workspaces and subprocess-local server
 PATH must stay under that fixture (host Node/Python/Ruff are read-only prerequisites).
-Stage exact npm packages with `--ignore-scripts` and Ty as a pinned binary wheel in
+With no fixture selector it reports a skip, not a clean readiness result; an
+incomplete selected fixture fails. Stage exact npm packages with `--ignore-scripts` and Ty as a pinned binary wheel in
 a fixture venv; no host mise install/reshim, credentials or intentional schema/URL
 fetching. The test downloads nothing and checks actual nonempty diagnostics for
 invalid TS/Python/shell/YAML. This is fixture isolation, not an OS sandbox; host
@@ -266,6 +268,19 @@ pi update --extensions --no-approve
 This updates extensions, not Pi itself. Stop-session guidance is an operator responsibility, not automatic process detection. `--check` reports convergence without running package commands, downloading, generating settings locks or writing configuration. Normal apply and native package updates are **not atomic**: a failure can leave partial package/configuration changes. Per-file private configuration backups remain; they are not package rollback orchestration.
 
 Before starting a fresh session, inspect declarations, preserved custom settings, Astra retirement/receipt, deliberately chosen turn knobs, model/compaction/Codemode preferences and F8. Selective refresh does not guarantee every existing preference matches a fresh baseline. Repeat installed schema/evaluator and relevant runtime verification after an update; isolated evidence does not guarantee an identical production package graph or provider availability.
+
+Settings publication coordinates with the selected Pi runtime's `proper-lockfile`
+4 protocol. Both package reconciliation and selective settings migrations stage
+validated content, acquire the native settings-path lock, recheck the snapshot
+(including bytes and inode), then atomically rename while holding that lock. Busy,
+stale or incompatible-lock failures refuse publication without an unlocked fallback.
+An owned legacy link is replaced, never unlinked first or written through to the
+repository target. Dry-run does not acquire locks. Settings locks do not protect
+against editors/extensions ignoring the protocol. Native first-file creation reads
+absence before locking, so bootstrap remains offline-only; this does not make live
+installation supported. Other configuration files retain their existing protection.
+Selective refresh can still publish modes before settings fails: it is not a
+multi-file transaction; preserve backups and rerun after resolving contention.
 
 Permission publication uses best-effort compare-before-publish: it checks the runtime file identity before backup and again after backup immediately before the atomic rename. Because the permission-system UI writer shares no lock with the installer, an unavoidable race remains between the final check and rename; the extra check narrows but cannot eliminate it.
 

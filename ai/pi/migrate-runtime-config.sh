@@ -47,6 +47,16 @@ pi_migration_unchanged() {
   [[ "$kind" == absent ]] || [[ "$(pi_migration_identity "$destination")" == "$identity" ]]
 }
 
+publish_pi_migration_candidate() {
+  local candidate=$1 destination=$2 file_mode=$3
+  if [[ "$destination" == "$PI_AGENT_DIR/settings.json" ]]; then
+    publish_pi_settings "$candidate" "$destination" "$file_mode" \
+      "$kind" "$link_target" "$snapshot_hash" "$identity"
+  else
+    atomic_publish_file "$candidate" "$destination" "$file_mode"
+  fi
+}
+
 # rendered is already validated JSON. delete=1 is used only for retired, empty
 # model output (including a recognized dangling link), never for preferences.
 publish_pi_migration() {
@@ -79,7 +89,7 @@ publish_pi_migration() {
   else
     candidate=$(mktemp "${destination}.candidate.XXXXXX") || return 1
     if ! printf '%s\n' "$rendered" >"$candidate" ||
-      ! atomic_publish_file "$candidate" "$destination" "$file_mode"; then
+      ! publish_pi_migration_candidate "$candidate" "$destination" "$file_mode"; then
       rm -f "$candidate"
       return 1
     fi
