@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+DOTFILES_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
+exec python3 "$DOTFILES_ROOT/ai/marketplace/plugins/my/skills/pr-closeout/scripts/knowledge_git.py" "$@"
