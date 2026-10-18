@@ -45,18 +45,19 @@ Interactive browser automation remains opt-in rather than a default dependency.
 
 ## Named agents and routing
 
-`ai/pi/config/modes.json` is the first-install/reset baseline for retained main-session modes. Gotgenes child routing is defined by the four files under `ai/pi/agents/`:
+`ai/pi/config/modes.json` is the first-install/reset baseline for retained main-session modes. Gotgenes child routing is defined by five files under `ai/pi/agents/` (the four main-session modes remain unchanged):
 
 | `subagent_type` | Model | Thinking | Use |
 |---|---|---|---|
 | `rush` | GitHub Copilot GPT-6 Luna | low | Bounded searches, inventories, and mechanical checks |
-| `smart` | GitHub Copilot GPT-6.1 Sol | medium | Normal review, investigation, and implementation subtasks; startup default |
+| `smart` | GitHub Copilot GPT-6.1 Sol | medium | Investigation and implementation subtasks; startup default |
+| `inspector` | GitHub Copilot GPT-6.1 Sol | medium | Ordinary read-oriented review and routine specialist analysis |
 | `deep` | GitHub Copilot GPT-6 Astra | high | Architecture, security, diagnosis, and broad analysis |
 | `review` | GitHub Copilot Claude Opus 5.5 | high | Independent cross-family second opinions |
 
 Each `subagent` invocation supplies one self-contained `prompt`, a 3–5 word `description`, and a `subagent_type`. Parallel work uses sibling calls with `run_in_background: true`; record each returned ID and poll with `get_subagent_result({ agent_id, wait: false })`. An explicit `model` is reserved for a user request or deliberate cross-family review.
 
-`rush`, `deep`, and `review` omit write/edit tools and allow routine inspection and verification silently. Their explicit rules deny selected repository and remote mutations; other recognized risky operations follow the composed permission policy instead of an absolute read-only guarantee. `smart` otherwise inherits the permissive global attention policy. Every named child hard-denies Bash commands containing unresolved `$` expansion so a curated reader cannot hide a sensitive operand from path extraction. Children cannot recursively dispatch more children. Worktree and file-context UI packages are excluded from children; permission-system, worktree-guard, and the selected skills remain inherited. Full Superpowers is the process router; the filtered agent-skills router and commands are not loaded. The local `my` selection remains five prompts, ten skills, and no extensions.
+`rush`, `inspector`, `deep`, and `review` omit write/edit tools and allow routine inspection and verification silently. Their explicit rules deny selected repository and remote mutations; other recognized risky operations follow the composed permission policy instead of an absolute read-only guarantee. `smart` otherwise inherits the permissive global attention policy. Every named child hard-denies Bash commands containing unresolved `$` expansion so a curated reader cannot hide a sensitive operand from path extraction. Children cannot recursively dispatch more children. Worktree and file-context UI packages are excluded from children; permission-system, worktree-guard, and the selected skills remain inherited. Full Superpowers is the process router; the filtered agent-skills router and commands are not loaded. The local `my` selection remains five prompts, eleven skills, and no extensions.
 
 ### Context and turn budgets
 
@@ -94,6 +95,86 @@ Gotgenes children inherit permission-system and worktree-guard, with restrictive
 
 Do not put secrets in the agent environment, run Pi against untrusted code, enable YOLO for interactive work, or describe these controls as a security boundary. Keep extension selection and installed compatibility under review.
 
+## Deliberate efficiency preferences
+
+Fresh installs enable Pi-native `showCacheMissNotices`, footer
+`powerline.queue.compactPromptMode: "native"`, and
+`powerline.cache_read.format: "both"`. The installed footer's default preset already
+includes cache reads; formatting does not add a segment to custom/minimal layouts,
+replace a layout or override `disabledSegments`. Cache figures depend on provider
+reporting and are not measured performance guarantees.
+
+This deliberately changes `/compact <text>`: text becomes Pi's custom compaction
+instructions, not Powerline's next-prompt-after-success shorthand. Messages typed
+during compaction use Pi's native queue and are delivered when compaction ends,
+**including after failure**; Powerline's default `"queue"` mode holds them for its
+post-compaction flow. This is an accepted behavior change, not merely a display
+preference. Keep `"queue"` instead if success-only deferred prompting is desired.
+
+Normal `make ai` preserves these runtime preferences. To apply only those three
+approved paths on an existing host, integrate the changes into the canonical
+checkout, stop Pi, then use this separate opt-in (not the older model refresh):
+
+```bash
+PI_AI_APPLY_EFFICIENCY_PREFERENCES=1 make ai-check
+PI_AI_APPLY_EFFICIENCY_PREFERENCES=1 make ai
+```
+
+This privately backs up and merges nested keys, preserving other footer settings,
+legacy string presets, compaction budgets and unrelated preferences. Malformed
+footer objects or detected concurrent changes refuse publication. Reconciliation
+still runs native extension updates, so record the installed graph and rerun the
+compatibility gates before starting a fresh session. Neither this opt-in, normal
+reconciliation nor selective refresh changes `wrapUpTurns` or turn/concurrency
+ceilings. To choose five wrap-up turns globally, separately back up the stopped
+runtime's `subagents.json` and set only `wrapUpTurns: 5` deliberately. Keep project
+`.pi/subagents.json` sparse: duplicated exclusion arrays replace global arrays and
+can mask later global updates. Preserve intentional local differences; do not
+version a private project snapshot or reset every project automatically.
+
+Keep session recap, but start it explicitly with the lightweight model when desired:
+
+```bash
+pi --recap-model github-copilot/gpt-6-luna
+```
+
+Installed recap automatically prefers old GPT-5.6 Luna only for an active GPT model
+when its provider's available catalog contains that model; otherwise it uses the
+active model (Anthropic has a separate preference). The flag is per launch, not a
+persistent setting. An unknown/malformed override silently falls back; a found
+model without usable authentication produces no recap rather than falling back.
+No package-cache patch, shell wrapper or invented persistent JSON key is used.
+Recap's standalone model calls retain ambient provider authority, not tool-call
+permission containment. Selection/auth paths have a no-paid-provider
+characterization test (skipped when no recap root is selected; an incomplete
+explicit selection still fails):
+
+```bash
+PI_TEST_HOST_ROOT=/path/to/selected/pi-coding-agent \
+PI_TEST_RECAP_ROOT=/path/to/selected/session-recap \
+node --test tests/pi_recap_runtime.test.mjs
+```
+
+### LSP readiness
+
+Mise manages Biome 2.5.15, Ty 0.0.89, Bash Language Server 5.8.1 and YAML Language
+Server 2.0.0 alongside Ruff. npm lifecycle scripts stay disabled. Pi-lsp's default
+adapters use `biome lsp-proxy`, `ty server`, `ruff server`,
+`bash-language-server start`, and `yaml-language-server --stdio`; no replacement
+server map is necessary. These provide intermediate diagnostics, not a substitute
+for repository type/lint/test commands. Report missing/skipped routes as unchecked.
+
+`tests/pi_lsp_readiness.test.mjs` is an opt-in installed-server exercise: explicitly
+select the SDK/LSP roots and `PI_TEST_LSP_FIXTURE`, an owned `/tmp/pi-lsp-fixture-*`
+root. HOME, agent configuration, caches, test workspaces and subprocess-local server
+PATH must stay under that fixture (host Node/Python/Ruff are read-only prerequisites).
+With no fixture selector it reports a skip, not a clean readiness result; an
+incomplete selected fixture fails. Stage exact npm packages with `--ignore-scripts` and Ty as a pinned binary wheel in
+a fixture venv; no host mise install/reshim, credentials or intentional schema/URL
+fetching. The test downloads nothing and checks actual nonempty diagnostics for
+invalid TS/Python/shell/YAML. This is fixture isolation, not an OS sandbox; host
+readiness and interactive behavior still need stopped-session rollout verification.
+
 ## Worktree policy
 
 Use the `using-git-worktrees` skill to create or reuse linked worktrees before repository writes. The custom guard blocks direct `write`, `edit`, and mutating `lsp_fix` calls whose effective target belongs to a primary checkout. It resolves `lsp_fix.root + lsp_fix.path` using pi-lsp semantics, so changing `root` cannot bypass the guard.
@@ -109,7 +190,7 @@ ai/
     AGENTS.md
     settings.json
     keybindings.json
-    agents/{rush,smart,deep,review}.md
+    agents/{rush,smart,inspector,deep,review}.md
     config/
       modes.json
       permission-system.json
@@ -188,6 +269,19 @@ This updates extensions, not Pi itself. Stop-session guidance is an operator res
 
 Before starting a fresh session, inspect declarations, preserved custom settings, Astra retirement/receipt, deliberately chosen turn knobs, model/compaction/Codemode preferences and F8. Selective refresh does not guarantee every existing preference matches a fresh baseline. Repeat installed schema/evaluator and relevant runtime verification after an update; isolated evidence does not guarantee an identical production package graph or provider availability.
 
+Settings publication coordinates with the selected Pi runtime's `proper-lockfile`
+4 protocol. Both package reconciliation and selective settings migrations stage
+validated content, acquire the native settings-path lock, recheck the snapshot
+(including bytes and inode), then atomically rename while holding that lock. Busy,
+stale or incompatible-lock failures refuse publication without an unlocked fallback.
+An owned legacy link is replaced, never unlinked first or written through to the
+repository target. Dry-run does not acquire locks. Settings locks do not protect
+against editors/extensions ignoring the protocol. Native first-file creation reads
+absence before locking, so bootstrap remains offline-only; this does not make live
+installation supported. Other configuration files retain their existing protection.
+Selective refresh can still publish modes before settings fails: it is not a
+multi-file transaction; preserve backups and rerun after resolving contention.
+
 Permission publication uses best-effort compare-before-publish: it checks the runtime file identity before backup and again after backup immediately before the atomic rename. Because the permission-system UI writer shares no lock with the installer, an unavoidable race remains between the final check and rename; the extra check narrows but cannot eliminate it.
 
 The migration converts the old whole-extension link to a real directory, preserves unrelated extension entries, and publishes only the three authored links. It removes only exact managed Amp settings links and only the `.permissions` key from valid Amp state. The exact legacy Brave `brave-search` directory is moved intact below `disabled-skills`; sibling skills, mismatches, and collisions are preserved.
@@ -231,7 +325,7 @@ make ai-check
 
 `make pi-runtime-test` is separate from `make check`. It requires the four explicitly selected `PI_TEST_HOST_ROOT`, `PI_TEST_PERMISSION_ROOT`, `PI_TEST_SUBAGENTS_ROOT`, and `PI_TEST_LSP_ROOT` roots. CI provisions current candidates, records their identities, runs `make check`, the installed schema/evaluator, and the native gate. The gate includes stock CLI missing npm/Git convergence and one bounded public-SDK resource-filter/local-my/retired-source proof with isolated transport and allowlisted environments; it does not modify the selected SDK or shared package graph.
 
-The tested Pi 1.1.0 graph exercises real Codemode nested tool calls, all four named child sessions, permission forwarding, inherited worktree enforcement, and current-layout fail-closed behavior. Optional runtime probes use the public interactive frontend and actual upstream F8 picker/worktree commands with deterministic provider, terminal-transport and user-dialog boundaries. They verify file quote delivery, active branch entry/history preservation, cwd/service rebinding, primary-write denial and linked/switched relative writes, current/main exclusion, dirty-removal refusal before confirmation, and clean removal only after Yes (No preserves it; branch survives). This is native SDK/extension behavior, not paid model, human TTY or OS clipboard certification. macOS/Windows live behavior remains untested. Caffeinate 0.49.11 failed actual WSL default inhibition (systemd denied; ScreenSaver D-Bus service absent) and was removed by operator decision; that is not a supported-platform pass or a backend adaptation.
+The tested Pi 1.3.0 graph exercises real Codemode nested tool calls, all five named child sessions, permission forwarding, inherited worktree enforcement, and current-layout fail-closed behavior. Optional runtime probes use the public interactive frontend and actual upstream F8 picker/worktree commands with deterministic provider, terminal-transport and user-dialog boundaries. They verify file quote delivery, active branch entry/history preservation, cwd/service rebinding, primary-write denial and linked/switched relative writes, current/main exclusion, dirty-removal refusal before confirmation, and clean removal only after Yes (No preserves it; branch survives). This is native SDK/extension behavior, not paid model, human TTY or OS clipboard certification. macOS/Windows live behavior remains untested. Caffeinate 0.49.11 failed actual WSL default inhibition (systemd denied; ScreenSaver D-Bus service absent) and was removed by operator decision; that is not a supported-platform pass or a backend adaptation.
 
 Use configured `lsp_diagnostics` for authored TypeScript when available; report missing server commands/configuration and install or change them only with operator approval. Standalone strict types and repository checks remain authoritative, not a substitute for unrun LSP diagnostics.
 

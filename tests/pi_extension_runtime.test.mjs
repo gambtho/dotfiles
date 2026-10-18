@@ -77,7 +77,7 @@ test("native Codemode sessions and installed child forwarding enforce policy and
       assert.equal(result.stderr, "", "native loading must have no compatibility warnings");
       const evidence = JSON.parse(result.stdout.trim());
       assert.ok(evidence.nestedCalls >= 12, result.stdout);
-      assert.deepEqual(evidence.children, ["rush", "smart", "deep", "review"]);
+      assert.deepEqual(evidence.children, ["rush", "smart", "inspector", "deep", "review"]);
       assert.ok(evidence.forwardedDenials >= 8, result.stdout);
       t.diagnostic(result.stdout.trim());
     }

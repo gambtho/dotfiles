@@ -38,13 +38,13 @@ Run: `gh auth status`
    - `OWNER` — the repository owner (e.g., `kubernetes-sigs`)
    - `REPO` — the repository name (e.g., `headlamp`)
    - `REPO_URL` — the full GitHub URL (e.g., `https://github.com/kubernetes-sigs/headlamp`)
-5. Set the output directory: `~/.pi/pr-reviews/{OWNER}/{REPO}/`
-   - Create it with `mkdir -p` if it does not exist
+5. Read the shared [project-review contract](../skills/pr-closeout/references/project-review-contract.md). Resolve the private store using the verified base identity and applicable local profile/aliases. All subsequent `{OWNER}/{REPO}` store paths mean this resolved store, not a second current-slug directory.
+   - Create a new store privately only after resolving its identity.
 6. Print: **"Reviewing PRs for: {OWNER}/{REPO}"**
 
-### 0c: One-Time Migration
+### 0c: Legacy Store Discovery
 
-If `~/.pi/pr-reviews/learnings.md` exists at the old flat path AND `~/.pi/pr-reviews/{OWNER}/{REPO}/learnings.md` does NOT exist, move all files from the old path into `~/.pi/pr-reviews/{OWNER}/{REPO}/`. Print a note that migration was performed.
+Do not automatically move legacy flat-path files. Follow the shared contract: leave them untouched, attribute only with verified local metadata, report ambiguity, and propose a separately approved migration. Alias lookup never moves files or creates a competing store.
 
 ### 0d: Rate Limit Check
 
@@ -189,7 +189,7 @@ Filter to PRs where BOTH review count AND comment count are 0.
 3. Categorize each PR by size and type:
    - **Lockfile-only**: All changed files match `*lock*`, `*.lock`, `go.sum`, `*.sum` — review from diff only with the rush model
    - **Small** (< 100 lines changed): Review from diff only with the rush model
-   - **Medium** (100–500 lines changed): Standard review with worktree and the smart model
+   - **Medium** (100–500 lines changed): Standard review with worktree and the read-oriented inspector
    - **Large** (500–1500 lines changed): Extended review with worktree and the deep model, focused on highest-impact files
    - **Very Large** (> 1500 lines changed): Summary and key concerns only with the deep model
 
@@ -283,11 +283,11 @@ Select the **`subagent_type` per PR based on size category**; the named agent ce
 |---------------|-----------------|-----------|
 | Lockfile-only | `rush` | Trivial changes, just check version sanity |
 | Small | `rush` | Fast and sufficient for small diffs |
-| Medium | `deep` | Review-only analysis requires a read-only agent |
+| Medium | `inspector` | Standard reasoning with read-oriented tool restrictions |
 | Large | `deep` | Needs careful analysis of impactful files |
 | Very Large | `deep` | Summary-only mode with deeper reasoning |
 
-Before invoking `subagent`, partition the selected PRs into `rush` and `deep` groups according to this table. Preserve the selected PR order within each group. For each PR, issue one sibling call with a self-contained `prompt`, a 3–5 word `description`, the group's `subagent_type`, and `run_in_background: true`. Process up to 5 sibling calls per group at a time, or up to 2 sibling calls when `RATE_LIMITED=true`; never mix PRs requiring different `subagent_type` values in the same dispatch group. Record every returned agent ID and poll each with `get_subagent_result({ agent_id, wait: false })`.
+Before invoking `subagent`, partition the selected PRs into `rush`, `inspector` and `deep` groups according to this table. Preserve the selected PR order within each group. For each PR, issue one sibling call with a self-contained `prompt`, a 3–5 word `description`, the group's `subagent_type`, and `run_in_background: true`. Process up to 5 sibling calls per group at a time, or up to 2 sibling calls when `RATE_LIMITED=true`; never mix PRs requiring different `subagent_type` values in the same dispatch group. Record every returned agent ID and poll each with `get_subagent_result({ agent_id, wait: false })`.
 
 **Collection-budget guidance**: Poll without blocking unrelated work. After the workflow's collection budget, continue without an unfinished result and mark that PR "review incomplete — result arrived late". This does not stop the agent; ignore a later notification for that report.
 
@@ -447,7 +447,7 @@ See the learnings file for auto-discovered conventions so far.
 
 ### 7b: Update Learnings
 
-Read the existing `~/.pi/pr-reviews/{OWNER}/{REPO}/learnings.md` (if any), then update it. Do NOT just append — consolidate and deduplicate. The file structure should be:
+Snapshot/read the existing resolved store's `learnings.md`, draft a complete semantically consolidated candidate in private scratch, then publish through `private_review_store.py` under the shared contract. Never use direct write/edit for publication. On stale content, reread/merge and retry once; on persistent error report a pending update rather than overwrite. Active coordinated lanes return candidates to the coordinator instead. The file structure should be:
 
 ```markdown
 # PR Review Learnings — {OWNER}/{REPO}
@@ -486,12 +486,11 @@ Read the existing `~/.pi/pr-reviews/{OWNER}/{REPO}/learnings.md` (if any), then 
 - Trend vs last session: {any notable changes in issue rates}
 ```
 
-**Manual follow-up after maintainer review:** Promote recurring, confirmed review
-patterns into `~/.pi/pr-reviews/{OWNER}/{REPO}/review.md` as a concise numbered
-checklist. `/polish` loads that profile alongside repository-owned
-`.agents/review.md` and this store's `learnings.md`. Keep accepted patterns and
-false positives in learnings. Do not automatically create or update `review.md`
-during this pipeline; the maintainer-round promotion is a separate manual step.
+**Automatic private maintenance:** Promote recurring verified patterns or explicit
+maintainer guidance into the resolved store's `review.md` through the same lock/hash
+publication helper. Preserve evidence, accepted patterns and false positives in
+learnings. Bot suggestions alone are not policy. Summarize changed/retired/pending
+items with evidence; do not edit tracked repo guidance or publish new comments.
 
 ### 7c: Clean Up Worktrees
 

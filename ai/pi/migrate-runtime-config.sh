@@ -47,6 +47,16 @@ pi_migration_unchanged() {
   [[ "$kind" == absent ]] || [[ "$(pi_migration_identity "$destination")" == "$identity" ]]
 }
 
+publish_pi_migration_candidate() {
+  local candidate=$1 destination=$2 file_mode=$3
+  if [[ "$destination" == "$PI_AGENT_DIR/settings.json" ]]; then
+    publish_pi_settings "$candidate" "$destination" "$file_mode" \
+      "$kind" "$link_target" "$snapshot_hash" "$identity"
+  else
+    atomic_publish_file "$candidate" "$destination" "$file_mode"
+  fi
+}
+
 # rendered is already validated JSON. delete=1 is used only for retired, empty
 # model output (including a recognized dangling link), never for preferences.
 publish_pi_migration() {
@@ -79,7 +89,7 @@ publish_pi_migration() {
   else
     candidate=$(mktemp "${destination}.candidate.XXXXXX") || return 1
     if ! printf '%s\n' "$rendered" >"$candidate" ||
-      ! atomic_publish_file "$candidate" "$destination" "$file_mode"; then
+      ! publish_pi_migration_candidate "$candidate" "$destination" "$file_mode"; then
       rm -f "$candidate"
       return 1
     fi
@@ -136,6 +146,31 @@ retire_astra_override() {
   kind=$receipt_kind link_target=$receipt_target snapshot_hash=$receipt_hash identity=$receipt_identity
   rendered=$(jq '.astraOverrideRetired = true' <<<"$receipt_contents") || return 1
   publish_pi_migration "$receipt" "$rendered" 0600
+}
+
+apply_pi_efficiency_preferences() {
+  local destination=$1 kind link_target snapshot_hash identity rendered
+  [[ "${PI_AI_APPLY_EFFICIENCY_PREFERENCES:-0}" == 1 ]] || return 0
+  pi_migration_snapshot "$destination" 'ai/pi/settings.json' 1 || return 1
+  [[ "$snapshot_hash" != absent ]] || return 0
+  jq -e '
+    (has("powerline") | not) or
+    ((.powerline | type) == "string") or
+    ((.powerline | type) == "object" and
+      (.powerline as $footer | all(["queue", "cache_read"][]; . as $key
+        | ($footer | has($key) | not) or ($footer[$key] | type) == "object")))
+  ' "$destination" >/dev/null || {
+    log_warning "Invalid efficiency preference structure; preserving runtime contents."
+    return 1
+  }
+  rendered=$(jq '
+    .powerline = (if (.powerline | type) == "string" then {preset: .powerline}
+                  else (.powerline // {}) end)
+    | .showCacheMissNotices = true
+    | .powerline.queue.compactPromptMode = "native"
+    | .powerline.cache_read.format = "both"
+  ' "$destination") || return 1
+  publish_pi_migration "$destination" "$rendered" 0644
 }
 
 pi_preferences_are_valid() {

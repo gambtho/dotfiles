@@ -9,6 +9,14 @@ Deliberate, evidence-based planning run **before** substantial implementation.
 Inspect the repository first; base the plan on what the code actually shows, not
 on generic convention. Do not start implementing unless the user asks.
 
+## Planning and handoff contract
+
+Use the shared [project-review contract](../pr-closeout/references/project-review-contract.md) to identify affected repositories, applicable project/maintainer guidance and verified profile/alias locations. Preserve the evidence and decisions below as the plan preface.
+
+Label a decision-only document **Decision brief — not execution-ready**. When execution is requested, produce one canonical executable plan, using the `writing-plans` task contract: `### Task N:` headings; exact Files; Interfaces with Consumes/Produces; concrete checkbox steps and commands with Expected results. Do not hand grouped prose steps to a `Task N` executor or rewrite the same decisions into a second competing plan. Run second-opinion before implementation as required.
+
+For lane coordination, name repo/worktree ownership, dependencies, plan task IDs and verified profile locations. The coordinator passes those into lane prompts and checks returned base/scope/profile/working-content review evidence and head provenance, rather than commissioning another automatic whole-change review. Handoffs retain pending decisions and unchecked coverage; a decision brief is converted once before execution.
+
 ## Steps
 
 1. **Inspect** the relevant source, tests, docs, config, interfaces, data

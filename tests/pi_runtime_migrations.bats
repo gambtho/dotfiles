@@ -6,7 +6,7 @@ setup() {
   setup_dotfiles_test
   export AGENT="$TEST_ROOT/agent" OWNED="$TEST_ROOT/owned"
   mkdir -p "$AGENT" "$OWNED/ai/pi/config"
-  export PI_AI_REFRESH_PREFERENCES=0
+  export PI_AI_REFRESH_PREFERENCES=0 PI_AI_APPLY_EFFICIENCY_PREFERENCES=0
   printf '{"providers":{"github-copilot":{"models":[{"id":"gpt-6-astra","api":"openai-responses"}]}}}\n' >"$OWNED/ai/pi/config/models.json"
 }
 
@@ -18,6 +18,7 @@ migration() {
     eval "$installer"
     [[ ! -f "$ROOT/ai/pi/migrate-runtime-config.sh" ]] || source "$ROOT/ai/pi/migrate-runtime-config.sh"
     PI_AGENT_DIR=$AGENT
+    PI_HOST_ROOT=${PI_TEST_HOST_ROOT:-}
     MANAGED_SOURCE_ROOTS=("$OWNED" "$REPO_ROOT")
     MODE=${TEST_MODE:-apply}
     "$@"
@@ -441,6 +442,74 @@ refresh() {
   migration refresh_pi_file_context "$AGENT/pi-file-context.json" "$REPO_ROOT/ai/pi/config/file-context.json"
   [ "$status" -eq 0 ]
   [ "$before" = "$(snapshot)" ]
+}
+
+@test "efficiency preferences have a separate opt-in and preserve nested values" {
+  printf '%s\n' '{"theme":"custom","showCacheMissNotices":false,"compaction":{"reserveTokens":123},"powerline":{"preset":"minimal","layout":{"left":["path"]},"disabledSegments":["cache_read"],"queue":{"compactPromptMode":"queue","keep":true},"cache_read":{"format":"tokens","keep":true}},"wrapUpTurns":9}' >"$AGENT/settings.json"
+  cp "$AGENT/settings.json" "$TEST_ROOT/efficiency-original.json"
+  local before
+  before=$(snapshot)
+  migration apply_pi_efficiency_preferences "$AGENT/settings.json"
+  [ "$status" -eq 0 ]
+  [ "$before" = "$(snapshot)" ]
+  export PI_AI_REFRESH_PREFERENCES=1
+  migration apply_pi_efficiency_preferences "$AGENT/settings.json"
+  [ "$status" -eq 0 ]
+  [ "$before" = "$(snapshot)" ]
+  export PI_AI_APPLY_EFFICIENCY_PREFERENCES=1
+  migration apply_pi_efficiency_preferences "$AGENT/settings.json"
+  [ "$status" -eq 0 ]
+  jq -e '.theme == "custom" and .showCacheMissNotices == true and .compaction == {reserveTokens:123} and .wrapUpTurns == 9 and .powerline == {preset:"minimal",layout:{left:["path"]},disabledSegments:["cache_read"],queue:{compactPromptMode:"native",keep:true},cache_read:{format:"both",keep:true}}' "$AGENT/settings.json"
+  cmp "$TEST_ROOT/efficiency-original.json" "$AGENT/settings.json.backup"
+  [ "$(stat -c %a "$AGENT/settings.json.backup")" = 600 ]
+  before=$(snapshot)
+  migration apply_pi_efficiency_preferences "$AGENT/settings.json"
+  [ "$status" -eq 0 ]
+  [ "$before" = "$(snapshot)" ]
+}
+
+@test "efficiency preferences preserve legacy preset and never set turn budgets" {
+  export PI_AI_APPLY_EFFICIENCY_PREFERENCES=1
+  printf '{"powerline":"compact"}\n' >"$AGENT/settings.json"
+  printf '{"defaultMaxTurns":31}\n' >"$AGENT/subagents.json"
+  migration apply_pi_efficiency_preferences "$AGENT/settings.json"
+  [ "$status" -eq 0 ]
+  jq -e '. == {powerline:{preset:"compact",queue:{compactPromptMode:"native"},cache_read:{format:"both"}},showCacheMissNotices:true}' "$AGENT/settings.json"
+  jq -e '. == {defaultMaxTurns:31}' "$AGENT/subagents.json"
+}
+
+@test "efficiency preferences reject malformed footer structures without changes" {
+  export PI_AI_APPLY_EFFICIENCY_PREFERENCES=1
+  local value before
+  for value in '{"powerline":42}' '{"powerline":{"queue":[]}}' '{"powerline":{"cache_read":null}}'; do
+    printf '%s\n' "$value" >"$AGENT/settings.json"
+    before=$(snapshot)
+    migration apply_pi_efficiency_preferences "$AGENT/settings.json"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *Invalid*efficiency* ]]
+    [ "$before" = "$(snapshot)" ]
+  done
+}
+
+@test "efficiency check mode and races cannot replace runtime state" {
+  export PI_AI_APPLY_EFFICIENCY_PREFERENCES=1 TEST_MODE=check
+  printf '{}\n' >"$AGENT/settings.json"
+  local before
+  before=$(snapshot)
+  migration apply_pi_efficiency_preferences "$AGENT/settings.json"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *Would*back*up* ]]
+  [ "$before" = "$(snapshot)" ]
+  export TEST_MODE=apply
+  migration eval '
+    original=$(declare -f backup_regular_contents)
+    eval "${original/backup_regular_contents/original_backup}"
+    backup_regular_contents() { original_backup "$@"; printf "{\"concurrent\":true}\\n" >"$1"; }
+    apply_pi_efficiency_preferences "$PI_AGENT_DIR/settings.json"
+  '
+  [ "$status" -ne 0 ]
+  [[ "$output" == *changed*during* ]]
+  jq -e '. == {concurrent:true}' "$AGENT/settings.json"
 }
 
 @test "check mode evaluates each pending migration without files backups receipts or directories" {

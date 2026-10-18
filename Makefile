@@ -73,7 +73,7 @@ python-test:
 	python3 -m unittest discover -s tests/python -p 'test_*.py'
 
 pi-runtime-test: ## Exercise selected installed Pi/permission/subagents/LSP packages without paid providers
-	node --test tests/pi_extension_runtime.test.mjs tests/pi_native_packages.test.mjs
+	node --test tests/pi_extension_runtime.test.mjs tests/pi_native_packages.test.mjs tests/pi_settings_publication.test.mjs
 
 # ── Help ──────────────────────────────────────────────────────────────────────
 

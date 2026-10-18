@@ -232,7 +232,7 @@ try {
   }
   manager.configureForCwd(repoRoot);
 
-  const issueScopes = [undefined, "rush", "smart", "deep", "review"] as const;
+  const issueScopes = [undefined, "rush", "smart", "inspector", "deep", "review"] as const;
   // Exercise the selected current/legacy method; incompatible implementations fail closed.
   const readPolicyIssues = manager[policyIssuesMethod] as (agentName?: string) => string[];
   const issues = issueScopes.flatMap((agentName) =>
@@ -872,7 +872,7 @@ try {
   checkPath(manager, "external_directory_read", "/opt/pi-security-test/file", "allow");
   checkPath(manager, "external_directory_write", "/opt/pi-security-test/file", "allow");
 
-  for (const agentName of ["rush", "deep", "review"] as const) {
+  for (const agentName of ["rush", "inspector", "deep", "review"] as const) {
     expectState(`${agentName} write tool`, manager.getToolPermission("write", agentName), "deny");
     expectState(`${agentName} edit tool`, manager.getToolPermission("edit", agentName), "deny");
     checkPath(manager, "path_read", join(homedir(), ".ssh", "config"), "deny", agentName);
@@ -914,7 +914,7 @@ try {
     checkBash(manager, "gh api repos/o/r -X DELETE", "deny", agentName);
   }
   checkBash(manager, "unknown-tool --version", "allow", "smart");
-  for (const agentName of ["rush", "smart", "deep", "review"] as const) {
+  for (const agentName of ["rush", "smart", "inspector", "deep", "review"] as const) {
     checkBash(manager, 'cat "$SECRET_PATH"', "deny", agentName);
   }
 
@@ -928,7 +928,7 @@ try {
   for (const command of sensitiveReadCommands) await checkBashPath(yolo, command, "deny");
   await checkBashPath(yolo, "ls ~/.ssh", "deny", "smart");
   checkPath(yolo, "path_read", authPath, "deny");
-  for (const agentName of ["rush", "deep", "review"] as const) {
+  for (const agentName of ["rush", "inspector", "deep", "review"] as const) {
     checkBash(yolo, "git reset --hard HEAD", "deny", agentName);
     checkBash(yolo, "git branch -D feature/example", "deny", agentName);
     checkBash(yolo, "git worktree remove --force /tmp/example", "deny", agentName);
@@ -938,7 +938,7 @@ try {
     checkBash(yolo, "gh repo delete owner/repo", "deny", agentName);
     checkBash(yolo, "gh api repos/o/r --method DELETE", "deny", agentName);
   }
-  for (const agentName of ["rush", "smart", "deep", "review"] as const) {
+  for (const agentName of ["rush", "smart", "inspector", "deep", "review"] as const) {
     checkBash(yolo, 'cat "$SECRET_PATH"', "deny", agentName);
   }
 

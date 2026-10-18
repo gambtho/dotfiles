@@ -17,6 +17,10 @@ neovim = "0.12.4"
 "npm:@devcontainers/cli" = "0.86.1"
 git-lfs = "3.7.1"
 ruff = "0.16.6"
+ty = "0.0.89"
+"npm:@biomejs/biome" = { version = "2.5.15", npm_args = "--ignore-scripts" }
+"npm:bash-language-server" = { version = "5.8.1", npm_args = "--ignore-scripts" }
+"npm:yaml-language-server" = { version = "2.0.0", npm_args = "--ignore-scripts" }
 
 [settings]
 idiomatic_version_file_enable_tools = ["node"]

@@ -70,10 +70,10 @@ assert.equal(baseline.permission.codemode, "allow", "enable the authored outer t
 const rendered = JSON.parse(JSON.stringify(baseline).replaceAll("__PI_AGENT_DIR__", agentDir));
 mkdirSync(join(agentDir, "extensions/pi-permission-system"));
 writeFileSync(join(agentDir, "extensions/pi-permission-system/config.json"), JSON.stringify(rendered));
-const children = ["rush", "smart", "deep", "review"];
+const children = ["rush", "smart", "inspector", "deep", "review"];
 for (const name of children) {
   const authored = readFileSync(join(repoRoot, `ai/pi/agents/${name}.md`), "utf8");
-  writeFileSync(join(agentDir, `agents/${name}.md`), authored.replace(/^model: .+$/m, "model: native-fixture/scripted"));
+  writeFileSync(join(agentDir, `agents/${name}.md`), authored);
 }
 const subagentSettings = JSON.parse(readFileSync(join(repoRoot, "ai/pi/config/subagents.json"), "utf8"));
 subagentSettings.excludedExtensionPackages.push(lspRoot);
@@ -115,6 +115,8 @@ const modelRuntime = await sdk.ModelRuntime.create({
 const prompts: PermissionUiPromptEvent[] = [];
 const decisions: PermissionDecisionEvent[] = [];
 const childIds = new Map<string, string>();
+const childModels = new Map<string, string>();
+const expectedModels: Record<string, string> = { rush: "gpt-6-luna", smart: "gpt-6.1-sol", inspector: "gpt-6.1-sol", deep: "gpt-6-astra", review: "claude-opus-5.5" };
 let runningChild: string | undefined;
 let service: SubagentsService | undefined;
 let serial = 0;
@@ -124,10 +126,11 @@ const modelDefinition = {
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 } satisfies ProviderModelConfig;
 const fixtureProvider = (pi: ExtensionAPI) => {
-  pi.registerProvider("native-fixture", {
+  const provider = {
     api: "native-fixture-api", apiKey: "literal-fake-test-key", baseUrl: "http://invalid.local-never-contacted",
     models: [modelDefinition],
     streamSimple(model, context, options) {
+      if (runningChild && model.provider === "github-copilot") childModels.set(runningChild, model.id);
       const stream = ai.createAssistantMessageEventStream();
       void (async () => {
         await options?.onPayload?.({ fixture: true }, model);
@@ -172,7 +175,11 @@ const fixtureProvider = (pi: ExtensionAPI) => {
       });
       return stream;
     },
-  });
+  } satisfies Parameters<ExtensionAPI["registerProvider"]>[1];
+  pi.registerProvider("native-fixture", provider);
+  // Keep authored IDs/routing while substituting only transport in this isolated
+  // model runtime. No production credentials or provider network is available.
+  pi.registerProvider("github-copilot", { ...provider, models: [...new Set(Object.values(expectedModels))].map(id => ({ ...modelDefinition, id, reasoning: true })) });
   pi.events.on("fixture:subagents-service", value => { service = value as SubagentsService; });
   pi.events.on("permissions:ui_prompt", event => prompts.push(event as PermissionUiPromptEvent));
   pi.events.on("permissions:decision", event => decisions.push(event as PermissionDecisionEvent));
@@ -254,7 +261,7 @@ try {
       tools.bash({command: ${JSON.stringify(name === "smart" ? "git branch --show-current" : "git branch must-not-exist")}})
     ]); text(out.map(r => r.status === "rejected" ? { status: r.status, error: r.reason.message } : r)); text(ALL_TOOLS.map(t => t.name));
     ${name === "smart" ? 'text((await Promise.allSettled([tools.write({path:"smart.txt",content:"smart-linked"}), tools.write({path:"primary/smart-blocked.txt",content:"blocked"})])).map(r => r.status === "rejected" ? {status:r.status,error:r.reason.message} : r));' : `text({write: "write" in tools, edit: "edit" in tools}); for (const tool of ["write", "edit"]) { try { await tools[tool]({path: "${name}-blocked.txt",content:"must-not-write",oldText:"original",newText:"mutated"}); } catch (e) { text(e.message); } }`}`;
-    const id = service.spawn(name, `NATIVE:${source}`, { model: "native-fixture/scripted", foreground: true, maxTurns: 4 });
+    const id = service.spawn(name, `NATIVE:${source}`, { foreground: true, maxTurns: 4 });
     await service.waitForAll();
     const record = service.getRecord(id);
     assert.ok(record?.result, "a completed native child has a result");
@@ -262,6 +269,7 @@ try {
     assert.match(record.result, /native-readable-decoy/);
     assert.doesNotMatch(record.result, /FAKE_SECRET|not-for-models|unknown_child_tool/);
     assert.ok(childIds.has(name), `${name} actually created a native child`);
+    assert.equal(childModels.get(name), expectedModels[name], `${name} resolves its authored model without a caller override`);
     if (name !== "smart") {
       assert.match(record.result, /"write":false,"edit":false/);
       assert.match(record.result, /Denied by policy: 'bash'/);
@@ -315,7 +323,7 @@ try {
     subagentsVersion: JSON.parse(readFileSync(join(subagentsRoot, "package.json"), "utf8")).version,
     lspVersion: JSON.parse(readFileSync(join(lspRoot, "package.json"), "utf8")).version,
     nestedCalls: entries.filter(entry => entry.type === "tool_call" && entry.parentToolCallId).length,
-    children, forwardedDenials: decisions.filter(decision => decision.forwarding && decision.resolution === "user_denied").length,
+    children, childModels: Object.fromEntries(childModels), forwardedDenials: decisions.filter(decision => decision.forwarding && decision.resolution === "user_denied").length,
   }));
 } finally {
   await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });

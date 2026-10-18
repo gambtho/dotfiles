@@ -54,12 +54,15 @@ setup() {
     subagent \
     get_subagent_result \
     steer_subagent \
+    ask_parent \
+    notify_parent \
     handoff \
     session_query \
     plan \
     ralph_start \
     ralph_done \
     copy_to_clipboard \
+    web_enable \
     web_search \
     source_check \
     fetch_content \
