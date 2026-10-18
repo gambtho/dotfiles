@@ -26,8 +26,9 @@ already has it.
 4. Copies `config.toml.template` to `~/.config/herdr/config.toml` if that file
    does not exist. An existing config is never overwritten — drift is reported
    and the file is left alone.
-5. Installs the `devcontainer` plugin at the ref pinned in
-   `config/versions.env`, because the shipped config binds two keys to it.
+
+The installer neither installs nor removes plugins. Existing registrations and
+plugin-owned configuration remain machine-local.
 
 `bash tools/herdr/install.sh --check` prints the plan and writes nothing.
 
@@ -39,37 +40,6 @@ Tailscale. Run `DOTFILES_HEELER_ENABLED=1 make ai-heeler` from the canonical
 checkout to prepare it without restarting live agents; root publication and
 controlled cutover remain separate operator steps. Ordinary bootstrap and
 updates do not enable this access. No browser backend or reverse proxy is required.
-
-## The Dev Container plugin
-
-The shipped config binds `prefix+d` to a shell inside the repository's Dev
-Container and `prefix+shift+s` to stopping it. Those actions come from
-[gambtho/herdr-devcontainer](https://github.com/gambtho/herdr-devcontainer), so
-the installer registers the plugin rather than leaving two dead keys on a fresh
-machine.
-
-`prefix+shift+s` and not `prefix+shift+d`: the latter is Herdr's built-in
-`close_workspace`, and stopping a container is destructive enough that it should
-not sit under a mis-key of an equally destructive built-in.
-
-This pin works differently from the binary's. There is no digest to commit —
-`herdr plugin install` resolves the ref to a commit and builds it from source
-here — so `HERDR_DEVCONTAINER_REF` is itself the pin, and a Rust toolchain is
-required at install time. Move it by editing that value; the installer
-uninstalls the old ref before installing the new one.
-
-Three things it deliberately will not do:
-
-- **Replace a local link.** A plugin showing as `local:` is someone's
-  development checkout, and swapping it for a tagged release would drop their
-  working tree out of the pane path.
-- **Fail the phase.** Plugin registration goes through the running Herdr
-  server's socket API, so a first bootstrap that has not started Herdr yet
-  cannot register anything. That warns and continues; rerun the phase once
-  Herdr has run.
-- **Keep its own marker file.** Herdr's plugin registry is the authority, read
-  through `herdr plugin list --json`. A marker would disagree with reality after
-  a hand `herdr plugin uninstall`.
 
 ## Why the config is copied, not symlinked
 
@@ -87,13 +57,77 @@ keeping belong in `config.toml.template`.
 Herdr self-updates: `herdr update`, `herdr channel set stable|preview`, and a
 background `version_check` that polls herdr.dev. Any of those would move the
 binary away from the digest recorded in `config/versions.env`, so the shipped
-config sets `version_check = false` and new releases are noticed by
-`make pins-check` instead.
+config sets `version_check = false`.
 
-To move the pin: `make pins-update`, or edit `HERDR_VERSION` and both
-`HERDR_LINUX_*_SHA256` values by hand. Upstream publishes no checksum file, so
-the digests are computed from the downloaded artifacts and are
-trust-on-first-use.
+Normal Linux install/update runs a separate optional Herdr-only release check:
+`bash libexec/versions check-herdr`. It compares the repository pin with GitHub's
+latest stable release, using a 3-second connection timeout, 10-second total
+request timeout and no retries. A differing tag prints a reminder, not an
+upgrade or downgrade recommendation. Missing tools, offline/rate-limited requests
+and invalid responses warn without failing otherwise successful provisioning.
+The advisory never contacts the running Herdr server or changes pins/binaries.
+`make pins-check` remains the comprehensive check for all dependencies.
+
+To advance Herdr, review the release and edit `HERDR_VERSION`, its release URL,
+and both `HERDR_LINUX_*_SHA256` values together, then verify before deploying.
+`make pins-update` does not advance checksum-reviewed artifacts. Upstream
+publishes no checksum file, so these digests are computed from downloaded
+artifacts and are trust-on-first-use. Replacing a binary does not itself upgrade
+an already-running server; arrange a controlled cutover after saving agent work.
+
+## Lane workflow and existing-host rollout
+
+The defaults name spaces at creation, sort Agents by attention priority, hide a
+single tab's bar, and show in-app background notifications. Keep Spaces as the
+stable lane list; Agents is an attention queue, not a requirement to group lanes
+by repository or run several agents per space. Pi's coordinator skill can launch
+lanes only on explicit request; manual handoffs remain available in other apps.
+
+These are first-install defaults, not a migration of existing mutable config.
+After integrating the reviewed source into the canonical checkout:
+
+1. Stop Pi sessions before reconciling linked resources; run `make ai` from the
+   canonical checkout, never the implementation worktree. This removes the
+   tab-status selection while retaining Herdr's state/prompt bridges. Start a
+   fresh Pi session after the remaining configuration steps.
+2. Back up `~/.config/herdr/config.toml`. Merge these values into its existing
+   tables; do not append duplicate TOML tables or replace unrelated preferences:
+
+   ```toml
+   [ui]
+   prompt_new_workspace_name = true
+   agent_panel_sort = "priority"
+   hide_tab_bar_when_single_tab = true
+
+   [ui.toast]
+   delivery = "herdr"
+   ```
+
+3. Remove only existing `[[keys.command]]` blocks whose `command` is exactly
+   `devcontainer.open-shell` or `devcontainer.open-stop`. Preserve all other
+   shortcuts. Inspect `herdr plugin list --json`; if devcontainer is registered
+   and none of its plugin panes is in use, run `herdr plugin uninstall devcontainer`
+   in the intended session. No installer automatically uninstalls it. Do not
+   stop containers or delete their data or `~/.config/herdr-devcontainer`.
+4. Run `herdr server reload-config`, check that the retired bindings are absent
+   and the new preferences work, then start fresh Pi and try one disposable lane
+   with an explicit launch request. Check its space name, Pi `/session` and
+   `/resume` identity, unchanged focus, and the coordinator's recorded IDs.
+
+No server stop or Herdr upgrade is needed for these preferences. In-app toasts
+are separate from iPhone pushes; see [Heeler notifications](heeler/README.md#notification-only-follow-up).
+
+## Deferred extension watchlist
+
+Not installed or live-tested here; recheck requirements and source before trying:
+
+| Candidate | Possible value | Gate/caveat at investigation |
+|---|---|---|
+| [Herdr Annotate](https://github.com/plannotator/herdr-annotate) | Comment on plans and agent replies | Supports Herdr 0.8.0; test one review flow first |
+| [Herdr Reviewr](https://github.com/persiyanov/herdr-reviewr) | Interactive diffs and feedback | Requires Herdr >=0.9.3 |
+| [pi-herdr](https://github.com/AndrewJacop/pi-herdr) | Visible, steerable delegated agents | Requires Herdr >=0.9.0; README does not verify Linux |
+| [pi-herdr-agents](https://github.com/giuseppecrj/pi-herdr-agents) | Herdr-backed subagents/worktrees | Alternative to current managers, not an automatic additional layer |
+| [Herdr Projects](https://github.com/eliasstravik/herdr-projects) | Integrated coordinator/task board | Would replace substantial existing coordination and Git workflow |
 
 ## Related
 

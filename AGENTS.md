@@ -53,7 +53,7 @@ Pi authenticates directly to the GitHub Copilot subscription through `/login`. S
 - `polish-core` — shared engine behind `/polish`, including per-language idiom rules.
 - `blindspot-pass` — pre-implementation risk surface.
 - `implementation-plan` — evidence-based implementation plan.
-- `lane-coordinator` — coordinate manually started lanes (Pi or Claude Code): keep STATE.md current, verify reports, and gate outward publication.
+- `lane-coordinator` — coordinate lanes across harnesses: manual handoffs by default, explicit Herdr launching and Pi naming, STATE.md, verified reports, and approval-gated publication.
 - `change-explainer` — reviewer-facing completed-change write-up.
 - `pr-closeout` — drive a PR to merge-ready in any repository (project review profiles, bot vs human thread rules, flake discipline, size check).
 - `second-opinion-core` — cross-model spec/plan review; runs automatically after a spec or plan is written and backs `/second-opinion`.

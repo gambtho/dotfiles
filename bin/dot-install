@@ -248,6 +248,9 @@ main() {
   fi
   run_phase optional work setup_work
   run_phase optional herdr bash "$DOTFILES_ROOT/tools/herdr/install.sh"
+  case "$OS" in
+    Ubuntu | WSL) run_phase optional herdr-update bash "$DOTFILES_ROOT/libexec/versions" check-herdr ;;
+  esac
   setup_ai
 
   finish_phases || exit 1

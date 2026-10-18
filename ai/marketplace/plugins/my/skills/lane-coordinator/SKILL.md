@@ -1,6 +1,6 @@
 ---
 name: lane-coordinator
-description: Runs a long-lived coordination session for parallel "lanes" (separate agent sessions the user starts by hand, in Pi or Claude Code). Writes lane prompts, verifies lane reports against the real code and GitHub, keeps STATE.md current, drafts outward text in the user's voice, and posts only with approval. Doesn't write product code. Use when the user says "coordinate", "lane coordinator", "start lanes", "write a lane prompt", "W<n>", or pastes a lane report.
+description: Use when coordinating parallel work lanes across Pi, Claude Code, or a Claude app session, writing lane prompts, explicitly starting a lane in Herdr, verifying lane reports, or keeping project coordination state. Triggers include "coordinate", "lane coordinator", "start W12", "write a lane prompt", "W<n>", or a pasted lane report.
 ---
 
 # Lane coordinator
@@ -52,7 +52,8 @@ folder.
   lane's plan file. Don't infer scope from a PR number.
 - Next number: the highest `W<n>` in `lanes/` or STATE.md, plus one. One file per lane
   from [lane-template.md](references/lane-template.md). Hand the user one line in a code
-  block: `Read <absolute path> and follow it.`
+  block: `Read <absolute path> and follow it.` For Pi, also provide the UI command
+  `/name <project W<n> — title>` for the new lane; never run `/name` in Bash.
 - Each lane gets its own worktree and branch from a freshly fetched base, never a shared
   checkout.
 - Non-trivial work: audit or design first, stop for the user's OK, then one PR at a time.
@@ -64,6 +65,21 @@ folder.
   their design, list each deviation, draft a short takeover comment for the user.
 - Before a lane closes or pauses for long, have it write a handoff from
   [handoff-template.md](references/handoff-template.md).
+
+## Start a lane only when asked
+
+Manual creation remains the default, including when the coordinator runs in a
+Claude app session. Preparing a prompt does not launch it. An explicit request
+such as "start W12" may create a named Herdr space and start Pi **only** with
+shell/tool access inside the intended Herdr session (`HERDR_ENV=1`). Otherwise
+return the manual handoff and Pi naming instruction without claiming a launch.
+
+For an eligible launch, follow [herdr-launch.md](references/herdr-launch.md):
+check existing launches first; use a new space per lane, explicit source cwd and
+`--no-focus`; record returned IDs before starting Pi with `--name`; submit the
+lane-file instruction to that exact pane. Record partial failures instead of
+retrying blindly. Never approve dialogs, control another client's focused pane,
+or treat launch permission as approval of unapproved implementation work.
 
 ## Handle a lane report
 

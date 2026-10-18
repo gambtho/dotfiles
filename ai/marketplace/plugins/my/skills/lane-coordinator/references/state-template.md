@@ -16,9 +16,12 @@ is the most important thing to surface.
 
 ## Open lanes
 
-| Lane | What | State | Waiting on |
-|---|---|---|---|
-| W<n> | <one line: goal and current PR numbers> | Active / Waiting / Paused / Ready | <person, PR, or —> |
+| Lane | What | State | Waiting on | Launch |
+|---|---|---|---|---|
+| W<n> | <one line: goal and current PR numbers> | Active / Waiting / Paused / Ready | <person, PR, or —> | Manual, or <workspace ID / pane ID; alias; Pi name; Created / Ready / Submitted> |
+
+Launch is terminal setup, not proof of completed work. Preserve the last confirmed
+stage and IDs on failure; note uncertain delivery here before retrying.
 
 Closed recently: <W<n>, …>
 To reopen later: <W<n> (when)>

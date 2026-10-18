@@ -11,6 +11,53 @@ Tailscale Serve/Funnel route is required. Native Pi resources and ordinary
 provisioning phases are unchanged.
 The Heeler plugin, pairing bootstrap, notifications and push relay are not installed.
 
+## Notification-only follow-up
+
+Investigation only: the host plugin is still **not installed**, and phone push
+or Live Activity delivery has not been exercised. Source review of Heeler
+[revision 92ba5da](https://github.com/ZingerLittleBee/Heeler/tree/92ba5dac6ca83c6972e18fd6227bbde49eabe3bf)
+found a notification-only path independent of QR pairing:
+
+- The [plugin manifest](https://github.com/ZingerLittleBee/Heeler/blob/92ba5dac6ca83c6972e18fd6227bbde49eabe3bf/plugin/herdr-plugin.toml)
+  is version 0.6.1, requires Herdr >=0.7.5, and builds with `npm ci`. Its startup
+  and agent-state hooks run Node (the plugin README requires Node >=20 on PATH).
+  Verify Node/npm and the reviewed build/dependency scripts before installation;
+  Node available interactively is not proof it is available to service hooks.
+- [Registration](https://github.com/ZingerLittleBee/Heeler/blob/92ba5dac6ca83c6972e18fd6227bbde49eabe3bf/Sources/Heeler/Notifications/NotificationRegistrationCeremony.swift)
+  uses the existing authenticated Host, not the pairing action. It creates/reuses
+  a per-Host encryption key in the phone's Keychain and writes the corresponding
+  device token/key/session entry on the Host. Live Activity registration extends
+  that entry and needs notifications registered first.
+- The [SSH transport](https://github.com/ZingerLittleBee/Heeler/blob/92ba5dac6ca83c6972e18fd6227bbde49eabe3bf/Sources/Heeler/Transport/HeelerSSHTransport.swift#L1196-L1595)
+  probes `herdr plugin list` / `plugin config-dir` through SSH exec and replaces
+  `notifications.json` / `notify.json` atomically over SFTP. It enforces private
+  config-directory/file modes 0700/0600. These files include secret key material:
+  never print, commit, or copy them into diagnostic reports.
+- This repository's SSH listener already permits ordinary shell exec and
+  `internal-sftp`; its dedicated authorized-key path and port 2222 need not
+  change for that path. The socket forwarding allowlist is not a filesystem
+  sandbox. Compatibility is source-based, not a successful device registration.
+- The [push relay](https://github.com/ZingerLittleBee/Heeler/blob/92ba5dac6ca83c6972e18fd6227bbde49eabe3bf/relay/README.md)
+  defaults to `https://heeler-apns.bybee.dev` and forwards to Apple. Notification
+  content is encrypted, but tokens, source IP, timing/size and Live Activity
+  counts/event metadata are visible to the relay. No inbound listener or
+  self-hosted relay is needed; enabling this is consent to that outbound service.
+
+A separately approved experiment should install a reviewed, pinned plugin
+revision (not a floating `main`), **skip `heeler.pair`**, and retain the working
+Host's address, port, SSH key, fingerprint and default session. Check app/plugin
+compatibility and Node in the running server environment first. Enable Agent
+Notifications in the existing app/Host, test one harmless Blocked and Done event
+with the app backgrounded, then test Live Activities and reconnect. Inspect only
+version/status/permissions, not registration contents. Do not change SSH policy
+to make a failed test pass; diagnose the exact failure first.
+
+For rollback, turn off that Host's notifications/Live Activities while connected
+so the app can remove its registration, then disable/uninstall only the new
+plugin. Keep the working SSH access and all unrelated device registrations.
+Source compatibility does not establish that the currently installed phone app
+supports these exact features; verify its version before the experiment.
+
 ## Boundaries and prerequisites
 
 - Linux with systemd, its user manager and cgroup v2. Tested on Ubuntu 24.04 WSL,

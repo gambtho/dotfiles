@@ -29,7 +29,7 @@ setup() {
   [[ "$output" == *"artifact herdr v0.8.0"* ]]
   [[ "$output" == *"artifact neovim $NVIM_VERSION"* ]]
   [[ "$output" == *"artifact tree-sitter-cli $TREE_SITTER_VERSION"* ]]
-  [[ "$output" == *"git herdr-devcontainer $HERDR_DEVCONTAINER_REPO $HERDR_DEVCONTAINER_REF"* ]]
+  [[ "$output" != *"herdr-devcontainer"* ]]
   [[ "$output" != *"paseo"* ]]
   [[ "$output" != *"npm "* ]]
   [[ "$output" != *"pi-webui-runtime"* ]]
@@ -239,7 +239,7 @@ case "$url" in
   *herdrdev/herdr*) printf '{"tag_name":"v0.8.0"}\n' ;;
   *neovim/neovim*) printf '{"tag_name":"v0.12.4"}\n' ;;
   *tree-sitter/tree-sitter*) printf '{"tag_name":"v0.26.11"}\n' ;;
-  *gambtho/herdr-devcontainer*) printf '{"tag_name":"v0.2.0"}\n' ;;
+
   *tmustier/pi-queue-steer*|*registry.npmjs.org/pi-web-access/*|*registry.npmjs.org/@narumitw/pi-lsp/*|*registry.npmjs.org/@gotgenes/pi-subagents/*|*registry.npmjs.org/@gotgenes/pi-permission-system/*) exit 91 ;;
   *registry.npmjs.org*) exit 92 ;;
 esac
@@ -256,7 +256,7 @@ SCRIPT
   [[ "$output" == *"current artifact herdr v0.8.0"* ]]
   [[ "$output" == *"current artifact neovim v0.12.4"* ]]
   [[ "$output" == *"current artifact tree-sitter-cli v0.26.11"* ]]
-  [[ "$output" == *"current git herdr-devcontainer v0.2.0"* ]]
+  [[ "$output" != *"herdr-devcontainer"* ]]
   [[ "$output" == *"current artifact nerd-fonts v3.4.0"* ]]
   [[ "$output" != *"paseo"* ]]
   [[ "$output" != *"npm "* ]]
@@ -306,7 +306,6 @@ SCRIPT
   done <<'PINS'
 neovim neovim/neovim artifact v0.12.4
 tree-sitter-cli tree-sitter/tree-sitter artifact v0.26.11
-herdr-devcontainer gambtho/herdr-devcontainer git v0.2.0
 PINS
 }
 

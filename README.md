@@ -388,10 +388,14 @@ in `config/mise/config.toml` (linked to `~/.config/mise/config.toml`).
 
 Run `make pins` to list every managed version and Git ref. Run `make pins-check`
 to query upstreams without changing files, including the Neovim and tree-sitter
-CLI artifact pins and the Herdr devcontainer plugin release tag. Neovim and
+CLI and Herdr artifact pins. Neovim and
 tree-sitter also have mise pins; review both copies together when updating them.
 Run `make pins-update` to select mise upgrades interactively, refresh Git refs,
 run the full test suite, and display the resulting version diff for review.
+Checksum-reviewed artifacts such as Herdr still require a manual version/digest
+update. Normal Linux install/update also performs a best-effort Herdr-only
+release check; it reminds without upgrading or restarting agents. See
+[Herdr update policy](tools/herdr/README.md#why-the-pin-fights-the-built-in-updater).
 The Kubernetes channel is operator-selected: `pins-update` reports Kubernetes channel drift against
 upstream but never rewrites `KUBERNETES_CHANNEL` itself — choose and edit a
 compatible minor in `config/versions.env` by hand.

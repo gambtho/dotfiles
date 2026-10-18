@@ -5,6 +5,13 @@ PR from a freshly fetched `origin/<base>`). Read the repo's `AGENTS.md`/`CLAUDE.
 contribution guide first and follow them. Never push to the default branch, don't merge,
 don't post on GitHub without the user's OK.
 
+## Session identity (private)
+
+Display name: `<project> W<n> — <short title>`. In Pi, launch with `--name` or have
+its user run `/name <display name>` in the Pi UI before submitting this prompt.
+Do not execute `/name` in Bash. Other harnesses use their own naming mechanism.
+Keep this identity out of public branch names, commits, PRs and comments.
+
 ## Context
 
 <Why this work exists, in a few lines. Link the issue/PR. Name who owns what and which

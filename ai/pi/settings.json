@@ -41,7 +41,6 @@
       "extensions": [
         "raw-paste/index.ts",
         "session-recap/index.ts",
-        "tab-status/tab-status.ts",
         "usage-extension/index.ts",
         "pi-ralph-wiggum/index.ts",
         "code-actions/index.ts"
