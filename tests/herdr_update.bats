@@ -4,8 +4,11 @@ load test_helper
 
 setup() {
   setup_dotfiles_test
+  source "$REPO_ROOT/config/versions.env"
   cp "$REPO_ROOT/config/versions.env" "$TEST_ROOT/pins-before"
-  export HERDR_CHECK_RESPONSE='{"tag_name":"v0.9.5"}' HERDR_CHECK_STATUS=0
+  local major="${HERDR_VERSION#v}"
+  HERDR_NEWER_VERSION="v$((${major%%.*} + 1)).0.0"
+  export HERDR_CHECK_RESPONSE="{\"tag_name\":\"$HERDR_NEWER_VERSION\"}" HERDR_CHECK_STATUS=0
   stub_command curl '
     connect= max= retry=
     while (($# > 1)); do
@@ -29,7 +32,7 @@ setup() {
 @test "Herdr advisory compares only the pin and stable release without mutation" {
   run bash "$REPO_ROOT/libexec/versions" check-herdr
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Herdr pin differs from latest stable: v0.8.0 -> v0.9.5"* ]]
+  [[ "$output" == *"Herdr pin differs from latest stable: $HERDR_VERSION -> $HERDR_NEWER_VERSION"* ]]
   [[ "$output" == *"tools/herdr/README.md"* ]]
   [[ "$output" != *"unexpected tool"* ]]
   [ "$(<"$TEST_ROOT/curl-budget")" = '3 10 0' ]
@@ -38,16 +41,16 @@ setup() {
 }
 
 @test "Herdr advisory reports a current pin without an update recommendation" {
-  HERDR_CHECK_RESPONSE='{"tag_name":"v0.8.0"}' run bash "$REPO_ROOT/libexec/versions" check-herdr
+  HERDR_CHECK_RESPONSE="{\"tag_name\":\"$HERDR_VERSION\"}" run bash "$REPO_ROOT/libexec/versions" check-herdr
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Herdr pin matches latest stable: v0.8.0"* ]]
+  [[ "$output" == *"Herdr pin matches latest stable: $HERDR_VERSION"* ]]
   [[ "$output" != *"differs"* ]]
 }
 
 @test "Herdr advisory reports a different older release without recommending a downgrade" {
-  HERDR_CHECK_RESPONSE='{"tag_name":"v0.7.0"}' run bash "$REPO_ROOT/libexec/versions" check-herdr
+  HERDR_CHECK_RESPONSE='{"tag_name":"v0.0.1"}' run bash "$REPO_ROOT/libexec/versions" check-herdr
   [ "$status" -eq 0 ]
-  [[ "$output" == *"pin differs from latest stable: v0.8.0 -> v0.7.0"* ]]
+  [[ "$output" == *"pin differs from latest stable: $HERDR_VERSION -> v0.0.1"* ]]
   [[ "$output" != *"outdated"* ]]
 }
 
