@@ -19,12 +19,15 @@ open PRs to stay off (or the shared rules file).>
 1. <Audit/design: what to read and answer.> Write it to `<local report path>` and
    **stop for approval**. Include a size estimate and a PR split if it's over ~800
    product lines. (Skip this gate if the scope is already approved; say so.)
-2. <Implement the approved scope.>
+2. <Implement the approved executable plan tasks: plan path, Task N IDs, owned files,
+   dependencies, verified repo/profile/alias location. A decision brief must be converted
+   to the canonical executable plan once before implementation.>
 3. Run the repo's checks: <exact commands from the repo>. Race/focused tests on touched
    packages where the repo has them.
-4. Open the PR (draft or not, say which) with a short plain body. Stop when it's open
-   and CI is green. If it's blocked, failing or pending past a reasonable wait, stop and
-   report that.
+4. Use `pr-closeout` for the review/finalization phase, reusing valid review evidence
+   rather than adding another automatic reviewer pass. Publication still needs the
+   user's approval. For an approved PR, report CI/threads/readiness at the exact head;
+   for local or deliberately draft work, report only that scoped status and blockers.
 
 ## Rules
 
@@ -41,10 +44,10 @@ open PRs to stay off (or the shared rules file).>
 - Public text (PR bodies, comments) is a draft until the user approves it, unless this
   prompt says otherwise.
 
-- If the repo has a maintainer review profile (see COORDINATION.md), read it before
-  starting. When you address that maintainer's review, propose any new pattern in your
-  report (the exact line plus an evidence link); the coordinator decides and updates the
-  profile.
+- Read the shared project-review contract bundled with `pr-closeout` and all applicable
+  profiles at their verified COORDINATION.md paths, including aliases. Return feedback
+  candidates (exact text plus evidence) to the coordinator; do not publish profiles
+  yourself. The coordinator performs automatic private maintenance safely and summarizes it.
 
 ## Report
 

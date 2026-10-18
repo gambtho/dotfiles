@@ -5,6 +5,11 @@ Written by the lane before it closes or pauses for long, under the project folde
 
 - Repo / worktree / branch: <owner/repo>, <path>, <branch>
 - Base and HEAD: <base ref and SHA>, <local HEAD>; pushed? <yes/no>
+- Canonical plan/task IDs and dependencies: <path, Task N, owners>
+- Verified repo/profile/alias locations: <identity and loaded paths>
+- Review evidence: <head/base, scope, working-content hash, profile content identities, method/resolved model,
+  findings/dispositions, checks and unchecked coverage; changes since review>
+- Private learning candidates/updates: <exact text and evidence; coordinator owns publication>
 - PRs: <number, state, head SHA, CI on that head>
 - Done: <what landed or is ready>
 - Not done: <remaining scope, uncommitted or unpushed work and where it is>

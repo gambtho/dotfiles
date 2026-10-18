@@ -17,7 +17,7 @@ Read `.pi/memory/improve_findings.md` from the project root. If it does not exis
 
 ## Dispatch parallel reviewers
 
-Issue three sibling `subagent` calls: semantic/architectural, correctness/quality, and surface/dependencies. Give each call a self-contained `prompt`, a 3–5 word `description`, `subagent_type: deep`, and `run_in_background: true`, because subagents do not share the parent conversation. Repeat the required priming reads, Phase 1 data, finding format, and output contract in every prompt. The correctness/quality agent should read the applicable language file from the installed `polish-core/rules/` directory.
+Issue three sibling `subagent` calls: semantic/architectural, correctness/quality, and surface/dependencies. Give each call a self-contained `prompt`, a 3–5 word `description`, and `run_in_background: true`, because subagents do not share the parent conversation. Use `subagent_type: deep` for semantic/architectural analysis and `subagent_type: inspector` for ordinary correctness and surface/dependency passes; escalate only for a named difficult risk. Repeat the required priming reads, Phase 1 data, finding format, and output contract in every prompt. The correctness/quality agent should read the applicable language file from the installed `polish-core/rules/` directory.
 
 Record every returned agent ID, then poll each with `get_subagent_result({ agent_id, wait: false })`. Poll without blocking unrelated work; after the workflow's collection budget, mark unfinished reports late/incomplete and ignore later notifications rather than claiming those agents were stopped.
 

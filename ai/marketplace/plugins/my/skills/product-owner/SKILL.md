@@ -17,7 +17,7 @@ Be an ongoing, project-specific product strategy partner. Help the user develop 
 
 ## Feature brief, when requested
 
-For a chosen bet or a specific feature request, draft a short brief **in chat**: intended user and problem, observable outcomes, boundaries and non-goals, evidence versus assumptions, consequential open decisions, and how the user could tell it succeeded. Ask about decisions that are costly to guess. Recommend cuts or alternative directions when justified, without silently changing the request. A brief can feed a later implementation plan; it is not one.
+For a chosen bet or a specific feature request, draft a short brief **in chat**: intended user and problem, observable outcomes, boundaries and non-goals, evidence versus assumptions, consequential open decisions, and how the user could tell it succeeded. Ask about decisions that are costly to guess. Recommend cuts or alternative directions when justified, without silently changing the request. A brief can feed a later implementation plan; it is not execution-ready. Hand approved scope to `implementation-plan` once, preserving decisions as its preface; for coordinated work include affected repositories and dependency/ownership boundaries, without dispatching lanes here.
 
 ## Boundaries
 

@@ -15,16 +15,17 @@ setup() {
 }
 
 @test "lane coordinator bundled Markdown references resolve inside its package" {
-  run python3 - "$SKILL_DIR" <<'PY'
+  run python3 - "$SKILL_DIR" "$PACKAGE_DIR" <<'PY'
 from pathlib import Path
 import re
 import sys
 
-root = Path(sys.argv[1]).resolve()
-entry = root / "SKILL.md"
+skill = Path(sys.argv[1]).resolve()
+root = Path(sys.argv[2]).resolve()
+entry = skill / "SKILL.md"
 assert entry.is_file(), f"Missing skill entry: {entry}"
 visited = set()
-pending = [entry]
+pending = [entry, root / "skills/pr-closeout/SKILL.md", root / "skills/polish-core/SKILL.md", root / "prompts/review-prs.md"]
 while pending:
     source = pending.pop()
     if source in visited:

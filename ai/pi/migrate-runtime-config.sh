@@ -138,6 +138,31 @@ retire_astra_override() {
   publish_pi_migration "$receipt" "$rendered" 0600
 }
 
+apply_pi_efficiency_preferences() {
+  local destination=$1 kind link_target snapshot_hash identity rendered
+  [[ "${PI_AI_APPLY_EFFICIENCY_PREFERENCES:-0}" == 1 ]] || return 0
+  pi_migration_snapshot "$destination" 'ai/pi/settings.json' 1 || return 1
+  [[ "$snapshot_hash" != absent ]] || return 0
+  jq -e '
+    (has("powerline") | not) or
+    ((.powerline | type) == "string") or
+    ((.powerline | type) == "object" and
+      (.powerline as $footer | all(["queue", "cache_read"][]; . as $key
+        | ($footer | has($key) | not) or ($footer[$key] | type) == "object")))
+  ' "$destination" >/dev/null || {
+    log_warning "Invalid efficiency preference structure; preserving runtime contents."
+    return 1
+  }
+  rendered=$(jq '
+    .powerline = (if (.powerline | type) == "string" then {preset: .powerline}
+                  else (.powerline // {}) end)
+    | .showCacheMissNotices = true
+    | .powerline.queue.compactPromptMode = "native"
+    | .powerline.cache_read.format = "both"
+  ' "$destination") || return 1
+  publish_pi_migration "$destination" "$rendered" 0644
+}
+
 pi_preferences_are_valid() {
   jq -e '
     def optional($key; $type): (has($key) | not) or (.[$key] | type) == $type;

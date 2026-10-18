@@ -93,12 +93,17 @@ user doesn't remember which lane owns something; STATE.md answers that.
 
 ## Maintainer review profiles
 
-For each repo where someone else merges, keep a review profile: a short checklist of what
-that maintainer asks for, each item with a one-line why and an example link (path recorded
-in COORDINATION.md's repo table). Lanes working in that repo read it first.
-- When a lane addresses that maintainer's review, it proposes any new pattern in its
-  report (exact line plus evidence link); you verify it against the review and update the
-  profile, so it stays accurate and deduplicated.
+Read the shared [project-review contract](../pr-closeout/references/project-review-contract.md).
+Use it for every repository, not only those where another maintainer merges. Record
+verified base identity, profile/alias location and executable plan task IDs in the
+COORDINATION.md repo table and lane prompts. Keep profiles concise and evidence-linked.
+- Lanes return exact candidate feedback plus source links; you verify and automatically
+  consolidate/promote confirmed preferences through the shared private-store helper.
+  You are the semantic writer for active lanes; never directly overwrite store Markdown.
+  On contention/stale data, merge/retry once or report pending updates. Summarize changes.
+- Reuse matching base/scope/profile/working-content review evidence (retain head provenance) from `pr-closeout`/polish.
+  Reject stale evidence, and request affected-scope review when needed; do not run another
+  whole-change review just because a lane finished. Repository-required reviews still win.
 - Every so often (or when reviews keep catching the same things), run a read-only lane
   that mines their recent review comments and their own merged PRs, sharpens or retires
   items, and keeps the profile scannable.

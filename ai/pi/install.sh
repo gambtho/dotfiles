@@ -21,6 +21,7 @@ PI_HOST_ROOT=""
 PERMISSION_PYTHON=""
 PI_AI_RESET_MUTABLE_CONFIG="${PI_AI_RESET_MUTABLE_CONFIG:-0}"
 PI_AI_REFRESH_PREFERENCES="${PI_AI_REFRESH_PREFERENCES:-0}"
+PI_AI_APPLY_EFFICIENCY_PREFERENCES="${PI_AI_APPLY_EFFICIENCY_PREFERENCES:-0}"
 PI_AGENT_DIR=""
 PI_BINARY=""
 WEB_CONFIG_PATH=""
@@ -66,6 +67,14 @@ resolve_pi_paths() {
     0 | 1) ;;
     *)
       log_warning "PI_AI_REFRESH_PREFERENCES must be 0 or 1."
+      return 1
+      ;;
+  esac
+
+  case "$PI_AI_APPLY_EFFICIENCY_PREFERENCES" in
+    0 | 1) ;;
+    *)
+      log_warning "PI_AI_APPLY_EFFICIENCY_PREFERENCES must be 0 or 1."
       return 1
       ;;
   esac
@@ -727,7 +736,7 @@ reconcile_authored_links() {
   reconcile_link "$ROOT/ai/pi/keybindings.json" "$PI_AGENT_DIR/keybindings.json" \
     "Pi keybindings" backup "$MODE"
 
-  for entry in rush smart deep review; do
+  for entry in rush smart inspector deep review; do
     reconcile_link "$ROOT/ai/pi/agents/$entry.md" "$destination/$entry.md" \
       "Pi agent $entry" backup "$MODE"
   done
@@ -842,6 +851,7 @@ preflight_destinations() {
   reconcile_mutable_file "$ROOT/ai/pi/config/file-context.json" "$PI_AGENT_DIR/pi-file-context.json" "Pi file context" 0644 'ai/pi/config/file-context.json'
   refresh_pi_preferences "$PI_AGENT_DIR/settings.json" "$PI_AGENT_DIR/modes.json" "$ROOT/ai/pi/settings.json" "$ROOT/ai/pi/config/modes.json"
   refresh_pi_file_context "$PI_AGENT_DIR/pi-file-context.json" "$ROOT/ai/pi/config/file-context.json"
+  apply_pi_efficiency_preferences "$PI_AGENT_DIR/settings.json"
   reconcile_mutable_file "$ROOT/ai/pi/config/web-search.json" "$WEB_CONFIG_PATH" "Pi web access settings" 0600
   # Preserve the approved legacy sandbox reset, not a general YOLO bypass.
   if [[ -f "$PI_AGENT_DIR/settings.json" ]] &&
@@ -932,6 +942,7 @@ main() {
   refresh_pi_preferences "$PI_AGENT_DIR/settings.json" "$PI_AGENT_DIR/modes.json" \
     "$ROOT/ai/pi/settings.json" "$ROOT/ai/pi/config/modes.json"
   refresh_pi_file_context "$PI_AGENT_DIR/pi-file-context.json" "$ROOT/ai/pi/config/file-context.json"
+  apply_pi_efficiency_preferences "$PI_AGENT_DIR/settings.json"
   reconcile_mutable_file "$ROOT/ai/pi/config/web-search.json" "$WEB_CONFIG_PATH" \
     "Pi web access settings" 0600
   if [[ "$MODE" == check ]]; then

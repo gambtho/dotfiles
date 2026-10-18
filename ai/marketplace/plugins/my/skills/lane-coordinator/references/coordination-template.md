@@ -7,7 +7,7 @@ Lane prompts: `~/<project>-local/lanes/W<n>-<slug>.md`. Last reviewed: <date>.
 
 | Repo | Coordinator checkout | Merge policy |
 |---|---|---|
-| <owner/repo> | <path> | <who merges, required checks/reviews, strategy, contribution rules (DCO, AI disclosure, who replies to reviews); review profile path, if any> |
+| <owner/repo> | <path> | <who merges, required checks/reviews, strategy, contribution rules (DCO, AI disclosure, who replies to reviews); verified review profile/alias path, executable plan/task IDs and review evidence location> |
 
 ## People
 

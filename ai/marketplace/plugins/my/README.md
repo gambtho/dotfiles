@@ -36,7 +36,7 @@ For fork branches, OWNER/REPO identifies the PR's base repository; without PR
 metadata, `upstream` takes precedence over `origin`. Local overlays use verified
 GitHub identities only; other hosts still get repository-owned profiles and the
 built-in checklist. Loaded sources are printed.
-A read-only `project-reviewer` checks profiles alongside the generic reviewers.
+One fresh read-oriented whole-change reviewer checks profiles, correctness, silent failures and relevant language/type concerns together, in both standalone polish and closeout. Extra specialists require a named risk or explicit intensive-review request; repository-required review methods still take precedence. Closeout reuses matching head/base/scope/profile review evidence rather than dispatching another automatic pass.
 The **Project review** report groups findings by source and checklist item;
 these findings are never auto-fixed, even with `--fix`. `/polish-pr` carries them
 into its deferred summary and preserves the worktree when project coverage is
@@ -50,9 +50,13 @@ worktree. Conflicts and test failures are reported as `branch-stale`; unavailabl
 refs, blocked commands, and missing test instructions are reported explicitly.
 The reviewed worktree is never merged, rebased, or reset, and polish never pushes.
 
-After a maintainer review round, manually add recurring, confirmed patterns to
-that repository's `review.md`; keep accepted patterns and false positives in the
-existing `learnings.md` store. This is not automated by polish or `/review-prs`.
+The shared [project-review contract](skills/pr-closeout/references/project-review-contract.md)
+also defines explicit repository aliases and automatic evidence-linked private
+maintenance. Closeout/batch parents or an active lane coordinator consolidate
+learnings and verified preferences through the lock/hash-checked publication
+helper, then summarize changes or pending conflicts. Direct store-file overwrites,
+automatic legacy flat-store moves, tracked-guidance changes and new public posts
+are not authorized. Private aliases redirect lookup without moving evidence.
 
 ## Installation
 
