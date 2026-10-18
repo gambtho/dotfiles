@@ -38,12 +38,13 @@ class KnowledgeFixture(unittest.TestCase):
         (self.home / ".gitconfig").write_text("[user]\n name = Fixture\n email = fixture@example.invalid\n")
         git_shim = bin_dir / "git"
         git_shim.write_text('''#!/usr/bin/env python3
-import os,subprocess,sys
+import json,os,subprocess,sys
 from pathlib import Path
 args=sys.argv[1:]
 network=next((i for i,a in enumerate(args) if a in ('clone','fetch','push')),None)
 if network is not None:
     verb=args[network]
+    if verb=='push':Path(os.environ['TEST_LOG']).with_suffix('.push-argv').write_text(json.dumps(args))
     with open(os.environ['TEST_LOG'],'a') as log: log.write(verb+'\\n')
     meta=Path(os.environ['TEST_META'])
     if meta.with_suffix('.offline').exists() or (verb=='push' and meta.with_suffix('.push-fail').exists()):sys.exit(71)

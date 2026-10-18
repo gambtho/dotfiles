@@ -21,6 +21,7 @@ from urllib.parse import quote
 TIMEOUT = 30
 SLUG = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 HASH = re.compile(r"[a-f0-9]{64}\Z")
+MISSING_WORKTREE = "Registered knowledge worktree is missing; check storage and repair its Git worktree registration manually. No automatic pruning was attempted."
 
 
 class KnowledgeError(Exception):
@@ -198,6 +199,10 @@ def fetch(cfg, initial=False):
 def validate_managed(cfg):
     root = Path(cfg["worktree"])
     common = Path(cfg["git_dir"])
+    if (root / ".git").is_dir():
+        raise KnowledgeError("unsupported primary checkout; stop Pi and migrate to a linked knowledge worktree manually", 5)
+    if not root.exists() and not root.is_symlink():
+        raise KnowledgeError("knowledge worktree is missing; run make agent-knowledge to provision or inspect registration", 5)
     if root.is_symlink() or common.is_symlink() or not (root / ".git").is_file() or (root / ".git").is_symlink():
         raise KnowledgeError("regular linked knowledge worktree required; run make agent-knowledge-adopt", 5)
     for directory in (root, common):
@@ -281,6 +286,8 @@ def ensure(cfg):
         return {"status": "pending", "advice": "Existing store preserved. Stop Pi, then run make agent-knowledge-adopt."}
     occupied = main_worktree(cfg)
     if occupied is not None:
+        if not occupied.exists():
+            return {"status": "pending", "advice": MISSING_WORKTREE}
         return {"status": "pending", "advice": "Branch already has a worktree. Stop Pi, then run make agent-knowledge-adopt."}
     root.parent.mkdir(parents=True, exist_ok=True)
     if root.exists():
@@ -315,7 +322,10 @@ def adopt(cfg):
                         raise KnowledgeError("legacy/remote records differ; merge explicitly before adoption", 5)
     source = main_worktree(cfg)
     cache = Path(cfg["git_dir"]).parent / "agent-knowledge"
-    if source is not None and source != cache:
+    if source is not None and not source.exists():
+        raise KnowledgeError(MISSING_WORKTREE, 5)
+    # Resolve parent aliases without accepting a symlink staging root.
+    if source is not None and (source.is_symlink() or cache.is_symlink() or source.resolve() != cache.resolve()):
         raise KnowledgeError("unexpected occupied worktree; review before adoption", 5)
     if source is None:
         if cache.exists():
@@ -500,6 +510,7 @@ class Publication:
         try:
             if not record_path(path) or not HASH.fullmatch(sha256) or hashlib.sha256(record_bytes(self.cfg, path)).hexdigest() != sha256:
                 raise KnowledgeError("publication digest/path mismatch", 5)
+            validate_managed(self.cfg)
             state = self.state()
             state["pending_files"][path] = sha256
             self.save(state)

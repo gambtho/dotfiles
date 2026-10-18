@@ -29,6 +29,20 @@ class KnowledgePublicationTests(KnowledgeFixture):
         self.assertNotIn("report.local", self.git("--git-dir=" + str(self.remote), "ls-tree", "-r", "--name-only", "main"))
         self.assertFalse(self.git("-C", str(self.root), "diff", "--name-only"))
 
+    def test_unmanaged_configured_root_saves_locally_without_git_authorization(self):
+        cache = self.bare.parent / "agent-knowledge"
+        self.git("--git-dir=" + str(self.bare), "worktree", "move", str(self.root), str(cache))
+        (self.root / "owner/repo").mkdir(parents=True, mode=0o700)
+        self.root.chmod(0o700)
+        (self.root / "owner/repo/review.md").write_text("old\n")
+        before_network = self.log.read_bytes()
+        result = self.publish()
+        self.assertEqual(result.returncode, 5, result.stderr + result.stdout)
+        self.assertTrue(json.loads(result.stdout)["sync"]["local_saved"])
+        self.assertEqual((self.root / "owner/repo/review.md").read_text(), "new\n")
+        self.assertFalse((self.state / "pending.json").exists())
+        self.assertEqual(self.log.read_bytes(), before_network)
+
     def test_snapshot_has_no_network_and_noop_has_no_empty_commit(self):
         self.log.unlink()
         import subprocess
@@ -128,6 +142,10 @@ class KnowledgePublicationTests(KnowledgeFixture):
         result = self.publish()
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         self.assertEqual(self.git("--git-dir=" + str(self.remote), "for-each-ref", "--format=%(refname)"), "refs/heads/main")
+        args = json.loads(self.log.with_suffix(".push-argv").read_text())
+        self.assertIn(("-c", "remote.origin.mirror=false"), zip(args, args[1:]))
+        self.assertIn(("-c", "push.followTags=false"), zip(args, args[1:]))
+        self.assertEqual(args[args.index("push") + 1:], ["--no-follow-tags", "--recurse-submodules=no", "origin", self.head() + ":refs/heads/main"])
 
     def test_custom_remote_helper_is_not_an_authorized_transport(self):
         self.git("-C", str(self.root), "config", "remote.origin.vcs", "unconfigured")

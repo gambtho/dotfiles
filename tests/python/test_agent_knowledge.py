@@ -35,6 +35,39 @@ class KnowledgeLifecycleTests(KnowledgeFixture):
         self.assertEqual((self.root / "local.md").read_text(), "keep\n")
         self.assertFalse((self.root / ".git").exists())
 
+    def test_primary_checkout_notice_requests_manual_migration_not_adopt_loop(self):
+        self.setup_store()
+        self.git("--git-dir=" + str(self.bare), "worktree", "move", str(self.root), str(self.base / "retained-worktree"))
+        self.git("clone", "--no-hardlinks", str(self.remote), str(self.root))
+        self.git("-C", str(self.root), "remote", "set-url", "origin", "https://github.com/fixture/knowledge.git")
+        before = self.head()
+        for action in ("ensure", "check", "adopt"):
+            with self.subTest(action=action):
+                result = self.cli(action)
+                self.assertEqual(result.returncode, 5, result.stderr + result.stdout)
+                self.assertIn("primary checkout", result.stdout)
+                self.assertNotIn("run make agent-knowledge-adopt", result.stdout)
+                self.assertEqual(self.head(), before)
+
+    def test_missing_registered_worktree_requests_manual_repair_without_pruning(self):
+        self.setup_store()
+        retained = self.base / "temporarily-offline"
+        self.root.rename(retained)
+        before = self.git("--git-dir=" + str(self.bare), "worktree", "list", "--porcelain")
+        for action in ("ensure", "adopt"):
+            with self.subTest(action=action):
+                result = self.cli(action)
+                self.assertEqual(result.returncode, 5, result.stderr + result.stdout)
+                self.assertIn("registration", result.stdout)
+                self.assertNotIn("run make agent-knowledge-adopt", result.stdout)
+                self.assertFalse(self.root.exists())
+                self.assertEqual(self.git("--git-dir=" + str(self.bare), "worktree", "list", "--porcelain"), before)
+                self.assertEqual((retained / "owner/repo/review.md").read_text(), "old\n")
+        result = self.cli("check")
+        self.assertEqual(result.returncode, 5, result.stderr + result.stdout)
+        self.assertIn("make agent-knowledge", result.stdout)
+        self.assertNotIn("agent-knowledge-adopt", result.stdout)
+
     def test_remote_ahead_ensure_notifies_without_checkout(self):
         self.setup_store()
         old = self.head()
@@ -108,6 +141,20 @@ class KnowledgeLifecycleTests(KnowledgeFixture):
         self.assertEqual(registration.count("branch refs/heads/main"), 1)
         self.assertIn(str(self.root), registration)
         self.assertEqual(self.cli("adopt").returncode, 0)
+
+    def test_existing_staging_worktree_reuses_trusted_data_parent_alias(self):
+        self.bare.parent.mkdir(parents=True)
+        alias = self.base / "data-alias"
+        alias.symlink_to(self.bare.parent, target_is_directory=True)
+        self.env["XDG_DATA_HOME"] = str(alias)
+        self.legacy()
+        self.assertEqual(self.cli(configure=True).returncode, 5)
+        cache = self.bare.parent / "agent-knowledge"
+        self.git("--git-dir=" + str(self.bare), "worktree", "add", str(cache), "main")
+        result = self.cli("adopt")
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertEqual((self.root / "owner/repo/review.md").read_text(), "old\n")
+        self.assertFalse(cache.exists())
 
     def test_adoption_compares_raw_utf8_crlf_bytes_without_normalizing(self):
         self.advance("owner/repo/review.md", "caf\u00e9\r\n")

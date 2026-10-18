@@ -14,7 +14,7 @@ update: ## Update packages, runtimes, neovim plugins
 relink: ## Remove dead symlinks and re-create from current layout
 	bash libexec/relink
 
-# ── AI tools ────────────────────────────────────────────────────────────────
+# ── AI tools ──────────────────────────────────────────────────────────────────
 
 .PHONY: agent-knowledge agent-knowledge-check agent-knowledge-adopt agent-knowledge-sync
 
