@@ -175,6 +175,76 @@ fetching. The test downloads nothing and checks actual nonempty diagnostics for
 invalid TS/Python/shell/YAML. This is fixture isolation, not an OS sandbox; host
 readiness and interactive behavior still need stopped-session rollout verification.
 
+## Private project knowledge across machines
+
+Private repository review profiles and verified PR learnings can live in a separate
+private GitHub repository. Its identity is machine-local, never an authored public
+baseline. Git and `gh` must already be installed and authenticated for that repository.
+
+After stopping Pi, opt in once on each computer from this dotfiles checkout:
+
+```bash
+DOTFILES_AGENT_KNOWLEDGE_REPO=OWNER/REPO make agent-knowledge
+```
+
+This validates private visibility and records the binding in
+`${XDG_CONFIG_HOME:-~/.config}/dotfiles/agent-knowledge.json` (0600).
+It prepares `${XDG_DATA_HOME:-~/.local/share}/agent-knowledge.git` and uses a regular
+linked worktree at `~/.pi/pr-reviews` (0700), not a symlink or primary checkout.
+The path deliberately does not follow `PI_CODING_AGENT_DIR`: profile readers use
+`~/.pi/pr-reviews` independently. Authentication stays with the existing credential
+manager and intentional `gh` identity shim; explicit `GH_CONFIG_DIR` is respected.
+
+**`dot-install` and `dot-update` run the same idempotent ensure phase.** Missing safe
+storage is provisioned; existing notes/history are not refreshed or rewritten. An
+unconfigured computer skips without network access. A configured computer reports
+pending, offline, behind or unsafe state as an optional-phase warning, while other
+provisioning continues. Direct Make targets propagate nonzero attention status.
+Normal full install/update still requires stopped Pi because it changes other linked
+resources and packages. `make ai` remains Pi reconciliation only.
+
+| Action | Behavior |
+|---|---|
+| `make agent-knowledge` | Same ensure operation as install/update; no implicit migration or pull |
+| `make agent-knowledge-check` | Read-only readiness check; no filesystem changes |
+| `make agent-knowledge-adopt` | Explicit stopped-Pi legacy-store migration |
+| `make agent-knowledge-sync` | Explicit stopped-Pi fast-forward and verified pending publication |
+
+A populated existing store is preserved until explicit adoption. Adoption refuses
+differing or local-only curated review/learning/config/source/alias records so they
+can be imported/merged deliberately first. It archives the complete old root as a
+private `pr-reviews.pre-git-*` sibling, then moves the existing cached branch worktree
+or prepares one. It never checks out the same branch twice. On a detected migration failure it restores
+the old root and worktree location/registration. Archives are retained, not pruned;
+local-only research and workflow ledgers remain local. Follow their archived paths
+when a profile references supporting material that is not versioned. Rename aliases
+must be explicitly verified; folder names alone are not identity evidence.
+
+Once configured and active, the normal private publication helper automatically
+commits/pushes only verified `OWNER/REPO/review.md` and `learnings.md` updates. It
+checks effective Git fetch/push destinations (including URL rewriting and alternate
+push URLs) and private visibility, pushes only the owned commit to the bound branch,
+and does not bypass hooks. Repository lock precedes the per-store CAS lock. No
+snapshot/read operation pushes; active publication never checks out remote changes.
+GitHub metadata checks use the knowledge checkout's account context, not the product
+repository's identity.
+
+Offline or remote-ahead updates remain saved locally and **uncommitted**, with
+owner-private pending state under `${XDG_STATE_HOME:-~/.local/state}/dotfiles/agent-knowledge`.
+Exit 5 means attention is needed, not remotely backed up; publication JSON distinguishes
+local saved from pushed. Run the indicated explicit sync after stopping Pi. Fast-forward
+may preserve pending edits to unrelated files; same-file collisions or divergent
+committed histories require reconciliation. A failed push retains its authorized
+commit receipt for safe retry; manual edits/commits and unrelated staged files are
+never swept into publication. No force, reset, stash or automatic Markdown merge.
+
+Set the machine-local binding's `auto_publish` to `false` to keep publication local.
+The same ensure operation will not overwrite that preference or retarget the store.
+Broader curated files need deliberate commits; automatic publication excludes reports,
+configs, aliases, imported checklists, backups and locks. Common credential-pattern
+checks are a precaution, not a complete secret scanner: private Git is not secret
+storage. Never commit auth, sessions, raw logs or Superpowers workflow artifacts.
+
 ## Worktree policy
 
 Use the `using-git-worktrees` skill to create or reuse linked worktrees before repository writes. The custom guard blocks direct `write`, `edit`, and mutating `lsp_fix` calls whose effective target belongs to a primary checkout. It resolves `lsp_fix.root + lsp_fix.path` using pi-lsp semantics, so changing `root` cannot bypass the guard.

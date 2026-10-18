@@ -447,7 +447,7 @@ See the learnings file for auto-discovered conventions so far.
 
 ### 7b: Update Learnings
 
-Snapshot/read the existing resolved store's `learnings.md`, draft a complete semantically consolidated candidate in private scratch, then publish through `private_review_store.py` under the shared contract. Never use direct write/edit for publication. On stale content, reread/merge and retry once; on persistent error report a pending update rather than overwrite. Active coordinated lanes return candidates to the coordinator instead. The file structure should be:
+Snapshot/read the existing resolved store's `learnings.md`, draft a complete semantically consolidated candidate in private scratch, then publish through `private_review_store.py` under the shared contract. Never use direct write/edit for publication. On stale content, reread/merge and retry once; on persistent error report a pending update rather than overwrite. Git-backed exit 5 with `sync.local_saved=true` means **saved locally, sync pending**: report the reason/operator action, do not retry the old hash or claim a push. Active coordinated lanes return candidates to the coordinator instead. The file structure should be:
 
 ```markdown
 # PR Review Learnings — {OWNER}/{REPO}

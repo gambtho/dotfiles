@@ -16,6 +16,20 @@ relink: ## Remove dead symlinks and re-create from current layout
 
 # ── AI tools ──────────────────────────────────────────────────────────────────
 
+.PHONY: agent-knowledge agent-knowledge-check agent-knowledge-adopt agent-knowledge-sync
+
+agent-knowledge: ## Ensure private knowledge storage; notify rather than refresh existing notes
+	bash libexec/agent-knowledge ensure
+
+agent-knowledge-check: ## Inspect private knowledge readiness without filesystem changes
+	bash libexec/agent-knowledge check
+
+agent-knowledge-adopt: ## Explicit stopped-Pi migration of existing private review records
+	bash libexec/agent-knowledge adopt
+
+agent-knowledge-sync: ## Explicit stopped-Pi fast-forward and verified pending publication
+	bash libexec/agent-knowledge sync
+
 # Failures are aggregated rather than aborting the loop: one broken installer
 # must not block the rest, but it must still fail the target — a plain loop
 # reports only the last installer's status and hides every earlier failure.

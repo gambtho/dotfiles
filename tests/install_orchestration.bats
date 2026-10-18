@@ -91,6 +91,50 @@ SCRIPT
   [ "$output" = $'<--help>\n<two words>\n<>\n<-->\n<-m>' ]
 }
 
+@test "the shared installer ensures knowledge after runtimes before AI on every run" {
+  INSTALL_SOURCE_ONLY=1 run bash -c '
+    source "$1/bin/dot-install"
+    detect_os() { OS=macOS; }
+    install_platform_packages() { :; }
+    install_managed_tools() { :; }
+    setup_shell() { :; }
+    setup_git() { printf "GIT_READY\n"; }
+    install_languages() { printf "RUNTIMES_READY\n"; }
+    setup_neovim() { :; }
+    setup_fonts() { :; }
+    setup_work() { :; }
+    setup_ai() { printf "AI_STARTED\n"; }
+    bash() {
+      if [[ "$*" == "$DOTFILES_ROOT/libexec/agent-knowledge ensure" ]]; then
+        printf "KNOWLEDGE_ENSURE\n"
+        return 5
+      fi
+      return 0
+    }
+    main
+    main
+  ' _ "$REPO_ROOT"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *GIT_READY*RUNTIMES_READY*KNOWLEDGE_ENSURE*AI_STARTED* ]]
+  [ "$(printf '%s\n' "$output" | grep -c '^KNOWLEDGE_ENSURE$')" -eq 2 ]
+  [[ "$output" == *'WARNING: agent-knowledge'* ]]
+  [[ "$output" != *'FAILED:'* ]]
+}
+
+@test "knowledge Make targets select explicit actions and propagate attention status" {
+  local fixture="$TEST_ROOT/knowledge-make" target action
+  mkdir -p "$fixture/libexec"
+  cp "$REPO_ROOT/Makefile" "$fixture/Makefile"
+  printf '#!/bin/sh\nprintf "ACTION=%%s\\n" "$1"\nexit 5\n' >"$fixture/libexec/agent-knowledge"
+  for action in ensure check adopt sync; do
+    target="agent-knowledge-$action"
+    [[ "$action" != ensure ]] || target=agent-knowledge
+    run make --no-print-directory -C "$fixture" "$target"
+    [ "$status" -ne 0 ]
+    printf '%s\n' "$output" | grep -Fxq -- "ACTION=$action"
+  done
+}
+
 @test "normal Linux install checks Herdr updates as an optional phase only" {
   local os
   for os in WSL Ubuntu macOS; do
