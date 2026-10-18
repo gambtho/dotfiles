@@ -59,6 +59,8 @@ from pathlib import Path
 meta=Path(os.environ['TEST_META'])
 with open(os.environ['TEST_LOG'],'a') as log:log.write('gh\\n')
 if meta.with_suffix('.offline').exists():sys.exit(72)
+expected=meta.with_suffix('.cwd')
+if expected.exists() and str(Path.cwd())!=expected.read_text():sys.exit(73)
 if '/git/ref/heads/' in ' '.join(sys.argv):
     sha=subprocess.check_output([os.environ['TEST_REAL_GIT'],'--git-dir='+os.environ['TEST_REMOTE'],'rev-parse','main'],text=True).strip()
     print(json.dumps({'object':{'sha':sha}}))
@@ -102,7 +104,7 @@ else:print(meta.read_text())
     def offline(self):
         self.meta.with_suffix(".offline").touch()
 
-    def publish(self, text="new\n", store="owner/repo", file="review.md", expected=None):
+    def publish(self, text="new\n", store="owner/repo", file="review.md", expected=None, root=None):
         import hashlib
         target = self.root / store / file
         if expected is None:
@@ -111,4 +113,4 @@ else:print(meta.read_text())
         scratch.mkdir(exist_ok=True)
         candidate = scratch / (store.replace("/", "-") + "-" + file)
         candidate.write_text(text)
-        return subprocess.run([sys.executable, str(PUBLISHER), "publish", "--root", str(self.root), "--store", store, "--file", file, "--expected", expected, "--candidate-root", str(scratch), "--candidate", str(candidate)], env=self.env, text=True, capture_output=True, check=False)
+        return subprocess.run([sys.executable, str(PUBLISHER), "publish", "--root", str(root or self.root), "--store", store, "--file", file, "--expected", expected, "--candidate-root", str(scratch), "--candidate", str(candidate)], env=self.env, text=True, capture_output=True, check=False)

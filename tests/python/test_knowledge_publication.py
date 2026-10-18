@@ -6,7 +6,7 @@ import json
 import os
 import sys
 from unittest.mock import patch
-from agent_knowledge_fixture import CONTROLLER, PUBLISHER, KnowledgeFixture
+from agent_knowledge_fixture import CONTROLLER, PUBLISHER, ROOT, KnowledgeFixture
 
 
 class KnowledgePublicationTests(KnowledgeFixture):
@@ -169,6 +169,58 @@ class KnowledgePublicationTests(KnowledgeFixture):
         self.assertEqual(self.cli().returncode, 5)
         self.assertEqual(self.cli("check").returncode, 5)
         self.assertEqual((self.root / "owner/repo/learnings.md").read_text(), "new\n")
+
+    def test_github_identity_is_selected_from_knowledge_not_product_worktree(self):
+        self.meta.with_suffix(".cwd").write_text(str(self.root))
+        result = self.publish()
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertEqual(self.cli("check").returncode, 0)
+
+    def test_publication_refuses_world_readable_git_storage_before_local_change(self):
+        self.bare.chmod(0o755)
+        result = self.publish()
+        self.assertNotEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertEqual((self.root / "owner/repo/review.md").read_text(), "old\n")
+
+    def test_product_git_context_cannot_redirect_knowledge_index_or_objects(self):
+        before_index = (self.seed / ".git/index").read_bytes()
+        before_objects = {str(p.relative_to(self.seed)) for p in (self.seed / ".git/objects").rglob("*") if p.is_file()}
+        original = dict(self.env)
+        self.env.update(GIT_DIR=str(self.seed / ".git"), GIT_WORK_TREE=str(self.seed), GIT_INDEX_FILE=str(self.seed / ".git/index"), GIT_OBJECT_DIRECTORY=str(self.seed / ".git/objects"))
+        result = self.publish()
+        self.env = original
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertEqual((self.seed / ".git/index").read_bytes(), before_index)
+        self.assertEqual({str(p.relative_to(self.seed)) for p in (self.seed / ".git/objects").rglob("*") if p.is_file()}, before_objects)
+        self.assertEqual(self.git("--git-dir=" + str(self.remote), "show", "main:owner/repo/review.md"), "new")
+
+    def test_literal_tilde_root_keeps_the_existing_expanduser_contract(self):
+        import subprocess
+        scratch = self.base / "tilde-scratch"
+        scratch.mkdir()
+        candidate = scratch / "candidate.md"
+        candidate.write_text("tilde publication\n")
+        result = subprocess.run([sys.executable, str(PUBLISHER), "publish", "--root", "~/.pi/pr-reviews", "--store", "owner/repo", "--file", "review.md", "--expected", hashlib.sha256(b"old\n").hexdigest(), "--candidate-root", str(scratch), "--candidate", str(candidate)], env=self.env, text=True, capture_output=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertEqual(json.loads(result.stdout).get("sync", {}).get("status"), "pushed")
+        self.assertEqual(self.git("--git-dir=" + str(self.remote), "show", "main:owner/repo/review.md"), "tilde publication")
+
+    def test_trusted_parent_alias_is_the_same_configured_worktree(self):
+        alias = self.base / "home-alias"
+        alias.symlink_to(self.home, target_is_directory=True)
+        result = self.publish("alias publication\n", root=alias / ".pi/pr-reviews")
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertEqual(json.loads(result.stdout)["sync"]["status"], "pushed")
+        self.assertEqual(self.git("--git-dir=" + str(self.remote), "show", "main:owner/repo/review.md"), "alias publication")
+
+    def test_documented_make_sync_action_runs_the_real_controller(self):
+        import subprocess
+        self.offline()
+        self.assertEqual(self.publish().returncode, 5)
+        self.meta.with_suffix(".offline").unlink()
+        result = subprocess.run(["make", "--no-print-directory", "-C", str(ROOT), "agent-knowledge-sync"], env=self.env, text=True, capture_output=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertEqual(self.git("--git-dir=" + str(self.remote), "show", "main:owner/repo/review.md"), "new")
 
     def test_public_destination_keeps_local_data_without_committing(self):
         data = json.loads(self.meta.read_text())

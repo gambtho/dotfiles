@@ -88,10 +88,14 @@ def write_json(path, value):
         Path(name).unlink(missing_ok=True)
 
 
-def command(args, binary=False):
+def command(args, binary=False, cwd=None):
     env = dict(os.environ, GIT_TERMINAL_PROMPT="0", GIT_OPTIONAL_LOCKS="0", GH_PROMPT_DISABLED="1")
+    # A caller may run inside a product hook/worktree. Keep authentication and
+    # user policy, but never inherit its index, object storage or repository.
+    for key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE", "GIT_PREFIX", "GIT_SHALLOW_FILE", "GIT_REPLACE_REF_BASE", "GIT_CONFIG"):
+        env.pop(key, None)
     try:
-        result = subprocess.run(args, text=not binary, capture_output=True, env=env, timeout=TIMEOUT, check=False)
+        result = subprocess.run(args, text=not binary, capture_output=True, env=env, cwd=cwd, timeout=TIMEOUT, check=False)
     except (OSError, subprocess.TimeoutExpired) as error:
         raise KnowledgeError("command unavailable or timed out; knowledge remains local", 5) from error
     if result.returncode:
@@ -107,8 +111,8 @@ def git(cfg, *args, bare=False, raw=False, binary=False):
     return result if raw else result.strip()
 
 
-def metadata(repository):
-    value = json.loads(command(["gh", "api", "--hostname", "github.com", "repos/" + repository]))
+def metadata(repository, cwd=None):
+    value = json.loads(command(["gh", "api", "--hostname", "github.com", "repos/" + repository], cwd=cwd))
     if not isinstance(value, dict) or value.get("private") is not True or not isinstance(value.get("full_name"), str) or value["full_name"].casefold() != repository.casefold():
         raise KnowledgeError("configured destination must be the same verified private repository")
     branch = value.get("default_branch")
@@ -161,8 +165,17 @@ def repo_lock():
             fcntl.flock(stream, fcntl.LOCK_UN)
 
 
+def gh_directory(cfg):
+    # The intentional gh shim selects an account from cwd's Git owner map.
+    # Never let a product repo choose the knowledge repository's credentials.
+    for root in (Path(cfg["worktree"]), Path(cfg["git_dir"]).parent / "agent-knowledge"):
+        if (root / ".git").is_file():
+            return root
+    return None  # Initial setup retains the operator's explicit account context.
+
+
 def verify_remote(cfg):
-    value = metadata(cfg["repository"])
+    value = metadata(cfg["repository"], cwd=gh_directory(cfg))
     if value["default_branch"] != cfg["branch"]:
         raise KnowledgeError("default branch changed; review configuration", 5)
     expected = "https://github.com/" + cfg["repository"] + ".git"
@@ -187,6 +200,10 @@ def validate_managed(cfg):
     common = Path(cfg["git_dir"])
     if root.is_symlink() or common.is_symlink() or not (root / ".git").is_file() or (root / ".git").is_symlink():
         raise KnowledgeError("regular linked knowledge worktree required; run make agent-knowledge-adopt", 5)
+    for directory in (root, common):
+        info = directory.stat()
+        if info.st_uid != os.getuid() or info.st_mode & 0o077:
+            raise KnowledgeError("knowledge worktree and Git storage must be owner-private (0700)")
     actual_common = Path(git(cfg, "rev-parse", "--git-common-dir"))
     if not actual_common.is_absolute():
         actual_common = root / actual_common
@@ -215,7 +232,7 @@ def main_worktree(cfg):
 
 
 def remote_head(cfg):
-    value = json.loads(command(["gh", "api", "--hostname", "github.com", "repos/" + cfg["repository"] + "/git/ref/heads/" + quote(cfg["branch"], safe="")]))
+    value = json.loads(command(["gh", "api", "--hostname", "github.com", "repos/" + cfg["repository"] + "/git/ref/heads/" + quote(cfg["branch"], safe="")], cwd=gh_directory(cfg)))
     sha = value.get("object", {}).get("sha")
     if not isinstance(sha, str) or not re.fullmatch(r"(?:[a-f0-9]{40}|[a-f0-9]{64})", sha):
         raise KnowledgeError("invalid remote head metadata", 5)
@@ -246,6 +263,7 @@ def prepare_bare(cfg):
     if git(cfg, "rev-parse", "--is-bare-repository", bare=True) != "true":
         raise KnowledgeError("configured Git storage is not bare")
     verify_remote(cfg)
+    private_directory(directory)
     try:
         git(cfg, "rev-parse", "--verify", "refs/heads/" + cfg["branch"], bare=True)
     except KnowledgeError:
@@ -290,7 +308,7 @@ def adopt(cfg):
                 relevant = (len(relative.parts) == 3 and name in ("review.md", "learnings.md", "config.md", "sources.md")) or relative.as_posix() == "aliases.json"
                 if relevant:
                     try:
-                        existing = git(cfg, "show", cfg["branch"] + ":" + relative.as_posix(), bare=True, raw=True).encode()
+                        existing = git(cfg, "show", cfg["branch"] + ":" + relative.as_posix(), bare=True, raw=True, binary=True)
                     except KnowledgeError as error:
                         raise KnowledgeError("local-only curated record; import explicitly before adoption", 5) from error
                     if existing != (root / relative).read_bytes():
@@ -321,6 +339,7 @@ def adopt(cfg):
         moved = True
         root.chmod(0o700)
         validate_managed(cfg)
+        result = status(cfg)
     except BaseException:
         if moved:
             git(cfg, "worktree", "move", str(root), str(source), bare=True)
@@ -328,7 +347,7 @@ def adopt(cfg):
             archive.rename(root)
             root.chmod(old_mode)
         raise
-    return {"status": "ready", "archive": str(archive) if archive else None, "advice": "Local-only supporting material remains in the archive; it was not versioned."}
+    return {**result, "archive": str(archive) if archive else None, "archive_note": "Local-only supporting material remains in the archive; it was not versioned."}
 
 
 def record_path(path):
@@ -494,7 +513,15 @@ class Publication:
 @contextmanager
 def publication(root):
     cfg = load_config()
-    if cfg is None or not cfg["auto_publish"] or Path(root).absolute() != Path(cfg["worktree"]):
+    if cfg is None or not cfg["auto_publish"]:
+        yield None
+        return
+    root = Path(root).expanduser()
+    try:
+        matches = not root.is_symlink() and root.resolve() == Path(cfg["worktree"]).resolve()
+    except (OSError, RuntimeError) as error:
+        raise KnowledgeError("unsafe publication root") from error
+    if not matches:
         yield None
         return
     with repo_lock():

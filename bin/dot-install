@@ -188,6 +188,10 @@ setup_flatpak() {
 
 # ── Phase 9: AI tools ────────────────────────────────────────────────────────
 
+setup_agent_knowledge() {
+  bash "$DOTFILES_ROOT/libexec/agent-knowledge" ensure
+}
+
 setup_ai() {
   log_info "Setting up Pi..."
   run_phase optional ai-pi bash "$DOTFILES_ROOT/ai/pi/install.sh"
@@ -251,6 +255,7 @@ main() {
   case "$OS" in
     Ubuntu | WSL) run_phase optional herdr-update bash "$DOTFILES_ROOT/libexec/versions" check-herdr ;;
   esac
+  run_phase optional agent-knowledge setup_agent_knowledge
   setup_ai
 
   finish_phases || exit 1

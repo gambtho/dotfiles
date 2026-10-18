@@ -109,6 +109,25 @@ class KnowledgeLifecycleTests(KnowledgeFixture):
         self.assertIn(str(self.root), registration)
         self.assertEqual(self.cli("adopt").returncode, 0)
 
+    def test_adoption_compares_raw_utf8_crlf_bytes_without_normalizing(self):
+        self.advance("owner/repo/review.md", "caf\u00e9\r\n")
+        self.legacy("caf\u00e9\r\n")
+        result = self.cli("adopt")
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertEqual((self.root / "owner/repo/review.md").read_bytes(), "caf\u00e9\r\n".encode())
+
+    def test_adoption_reports_pending_if_cached_branch_is_behind_remote(self):
+        self.legacy()
+        self.advance()
+        result = self.cli("adopt")
+        self.assertEqual(result.returncode, 5, result.stderr + result.stdout)
+        report = json.loads(result.stdout)
+        self.assertEqual(report["status"], "pending")
+        self.assertIn("agent-knowledge-sync", report["advice"])
+        self.assertTrue((self.root / ".git").is_file())
+        self.assertEqual((self.root / "owner/repo/review.md").read_text(), "old\n")
+        self.assertEqual(self.cli("sync").returncode, 0)
+
     def test_conflicting_and_local_only_curated_records_prevent_adoption(self):
         self.legacy("local changed\n")
         result = self.cli("adopt")
