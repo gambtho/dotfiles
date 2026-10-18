@@ -48,6 +48,7 @@ if network is not None:
     meta=Path(os.environ['TEST_META'])
     if meta.with_suffix('.offline').exists() or (verb=='push' and meta.with_suffix('.push-fail').exists()):sys.exit(71)
     args=[os.environ['TEST_REMOTE'] if a=='origin' or a=='https://github.com/fixture/knowledge.git' else a for a in args]
+    if any(a.startswith(('https://','http://','ssh://','git@')) for a in args):sys.exit(96)
 sys.exit(subprocess.call([os.environ['TEST_REAL_GIT'],*args]))
 ''')
         git_shim.chmod(0o700)

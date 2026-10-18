@@ -6,13 +6,14 @@ constrain unrelated programs which ignore this protocol.
 """
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 import re
 import stat
 import sys
 import tempfile
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 
 
@@ -117,6 +118,25 @@ def private_temp(directory, prefix, content):
     return path
 
 
+@contextmanager
+def git_publication(root):
+    # Load the authored sibling, not a same-named module in a project's cwd.
+    path = Path(__file__).with_name("knowledge_git.py")
+    name = "_pi_knowledge_" + hashlib.sha256(str(path.resolve()).encode()).hexdigest()[:16]
+    module = sys.modules.get(name)
+    if module is None:
+        spec = importlib.util.spec_from_file_location(name, path)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        sys.modules[name] = module
+    try:
+        with module.publication(Path(root)) as actor:
+            yield actor
+    except module.KnowledgeError as error:
+        raise Refusal(str(error), error.code) from error
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -135,33 +155,42 @@ def main(argv=None):
         if args.expected != "absent" and not re.fullmatch(r"[a-f0-9]{64}", args.expected):
             raise Refusal("invalid expected digest")
         candidate = scratch_bytes(args.candidate_root, args.candidate)
-    directory = store_directory(args.root, args.store)
-    target = directory / args.file
-    with store_lock(directory):
-        old = regular_bytes(target)
-        previous = digest(old)
-        if args.command == "snapshot":
-            print(json.dumps({"sha256": previous}))
-            return
-        expected = None if args.expected == "absent" else args.expected
-        if previous != expected:
-            raise Refusal("stale private review snapshot; re-read and merge", 4)
-        status = "unchanged"
-        if old != candidate:
-            if old is not None:
-                private_temp(directory, f"{args.file}.backup.", old)
-            pending = private_temp(directory, f"{args.file}.candidate.", candidate)
-            try:
-                os.replace(pending, target)
-            finally:
-                pending.unlink(missing_ok=True)
-            status = "changed"
-        print(json.dumps({"status": status, "file": args.file, "old_sha256": previous, "new_sha256": digest(candidate)}))
+    context = git_publication(args.root) if args.command == "publish" else nullcontext(None)
+    with context as actor:
+        directory = store_directory(args.root, args.store)
+        target = directory / args.file
+        with store_lock(directory):
+            old = regular_bytes(target)
+            previous = digest(old)
+            if args.command == "snapshot":
+                print(json.dumps({"sha256": previous}))
+                return 0
+            expected = None if args.expected == "absent" else args.expected
+            if previous != expected:
+                raise Refusal("stale private review snapshot; re-read and merge", 4)
+            status = "unchanged"
+            if old != candidate:
+                if old is not None:
+                    private_temp(directory, f"{args.file}.backup.", old)
+                pending = private_temp(directory, f"{args.file}.candidate.", candidate)
+                try:
+                    os.replace(pending, target)
+                finally:
+                    pending.unlink(missing_ok=True)
+                status = "changed"
+            result = {"status": status, "file": args.file, "old_sha256": previous, "new_sha256": digest(candidate)}
+            pending_sync = False
+            if actor is not None:
+                sync = actor.record(args.store + "/" + args.file, digest(candidate))
+                result["sync"] = sync
+                pending_sync = sync["status"] == "pending"
+            print(json.dumps(result))
+            return 5 if pending_sync else 0
 
 
 if __name__ == "__main__":
     try:
-        main()
+        sys.exit(main())
     except Refusal as error:
         print(f"private review store: {error}", file=sys.stderr)
         sys.exit(error.code)

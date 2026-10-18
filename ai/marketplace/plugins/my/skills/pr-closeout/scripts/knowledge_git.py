@@ -88,10 +88,10 @@ def write_json(path, value):
         Path(name).unlink(missing_ok=True)
 
 
-def command(args):
+def command(args, binary=False):
     env = dict(os.environ, GIT_TERMINAL_PROMPT="0", GIT_OPTIONAL_LOCKS="0", GH_PROMPT_DISABLED="1")
     try:
-        result = subprocess.run(args, text=True, capture_output=True, env=env, timeout=TIMEOUT, check=False)
+        result = subprocess.run(args, text=not binary, capture_output=True, env=env, timeout=TIMEOUT, check=False)
     except (OSError, subprocess.TimeoutExpired) as error:
         raise KnowledgeError("command unavailable or timed out; knowledge remains local", 5) from error
     if result.returncode:
@@ -100,10 +100,10 @@ def command(args):
     return result.stdout
 
 
-def git(cfg, *args, bare=False, raw=False):
+def git(cfg, *args, bare=False, raw=False, binary=False):
     root = Path(cfg["worktree"])
     prefix = ["git", "--git-dir=" + cfg["git_dir"]] if bare or not (root / ".git").is_file() else ["git", "-C", str(root)]
-    result = command([*prefix, *args])
+    result = command([*prefix, *args], binary=binary)
     return result if raw else result.strip()
 
 
@@ -166,6 +166,9 @@ def verify_remote(cfg):
     if value["default_branch"] != cfg["branch"]:
         raise KnowledgeError("default branch changed; review configuration", 5)
     expected = "https://github.com/" + cfg["repository"] + ".git"
+    keys = git(cfg, "config", "--name-only", "--get-regexp", r"^remote\.origin\.(url|vcs)$").splitlines()
+    if "remote.origin.vcs" in keys:
+        raise KnowledgeError("custom remote helpers are not an authorized knowledge transport")
     for options in (("--all",), ("--push", "--all")):
         urls = git(cfg, "remote", "get-url", *options, "origin").splitlines()
         if urls != [expected]:
@@ -222,7 +225,10 @@ def remote_head(cfg):
 def status(cfg):
     validate_managed(cfg)
     verify_remote(cfg)
-    if changed_paths(cfg) or changed_paths(cfg, cached=True):
+    pending = Publication(cfg).state()
+    if pending["pending_files"] or pending["authorized_commit"]:
+        return {"status": "pending", "advice": "Verified publication is pending; run make agent-knowledge-sync after stopping Pi."}
+    if profile_changes(cfg) or changed_paths(cfg, cached=True):
         return {"status": "pending", "advice": "Local edits pending; review or run make agent-knowledge-sync after stopping Pi."}
     if git(cfg, "rev-parse", "HEAD") != remote_head(cfg):
         return {"status": "pending", "advice": "Knowledge history differs; run make agent-knowledge-sync after stopping Pi."}
@@ -302,7 +308,7 @@ def adopt(cfg):
     if command(["git", "-C", str(source), "status", "--porcelain"]):
         raise KnowledgeError("staging worktree has local changes", 5)
     archive = None
-    old_mode = None
+    old_mode = 0o700
     moved = False
     try:
         if root.exists():
@@ -325,13 +331,202 @@ def adopt(cfg):
     return {"status": "ready", "archive": str(archive) if archive else None, "advice": "Local-only supporting material remains in the archive; it was not versioned."}
 
 
+def record_path(path):
+    parts = path.split("/") if isinstance(path, str) else []
+    if len(parts) != 3 or parts[2] not in ("review.md", "learnings.md"):
+        return False
+    return bool(SLUG.fullmatch("/".join(parts[:2]))) and all(p not in (".", "..") for p in parts[:2])
+
+
+def profile_changes(cfg):
+    untracked = git(cfg, "ls-files", "--others", "--exclude-standard", "-z", raw=True).split("\0")
+    return changed_paths(cfg) | {p for p in untracked if record_path(p)}
+
+
+def record_bytes(cfg, path):
+    if not record_path(path):
+        raise KnowledgeError("unsafe pending profile path")
+    target = Path(cfg["worktree"])
+    for component in path.split("/"):
+        target = target / component
+        if target.is_symlink():
+            raise KnowledgeError("unsafe pending profile symlink")
+    fd = os.open(target, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+    with os.fdopen(fd, "rb") as stream:
+        if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+            raise KnowledgeError("pending profile is not a regular file")
+        return stream.read()
+
+
+def oid(value):
+    return isinstance(value, str) and re.fullmatch(r"(?:[a-f0-9]{40}|[a-f0-9]{64})", value)
+
+
+class Publication:
+    def __init__(self, cfg):
+        self.cfg = cfg
+        self.path = state_dir() / "pending.json"
+
+    def state(self):
+        value = private_json(self.path)
+        if value is None:
+            return {"version": 1, "repository": self.cfg["repository"], "branch": self.cfg["branch"], "pending_files": {}, "authorized_commit": None}
+        if not isinstance(value, dict) or value.get("version") != 1 or value.get("repository") != self.cfg["repository"] or value.get("branch") != self.cfg["branch"]:
+            raise KnowledgeError("pending state binding changed; reconcile explicitly", 5)
+        files = value.get("pending_files")
+        if not isinstance(files, dict) or any(not record_path(p) or not isinstance(h, str) or not HASH.fullmatch(h) for p, h in files.items()):
+            raise KnowledgeError("invalid pending file state")
+        receipt = value.get("authorized_commit")
+        if receipt is not None:
+            if not isinstance(receipt, dict) or not oid(receipt.get("sha")) or not oid(receipt.get("parent")) or not isinstance(receipt.get("files"), dict) or not receipt["files"]:
+                raise KnowledgeError("invalid pending commit receipt")
+            if any(not record_path(p) or not isinstance(h, str) or not HASH.fullmatch(h) for p, h in receipt["files"].items()):
+                raise KnowledgeError("invalid authorized commit paths")
+        return value
+
+    def save(self, state):
+        write_json(self.path, state)
+
+    def check_files(self, state):
+        for path, expected in state["pending_files"].items():
+            if hashlib.sha256(record_bytes(self.cfg, path)).hexdigest() != expected:
+                raise KnowledgeError("pending profile changed outside verified publication", 5)
+        allowed = set(state["pending_files"])
+        if (profile_changes(self.cfg) | changed_paths(self.cfg, cached=True)) - allowed:
+            raise KnowledgeError("unrelated local/staged changes require manual review", 5)
+        for path in changed_paths(self.cfg, cached=True):
+            staged = git(self.cfg, "show", ":" + path, raw=True, binary=True)
+            if hashlib.sha256(staged).hexdigest() != state["pending_files"][path]:
+                raise KnowledgeError("staged content differs from verified pending bytes", 5)
+
+    def check_receipt(self, receipt):
+        cfg = self.cfg
+        sha = receipt["sha"]
+        if git(cfg, "rev-list", "--parents", "-n", "1", sha).split() != [sha, receipt["parent"]]:
+            raise KnowledgeError("commit ancestry differs from recorded authorization", 5)
+        paths = set(git(cfg, "diff-tree", "--no-commit-id", "--name-only", "-r", "-z", sha, raw=True).rstrip("\0").split("\0"))
+        if paths != set(receipt["files"]):
+            raise KnowledgeError("commit scope differs from verified authorization", 5)
+        for path, expected in receipt["files"].items():
+            body = git(cfg, "show", sha + ":" + path, raw=True, binary=True)
+            if hashlib.sha256(body).hexdigest() != expected:
+                raise KnowledgeError("committed content differs from verified bytes", 5)
+            mode = git(cfg, "ls-tree", sha, "--", path).split()[0]
+            if mode != "100644":
+                raise KnowledgeError("profile commit is not a plain non-executable file", 5)
+
+    def push(self, receipt):
+        validate_managed(self.cfg)
+        verify_remote(self.cfg)
+        self.check_receipt(receipt)
+        if git(self.cfg, "rev-parse", "HEAD") != receipt["sha"]:
+            raise KnowledgeError("unowned local commit prevents automatic push", 5)
+        git(self.cfg, "-c", "remote.origin.mirror=false", "-c", "push.followTags=false", "push", "--no-follow-tags", "--recurse-submodules=no", "origin", receipt["sha"] + ":refs/heads/" + self.cfg["branch"])
+
+    def clear_receipt(self, state):
+        for path, expected in state["authorized_commit"]["files"].items():
+            if state["pending_files"].get(path) == expected:
+                del state["pending_files"][path]
+        state["authorized_commit"] = None
+        self.save(state)
+
+    def finish(self, state):
+        cfg = self.cfg
+        validate_managed(cfg)
+        self.check_files(state)
+        fetch(cfg)
+        remote = git(cfg, "rev-parse", "refs/remotes/origin/" + cfg["branch"])
+        head = git(cfg, "rev-parse", "HEAD")
+        delivered = None
+        receipt = state["authorized_commit"]
+        if receipt:
+            self.check_receipt(receipt)
+            if head != receipt["sha"] or remote not in (receipt["parent"], receipt["sha"]):
+                raise KnowledgeError("divergent or unowned history; reconcile before publishing", 5)
+            if remote != receipt["sha"]:
+                self.push(receipt)
+            delivered = receipt["sha"]
+            self.clear_receipt(state)
+            remote = delivered
+        if head != remote:
+            raise KnowledgeError("remote ahead or unowned local history; run make agent-knowledge-sync", 5)
+        selected = {}
+        for path, expected in list(state["pending_files"].items()):
+            try:
+                body = git(cfg, "show", "HEAD:" + path, raw=True, binary=True)
+            except KnowledgeError:
+                body = None
+            if body is not None and hashlib.sha256(body).hexdigest() == expected:
+                del state["pending_files"][path]
+            else:
+                selected[path] = expected
+        self.save(state)
+        if not selected:
+            return {"status": "pushed" if delivered else "unchanged", "local_saved": True, "commit": delivered}
+        secret = re.compile(rb"(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{30,}|sk-ant-[A-Za-z0-9_-]{20,}|-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|https?://[^\s/@]+:[^\s/@]+@)")
+        if any(secret.search(record_bytes(cfg, path)) for path in selected):
+            raise KnowledgeError("possible credential pattern; automatic commit refused", 5)
+        git(cfg, "add", "--", *sorted(selected))
+        git(cfg, "commit", "--only", "-m", "docs: update verified repository learnings", "--", *sorted(selected))
+        receipt = {"sha": git(cfg, "rev-parse", "HEAD"), "parent": remote, "files": selected}
+        self.check_receipt(receipt)
+        state["authorized_commit"] = receipt
+        self.save(state)
+        self.push(receipt)
+        delivered = receipt["sha"]
+        self.clear_receipt(state)
+        return {"status": "pushed", "local_saved": True, "commit": delivered}
+
+    def record(self, path, sha256):
+        try:
+            if not record_path(path) or not HASH.fullmatch(sha256) or hashlib.sha256(record_bytes(self.cfg, path)).hexdigest() != sha256:
+                raise KnowledgeError("publication digest/path mismatch", 5)
+            state = self.state()
+            state["pending_files"][path] = sha256
+            self.save(state)
+            return self.finish(state)
+        except KnowledgeError as error:
+            return {"status": "pending", "local_saved": True, "reason": str(error)}
+        except (OSError, ValueError):
+            return {"status": "pending", "local_saved": True, "reason": "Private sync state could not be saved; reconcile before retrying."}
+
+
+@contextmanager
+def publication(root):
+    cfg = load_config()
+    if cfg is None or not cfg["auto_publish"] or Path(root).absolute() != Path(cfg["worktree"]):
+        yield None
+        return
+    with repo_lock():
+        if (Path(root) / ".git").exists():
+            validate_managed(cfg)
+        yield Publication(cfg)
+
+
 def sync(cfg):
     validate_managed(cfg)
-    if changed_paths(cfg) or changed_paths(cfg, cached=True):
-        raise KnowledgeError("unrecorded local edits; review before synchronization", 5)
+    actor = Publication(cfg)
+    state = actor.state()
+    actor.check_files(state)
     fetch(cfg)
-    git(cfg, "merge", "--ff-only", "refs/remotes/origin/" + cfg["branch"])
-    return status(cfg)
+    remote = git(cfg, "rev-parse", "refs/remotes/origin/" + cfg["branch"])
+    head = git(cfg, "rev-parse", "HEAD")
+    if state["authorized_commit"]:
+        if not cfg["auto_publish"]:
+            raise KnowledgeError("automatic publication disabled; pending commit retained", 5)
+        result = actor.finish(state)
+    else:
+        if head != remote:
+            # merge --ff-only alone also succeeds when local HEAD is ahead. Do
+            # not mistake an unowned local commit for a permitted fast-forward.
+            if git(cfg, "merge-base", head, remote) != head:
+                raise KnowledgeError("divergent or unowned history; reconcile manually", 5)
+            git(cfg, "merge", "--ff-only", "refs/remotes/origin/" + cfg["branch"])
+        actor.check_files(state)
+        result = actor.finish(state) if cfg["auto_publish"] and state["pending_files"] else {"status": "unchanged"}
+    if result["status"] == "pending":
+        raise KnowledgeError(result["reason"], 5)
+    return {**status(cfg), "sync": result}
 
 
 def run(action):
