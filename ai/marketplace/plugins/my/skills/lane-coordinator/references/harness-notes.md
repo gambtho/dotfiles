@@ -11,6 +11,11 @@ skip a job if there's no tool for it.
 | Durable facts about people and preferences | Auto-memory, one fact per file; STATE.md stays the source of truth for lanes | `session_query` for missing context from a known session file; record durable facts in COORDINATION.md |
 | Worktree writes | Normal git worktrees | The worktree guard blocks writes in primary checkouts; use linked worktrees |
 
+For explicit Herdr launches and manual Pi conversation naming, follow
+[herdr-launch.md](herdr-launch.md). This depends on actual tools and the inherited
+Herdr session, not whether the coordinator is Pi or Claude Code. Claude app
+sessions without terminal tools use the manual handoff.
+
 Background reviewers are read-only helpers, not lanes: say so in their prompt (no edits,
 commits, pushes or posts) and spot-check what they find.
 

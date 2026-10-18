@@ -12,7 +12,7 @@ source "$ROOT/libexec/common.sh"
 source "$PINS_FILE"
 
 usage() {
-  echo "Usage: libexec/versions {list|check|update}" >&2
+  echo "Usage: libexec/versions {list|check|check-herdr|update}" >&2
 }
 
 list_mise() {
@@ -52,7 +52,6 @@ list_pins() {
   printf 'artifact herdr %s\n' "$HERDR_VERSION"
   printf 'artifact neovim %s\n' "$NVIM_VERSION"
   printf 'artifact tree-sitter-cli %s\n' "$TREE_SITTER_VERSION"
-  printf 'git herdr-devcontainer %s %s\n' "$HERDR_DEVCONTAINER_REPO" "$HERDR_DEVCONTAINER_REF"
   printf 'artifact nerd-fonts %s\n' "$NERD_FONTS_VERSION"
   printf 'artifact nerd-font-cascadia-mono %s %s\n' "$NERD_FONTS_VERSION" "$NERD_FONT_CASCADIA_MONO_SHA256"
   printf 'artifact nerd-font-hack %s %s\n' "$NERD_FONTS_VERSION" "$NERD_FONT_HACK_SHA256"
@@ -100,7 +99,8 @@ latest_kubernetes_channel() {
 
 latest_artifact_release() {
   local repository="$1" response
-  response=$(curl "${CURL_DOWNLOAD_ARGS[@]}" --silent "https://api.github.com/repos/$repository/releases/latest") || return
+  shift
+  response=$(curl "${CURL_DOWNLOAD_ARGS[@]}" "$@" --silent "https://api.github.com/repos/$repository/releases/latest") || return
   jq -er '.tag_name' <<<"$response"
 }
 
@@ -120,6 +120,31 @@ check_artifact_release() {
     return 1
   }
   report_artifact_release "$name" "$current" "$latest" "$kind"
+}
+
+# A routine advisory must not wait through the artifact downloader's retry budget.
+check_herdr_update() {
+  local tool latest
+  for tool in curl jq; do
+    if ! command -v "$tool" >/dev/null 2>&1; then
+      printf 'Unable to check Herdr updates: %s is required; retry with make pins-check.\n' "$tool" >&2
+      return 1
+    fi
+  done
+  latest=$(latest_artifact_release herdrdev/herdr --connect-timeout 3 --max-time 10 --retry 0) || {
+    printf 'Unable to check Herdr updates; retry with make pins-check.\n' >&2
+    return 1
+  }
+  if [[ ! "$latest" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    printf 'Unable to check Herdr updates: invalid stable release tag; retry with make pins-check.\n' >&2
+    return 1
+  fi
+  if [[ "$HERDR_VERSION" == "$latest" ]]; then
+    printf 'Herdr pin matches latest stable: %s\n' "$HERDR_VERSION"
+  else
+    printf 'Herdr pin differs from latest stable: %s -> %s\n' "$HERDR_VERSION" "$latest"
+    printf 'Review tools/herdr/README.md to advance the pin and checksums; no upgrade or restart was performed.\n'
+  fi
 }
 
 check_pins() {
@@ -152,7 +177,6 @@ check_pins() {
   check_artifact_release herdr herdrdev/herdr "$HERDR_VERSION"
   check_artifact_release neovim neovim/neovim "v$NVIM_VERSION"
   check_artifact_release tree-sitter-cli tree-sitter/tree-sitter "v$TREE_SITTER_VERSION"
-  check_artifact_release herdr-devcontainer "$HERDR_DEVCONTAINER_REPO" "$HERDR_DEVCONTAINER_REF" git
 }
 
 update_pin() {
@@ -221,6 +245,7 @@ update_pins() {
 case "${1:-}" in
   list) list_pins ;;
   check) check_pins ;;
+  check-herdr) check_herdr_update ;;
   update) update_pins ;;
   *)
     usage

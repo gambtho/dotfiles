@@ -91,6 +91,45 @@ SCRIPT
   [ "$output" = $'<--help>\n<two words>\n<>\n<-->\n<-m>' ]
 }
 
+@test "normal Linux install checks Herdr updates as an optional phase only" {
+  local os
+  for os in WSL Ubuntu macOS; do
+    INSTALL_SOURCE_ONLY=1 run bash -c '
+      source "$1/bin/dot-install"
+      detect_os() { OS="$TEST_OS"; }
+      install_platform_packages() { :; }
+      install_managed_tools() { :; }
+      check_unsaved_apt_packages() { :; }
+      setup_flatpak() { :; }
+      setup_shell() { :; }
+      setup_git() { :; }
+      install_languages() { :; }
+      setup_neovim() { :; }
+      setup_fonts() { :; }
+      setup_wt_theme() { :; }
+      setup_work() { :; }
+      setup_ai() { :; }
+      bash() {
+        if [[ "$*" == "$DOTFILES_ROOT/libexec/versions check-herdr" ]]; then
+          printf "HERDR_ADVISORY_CALLED\n"
+          return 22
+        fi
+        [[ "$*" == "$DOTFILES_ROOT/tools/herdr/install.sh" ]]
+      }
+      TEST_OS="$2"
+      main
+    ' _ "$REPO_ROOT" "$os"
+    [ "$status" -eq 0 ]
+    if [[ "$os" == macOS ]]; then
+      [[ "$output" != *"HERDR_ADVISORY_CALLED"* ]]
+    else
+      [[ "$output" == *"HERDR_ADVISORY_CALLED"* ]]
+      [[ "$output" == *"WARNING: herdr-update"* ]]
+    fi
+    [[ "$output" != *"FAILED:"* ]]
+  done
+}
+
 @test "Linux managed tools provision pinned yq despite an incompatible namesake" {
   local os
   for os in Ubuntu WSL; do

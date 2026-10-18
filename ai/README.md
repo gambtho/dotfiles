@@ -32,7 +32,7 @@ Generic runtime behavior comes from floating npm and Git declarations, reconcile
 | Structured development methods | `obra/superpowers` | Full package, including the session bootstrap and all 15 skills in the tested candidate |
 | Security and performance checklists | filtered `addyosmani/agent-skills` | Only `security-and-hardening` and `performance-optimization`; its `using-agent-skills` router and commands are not loaded because they conflict with Superpowers routing |
 | Long-running iterations | `pi-ralph-wiggum` | Used by the custom `overnight-improve` workflow |
-| Model/context/cost UI | `pi-powerline-footer`, `usage-extension`, `session-recap` | Existing display and recap behavior |
+| Model/context/cost UI | `pi-powerline-footer`, `usage-extension`, `session-recap` | Display and away recaps; Herdr's state/prompt bridges own lifecycle status rather than tab-title heuristics |
 | Worktree create/switch/remove UI | `@narumitw/pi-worktree` | Parent-only; uses normal Git worktrees and preserves the active conversation on switch |
 | File selection and quotes | `@narumitw/pi-file-context` | Parent-only; F8 opens the file-context picker without taking native copy shortcuts |
 | Click local files to edit | `gambtho/pi-file-editor@v0.1.0` | Parent-only; normal-click a local file link to open the configured external editor, then quit to return to Pi |

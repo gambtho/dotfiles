@@ -4,15 +4,6 @@ load test_helper
 
 setup() {
   setup_dotfiles_test
-  # Read the pin rather than restating it. These assertions used to hardcode
-  # the version, so every bump to config/versions.env left four tests failing
-  # against a value nothing in the installer still used.
-  DEVCONTAINER_REF="$(
-    # shellcheck source=config/versions.env
-    source "$REPO_ROOT/config/versions.env"
-    printf '%s' "$HERDR_DEVCONTAINER_REF"
-  )"
-  export DEVCONTAINER_REF
 }
 
 # Every test sources the installer instead of executing it, matching the
@@ -161,6 +152,25 @@ source_installer() {
   [[ "$output" == *"version_check = false"* ]]
 }
 
+@test "new installs render lane attention defaults" {
+  source_installer bash -c '
+    source "$1/tools/herdr/install.sh"
+    install_config
+  ' _ "$REPO_ROOT"
+  [ "$status" -eq 0 ]
+  run python3 - "$TEST_ROOT/config/herdr/config.toml" <<'PY'
+import sys, tomllib
+with open(sys.argv[1], "rb") as source:
+    config = tomllib.load(source)
+ui = config["ui"]
+assert ui["prompt_new_workspace_name"] is True
+assert ui["agent_panel_sort"] == "priority"
+assert ui["hide_tab_bar_when_single_tab"] is True
+assert ui["toast"]["delivery"] == "herdr"
+PY
+  [ "$status" -eq 0 ]
+}
+
 @test "an edited config is left alone and reported as drift" {
   mkdir -p "$TEST_ROOT/config/herdr"
   printf '[theme]\nname = "kanagawa"\n' >"$TEST_ROOT/config/herdr/config.toml"
@@ -208,7 +218,7 @@ source_installer() {
 
   [ "$status" -eq 0 ]
   [[ "$output" == *"v0.8.0"* ]]
-  [[ "$output" == *"gambtho/herdr-devcontainer@$DEVCONTAINER_REF"* ]]
+  [[ "$output" != *"plugin:"* ]]
   [[ "$output" == *"(none)"* ]]
   [ ! -e "$TEST_ROOT/bin/herdr" ]
   [ ! -e "$TEST_ROOT/config/herdr/config.toml" ]
@@ -222,106 +232,31 @@ source_installer() {
   [[ "$output" == *"version_check = false"* ]]
 }
 
-@test "the shipped config binds the Dev Container plugin it installs" {
-  # Two dead keys otherwise: the config binds actions the plugin phase provides.
-  run cat "$REPO_ROOT/tools/herdr/config.toml.template"
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"devcontainer.open-shell"* ]]
-  [[ "$output" == *"devcontainer.open-stop"* ]]
-
-  # prefix+shift+d is Herdr's built-in close_workspace; stop must not sit under
-  # a mis-key of it.
-  [[ "$output" != *'key = "prefix+shift+d"'* ]]
-}
-
-# A fake herdr: enough of `plugin list --json` to drive install_plugin, plus a
-# log of every other plugin subcommand so a test can assert what was invoked.
-# A fake cargo goes alongside it so the build-hook guard does not turn these
-# into silent skips on a host without a Rust toolchain.
-fake_herdr() {
-  local list_json="$1"
-  mkdir -p "$TEST_ROOT/bin"
-  cat >"$TEST_ROOT/bin/herdr" <<EOF
-#!/usr/bin/env bash
-if [[ "\$1 \$2" == "plugin list" ]]; then
-  printf '%s\n' '$list_json'
-  exit 0
-fi
-printf '%s\n' "\$*" >>"$TEST_ROOT/plugin-calls"
-exit \${FAKE_HERDR_STATUS:-0}
-EOF
-  chmod 0755 "$TEST_ROOT/bin/herdr"
-  printf '#!/usr/bin/env bash\nexit 0\n' >"$TEST_ROOT/bin/cargo"
-  chmod 0755 "$TEST_ROOT/bin/cargo"
-}
-
-run_install_plugin() {
-  source_installer PATH="$TEST_ROOT/bin:$PATH" bash -c '
+@test "fresh config has no retired plugin actions" {
+  source_installer bash -c '
     source "$1/tools/herdr/install.sh"
-    install_plugin
+    install_config
   ' _ "$REPO_ROOT"
-}
-
-@test "the plugin is installed at the pinned ref when absent" {
-  fake_herdr '{"result":{"plugins":[]}}'
-
-  run_install_plugin
-
   [ "$status" -eq 0 ]
-  run cat "$TEST_ROOT/plugin-calls"
-  [[ "$output" == *"plugin install gambtho/herdr-devcontainer --ref $DEVCONTAINER_REF --yes"* ]]
-}
-
-@test "a locally linked plugin is left alone" {
-  # Someone developing the plugin has it linked from a checkout; replacing that
-  # with a tagged release would drop their working tree out of the pane path.
-  fake_herdr '{"result":{"plugins":[{"plugin_id":"devcontainer","source":{"kind":"local"}}]}}'
-
-  run_install_plugin
-
+  run python3 - "$TEST_ROOT/config/herdr/config.toml" <<'PY'
+import sys, tomllib
+with open(sys.argv[1], "rb") as source:
+    config = tomllib.load(source)
+assert not any(command.get("command", "").startswith("devcontainer.")
+               for command in config.get("keys", {}).get("command", []))
+PY
   [ "$status" -eq 0 ]
-  [[ "$output" == *"linked from a local checkout"* ]]
-  [ ! -e "$TEST_ROOT/plugin-calls" ]
 }
 
-@test "a plugin already at the pinned ref is not reinstalled" {
-  fake_herdr "{\"result\":{\"plugins\":[{\"plugin_id\":\"devcontainer\",\"source\":{\"kind\":\"github\",\"requested_ref\":\"$DEVCONTAINER_REF\"}}]}}"
-
-  run_install_plugin
-
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"already installed"* ]]
-  [ ! -e "$TEST_ROOT/plugin-calls" ]
-}
-
-@test "a plugin pinned to a different ref is uninstalled before reinstalling" {
-  fake_herdr '{"result":{"plugins":[{"plugin_id":"devcontainer","source":{"kind":"github","requested_ref":"v0.0.9"}}]}}'
-
-  run_install_plugin
-
-  [ "$status" -eq 0 ]
-  run cat "$TEST_ROOT/plugin-calls"
-  [[ "$output" == *"plugin uninstall devcontainer"* ]]
-  [[ "$output" == *"plugin install gambtho/herdr-devcontainer --ref $DEVCONTAINER_REF --yes"* ]]
-}
-
-@test "a failed plugin install warns without failing the phase" {
-  # Plugin registration goes through the running server's socket API, so a first
-  # bootstrap cannot register anything -- and must not take down bin/dot-install.
-  fake_herdr '{"result":{"plugins":[]}}'
-
-  source_installer PATH="$TEST_ROOT/bin:$PATH" FAKE_HERDR_STATUS=1 bash -c '
+@test "normal convergence never invokes Herdr plugin commands" {
+  source_installer bash -c '
     source "$1/tools/herdr/install.sh"
-    install_plugin
+    download_verified_artifact() {
+      printf "#!/bin/sh\nprintf called >>%s\nexit 0\n" "$TEST_ROOT/plugin-calls" >"$3"
+      chmod "$4" "$3"
+    }
+    main
   ' _ "$REPO_ROOT"
-
   [ "$status" -eq 0 ]
-  [[ "$output" == *"rerun after Herdr has started once"* ]]
-}
-
-@test "a missing herdr binary skips the plugin instead of failing" {
-  run_install_plugin
-
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"skipping the devcontainer plugin"* ]]
+  [ ! -e "$TEST_ROOT/plugin-calls" ]
 }
