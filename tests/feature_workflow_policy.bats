@@ -210,9 +210,11 @@ setup() {
   [ "$status" -eq 0 ]
   run grep -F "load \`blindspot-pass\` before implementation" "$PI_GUIDANCE"
   [ "$status" -eq 0 ]
-  run grep -F "load \`second-opinion-core\` after writing or substantially revising a spec or implementation plan" "$PI_GUIDANCE"
+  run grep -F "\`second-opinion-core\` after writing or substantially revising a spec or plan" "$PI_GUIDANCE"
   [ "$status" -eq 0 ]
-  run grep -F "run \`polish-core --fix\` after implementation" "$PI_GUIDANCE"
+  run grep -F "Use one finalization review phase" "$PI_GUIDANCE"
+  [ "$status" -eq 0 ]
+  run grep -F "\`polish-core --fix\` is its reusable review/cleanup engine" "$PI_GUIDANCE"
   [ "$status" -eq 0 ]
   run grep -F "use \`change-explainer\`" "$PI_GUIDANCE"
   [ "$status" -eq 0 ]

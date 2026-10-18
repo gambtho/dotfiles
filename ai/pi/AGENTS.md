@@ -39,7 +39,7 @@ for committing Superpowers artifacts below.
 
 ## GitHub ref inspection
 
-Read-oriented `rush`, `deep`, and `review` agents keep `git ls-remote` denied,
+Read-oriented `rush`, `inspector`, `deep`, and `review` agents keep `git ls-remote` denied,
 even for literal HEAD queries approved in the parent. Use existing `gh api`
 read permissions instead. Inspect the repository's default branch first, then
 make a separate literal ref query using the branch actually returned. For example:
@@ -78,9 +78,10 @@ remain in force.
 When subagents materially help, select the named `subagent_type` by task shape:
 
 - `rush`: bounded searches, inventories, and mechanical checks.
-- `smart`: normal code review, focused investigation, and implementation subtasks.
+- `inspector`: ordinary read-oriented review, focused analysis and routine specialist checks.
+- `smart`: focused investigation and implementation subtasks that need writes.
 - `deep`: architecture, security, difficult diagnosis, or broad cross-cutting analysis.
-- `review`: an independent second opinion from a different model family.
+- `review`: an independent second opinion from a different model family. Verify the actual resolved model; omit unused optional overrides rather than passing blank strings.
 
 Each `subagent` call launches exactly one agent and supplies a self-contained `prompt`, a 3–5 word `description`, and the selected `subagent_type`. Use an explicit `model` only when the user requests one or a workflow deliberately requires a different model family. For parallel work, issue sibling calls with `run_in_background: true`, record each returned agent ID, then poll with `get_subagent_result({ agent_id, wait: false })`; a collection budget does not stop unfinished agents.
 
@@ -89,7 +90,7 @@ Each `subagent` call launches exactly one agent and supplies a self-contained `p
 - Inspect and clarify in the current checkout, then create or reuse a linked worktree before the first repository write.
 - Specs, plans, tests, source, configuration, and documentation all count as writes.
 - The global worktree-guard extension blocks Pi's direct file-write tools in primary checkouts. Do not bypass it with shell redirection or generated-file commands.
-- For non-trivial work, load `blindspot-pass` before implementation, load `second-opinion-core` after writing or substantially revising a spec or implementation plan, run `polish-core --fix` after implementation, inspect its edits, rerun verification, and use `change-explainer` for the completion write-up.
+- For non-trivial work, load `blindspot-pass` before implementation and `second-opinion-core` after writing or substantially revising a spec or plan. Use one finalization review phase: `pr-closeout` owns it for PR work and local/pre-PR readiness; `polish-core --fix` is its reusable review/cleanup engine, not an additional automatic reviewer loop. Reuse only matching base/scope/profile/working-content evidence (record HEAD as provenance); retain repository-required autoreview and risk-driven specialists. Inspect cleanup edits, rerun verification, and use `change-explainer` for the write-up. Follow the shared project-review contract bundled with `pr-closeout`, including automatic evidence-linked private maintenance through its publication helper; do not silently edit tracked guidance or expand posting authority.
 
 ## Implementation
 

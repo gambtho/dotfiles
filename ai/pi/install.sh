@@ -21,6 +21,7 @@ PI_HOST_ROOT=""
 PERMISSION_PYTHON=""
 PI_AI_RESET_MUTABLE_CONFIG="${PI_AI_RESET_MUTABLE_CONFIG:-0}"
 PI_AI_REFRESH_PREFERENCES="${PI_AI_REFRESH_PREFERENCES:-0}"
+PI_AI_APPLY_EFFICIENCY_PREFERENCES="${PI_AI_APPLY_EFFICIENCY_PREFERENCES:-0}"
 PI_AGENT_DIR=""
 PI_BINARY=""
 WEB_CONFIG_PATH=""
@@ -66,6 +67,14 @@ resolve_pi_paths() {
     0 | 1) ;;
     *)
       log_warning "PI_AI_REFRESH_PREFERENCES must be 0 or 1."
+      return 1
+      ;;
+  esac
+
+  case "$PI_AI_APPLY_EFFICIENCY_PREFERENCES" in
+    0 | 1) ;;
+    *)
+      log_warning "PI_AI_APPLY_EFFICIENCY_PREFERENCES must be 0 or 1."
       return 1
       ;;
   esac
@@ -156,6 +165,17 @@ atomic_publish_file() {
     rm -f "$staged"
     return 1
   fi
+}
+
+publish_pi_settings() {
+  local source=$1 destination=$2 file_mode=$3
+  shift 3
+  if [[ -z "$PI_HOST_ROOT" ]]; then
+    resolve_pi_runtime "${PI_BINARY:-$(command -v pi 2>/dev/null || true)}" || return 1
+    PI_HOST_ROOT=$PI_RUNTIME_PACKAGE_ROOT
+  fi
+  node "$ROOT/libexec/pi-publish-settings.mjs" "$PI_HOST_ROOT" \
+    "$source" "$destination" "$file_mode" "$@"
 }
 
 publish_rendered_baseline() {
@@ -557,6 +577,7 @@ settings_candidate_contents() {
 
 reconcile_pi_settings() {
   local source=$1 destination=$2 parent use_runtime=false backup raw
+  local kind link_target snapshot_hash identity
   parent=$(dirname "$destination")
   jq -e 'type == "object"' "$source" >/dev/null
 
@@ -602,6 +623,7 @@ reconcile_pi_settings() {
   fi
 
   mkdir -p "$parent"
+  pi_migration_snapshot "$destination" 'ai/pi/settings.json' 1 || return 1
   if [[ -e "$destination" && (-L "$destination" || "$PI_AI_RESET_MUTABLE_CONFIG" == 1) ]]; then
     backup=$(backup_regular_contents "$destination" "$destination")
     log_info "Backed up Pi settings to $backup"
@@ -609,10 +631,10 @@ reconcile_pi_settings() {
 
   raw=$(mktemp "${destination}.candidate.XXXXXX")
   settings_candidate_contents "$source" "$destination" "$use_runtime" >"$raw"
-  if [[ -L "$destination" ]]; then
-    rm -- "$destination"
+  if ! publish_pi_settings "$raw" "$destination" 0644 "$kind" "$link_target" "$snapshot_hash" "$identity"; then
+    rm -f "$raw"
+    return 1
   fi
-  atomic_publish_file "$raw" "$destination" 0644
   rm -f "$raw"
   log_success "Reconciled tracked Pi packages while preserving runtime settings at $destination"
 }
@@ -727,7 +749,7 @@ reconcile_authored_links() {
   reconcile_link "$ROOT/ai/pi/keybindings.json" "$PI_AGENT_DIR/keybindings.json" \
     "Pi keybindings" backup "$MODE"
 
-  for entry in rush smart deep review; do
+  for entry in rush smart inspector deep review; do
     reconcile_link "$ROOT/ai/pi/agents/$entry.md" "$destination/$entry.md" \
       "Pi agent $entry" backup "$MODE"
   done
@@ -842,6 +864,7 @@ preflight_destinations() {
   reconcile_mutable_file "$ROOT/ai/pi/config/file-context.json" "$PI_AGENT_DIR/pi-file-context.json" "Pi file context" 0644 'ai/pi/config/file-context.json'
   refresh_pi_preferences "$PI_AGENT_DIR/settings.json" "$PI_AGENT_DIR/modes.json" "$ROOT/ai/pi/settings.json" "$ROOT/ai/pi/config/modes.json"
   refresh_pi_file_context "$PI_AGENT_DIR/pi-file-context.json" "$ROOT/ai/pi/config/file-context.json"
+  apply_pi_efficiency_preferences "$PI_AGENT_DIR/settings.json"
   reconcile_mutable_file "$ROOT/ai/pi/config/web-search.json" "$WEB_CONFIG_PATH" "Pi web access settings" 0600
   # Preserve the approved legacy sandbox reset, not a general YOLO bypass.
   if [[ -f "$PI_AGENT_DIR/settings.json" ]] &&
@@ -932,6 +955,7 @@ main() {
   refresh_pi_preferences "$PI_AGENT_DIR/settings.json" "$PI_AGENT_DIR/modes.json" \
     "$ROOT/ai/pi/settings.json" "$ROOT/ai/pi/config/modes.json"
   refresh_pi_file_context "$PI_AGENT_DIR/pi-file-context.json" "$ROOT/ai/pi/config/file-context.json"
+  apply_pi_efficiency_preferences "$PI_AGENT_DIR/settings.json"
   reconcile_mutable_file "$ROOT/ai/pi/config/web-search.json" "$WEB_CONFIG_PATH" \
     "Pi web access settings" 0600
   if [[ "$MODE" == check ]]; then

@@ -10,7 +10,7 @@ type PipelineCase = {
   expected: ExpectedDecision;
   toolName?: string;
   input?: Record<string, unknown>;
-  agentName?: "rush" | "smart" | "deep" | "review";
+  agentName?: "rush" | "smart" | "inspector" | "deep" | "review";
   surface?: string;
   pattern?: string;
   origin?: "global" | "agent";
@@ -647,7 +647,7 @@ for (const method of ["POST", "PUT", "PATCH", "DELETE", "post", "put", "patch", 
   });
 }
 
-for (const agentName of ["rush", "deep", "review"] as const) {
+for (const agentName of ["rush", "inspector", "deep", "review"] as const) {
   RELAXED_PIPELINE_CASES.push(
     {
       label: `${agentName} nl inspection`,
@@ -809,7 +809,7 @@ for (const shell of ["sh", "bash", "zsh", "dash", "ksh"] as const) {
 
 // Literal policy boundaries: do not derive expectations from the authored rules.
 const QUERY_PIPELINE_CASES: PipelineCase[] = [];
-for (const agentName of [undefined, "rush", "smart", "deep", "review"] as const) {
+for (const agentName of [undefined, "rush", "smart", "inspector", "deep", "review"] as const) {
   for (const command of [
     "printenv PI_PROVIDER PI_MODEL PI_REASONING_LEVEL",
     "printenv XDG_CONFIG_HOME PI_CODING_AGENT_DIR",
@@ -826,6 +826,13 @@ for (const agentName of [undefined, "rush", "smart", "deep", "review"] as const)
   for (const command of ["printenv", "/usr/bin/printenv", "env", "/usr/bin/env", "printenv PI_MODEL", "printenv PI_PROVIDER PI_MODEL PI_REASONING_LEVEL_EXTRA"]) {
     QUERY_PIPELINE_CASES.push({ label: `${agentName ?? "global"} environment still asks: ${command}`, command, agentName, expected: "ask", raw: true });
   }
+  for (const [toolName, input] of [
+    ["web_enable", {}],
+    ["ask_parent", { question: "Which approved scope should this task use?" }],
+    ["notify_parent", { message: "Material finding for the delegating agent." }],
+  ] as const) {
+    QUERY_PIPELINE_CASES.push({ label: `${agentName ?? "global"} workflow tool allows: ${toolName}`, command: "", toolName, input, agentName, expected: "allow" });
+  }
   for (const toolName of ["unknown_extension_tool", "mcp"]) {
     QUERY_PIPELINE_CASES.push({ label: `${agentName ?? "global"} unknown tool asks: ${toolName}`, command: "", toolName, input: {}, agentName, expected: "ask" });
   }
@@ -834,8 +841,8 @@ for (const agentName of [undefined, "rush", "smart", "deep", "review"] as const)
   }
 }
 
-for (const agentName of [undefined, "rush", "smart", "deep", "review"] as const) {
-  const readonly = agentName === "rush" || agentName === "deep" || agentName === "review";
+for (const agentName of [undefined, "rush", "smart", "inspector", "deep", "review"] as const) {
+  const readonly = agentName === "rush" || agentName === "inspector" || agentName === "deep" || agentName === "review";
   for (const repo of [
     "earendil-works/pi", "gotgenes/pi-packages", "narumiruna/pi-extensions",
     "tmustier/pi-extensions", "tmustier/pi-queue-steer", "nicobailon/pi-web-access",
@@ -966,7 +973,7 @@ for (const agentName of [undefined, "rush", "smart", "deep", "review"] as const)
   }
 }
 
-for (const agentName of [undefined, "rush", "smart", "deep", "review"] as const) {
+for (const agentName of [undefined, "rush", "smart", "inspector", "deep", "review"] as const) {
   for (const [path, expected] of [
     ["~/.dotfiles/config/versions.env", "allow"],
     ["~/.dotfiles/config/unrelated.env", "deny"],
@@ -1173,6 +1180,7 @@ export async function runPermissionPipelineChecks({
       getToolPreviewLimits: () => resolveToolPreviewLimits(),
       getPathNormalizer: () => normalizer,
       getShellToolAliases: () => undefined,
+      getCommandEffects: () => ({}),
     };
     const pipeline = new ToolCallGatePipeline(resolver, inputs);
     const runner = new GateRunner(

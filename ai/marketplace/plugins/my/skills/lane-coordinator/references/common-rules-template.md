@@ -18,7 +18,10 @@ If you need a change in another lane's area, write it in your report instead of 
 ## Rules for every lane
 
 - Audit first and stop for approval, unless the scope is already approved.
-- Small PRs, one theme each, from a fresh base. Stop when each is open and green.
+- Small PRs, one theme each, from a fresh base. Follow `pr-closeout` for scoped
+  review/finalization, preserving publication approval and reusing valid review evidence.
+- Profiles/aliases and executable plan task ownership come from COORDINATION.md;
+  return feedback candidates to the coordinator, who uses the shared publication helper.
 - Never push to the default branch, never merge, no force push on others' branches.
 - Public text is a draft until the user approves it.
 - No secrets, lane numbers, internal names, customers or events in anything public.

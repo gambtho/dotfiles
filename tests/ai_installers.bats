@@ -653,6 +653,7 @@ JS
   [[ "$output" == *"$agent_dir/dotfiles-migrations.json"* ]]
   [[ "$output" == *"$agent_dir/agents/rush.md"* ]]
   [[ "$output" == *"$agent_dir/agents/smart.md"* ]]
+  [[ "$output" == *"$agent_dir/agents/inspector.md"* ]]
   [[ "$output" == *"$agent_dir/agents/deep.md"* ]]
   [[ "$output" == *"$agent_dir/agents/review.md"* ]]
   [[ "$output" == *"$agent_dir/extensions/herdr-agent-state.ts"* ]]
@@ -698,6 +699,7 @@ JSON
   assert_symlink_target "$HOME/.pi/agent/keybindings.json" "$REPO_ROOT/ai/pi/keybindings.json"
   assert_symlink_target "$HOME/.pi/agent/agents/rush.md" "$REPO_ROOT/ai/pi/agents/rush.md"
   assert_symlink_target "$HOME/.pi/agent/agents/smart.md" "$REPO_ROOT/ai/pi/agents/smart.md"
+  assert_symlink_target "$HOME/.pi/agent/agents/inspector.md" "$REPO_ROOT/ai/pi/agents/inspector.md"
   assert_symlink_target "$HOME/.pi/agent/agents/deep.md" "$REPO_ROOT/ai/pi/agents/deep.md"
   assert_symlink_target "$HOME/.pi/agent/agents/review.md" "$REPO_ROOT/ai/pi/agents/review.md"
   assert_symlink_target "$HOME/.pi/agent/extensions/herdr-agent-state.ts" \

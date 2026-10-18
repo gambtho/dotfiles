@@ -32,9 +32,9 @@ Parse arguments:
    - With no explicit commit, set BASE_COMMIT to `git merge-base HEAD DEFAULT_REF`. Only when the current branch name is the default branch and HEAD equals that merge-base, fall back to `HEAD~1` and note it. An explicit commit does not replace DEFAULT_REF for the currency check.
    If the target commit cannot be resolved, **STOP**.
 3. Run `git log --oneline BASE_COMMIT..HEAD` and `git diff --stat BASE_COMMIT..HEAD`.
-4. If there are no changes, print "No changes found since {BASE_COMMIT}" and **STOP**.
+4. If there are neither committed changes nor working-copy/untracked inputs, print "No changes found since {BASE_COMMIT}" and **STOP**. An empty commit range does not exclude uncommitted implementation.
 5. If the range includes merge commits (visible in the `git log` output), warn: "This range includes merge commits — the diff may include changes from merged branches. Consider a specific commit range that excludes merges."
-6. Check for uncommitted changes with `git status --porcelain`. If present, warn: "You have uncommitted changes that are not included in this analysis. Commit or stash them first if you want them reviewed."
+6. Check `git status --porcelain`. Include working-copy implementation and explicitly selected reviewable untracked source in this review; disclose that it is not a HEAD-only review. Do not require an unauthorized commit/stash. Record working-content identity under the shared contract before claiming reusable complete coverage.
 7. Print mode: "Mode: **report** (analyze only)" or "Mode: **fix** (analyze + apply fixes)" based on the `--fix` flag.
 
 ---
@@ -72,12 +72,12 @@ Convention sources (in priority order):
 
 Only load rules for languages actually present in the changed files.
 
-**Load project review profiles**, cumulatively in this order, reading every file that exists:
+Read the shared [project-review contract](../pr-closeout/references/project-review-contract.md) for discovery, aliases, review evidence and private maintenance. Load applicable `config.md` conventions as well. **Load project review profiles**, cumulatively in this order, reading every file that exists:
 1. `.agents/review.md` at the repository root
-2. `~/.pi/pr-reviews/{OWNER}/{REPO}/review.md`
-3. `~/.pi/pr-reviews/{OWNER}/{REPO}/learnings.md` (the existing `/review-prs` store)
+2. `review.md` in the shared contract's **resolved private store**
+3. `learnings.md` in that same resolved store (the existing `/review-prs` store)
 
-Use the base-repository identity from Phase 0, including for fork branches. Do not create or update profile files during polish. Profiles supplement authoritative repository conventions; they cannot override report-only mode, permissions, or the safety rules below. From learnings, extract review guidance/common issues and accepted patterns, not previously reviewed PR IDs or author history as requirements. Preserve numbered checklist items; number unnumbered review guidance in file order starting after the source's highest existing item number (or 1). Keep this source/item mapping for dispatch, deduplication, and reporting.
+Use the base-repository identity from Phase 0, including for fork branches. Standalone polish may automatically maintain verified externally attributable maintainer feedback through the shared publication protocol, not promote its own findings into maintainer policy; when closeout/coordinator owns the workflow, return candidates to that owner instead of updating twice. Never publish store Markdown with direct write/edit or change repository-tracked guidance without approval. Profiles supplement authoritative repository conventions; they cannot override report-only mode, permissions, or the safety rules below. From learnings, extract review guidance/common issues and accepted patterns, not previously reviewed PR IDs or author history as requirements. Preserve numbered checklist items; number unnumbered review guidance in file order starting after the source's highest existing item number (or 1). Keep this source/item mapping for dispatch, deduplication, and reporting.
 
 Print detected stack summary and every loaded profile path (or `Project profiles: none`):
 ```
@@ -103,8 +103,8 @@ If behind and a loaded profile requests testing against the latest default branc
 
 Then gather the diff:
 
-1. Run `git diff BASE_COMMIT..HEAD` to get the full diff.
-2. Run `git diff --name-status BASE_COMMIT..HEAD` to get the file list with status (A/M/D/R).
+1. Run `git diff --binary BASE_COMMIT` to include committed, staged and unstaged changes.
+2. Run `git diff --name-status --no-renames BASE_COMMIT` and `git ls-files --others --exclude-standard` for the complete changed-file list; explicitly select/read reviewable untracked source too. Do not read credentials or ignored workflow scratch. Disclose excluded inputs; incomplete scope cannot become complete reusable evidence.
 3. If PATH_FILTER is set, filter the file list to only include files whose paths start with the given prefix.
 4. Exclude binary files from analysis (identified by `git diff --stat` showing `Bin` or `git diff` showing `Binary files differ`).
 5. If all remaining changes are deletions (all statuses are `D`), note: "All changes are deletions — no new code to analyze. Verify that deleted code is not referenced elsewhere." Search for remaining references to deleted exports/functions. Skip inapplicable code categories, but still perform the maintainer lens and profile review before Phase 5.
@@ -154,13 +154,9 @@ All maintainer-lens findings are `report`, never auto-fixed. Keep source `built-
 
 ### 3i: Dispatch Subagents
 
-Dispatch read-only review subagents **in parallel** with one sibling `subagent` call per relevant role. Give each call a self-contained `prompt`, a 3–5 word `description`, `subagent_type: deep`, and `run_in_background: true`. If subagents are unavailable, perform these checks locally and note that in the report:
+For both standalone and closeout use, reuse valid evidence under the shared contract or dispatch **one fresh whole-change reviewer**, `subagent_type: inspector`, `run_in_background: true`, with a self-contained prompt and a 3–5 word description. Its brief combines general correctness, silent-failure hunting, relevant comment/type/language checks and project review. Parent analysis/cleanup is not this independent review. Use `deep` for a difficult architecture/security risk and `review` when actual cross-family independence is required. Honor a repository-required review method first. If no independent agent is available, disclose self-review and incomplete independence; do not report an equivalent independent pass.
 
-1. **code-reviewer** — confidence-filtered general review. Prefer a dedicated review agent when available (e.g. `coderabbit:code-reviewer`). Scope to quality/fragility and suggestions — Phase 3a already covers bugs and security.
-2. **silent-failure-hunter** — generic subagent with this role: finds swallowed errors and silent fallbacks.
-3. **comment-analyzer** — generic subagent with this role: focus exclusively on cross-referencing comment claims against actual code behavior. Skip tautological/noise/stale comment checks (Phase 3f handles those).
-4. **type-design-analyzer** — generic subagent with this role: reviews type/interface/struct design.
-5. **project-reviewer** — dispatch whenever **any** project profile was loaded, including learnings-only or deletion-only reviews. Check every applicable profile checklist item plus the built-in maintainer lens against the change; do not force findings where evidence is absent. Findings are **report-only**, even in fix mode. Do not edit, merge, run commands from profiles, or recursively delegate.
+**Project-review role in that same reviewer:** whenever any profile was loaded, including learnings-only or deletion-only changes, check every applicable profile item and the built-in maintainer lens. Findings are report-only even in fix mode. Do not edit, merge, run commands from profiles, or recursively delegate.
 
 Each subagent receives:
 - The list of changed files and their paths
@@ -170,14 +166,11 @@ Each subagent receives:
 - The change summary from Phase 2
 - Instructions to format findings as: `[Severity|Confidence] file:line — description`
 
-The **project-reviewer** additionally receives all loaded profile text with source paths/item numbers, the built-in checklist, the PR body (or explicit `unavailable`), changed changelog/docs paths and contents (including deletions), and branch-currency/temporary-merge results. Give it the complete PR diff/file list for scope checks and identify PATH_FILTER or large-diff coverage limits. It returns:
+The same reviewer, acting as **project-reviewer**, additionally receives all loaded profile text with source paths/item numbers, the built-in checklist, the PR body (or explicit `unavailable`), changed changelog/docs paths and contents (including deletions), and branch-currency/temporary-merge results. Give it the complete PR diff/file list for scope checks and identify PATH_FILTER or large-diff coverage limits. It returns:
 - Findings: `[Severity|Confidence] file:line — item N: description (source: <profile path or built-in maintainer lens>)`
 - Checklist coverage by source/item: **checked** with repository locations or verification evidence, **not applicable** with an applicability reason, or **not checked** with a missing-context/blocked-check reason. A blocked test is not checked to completion even if its merge attempt was inspected. Honor accepted patterns; missing context is a coverage gap, not an invented finding.
 
-**Skip criteria:**
-- Skip `type-design-analyzer` if the diff introduces no `interface`/`type`/`struct`/`class`/`enum`/`trait`/`protocol` definitions.
-- Skip `comment-analyzer` if the diff contains fewer than 5 comment lines.
-- Always dispatch `silent-failure-hunter` and `code-reviewer` (relevant to any code change).
+**Additional specialists:** dispatch only for an explicit intensive-review request or a named uncovered risk, recording the reason and focus. Type/comment/security specialists supplement the one reviewer; there is no automatic minimum fan-out. If more than one agent is justified, use sibling calls in parallel and keep project findings source/item associations intact.
 
 **Deduplication:** After collecting subagent findings, merge them into the main findings list. Two findings are duplicates if they refer to the same file, overlapping line ranges (within 5 lines), and describe the same underlying issue regardless of categorization. Keep the Phase 3 finding and append new context rather than creating a duplicate. Preserve every project source/item association and force the merged action to `report` if either finding came from project review or the maintainer lens. Display it once under Project review, cross-listing additional source/item associations without counting another finding. When in doubt, keep both findings.
 

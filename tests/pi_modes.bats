@@ -143,9 +143,21 @@ JS
   done
 }
 
+@test "Pi inspector uses standard reasoning with deep-equivalent restrictions" {
+  local expected actual
+  expected=$(agent_frontmatter deep)
+  actual=$(agent_frontmatter inspector)
+  run jq -e --argjson expected "$expected" '
+    .model == "github-copilot/gpt-6.1-sol" and .thinking == "medium"
+    and .tools == $expected.tools and .permission == $expected.permission
+    and .prompt_mode == "append"
+  ' <<<"$actual"
+  [ "$status" -eq 0 ]
+}
+
 @test "Pi named agents declare complete tool allowlists" {
   local agent actual
-  for agent in rush deep review; do
+  for agent in rush inspector deep review; do
     actual=$(agent_frontmatter "$agent")
     run jq -e '.tools == "read, bash, grep, find, ls, codemode"' <<<"$actual"
     [ "$status" -eq 0 ]
@@ -158,7 +170,7 @@ JS
 
 @test "Pi read-oriented agents restrict direct tools and recognizable mutation" {
   local agent actual
-  for agent in rush deep review; do
+  for agent in rush inspector deep review; do
     actual=$(agent_frontmatter "$agent")
     run jq -e '
       (.permission | has("path_write") | not)
@@ -234,7 +246,7 @@ JS
 
 @test "Pi read-oriented agents keep metadata approvals without remote Git overrides" {
   local agent actual
-  for agent in rush deep review; do
+  for agent in rush inspector deep review; do
     actual=$(agent_frontmatter "$agent")
     run jq -e '
       .permission.bash as $bash
@@ -258,7 +270,7 @@ JS
   local agent actual expected
   expected=$(agent_frontmatter rush | jq -c '.permission')
 
-  for agent in deep review; do
+  for agent in inspector deep review; do
     actual=$(agent_frontmatter "$agent")
     run jq -e --argjson expected "$expected" '.permission == $expected' <<<"$actual"
     [ "$status" -eq 0 ]
@@ -267,7 +279,7 @@ JS
 
 @test "Pi read-oriented agents scope the complete direct Git reader allowlist" {
   local agent actual
-  for agent in rush deep review; do
+  for agent in rush inspector deep review; do
     actual=$(agent_frontmatter "$agent")
     run jq -e '
       def direct_read_rules: [
@@ -405,9 +417,9 @@ JS
 
 @test "PR review fan-out uses only read-only named agent types" {
   local prompt="$REPO_ROOT/ai/marketplace/plugins/my/prompts/review-prs.md"
-  run grep -F 'partition the selected PRs into `rush` and `deep` groups' "$prompt"
+  run grep -F 'partition the selected PRs into `rush`, `inspector` and `deep` groups' "$prompt"
   [ "$status" -eq 0 ]
-  run grep -F '| Medium | `deep` |' "$prompt"
+  run grep -F '| Medium | `inspector` |' "$prompt"
   [ "$status" -eq 0 ]
   run rg -n 'subagent_type: smart|`smart` group|`rush`, `smart`' "$prompt"
   [ "$status" -eq 1 ]
@@ -466,14 +478,15 @@ JS
 @test "personal workflows route review-only work through read-only agents" {
   local workflow
   for workflow in \
-    "$REPO_ROOT/ai/marketplace/plugins/my/prompts/fix-pr.md" \
-    "$REPO_ROOT/ai/marketplace/plugins/my/skills/polish-core/SKILL.md"; do
+    "$REPO_ROOT/ai/marketplace/plugins/my/prompts/fix-pr.md"; do
     run grep -F 'subagent_type: deep' "$workflow"
     [ "$status" -eq 0 ]
     run grep -F 'subagent_type: smart' "$workflow"
     [ "$status" -eq 1 ]
   done
 
+  run grep -F 'subagent_type: inspector' "$REPO_ROOT/ai/marketplace/plugins/my/skills/polish-core/SKILL.md"
+  [ "$status" -eq 0 ]
   run rg -n 'subagent_type: deep' \
     "$REPO_ROOT/ai/marketplace/plugins/my/skills/improve/references/platforms.md"
   [ "$status" -eq 0 ]
