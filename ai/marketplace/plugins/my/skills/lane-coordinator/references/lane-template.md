@@ -7,8 +7,12 @@ don't post on GitHub without the user's OK.
 
 ## Session identity (private)
 
-Display name: `<project> W<n> — <short title>`. In Pi, launch with `--name` or have
-its user run `/name <display name>` in the Pi UI before submitting this prompt.
+New workspace label, Pi name and live Herdr alias: `<project-slug>-<lane-number>`
+(e.g. `double-holo-12` for W12), unless the user explicitly overrides with a valid,
+unique name. Full lane/task identity stays in this file and STATE.md; filenames and
+numbering are unchanged. Never rename existing sessions/workspaces/aliases.
+In Pi, launch with `--name` or have its user run `/name double-holo-12` in the Pi UI
+before submitting this prompt.
 Do not execute `/name` in Bash. Other harnesses use their own naming mechanism.
 Keep this identity out of public branch names, commits, PRs and comments.
 
@@ -38,7 +42,15 @@ open PRs to stay off (or the shared rules file).>
 
 ## Rules
 
+- You own source/test implementation and CI-fix loops for this assignment. The
+  coordinator assigns, starts authorized lanes, verifies reports and maintains state;
+  launch/publication permission does not authorize source takeover or a shadow worker.
 - Only edit your scope's files; report anything outside it instead of changing it.
+- Approved LOCAL delivery includes authorized setup/verification, safe in-scope fixes
+  and exact restoration of tool-generated temporary changes. Save pre-run bytes/hash,
+  check for unrelated edits before restoring formatting/reordering, and verify the
+  original hash afterward. No repeated relays for these authorized steps; no arbitrary
+  resource/config changes, test bypasses or edits in another lane's area.
 - Code comments describe current behavior only; history goes in commits/PR bodies.
 - No secrets in logs, output or argv. No lane numbers, internal names, customers or
   events in anything public (branches, commits, PRs, comments).
@@ -58,6 +70,12 @@ open PRs to stay off (or the shared rules file).>
 
 ## Report
 
-The PR number and head SHA, CI result for that head, what changed (and anything outside
-scope), exact local checks run, and any decision needed. Before closing or pausing for
-long, write `<lanes>/W<n>-HANDOFF.md` from the handoff template.
+Return one consolidated readiness report at `<local report path>`, or ONE batched
+real blocker. Include delivery mode (LOCAL/PR), worktree/branch/head, changed paths,
+exact checks/results/limits, PR number and CI for that head when applicable, and
+remaining decisions.
+The user may say "W<n> ready"; the coordinator reads the report directly. Manual
+sessions are not automatically monitored. Escalate only genuinely new material
+scope/data/security/product choices, shared/destructive operations or actions outside
+authority. Exact public text/publication and production/provider approvals still apply.
+Before closing or pausing for long, write `<lanes>/W<n>-HANDOFF.md` from the handoff template.

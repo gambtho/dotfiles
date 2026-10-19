@@ -12,7 +12,10 @@ skip a job if there's no tool for it.
 | Worktree writes | Normal git worktrees | The worktree guard blocks writes in primary checkouts; use linked worktrees |
 
 For explicit Herdr launches and manual Pi conversation naming, follow
-[herdr-launch.md](herdr-launch.md). This depends on actual tools and the inherited
+[herdr-launch.md](herdr-launch.md), including its deterministic helper when an
+approved prompt already exists. New names default to `project-slug-number` across
+workspace/Pi/alias (e.g. `double-holo-12`); existing names remain untouched.
+This depends on actual tools and the inherited
 Herdr session, not whether the coordinator is Pi or Claude Code. Claude app
 sessions without terminal tools use the manual handoff.
 

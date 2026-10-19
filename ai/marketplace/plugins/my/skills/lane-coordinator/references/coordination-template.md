@@ -17,7 +17,11 @@ Lane prompts: `~/<project>-local/lanes/W<n>-<slug>.md`. Last reviewed: <date>.
 
 ## Standing rules
 
-- Coordinator doesn't write product code; trivial changes only when the user asks.
+- Coordinator prepares assignments, starts authorized lanes, verifies reports,
+  maintains state and publishes approved material. Lanes own implementation/tests
+  and CI-fix loops; no coordinator takeover or shadow implementation worker.
+- New workspace/Pi/Herdr names default to `<project-slug>-<lane-number>`; preserve
+  existing names and full W<n>/task identity in lane files/STATE.md.
 - Lanes draft every public post; the user approves the exact text.
 - Never push to main, never merge, no force push on someone else's branch.
 - <project-specific rules: context pinning, comment style, privacy, etc.>
