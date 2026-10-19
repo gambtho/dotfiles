@@ -205,6 +205,8 @@ class Launch:
                           '--no-focus', kind='workspace_created')
             w, p = result['workspace'], result['root_pane']
             workspace, pane, terminal = string(w, 'workspace_id'), string(p, 'pane_id'), string(p, 'terminal_id')
+            # Preserve observed IDs for inspection without certifying a valid creation.
+            self.checkpoint(created_response={'workspace': workspace, 'pane': pane, 'terminal': terminal})
             if w.get('label') != identity['name'] or p.get('workspace_id') != workspace or p.get('cwd') != str(args.repo):
                 raise LaunchError('Creation returned unexpected workspace/root pane/cwd')
             self.checkpoint('Created', workspace=workspace, pane=pane, terminal=terminal)
@@ -278,7 +280,7 @@ def main():
             launch = Launch(args, context, live)
             try:
                 launch.execute()
-            except (LaunchError, OSError, ValueError, KeyError, TypeError) as exc:
+            except (LaunchError, OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
                 if launch.record:
                     launch.checkpoint(error=str(exc))
                 raise
@@ -288,14 +290,14 @@ def main():
                     primary_error = sys.exc_info()[1]
                     try:
                         launch.update_state()
-                    except (OSError, ValueError, KeyError, TypeError) as state_exc:
+                    except (OSError, ValueError, KeyError, TypeError, AttributeError) as state_exc:
                         print(f'STATE summary needs updating from {launch.path.name}: {state_exc}',
                               file=sys.stderr)
                         if primary_error is None:
                             raise
         print(json.dumps(launch.record))
         return 0
-    except (OSError, ValueError, KeyError, TypeError) as exc:
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
         print(f'Launch stopped: {exc}', file=sys.stderr)
         return 2
 

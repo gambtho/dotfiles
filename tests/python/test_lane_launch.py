@@ -51,6 +51,8 @@ def save():
 def reply(kind, **data):
     print(json.dumps({'id': 'fixture', 'result': {'type': kind, **data}}))
 if a == ['api', 'snapshot']:
+    if mode == 'snapshot-workspace-list':
+        s['workspaces'] = [[]]
     reply('session_snapshot', snapshot=s)
 elif a[:2] == ['workspace', 'create']:
     assert a == ['workspace', 'create', '--cwd', os.environ['FAKE_REPO'],
@@ -64,7 +66,14 @@ elif a[:2] == ['workspace', 'create']:
     if mode == 'create-malformed':
         print('{}')
     else:
-        reply('workspace_created', workspace=w, root_pane=p, tab={'tab_id': 'opaque-tab'})
+        if mode == 'create-label-mismatch':
+            w['label'] = 'unexpected-label'
+        elif mode == 'create-association-mismatch':
+            p['workspace_id'] = 'unexpected-workspace'
+        elif mode == 'create-cwd-mismatch':
+            p['cwd'] = '/unexpected/cwd'
+        reply('workspace_created', workspace=[] if mode == 'create-workspace-list' else w,
+              root_pane=[] if mode == 'create-pane-list' else p, tab={'tab_id': 'opaque-tab'})
 elif a[:2] == ['workspace', 'get']:
     reply('workspace_info', workspace=next(w for w in s['workspaces'] if w['workspace_id'] == a[2]))
 elif a[:2] == ['agent', 'start']:
@@ -78,13 +87,14 @@ elif a[:2] == ['agent', 'start']:
                  agent_session={'agent':'pi','source':'herdr:pi','kind':'path','value':'session-new'})
     s['agents'] = [agent]
     save()
-    reply('agent_started', agent=agent, argv=['pi', '--name', a[2]])
+    reply('agent_started', agent=[] if mode == 'start-agent-list' else agent,
+          argv=['pi', '--name', a[2]])
 elif a[:2] == ['agent', 'get']:
     assert a[2] == 'opaque-root'
     if not s['agents']:
         sys.exit(1)
     agent = dict(s['agents'][0])
-    if mode in ('welcome', 'dialog', 'welcome-dialog') and not s.get('read'):
+    if mode in ('welcome', 'dialog', 'welcome-dialog', 'read-list') and not s.get('read'):
         agent.update(agent_status='blocked', interactive_ready=False)
     reply('agent_info', agent=agent)
 elif a[:2] == ['agent', 'read']:
@@ -94,7 +104,7 @@ elif a[:2] == ['agent', 'read']:
     text = 'Welcome back!\nPress any key to continue (1s)' if mode == 'welcome' else 'Trust this project? Allow?'
     if mode == 'welcome-dialog':
         text += '\nWelcome back!\nPress any key to continue (1s)'
-    reply('pane_read', read={'pane_id':'opaque-root','text':text})
+    reply('pane_read', read=[] if mode == 'read-list' else {'pane_id':'opaque-root','text':text})
 elif a[:2] == ['agent', 'prompt']:
     assert a == ['agent', 'prompt', 'opaque-root', 'Read ' + os.environ['FAKE_PROMPT'] + ' and follow it.']
     receipt = json.loads((root / 'W12-launch.json').read_text())
@@ -107,7 +117,7 @@ elif a[:2] == ['agent', 'prompt']:
     if mode in ('prompt-malformed', 'crash'):
         print('{}')
     else:
-        reply('agent_prompted', agent=s['agents'][0])
+        reply('agent_prompted', agent=[] if mode == 'prompt-agent-list' else s['agents'][0])
 else:
     raise AssertionError('Forbidden or unknown Herdr operation: ' + repr(a))
 '''
@@ -199,6 +209,64 @@ class LaunchTests(unittest.TestCase):
                 self.live.write_text(json.dumps(dict(initial, **{field:value})))
                 self.assertNotEqual(self.run_launch().returncode, 0)
                 self.assertEqual(self.mutations(['workspace', 'create']), [])
+
+    def test_creation_metadata_mismatch_preserves_observed_ids_without_advancing(self):
+        initial_live, initial_state = self.live.read_text(), self.state.read_text()
+        for mode in ('create-label-mismatch', 'create-association-mismatch', 'create-cwd-mismatch'):
+            with self.subTest(mode=mode):
+                self.live.write_text(initial_live)
+                self.state.write_text(initial_state)
+                self.receipt.unlink(missing_ok=True)
+                (self.root / 'calls.jsonl').write_text('')
+                result = self.run_launch(mode)
+                self.assertEqual(result.returncode, 2)
+                self.assertIn('Creation returned unexpected', result.stderr)
+                record = json.loads(self.receipt.read_text())
+                self.assertEqual(record.get('created_response'), {
+                    'workspace': 'opaque-workspace', 'pane': 'opaque-root', 'terminal': 'terminal-new'})
+                self.assertEqual(record['stage'], 'Creating')
+                self.assertNotIn('Created', record['checkpoints'])
+                self.assertEqual(self.mutations(['agent','start']), [])
+                self.assertEqual(self.run_launch().returncode, 2)
+                self.assertEqual(len(self.mutations(['workspace','create'])), 1)
+
+    def test_malformed_nested_responses_use_normal_error_path(self):
+        initial_live, initial_state = self.live.read_text(), self.state.read_text()
+        cases = [('snapshot-workspace-list', None), ('create-workspace-list', 'Creating'),
+                 ('create-pane-list', 'Creating'), ('start-agent-list', 'Starting'),
+                 ('read-list', 'Starting'), ('prompt-agent-list', 'Submitting')]
+        for mode, stage in cases:
+            with self.subTest(mode=mode):
+                self.live.write_text(initial_live)
+                self.state.write_text(initial_state)
+                self.receipt.unlink(missing_ok=True)
+                (self.root / 'calls.jsonl').write_text('')
+                result = self.run_launch(mode)
+                self.assertEqual(result.returncode, 2)
+                self.assertIn('Launch stopped:', result.stderr)
+                self.assertIn('has no attribute', result.stderr)
+                self.assertNotIn('Traceback', result.stderr)
+                if stage is None:
+                    self.assertFalse(self.receipt.exists())
+                    self.assertEqual(self.mutations(['workspace','create']), [])
+                else:
+                    record = json.loads(self.receipt.read_text())
+                    self.assertEqual(record['stage'], stage)
+                    self.assertIn('has no attribute', record['error'])
+                    self.assertIn('inspect receipt', self.state.read_text())
+                    if stage in ('Creating', 'Submitting'):
+                        self.assertEqual(self.run_launch().returncode, 2)
+                        self.assertEqual(len(self.mutations(['workspace','create'])), 1)
+                        self.assertLessEqual(len(self.mutations(['agent','prompt'])), 1)
+
+    def test_malformed_receipt_uses_normal_error_path_without_overwriting_it(self):
+        self.receipt.write_text('[]')
+        result = self.run_launch()
+        self.assertEqual(result.returncode, 2)
+        self.assertIn('Launch stopped:', result.stderr)
+        self.assertNotIn('Traceback', result.stderr)
+        self.assertEqual(self.receipt.read_text(), '[]')
+        self.assertEqual(self.mutations(['workspace','create']), [])
 
     def test_malformed_create_never_duplicates(self):
         self.assertNotEqual(self.run_launch('create-malformed').returncode, 0)
@@ -310,7 +378,7 @@ class LaunchTests(unittest.TestCase):
         stderr = io.StringIO()
         with mock.patch.dict(os.environ, dict(self.env, FAKE_MODE='prompt-malformed'), clear=True), \
                 mock.patch.object(sys, 'argv', argv), \
-                mock.patch.object(module.Launch, 'update_state', side_effect=OSError('state-write-failed')), \
+                mock.patch.object(module.Launch, 'update_state', side_effect=AttributeError('state-write-failed')), \
                 contextlib.redirect_stderr(stderr):
             self.assertEqual(module.main(), 2)
         self.assertIn('malformed JSON', stderr.getvalue())
