@@ -6,7 +6,10 @@ description: Use when coordinating parallel work lanes across Pi, Claude Code, o
 # Lane coordinator
 
 You coordinate; lanes implement. You write lane prompts, check what lanes claim,
-keep the project's state file current, and draft what goes out under the user's name.
+keep the project's state file current, and publish only approved material. Existing
+lanes own source/test implementation and their CI-fix loops. Permission to start or
+publish a lane is not permission to take over through your own edits or a shadow
+implementation worker. Focused read-only investigation and review remain allowed.
 
 ## Start or resume
 
@@ -53,7 +56,12 @@ folder.
 - Next number: the highest `W<n>` in `lanes/` or STATE.md, plus one. One file per lane
   from [lane-template.md](references/lane-template.md). Hand the user one line in a code
   block: `Read <absolute path> and follow it.` For Pi, also provide the UI command
-  `/name <project W<n> — title>` for the new lane; never run `/name` in Bash.
+  `/name <project-slug>-<lane-number>` (e.g. `/name double-holo-12`) for the new lane;
+  never run `/name` in Bash. Default new workspace labels, Pi names and live Herdr
+  aliases to this same short name. Keep full W12/task identity in lane files and
+  STATE.md; preserve filenames/numbering and all existing names. Honor explicit
+  naming overrides that satisfy Herdr's alias constraints; reject invalid names
+  or collisions, never truncate or invent suffixes.
 - Each lane gets its own worktree and branch from a freshly fetched base, never a shared
   checkout.
 - Non-trivial work: audit or design first, stop for the user's OK, then one PR at a time.
@@ -74,17 +82,32 @@ such as "start W12" may create a named Herdr space and start Pi **only** with
 shell/tool access inside the intended Herdr session (`HERDR_ENV=1`). Otherwise
 return the manual handoff and Pi naming instruction without claiming a launch.
 
-For an eligible launch, follow [herdr-launch.md](references/herdr-launch.md):
-check existing launches first; use a new space per lane, explicit source cwd and
-`--no-focus`; record returned IDs before starting Pi with `--name`; submit the
-lane-file instruction to that exact pane. Record partial failures instead of
-retrying blindly. Never approve dialogs, control another client's focused pane,
-or treat launch permission as approval of unapproved implementation work.
+When an approved prompt already exists and the user says "start W12", use the
+mechanical helper in [herdr-launch.md](references/herdr-launch.md) immediately after
+context/prompt/source verification, not another planning round or a manual handoff
+when eligible access exists. It reconciles live identity, creates one `--no-focus`
+space, starts named Pi on the exact returned root pane, and submits once without
+waiting for task completion. Its receipt is authoritative; uncertain delivery is
+inspect-only, never an automatic resend/replacement workspace. Never approve dialogs,
+control another client's focused pane, or infer implementation approval from launch
+permission. A Herdr workspace is not an isolated Git worktree.
 
 ## Handle a lane report
 
-The user pastes reports, often as `<lane> - <report>`. Sometimes it's a repeat, or the
-user doesn't remember which lane owns something; STATE.md answers that.
+A lane returns one consolidated readiness report or ONE batched real blocker.
+The user can simply say "W12 ready": read the shared report directly instead of
+requiring copy/paste relays. Manual sessions are not automatically monitored.
+Sometimes a report is repeated or its owner unclear; STATE.md answers that.
+
+Approved LOCAL delivery includes authorized setup/verification, safe in-scope
+corrections, and exact restoration of tool-generated temporary changes. For
+formatting/reordering restoration, record the pre-run bytes/hash, check there are
+no unrelated edits, restore only the exact generated changes and verify the original
+hash. Don't ask for repeated relays for those steps. Source ownership and explicit
+scope still apply: no arbitrary resource/config changes or test bypasses. Escalate
+only new material scope/data/security/product choices, shared/destructive operations,
+or actions outside authority; public text/publication and production/provider actions
+retain their exact approval requirements.
 
 1. **Verify before relaying.** `gh pr view <n> -R <repo> --json state,headRefOid,mergeable,files,statusCheckRollup`,
    `gh pr diff <n> -R <repo>`, and the code at the lines that matter. Check that the head matches what
@@ -99,7 +122,8 @@ user doesn't remember which lane owns something; STATE.md answers that.
    flags. Recommend a merge order and say which lane absorbs the conflict (usually the
    one that owns the rename or the broader change).
 4. **Reply in this order:** what's true, what's off (with file:line), your recommendation,
-   then a paste-ready reply to the lane in its own code block.
+   then one batched next instruction only if needed. Read shared files directly; provide
+   a paste-ready reply only when no authorized direct handoff is available.
 5. **Recommend; don't just list options.** Push back on over-engineering, timeout bumps,
    scope creep, and process noise leaking into public text.
 6. When a lane asks to bypass something (a hook, a guard, a policy), find out why it

@@ -1,90 +1,111 @@
 # Explicit Herdr lane launch
 
-Manual handoff is the default. Writing a prompt or saying "prepare W12" does not
-launch anything. Follow this recipe only after an explicit request such as
-"start W12", with a shell/tool interface inside the intended Herdr session.
-A Claude app session without those tools returns the manual handoff instead.
-Do not arrange SSH, guess a socket, or control a different session as a fallback.
+Preparing a prompt does not launch it. After an explicit request such as **"start
+W12"**, with an approved prompt already present, verify context/prompt/source then
+run the helper below. Do not re-plan approved work or substitute manual instructions
+when eligible access exists. Without tools or eligible inherited context, give the
+short manual handoff. Never guess sockets, arrange SSH, switch sessions or steal focus.
+Other harnesses retain their manual fallback; this is only a Pi fast path.
 
-## Before launch
+## Identity and preflight
 
-- Confirm `HERDR_ENV=1` and that the inherited session is the intended destination.
-  If access or destination is uncertain, provide the manual handoff. Inspect the
-  installed `herdr --help`, `herdr workspace create --help`, `herdr agent start
-  --help` and `herdr agent prompt --help` rather than assuming newer flags.
-- Read STATE.md and the lane file. Check for an existing launch and inspect its
-  recorded IDs with `herdr workspace get <workspace_id>` / `herdr agent get
-  <pane_id>` before creating anything. If state has no launch record, list
-  workspaces/agents and reconcile matching lane labels. A match that cannot be
-  identified safely is a reason to ask, not create a duplicate.
-- Confirm the lane file exists and the intended source repository directory.
-  Each lane still creates/uses its own linked worktree before writing; opening
-  a space does not fetch, switch branches or authorize primary-checkout writes.
-- Choose a recognizable private display name, e.g. `project W12 — Login`, for
-  both the space and Pi conversation. Use a separate unique agent alias matching
-  `[a-z][a-z0-9_-]{0,31}`, e.g. `project-w12`. Check live aliases for collisions.
-  Lane identifiers must not leak into public branches, commits or PR text.
+- Read STATE.md and the approved lane file; confirm the intended source repository.
+  The source cwd must exist. The lane must still isolate in a linked Git worktree
+  before source writes: a Herdr workspace provides terminal layout, not Git isolation.
+- Use the established project slug and numeric lane: `double-holo-12` for W12.
+  This is the default for **all three** new workspace labels, Pi names and live
+  aliases. Full task descriptions and W12 identity stay in STATE.md/lane files;
+  lane filenames/numbering do not change. Never rename an existing workspace,
+  conversation, alias, public branch, commit or PR.
+- Honor an explicit naming override with `--name`; the shared name must satisfy
+  Herdr's alias constraint `[a-z][a-z0-9_-]{0,31}`. Reject invalid names, overlength
+  names and ambiguous collisions. No silent truncation or random suffixes. A user
+  override that cannot serve as an alias needs a valid user-selected name, not a guess.
+- Confirm `HERDR_ENV=1`, the inherited `HERDR_SESSION` matches the intended session,
+  and inherited socket/caller pane/workspace exist. Supply that verified session to
+  `--session`; it is an assertion, **not** a session selector. The helper never
+  overrides the inherited destination. Missing/mismatched context means manual handoff.
+- STATE.md needs the five-column Open lanes table from the state template, including
+  exactly one row for the lane, with Launch initially `Manual` or `—`. Existing launch
+  state or a receipt must be reconciled, not erased. Keep receipts in the same local,
+  unversioned lanes directory as the prompt. Do not copy receipts between sessions.
 
-## Create, record, start, submit
+## Execute once
 
-These are separate steps with checkpoints, not a fire-and-forget script. Stop on
-any failed command or invalid response. Keep paths/titles as literal arguments;
-quote shell data (including apostrophes) with a real shell-quoting routine when
-constructing tool input. Never interpolate untrusted text into shell code or use
-`eval`. Example Bash values below are literal, not executable label content:
-
-```bash
-repo='/home/example/my repo'
-lane_file='/home/example/project-local/lanes/W12.md'
-label='project W12 — Login'
-alias='project-w12'
-created=$(herdr workspace create --cwd "$repo" --label "$label" --no-focus)
-```
-
-Parse the returned `.result.workspace.workspace_id` and
-`.result.root_pane.pane_id`; validate both are nonempty strings. They are opaque
-IDs, not sidebar row numbers. Record them immediately in the lane's existing
-STATE.md row, with Pi name, alias and launch state **Created**. If parsing or the
-state write fails, stop and inspect the response/live list before retrying.
-
-Use the returned root pane, not a new split or another client's focused pane:
+Run [launch.py](../scripts/launch.py) through Python 3 (standard library, POSIX
+Linux/macOS/WSL). Resolve the script relative to this skill; quote literal paths:
 
 ```bash
-herdr agent start "$alias" --kind pi --pane "$pane_id" -- --name "$label"
+python3 <skill-dir>/scripts/launch.py --requested \
+  --project double-holo --lane W12 --session '<verified inherited session>' \
+  --repo '/home/example/my repo' \
+  --prompt '/home/example/double-holo-local/lanes/W12-approved-task.md' \
+  --state '/home/example/double-holo-local/STATE.md'
 ```
 
-`agent start` requires an available shell pane and waits for recognized readiness
-(default startup timeout 30 seconds). Successful return is not completed lane
-work. Record **Ready** before submitting the instruction to the same pane:
+`--requested` attests to the actual user launch request; it does not grant scope,
+publication or provider/production authority. Do not add it for "prepare W12".
+The helper uses argv subprocess calls, not executable shell text or `eval`.
 
-```bash
-herdr agent prompt "$pane_id" "Read $lane_file and follow it."
-```
+The installed Herdr 0.8.0 CLI capabilities and protocol 19 response shapes were
+inspected for this helper (`api snapshot`, `workspace create/get`, `agent start/get/
+read/prompt`). It checks protocol 19 and fails closed on unsupported/malformed shapes;
+there is no per-launch help dump or global capability cache. On incompatibility,
+inspect installed help/schema once and report manual fallback; do not update Herdr/Pi
+or broaden permissions to make a launch work.
 
-No `--wait`: launch hands control back to the coordinator while the lane works.
-Record **Submitted** only on successful submission. Preserve user focus; do not
-call focus commands or rely on implicit targets. Keep the existing lane report
-and GitHub verification process as the source of completion evidence, not idle
-status or a terminal excerpt.
+One `W12-launch.json` is authoritative. It stores prompt hash, source cwd, name,
+inherited socket/session/caller fingerprint, returned opaque workspace/root-pane/
+terminal IDs, Pi session identity and checkpoint timestamps. `.launch.lock` serializes
+helpers sharing that lanes directory. STATE gets one concise projection on exit;
+receipt checkpoints don't require extra model/tool rounds.
 
-## Partial launches and retries
+Flow: reconcile existing receipt and live labels/aliases → persist **Creating** →
+create ONE workspace with explicit cwd/label and `--no-focus` → validate returned
+workspace/root pane IDs → **Created** → persist **Starting** → start Pi with `--name`
+on that **exact returned pane** → verify recognized Pi/session and readiness →
+**Ready** → persist **Submitting before sending** → submit the lane instruction ONCE,
+without `--wait` → **Submitted** → inspect working/blocked/unknown truthfully.
+No focus, approval, key sending, kill, close, force or other-session operations exist.
 
-Keep created IDs and the last confirmed launch state when startup is blocked,
-times out, or prompt delivery is uncertain. Report the stage/error plainly;
-never silently create another workspace or resend a possibly delivered prompt.
-Inspect `agent get` and, when needed, `agent read` on the recorded pane. A timeout
-does not prove no input was sent. Ask before retrying uncertain submission or
-responding to a trust/permission/question dialog. Do not automatically approve,
-press Enter, kill processes, or close surfaces to clear an error. Restarts can
-make recorded IDs stale: reconcile the session, pane identity and lane prompt
-before using them again.
+The helper only waits up to 30 seconds for the known Powerline welcome overlay
+(`Welcome back!` plus `Press any key to continue (Ns)` in the **visible** viewport).
+It dismisses naturally; no Enter/approval is sent. Generic blocked status is not
+splash evidence. Trust/permission/question text stops for user intervention. Shell-only
+panes cannot be Ready. A successful submission/idle marker never proves lane completion.
+
+## Interrupted launch / recovery
+
+Re-run the **same invocation** only to reconcile; it does not mean "try again".
+- Existing live labels/aliases without a matching receipt, or STATE recording an old
+  launch, stop before creation. Inspect and identify them; do not rename/adopt implicitly.
+- **Creating** without validated IDs is uncertain even if no match is visible. Inspect
+  live workspaces; no automatic replacement workspace.
+- **Created** can start once. **Starting** only inspects an already recognized Pi;
+  a shell-only pane or startup failure is not permission to restart. A known welcome
+  overlay may finish naturally. **Ready** is revalidated before submission.
+- **Submitting** means possibly delivered, including a crash after delivery, failed
+  parse, nonzero exit or timeout. Inspect/report only; **never automatically resend**,
+  even if the agent appears idle or no delivery was observed. Ask before any deliberate
+  recovery/resubmission. **Submitted** is inspect-only on subsequent invocations too.
+- Receipt/live identity must match: inherited socket/caller fingerprint, workspace,
+  root pane/terminal, alias and Pi session. Restarts, stale IDs, changed prompts and
+  mismatches stop. Old receipt formats are not migrated or silently overwritten.
+- On errors, preserve the receipt and last checkpoint. If STATE cannot be written,
+  use the receipt and report that its summary needs updating. Never delete a receipt
+  to get past uncertainty or automatically clear a dialog/terminate a pane.
 
 ## Manual Pi handoff
 
-Return the normal `Read <absolute lane file> and follow it.` instruction and the
-Pi UI command `/name <project W12 — title>` to run in the new lane before pasting
-the instruction. Alternatively, start it with `pi --name <display-name>` using
-correct shell quoting. `/name` is a human Pi UI command, not a Bash command or a
-claim that this coordinator renamed a different session. Record **Manual** until
-the user reports or you verify an actual launch. Other harnesses retain their
-own naming mechanisms.
+Name the new conversation in the Pi UI, then paste the instruction:
+
+```text
+/name double-holo-12
+Read /absolute/project-local/lanes/W12-approved-task.md and follow it.
+```
+
+Alternatively launch `pi --name 'double-holo-12'`, then paste the instruction.
+`/name` is a human UI command, not Bash and not a claim that the coordinator renamed
+another session. Record **Manual** until an actual launch is reported or verified.
+Manual sessions are not automatically monitored; the user can say "W12 ready" and
+point to the consolidated shared report.
