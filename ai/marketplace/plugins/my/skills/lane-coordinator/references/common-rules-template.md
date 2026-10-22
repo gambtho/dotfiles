@@ -23,8 +23,8 @@ material; start/publish authority does not authorize source takeover or a shadow
 - Audit first and stop for approval, unless the scope is already approved.
 - Small PRs, one theme each, from a fresh base. Follow `pr-closeout` for scoped
   review/finalization, preserving publication approval and reusing valid review evidence.
-- Profiles/aliases and executable plan task ownership come from COORDINATION.md;
-  return feedback candidates to the coordinator, who uses the shared publication helper.
+- Profiles/aliases come from COORDINATION.md; executable plan/task ownership comes from the lane prompt.
+  Return feedback candidates to the coordinator, who uses the shared publication helper.
 - Never push to the default branch, never merge, no force push on others' branches.
 - Approved LOCAL delivery covers authorized setup/verification, safe in-scope
   corrections and exact restoration of tool-generated temporary changes. Save the
@@ -34,8 +34,8 @@ material; start/publish authority does not authorize source takeover or a shadow
   user can signal "W<n> ready"; the coordinator reads it directly. Manual sessions
   are not automatically monitored. Escalate new material choices, shared/destructive
   operations and actions outside authority, not routine authorized LOCAL steps.
-- Public text is a draft until the user approves it. Exact publication and
-  production/provider approvals are unchanged.
+- PR publication follows COORDINATION.md. Other public text needs exact approval
+  unless a standing grant covers it. Production/provider approvals are unchanged.
 - No secrets, lane numbers, internal names, customers or events in anything public.
 - Teammates' work: propose, don't delete; mark it "ask owner" with their login.
 

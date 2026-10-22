@@ -21,7 +21,10 @@ preferences, flagged phrases and per-person tone; follow those first.
 
 ## Publishing
 
-- Show the exact text and where it goes. Post only after the user approves that text.
+- PR bodies follow the project's PR policy in COORDINATION.md (lanes may open PRs with
+  short bodies directly where it says so).
+- Everything else (comments, reviews, chat): show the exact text and where it goes. Post
+  only after the user approves that text.
 - Changed text or destination needs a new OK. Standing grants in COORDINATION.md are the
   only exception.
 - Implementation approval, passing CI, or "go ahead and contribute" aren't approval to post.

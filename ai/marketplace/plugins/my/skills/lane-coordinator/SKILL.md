@@ -64,6 +64,20 @@ folder.
   or collisions, never truncate or invent suffixes.
 - Each lane gets its own worktree and branch from a freshly fetched base, never a shared
   checkout.
+- One owning lane per PR. It keeps the PR current (base updates, retargets, review threads).
+  Don't add a "merge captain" lane on top; it blurs ownership.
+- Keep work in progress small: a few open PRs per repo from us at a time. Start new
+  implementation when something merges, not before.
+- **Shared hot files:** once two lanes will PR into the same repo, check which files every
+  PR edits (changelog, repository maps, generated inventories, counts). Fix that first
+  (fragments, directory-level maps) or every merge breaks every other open PR.
+- Before giving a lane git commands (rebase, retarget, reset), verify the branch's actual
+  ancestry (`gh api repos/<o>/<r>/compare/<base>...<head>`). Don't guess commit ranges.
+- Don't treat our own issue or plan text as requirements the user set. When the user's
+  decision and our earlier wording disagree, the user wins; fix the wording.
+- Before sending an instruction, check its lane, PR and current owner against the latest
+  report. After a rule or ownership change, reconcile affected prompts and STATE.md in
+  the same approved update; mark old instructions superseded, without rewriting history.
 - Non-trivial work: audit or design first, stop for the user's OK, then one PR at a time.
   Don't re-gate scope that's already approved.
 - Parallel lanes in one repo share a rules file from
@@ -71,6 +85,14 @@ folder.
   and which open PRs to stay off.
 - Resuming someone else's PR (teammate out): merge main in, no rebase or force push, keep
   their design, list each deviation, draft a short takeover comment for the user.
+- Stacked PRs in a repo that squash-merges: when the lower PR merges, the upper branch
+  still carries the lower PR's original commits, so merging main in conflicts on every
+  line it touched. Rebase our own upper branch instead:
+  `git rebase --onto origin/main <old lower head> <upper branch>`, then
+  `git push --force-with-lease=<branch>:<old upper head>`. Check COORDINATION.md for the
+  repo's merge method. Save each branch's old local/remote heads and a backup ref first.
+  After replay, compare each branch with its backup to preserve its own source, tests,
+  docs and merge-only fixes; rerun affected checks and collect CI for the new heads.
 - Before a lane closes or pauses for long, have it write a handoff from
   [handoff-template.md](references/handoff-template.md).
 
@@ -135,8 +157,9 @@ retain their exact approval requirements.
 
 Read the shared [project-review contract](../pr-closeout/references/project-review-contract.md).
 Use it for every repository, not only those where another maintainer merges. Record
-verified base identity, profile/alias location and executable plan task IDs in the
-COORDINATION.md repo table and lane prompts. Keep profiles concise and evidence-linked.
+verified repository identity and profile/alias location in the COORDINATION.md repo
+table; keep executable plan/task IDs and current review evidence in lane prompts and
+reports. Keep profiles concise and evidence-linked.
 - Lanes return exact candidate feedback plus source links; you verify and automatically
   consolidate/promote confirmed preferences through the shared private-store helper.
   You are the semantic writer for active lanes; never directly overwrite store Markdown.
@@ -165,8 +188,12 @@ with its undo, decide keep or delete explicitly. Recording and demo lanes follow
 
 Follow [writing-rules.md](references/writing-rules.md) for PR bodies, GitHub comments,
 reviews and chat messages.
-- Show the exact draft; post only after the user approves that text. Edits mean a new
-  draft. Standing grants recorded in COORDINATION.md are the exception.
+- **PR bodies** follow the project's PR policy in COORDINATION.md. Where it says lanes open
+  PRs directly, lanes write short bodies and open the PR; don't route PR text through the
+  user, and don't rewrite bodies unless something is actually wrong.
+- **Comments addressed to people** (reviews, issue comments, @-mentions, chat): show the
+  exact draft; post only after the user approves that text. Edits mean a new draft.
+  Standing grants recorded in COORDINATION.md are the exception.
 - Match tone to the reader as recorded in COORDINATION.md's people table (seniority,
   native language).
 - Never name customers, events or internal projects, or use lane numbers, in public repos.
@@ -176,7 +203,8 @@ reviews and chat messages.
 - No product code. Trivial changes are OK when the user asks (a license line, a policy
   nudge).
 - Never push to main, never merge (the user merges), no force push on someone else's
-  branch. Resolve conflicts by merging the base in, not rebasing.
+  branch. Resolve conflicts by merging the base in, except for our own stacked branches
+  after a squash merge (rebase --onto, force-with-lease; see "Write a lane prompt").
 - Before pushing anything yourself, check the author (`git log -1 --format='%an <%ae>'`);
   never commit with a placeholder identity, even in a scratch merge.
 - No secrets in logs, output or command-line arguments.

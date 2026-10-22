@@ -25,7 +25,7 @@ __pycache__/
 *.py[cod]
 
 # Machine-local Pi plans and retired Claude-era state are not tracked.
-.pi/plans/
+.pi
 .pi/overnight-run-state.md
 .claude/
 projects/
