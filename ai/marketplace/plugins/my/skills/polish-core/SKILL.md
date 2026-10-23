@@ -173,9 +173,11 @@ Each subagent receives:
 - The change summary from Phase 2
 - Required finding format: `[Priority|Severity|Confidence] file:line — description; Disposition: open; Verification: not verified`.
   Start each finding with those disposition/verification values; replace verification
-  only with checks/results actually observed. The parent updates disposition after
-  fixing or otherwise deciding the finding. Preserve repository priority labels and
-  state their P1 equivalence; severity/confidence alone do not make a warning P1.
+  only with checks/results actually observed. The parent updates auto-fix dispositions
+  after fixing or deciding them. Report-only findings stay open until their required
+  human verification; recording progress does not authorize auto-fixing or closing them.
+  Preserve repository priority labels and state their P1 equivalence;
+  severity/confidence alone do not make a warning P1.
 
 The same reviewer, acting as **project-reviewer**, additionally receives all loaded profile text with source paths/item numbers, the built-in checklist, the PR body (or explicit `unavailable`), changed changelog/docs paths and contents (including deletions), and branch-currency/temporary-merge results. Give it the complete PR diff/file list for scope checks and identify PATH_FILTER or large-diff coverage limits. It returns:
 - Findings: `[Priority|Severity|Confidence] file:line — item N: description (source: <profile path or built-in maintainer lens>); Disposition: open; Verification: not verified`, following the same priority mapping and update rules.
