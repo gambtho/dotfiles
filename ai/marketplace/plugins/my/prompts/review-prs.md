@@ -451,7 +451,18 @@ Return exact evidence-linked learning candidates to the coordinator; only the co
 writes profiles and commits/pushes them with plain Git. With no coordinator, give the
 candidates to the human to designate one and report maintenance pending. Batch review
 is not implicit coordinator authority. Do not load the coordinator's maintenance
-procedure or publish store files from this workflow. The suggested candidate structure is:
+procedure or publish store files from this workflow.
+
+Every proposed guidance entry in any section uses this required candidate format:
+
+```markdown
+- Candidate: {exact proposed text}
+  Repository: {OWNER}/{REPO}; Source URL: {attributable maintainer/review URL}; Date: {date}
+  Applicability: {scope}; Verification/disposition: {evidence/result and status, or pending}
+```
+
+Keep document metadata and aggregate/session bookkeeping in the structure below;
+they are not individual guidance candidates.
 
 ```markdown
 # PR Review Learnings — {OWNER}/{REPO}

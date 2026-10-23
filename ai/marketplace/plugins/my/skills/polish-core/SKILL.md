@@ -171,10 +171,14 @@ Each subagent receives:
 - The base commit and branch context
 - The detected stack and conventions from Phase 1
 - The change summary from Phase 2
-- Instructions to format findings as: `[Severity|Confidence] file:line — description`
+- Required finding format: `[Priority|Severity|Confidence] file:line — description; Disposition: open; Verification: not verified`.
+  Start each finding with those disposition/verification values; replace verification
+  only with checks/results actually observed. The parent updates disposition after
+  fixing or otherwise deciding the finding. Preserve repository priority labels and
+  state their P1 equivalence; severity/confidence alone do not make a warning P1.
 
 The same reviewer, acting as **project-reviewer**, additionally receives all loaded profile text with source paths/item numbers, the built-in checklist, the PR body (or explicit `unavailable`), changed changelog/docs paths and contents (including deletions), and branch-currency/temporary-merge results. Give it the complete PR diff/file list for scope checks and identify PATH_FILTER or large-diff coverage limits. It returns:
-- Findings: `[Severity|Confidence] file:line — item N: description (source: <profile path or built-in maintainer lens>)`
+- Findings: `[Priority|Severity|Confidence] file:line — item N: description (source: <profile path or built-in maintainer lens>); Disposition: open; Verification: not verified`, following the same priority mapping and update rules.
 - Checklist coverage by source/item: **checked** with repository locations or verification evidence, **not applicable** with an applicability reason, or **not checked** with a missing-context/blocked-check reason. A blocked test is not checked to completion even if its merge attempt was inspected. Honor accepted patterns; missing context is a coverage gap, not an invented finding.
 
 **Additional specialists:** only for an explicit request or a named risk the whole-change reviewer did not cover. Record that gap and focus; a code area alone is not a trigger. There is no automatic minimum fan-out. For justified parallel agents, use sibling calls and preserve source/item associations.
