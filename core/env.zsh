@@ -20,3 +20,7 @@ else
 fi
 export GPG_TTY=$(tty)
 export CLICOLOR=1
+
+# Pi otherwise hides clickable file links when terminal detection is inconclusive
+# (for example xterm-256color over SSH). Preserve explicit 0/auto overrides.
+export PI_HYPERLINKS="${PI_HYPERLINKS-1}"
