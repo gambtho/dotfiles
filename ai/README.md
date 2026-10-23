@@ -220,8 +220,17 @@ local-only research and workflow ledgers remain local. Follow their archived pat
 when a profile references supporting material that is not versioned. Rename aliases
 must be explicitly verified; folder names alone are not identity evidence.
 
-Once configured and active, the normal private publication helper automatically
-commits/pushes only verified `OWNER/REPO/review.md` and `learnings.md` updates. It
+### Profile workflow and retained helper capabilities
+
+Reviewers now return candidates; only the coordinator writes profiles and commits/pushes
+with plain Git in the existing private checkout. Existing private-store sync stays.
+Standalone polish and batch review do not become writers. Plain Git does not inherit
+the helper's CAS, backup, lock or pending-receipt guarantees. No installer or helper
+implementation is removed by this workflow change.
+
+The retained private publication helper, when invoked in configured active mode,
+automatically commits/pushes only verified `OWNER/REPO/review.md` and `learnings.md`
+updates. It is not a required reviewer step. It
 checks effective Git fetch/push destinations (including URL rewriting and alternate
 push URLs) and private visibility, pushes only the owned commit to the bound branch,
 and does not bypass hooks. Repository lock precedes the per-store CAS lock. No
