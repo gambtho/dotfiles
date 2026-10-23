@@ -77,6 +77,28 @@ run_loader() {
   [[ "$output" != *"VEKIL_MANAGED_"* ]]
 }
 
+@test "shell customizations export Pi hyperlinks by default" {
+  run zsh -dfc '
+    unset PI_HYPERLINKS
+    export DOTFILES="$1"
+    source "$DOTFILES/core/shell/load-custom.zsh" || exit 1
+    /bin/sh -c '\''test "$PI_HYPERLINKS" = 1'\''
+  ' _ "$REPO_ROOT"
+  [ "$status" -eq 0 ]
+}
+
+@test "shell customizations preserve explicit Pi hyperlink overrides" {
+  local value
+  for value in 0 auto 1; do
+    run zsh -dfc '
+      export DOTFILES="$1" PI_HYPERLINKS="$2"
+      source "$DOTFILES/core/shell/load-custom.zsh" || exit 1
+      /bin/sh -c '\''test "$PI_HYPERLINKS" = "$1"'\'' _ "$2"
+    ' _ "$REPO_ROOT" "$value"
+    [ "$status" -eq 0 ]
+  done
+}
+
 @test "core path never places the current directory on PATH" {
   run zsh -fc 'PATH=./bin:/usr/bin:/bin; ZSH="$1"; HOME="$2"; source "$1/core/path.zsh"; print -r -- "$PATH"' _ "$REPO_ROOT" "$HOME"
   [ "$status" -eq 0 ]

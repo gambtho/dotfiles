@@ -41,6 +41,8 @@ Generic runtime behavior comes from floating npm and Git declarations, reconcile
 
 `pi-file-editor` is pinned to the reviewed local-only release, verified with Pi 1.2.0. It has no preview, search, or SSH support; `/edit-file` is the keyboard fallback. It uses the machine-local `externalEditor` setting, then `$VISUAL` / `$EDITOR`. Only existing regular files are accepted, but the launched editor retains normal user authority rather than agent-tool/worktree containment. Line positioning requires metadata inside the link (`#L42` or `#L42-49`). File Context remains available for browsing and quoting.
 
+File clicks require fullscreen mode (Pi's default), an idle agent, and rendered OSC 8 hyperlinks. Shell customizations default `PI_HYPERLINKS=1` so links remain clickable when terminal detection is inconclusive, such as `xterm-256color` over SSH. Explicit overrides are preserved: launch with `PI_HYPERLINKS=0 pi` to disable hyperlinks or `PI_HYPERLINKS=auto pi` to restore terminal detection. Start a new shell after deploying the dotfiles change. Outside the managed shell, use `PI_HYPERLINKS=1 pi --tui-mode fullscreen`; regular mode uses `/edit-file` instead.
+
 Interactive browser automation remains opt-in rather than a default dependency.
 
 ## Named agents and routing
