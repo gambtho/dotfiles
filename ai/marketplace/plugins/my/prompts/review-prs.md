@@ -447,7 +447,22 @@ See the learnings file for auto-discovered conventions so far.
 
 ### 7b: Update Learnings
 
-Snapshot/read the existing resolved store's `learnings.md`, draft a complete semantically consolidated candidate in private scratch, then publish through `private_review_store.py` under the shared contract. Never use direct write/edit for publication. On stale content, reread/merge and retry once; on persistent error report a pending update rather than overwrite. Git-backed exit 5 with `sync.local_saved=true` means **saved locally, sync pending**: report the reason/operator action, do not retry the old hash or claim a push. Active coordinated lanes return candidates to the coordinator instead. The file structure should be:
+Return exact evidence-linked learning candidates to the coordinator; only the coordinator
+writes profiles and commits/pushes them with plain Git. With no coordinator, give the
+candidates to the human to designate one and report maintenance pending. Batch review
+is not implicit coordinator authority. Do not load the coordinator's maintenance
+procedure or publish store files from this workflow.
+
+Every proposed guidance entry in any section uses this required candidate format:
+
+```markdown
+- Candidate: {exact proposed text}
+  Repository: {OWNER}/{REPO}; Source URL: {attributable maintainer/review URL}; Date: {date}
+  Applicability: {scope}; Verification/disposition: {evidence/result and status, or pending}
+```
+
+Keep document metadata and aggregate/session bookkeeping in the structure below;
+they are not individual guidance candidates.
 
 ```markdown
 # PR Review Learnings — {OWNER}/{REPO}
@@ -486,11 +501,11 @@ Snapshot/read the existing resolved store's `learnings.md`, draft a complete sem
 - Trend vs last session: {any notable changes in issue rates}
 ```
 
-**Automatic private maintenance:** Promote recurring verified patterns or explicit
-maintainer guidance into the resolved store's `review.md` through the same lock/hash
-publication helper. Preserve evidence, accepted patterns and false positives in
-learnings. Bot suggestions alone are not policy. Summarize changed/retired/pending
-items with evidence; do not edit tracked repo guidance or publish new comments.
+**Feedback handoff:** Suggest recurring verified patterns or explicit maintainer
+guidance for the coordinator to promote to `review.md`. Preserve evidence, accepted
+patterns and false positives in the candidate learnings. Bot suggestions alone are
+not policy. Summarize pending items; do not write profiles, edit tracked guidance or
+publish new comments without separate authority.
 
 ### 7c: Clean Up Worktrees
 

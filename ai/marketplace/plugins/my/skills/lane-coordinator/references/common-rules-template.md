@@ -30,7 +30,8 @@ of public text.
 - Small PRs, one theme each, from a fresh base. Follow `pr-closeout` for scoped
   review/finalization, preserving publication approval and reusing valid review evidence.
 - Profiles/aliases come from COORDINATION.md; executable plan/task ownership comes from the lane prompt.
-  Return feedback candidates to the coordinator, who uses the shared publication helper.
+  Return feedback candidates to the coordinator; only that coordinator writes profiles
+  and commits/pushes them with plain Git in the private store.
 - Approved LOCAL delivery covers authorized setup/verification, safe in-scope
   corrections and exact restoration of tool-generated temporary changes. Save the
   pre-run bytes/hash; confirm no unrelated edits, restore only generated changes and

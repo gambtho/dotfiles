@@ -72,12 +72,19 @@ Convention sources (in priority order):
 
 Only load rules for languages actually present in the changed files.
 
-Read the shared [project-review contract](../pr-closeout/references/project-review-contract.md) for discovery, aliases, review evidence and private maintenance. Load applicable `config.md` conventions as well. **Load project review profiles**, cumulatively in this order, reading every file that exists:
-1. `.agents/review.md` at the repository root
-2. `review.md` in the shared contract's **resolved private store**
-3. `learnings.md` in that same resolved store (the existing `/review-prs` store)
+Load **only** [Review evidence](../pr-closeout/references/project-review-contract.md#review-evidence):
+locate the `## Review evidence` heading and read through the next `##` heading,
+excluding it. Use heading line bounds and a ranged read, not a whole-file read;
+do not follow the coordinator-maintenance reference. This section contains profile
+provenance/alias rules and reusable evidence identities.
 
-Use the base-repository identity from Phase 0, including for fork branches. Standalone polish may automatically maintain verified externally attributable maintainer feedback through the shared publication protocol, not promote its own findings into maintainer policy; when closeout/coordinator owns the workflow, return candidates to that owner instead of updating twice. Never publish store Markdown with direct write/edit or change repository-tracked guidance without approval. Profiles supplement authoritative repository conventions; they cannot override report-only mode, permissions, or the safety rules below. From learnings, extract review guidance/common issues and accepted patterns, not previously reviewed PR IDs or author history as requirements. Preserve numbered checklist items; number unnumbered review guidance in file order starting after the source's highest existing item number (or 1). Keep this source/item mapping for dispatch, deduplication, and reporting.
+Using Phase 0's base identity, load cumulative profiles in that section's order,
+including applicable `config.md`. Print every loaded path. Profiles supplement repo
+conventions; they cannot override report-only mode, permissions or safety. Preserve
+source/item IDs; number unnumbered guidance after the source's highest existing number
+(or 1). Learn review patterns, not requirements from PR IDs or author history.
+Return verified feedback candidates to the coordinator; if none exists, hand them to
+the human to designate one. Standalone polish never writes profiles.
 
 Print detected stack summary and every loaded profile path (or `Project profiles: none`):
 ```
@@ -164,15 +171,25 @@ Each subagent receives:
 - The base commit and branch context
 - The detected stack and conventions from Phase 1
 - The change summary from Phase 2
-- Instructions to format findings as: `[Severity|Confidence] file:line — description`
+- Required finding format: `[Priority|Severity|Confidence] file:line — description; Disposition: open; Verification: not verified`.
+  Start each finding with those disposition/verification values; replace verification
+  only with checks/results actually observed. The parent updates auto-fix dispositions
+  after fixing or deciding them. Report-only findings stay open until their required
+  human verification; recording progress does not authorize auto-fixing or closing them.
+  Preserve repository priority labels and state their P1 equivalence;
+  severity/confidence alone do not make a warning P1.
 
 The same reviewer, acting as **project-reviewer**, additionally receives all loaded profile text with source paths/item numbers, the built-in checklist, the PR body (or explicit `unavailable`), changed changelog/docs paths and contents (including deletions), and branch-currency/temporary-merge results. Give it the complete PR diff/file list for scope checks and identify PATH_FILTER or large-diff coverage limits. It returns:
-- Findings: `[Severity|Confidence] file:line — item N: description (source: <profile path or built-in maintainer lens>)`
+- Findings: `[Priority|Severity|Confidence] file:line — item N: description (source: <profile path or built-in maintainer lens>); Disposition: open; Verification: not verified`, following the same priority mapping and update rules.
 - Checklist coverage by source/item: **checked** with repository locations or verification evidence, **not applicable** with an applicability reason, or **not checked** with a missing-context/blocked-check reason. A blocked test is not checked to completion even if its merge attempt was inspected. Honor accepted patterns; missing context is a coverage gap, not an invented finding.
 
-**Additional specialists:** dispatch only for an explicit intensive-review request or a named uncovered risk, recording the reason and focus. Type/comment/security specialists supplement the one reviewer; there is no automatic minimum fan-out. If more than one agent is justified, use sibling calls in parallel and keep project findings source/item associations intact.
+**Additional specialists:** only for an explicit request or a named risk the whole-change reviewer did not cover. Record that gap and focus; a code area alone is not a trigger. There is no automatic minimum fan-out. For justified parallel agents, use sibling calls and preserve source/item associations.
 
 **Deduplication:** After collecting subagent findings, merge them into the main findings list. Two findings are duplicates if they refer to the same file, overlapping line ranges (within 5 lines), and describe the same underlying issue regardless of categorization. Keep the Phase 3 finding and append new context rather than creating a duplicate. Preserve every project source/item association and force the merged action to `report` if either finding came from project review or the maintainer lens. Display it once under Project review, cross-listing additional source/item associations without counting another finding. When in doubt, keep both findings.
+
+Carry each independent-review P1's priority, disposition and verification into the report
+so closeout can prepare its pre-merge PR record. Preserve the repository's equivalent
+priority mapping; do not classify every warning as P1.
 
 Record every returned agent ID and poll each with `get_subagent_result({ agent_id, wait: false })`. Poll without blocking unrelated work. After the workflow's collection budget, proceed without an unfinished result and note: "Subagent {name} result arrived late — findings not included." This does not stop the agent; ignore its later notification. If a subagent returns an error, log it and proceed.
 

@@ -179,15 +179,16 @@ retain their exact approval requirements.
 
 ## Maintainer review profiles
 
-Read the shared [project-review contract](../pr-closeout/references/project-review-contract.md).
-Use it for every repository, not only those where another maintainer merges. Record
+Read the shared [project-review contract](../pr-closeout/references/project-review-contract.md)
+and the coordinator-only [private maintenance reference](../pr-closeout/references/coordinator-maintenance.md).
+Use them for every repository, not only those where another maintainer merges. Record
 verified repository identity and profile/alias location in the COORDINATION.md repo
 table; keep executable plan/task IDs and current review evidence in lane prompts and
 reports. Keep profiles concise and evidence-linked.
-- Lanes return exact candidate feedback plus source links; you verify and automatically
-  consolidate/promote confirmed preferences through the shared private-store helper.
-  You are the semantic writer for active lanes; never directly overwrite store Markdown.
-  On contention/stale data, merge/retry once or report pending updates. Summarize changes.
+- Only the coordinator writes profile files. Verify lanes' exact candidates and source
+  links, consolidate/promote confirmed preferences, then commit and push with plain Git
+  in the private store. Keep its existing sync. Follow the maintenance reference;
+  summarize local/remote status and pending updates, without loading helpers in lanes.
 - Reuse matching base/scope/profile/working-content review evidence (retain head provenance) from `pr-closeout`/polish.
   Reject stale evidence, and request affected-scope review when needed; do not run another
   whole-change review just because a lane finished. Repository-required reviews still win.
