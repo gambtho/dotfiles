@@ -20,12 +20,17 @@ material; start/publish authority does not authorize source takeover or a shadow
 
 ## Rules for every lane
 
+Read the project's AGENTS.md (or the repo's own rules) for Git, PRs, privacy, tests
+and reports. This file records effort-specific ownership and exceptions, not another
+copy of those rules. If none exist, use small sequential PRs, never push to a default
+branch or merge, never rewrite someone else's branch, and keep private details out
+of public text.
+
 - Audit first and stop for approval, unless the scope is already approved.
 - Small PRs, one theme each, from a fresh base. Follow `pr-closeout` for scoped
   review/finalization, preserving publication approval and reusing valid review evidence.
 - Profiles/aliases come from COORDINATION.md; executable plan/task ownership comes from the lane prompt.
   Return feedback candidates to the coordinator, who uses the shared publication helper.
-- Never push to the default branch, never merge, no force push on others' branches.
 - Approved LOCAL delivery covers authorized setup/verification, safe in-scope
   corrections and exact restoration of tool-generated temporary changes. Save the
   pre-run bytes/hash; confirm no unrelated edits, restore only generated changes and
@@ -34,10 +39,9 @@ material; start/publish authority does not authorize source takeover or a shadow
   user can signal "W<n> ready"; the coordinator reads it directly. Manual sessions
   are not automatically monitored. Escalate new material choices, shared/destructive
   operations and actions outside authority, not routine authorized LOCAL steps.
-- PR publication follows COORDINATION.md. Other public text needs exact approval
-  unless a standing grant covers it. Production/provider approvals are unchanged.
-- No secrets, lane numbers, internal names, customers or events in anything public.
-- Teammates' work: propose, don't delete; mark it "ask owner" with their login.
+- PR publication and other public text follow the authority table in COORDINATION.md.
+  Without permission there, draft exact text for the human. Production/provider
+  approvals are unchanged.
 
 ## Sequencing
 

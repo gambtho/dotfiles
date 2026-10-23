@@ -25,6 +25,8 @@ root = Path(sys.argv[2]).resolve()
 entry = skill / "SKILL.md"
 assert entry.is_file(), f"Missing skill entry: {entry}"
 visited = set()
+people = skill / "references/people-template.md"
+assert people.is_file(), "Missing people bootstrap template"
 pending = [entry, root / "skills/pr-closeout/SKILL.md", root / "skills/polish-core/SKILL.md", root / "prompts/review-prs.md"]
 while pending:
     source = pending.pop()
@@ -39,8 +41,40 @@ while pending:
         assert resolved.is_file(), f"Broken reference: {source}: {target}"
         if resolved.suffix == ".md":
             pending.append(resolved)
+assert people in visited, "People bootstrap template is not reachable through bundled links"
 assert len(visited) > 1, "No bundled references reachable from the skill entry"
 print(f"Resolved {len(visited)} bundled Markdown files")
+PY
+  [ "$status" -eq 0 ]
+}
+
+@test "state template remains consumable by the launch projection" {
+  run python3 - "$SKILL_DIR" <<'PY'
+import importlib.util
+from pathlib import Path
+from types import SimpleNamespace
+import sys
+import tempfile
+
+skill = Path(sys.argv[1])
+spec = importlib.util.spec_from_file_location("lane_launch", skill / "scripts/launch.py")
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+text = (skill / "references/state-template.md").read_text().replace("W<n>", "W12")
+with tempfile.TemporaryDirectory() as directory:
+    state = Path(directory) / "STATE.md"
+    state.write_text(text)
+    args = SimpleNamespace(state=state, lane="W12", prompt=Path(directory) / "W12-task.md")
+    launch = module.Launch(args, {}, {})
+    launch.record = {"name": "sample-12", "stage": "Submitted", "workspace": "ws-1", "pane": "pane-1"}
+    launch.update_state()
+    result = state.read_text().splitlines()
+    row = module.state_row(state.read_text(), "W12")
+    original = text.splitlines()[module.state_row(text, "W12")]
+    assert result[row].split("|")[1:5] == original.split("|")[1:5]
+    assert "Submitted" in result[row] and "ws-1" in result[row] and "pane-1" in result[row]
+    assert result[:row] == text.splitlines()[:row]
+    assert result[row + 1:] == text.splitlines()[row + 1:]
 PY
   [ "$status" -eq 0 ]
 }

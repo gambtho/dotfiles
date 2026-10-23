@@ -1,10 +1,10 @@
 # W<n> — <repo>: <short title>
 
 You are an implementation lane in `<owner/repo>` (checkout `<path>`; a new worktree per
-PR from a freshly fetched `origin/<base>`). Read the repo's `AGENTS.md`/`CLAUDE.md` and
-contribution guide first and follow them. Never push to the default branch or merge.
-PR publication follows COORDINATION.md; other public posts need approval unless a
-standing grant covers them. State any deliberate publication hold explicitly.
+PR from a freshly fetched `origin/<base>`). Read the project's AGENTS.md (or the repo's
+own rules) and contribution guide first and follow them. Publication follows the
+authority table in COORDINATION.md; without permission there, draft exact public text
+for the human. State any deliberate publication hold explicitly.
 
 ## Session identity (private)
 
@@ -38,7 +38,7 @@ open PRs to stay off (or the shared rules file).>
    packages where the repo has them.
 4. Use `pr-closeout` for the review/finalization phase, reusing valid review evidence
    rather than adding another automatic reviewer pass. Open the PR with a short body
-   per COORDINATION.md's PR policy (unless this prompt says to stop first). For an approved PR, report CI/threads/readiness at the exact head;
+   per COORDINATION.md's authority table (unless this prompt says to stop first). For an approved PR, report CI/threads/readiness at the exact head;
    for local or deliberately draft work, report only that scoped status and blockers.
 
 ## Rules
@@ -52,26 +52,14 @@ open PRs to stay off (or the shared rules file).>
   check for unrelated edits before restoring formatting/reordering, and verify the
   original hash afterward. No repeated relays for these authorized steps; no arbitrary
   resource/config changes, test bypasses or edits in another lane's area.
-- Code comments describe current behavior only; history goes in commits/PR bodies.
-- No secrets in logs, output or argv. No lane numbers, internal names, customers or
-  events in anything public (branches, commits, PRs, comments).
-- No force push on anyone else's branch. No timeout bumps as a fix.
-- Tests cover distinct invariants, roughly proportional to product code; table-driven
-  where cases share a shape; no duplicated fixtures. Put product/tests/docs line counts
-  in the local readiness report, not the PR body unless the repository requires them.
-- Conflicts with the base: merge it in. Exception: if this PR is stacked and the PR below
-  it was squash-merged, rebase onto the base from the old lower head
-  (`git rebase --onto origin/<base> <old lower head>`) and push with an explicit
-  `--force-with-lease=<branch>:<old remote head>`; check the ancestry first. Before
-  restacking, save old local/remote heads and a backup ref. Compare each branch with its
-  backup to preserve source, tests, docs and merge-only fixes; rerun affected checks
-  and collect CI for the new heads.
-- You own this PR end to end: keep it current with its base and answer its review
-  threads (fix with the commit; don't resolve threads a person opened).
-- Handoffs and reports go under the project folder, never `/tmp`.
-- PR bodies: short (what it does, what it doesn't, how verified), written by you, per
-  COORDINATION.md's PR policy. Comments addressed to people are drafts until the user
-  approves them, unless a standing grant covers them.
+- Use the project's AGENTS.md (or the repo's own rules) for Git/conflicts, PR size and
+  sequencing, review replies, privacy, tests and report locations. Don't restate them here.
+  If none exist: keep one small PR current end to end, merge the base in for conflicts,
+  never push to a default branch or merge, and never rewrite someone else's branch.
+  Keep secrets and internal identities out of public text; put reports in the project
+  folder. Tests cover distinct invariants; no timeout bumps or test bypasses as a fix.
+- Where the authority table permits direct PR publication, write a short body: what it
+  does, what it doesn't and how verified. Otherwise keep it as a draft for the human.
 
 - Read the shared project-review contract bundled with `pr-closeout` and all applicable
   profiles at their verified COORDINATION.md paths, including aliases. Return feedback
@@ -82,12 +70,16 @@ open PRs to stay off (or the shared rules file).>
 
 Return one consolidated readiness report at `<local report path>`, or ONE batched
 real blocker. Start with the exact PR/head, ready or blocked, the next person's action
-and any unverified risk. Keep this decision summary under ten lines; put evidence below.
-Include delivery mode (LOCAL/PR), worktree/branch/head, changed paths,
-exact checks/results/limits, PR number and CI for that head when applicable, and
-remaining decisions.
+and any unverified risk. Keep this decision summary to at most ten lines at the top;
+put evidence below. Include delivery mode (LOCAL/PR), worktree/branch/head, changed
+paths, exact checks/results/limits, PR number and CI for that head when applicable,
+and remaining decisions. Before calling a PR ready, local HEAD, remote PR head,
+tested revision and CI revision must all match. Include reusable review evidence
+(base, head provenance, scope, content identity, profile identity, model and dispositions)
+so the coordinator can check freshness, blockers and the delta without redoing review.
 The user may say "W<n> ready"; the coordinator reads the report directly. Manual
 sessions are not automatically monitored. Escalate only genuinely new material
 scope/data/security/product choices, shared/destructive operations or actions outside
 authority. Exact public text/publication and production/provider approvals still apply.
 Before closing or pausing for long, write `<lanes>/W<n>-HANDOFF.md` from the handoff template.
+A parked lane has a stop/resume line: wait condition, first resume action and report path.
