@@ -77,10 +77,11 @@ const { githubCopilotProvider } = await import(import.meta.resolve("@earendil-wo
 const settings = SettingsManager.inMemory(JSON.parse(readFileSync(process.argv[3], "utf8")));
 const catalog = githubCopilotProvider().getModels();
 const selected = ["gpt-6-luna", "gpt-6.1-sol", "gpt-6-astra", "claude-opus-5.5"];
+const fallback = catalog.filter(model => model.type === "chat" && !selected.includes(model.id));
+assert.ok(fallback.length > 0, "native catalog has no non-overridden chat models to test");
 for (const [id, reserve, recent] of [
   ...selected.map(id => [id, 650000, 60000]),
-  ["claude-haiku-4.5", 16384, 20000],
-  ["gpt-5.4-mini", 16384, 20000],
+  ...fallback.map(model => [model.id, 16384, 20000]),
 ]) {
   const model = catalog.find(model => model.id === id);
   assert.ok(model, `native catalog missing ${id}`);
