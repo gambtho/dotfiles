@@ -1,8 +1,9 @@
 # Writing rules
 
 For PR titles and bodies, GitHub issues, comments and reviews, commit messages, and chat
-messages written in the user's voice. COORDINATION.md records the user's confirmed
-preferences, flagged phrases and per-person tone; follow those first.
+messages written in the user's voice. Follow the project's AGENTS.md and
+COORDINATION.md for confirmed preferences and flagged phrases. Look for per-person
+tone in PEOPLE.md, falling back to the people section in COORDINATION.md.
 
 ## Voice
 
@@ -21,12 +22,11 @@ preferences, flagged phrases and per-person tone; follow those first.
 
 ## Publishing
 
-- PR bodies follow the project's PR policy in COORDINATION.md (lanes may open PRs with
-  short bodies directly where it says so).
-- Everything else (comments, reviews, chat): show the exact text and where it goes. Post
-  only after the user approves that text.
-- Changed text or destination needs a new OK. Standing grants in COORDINATION.md are the
-  only exception.
+- PR bodies and other public posts follow the project's authority table in
+  COORDINATION.md, including actor, destination and limits. Lanes write short PR bodies
+  and open PRs directly where authorized; do not invent a draft-only requirement.
+- Without permission in the authority table, show the exact text and destination;
+  post only after the user approves that text. Changed text or destination needs a new OK.
 - Implementation approval, passing CI, or "go ahead and contribute" aren't approval to post.
 - Follow each repo's contribution policy (DCO, AI disclosure, who replies to reviews).
   If it conflicts with the user's preference, ask.

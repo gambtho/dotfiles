@@ -13,17 +13,19 @@ implementation worker. Focused read-only investigation and review remain allowed
 
 ## Start or resume
 
-Invocation: `coordinate <project>` (for example `coordinate kaimahi`). The project is a
+Invocation: `coordinate <project>` (for example `coordinate sample`). The project is a
 short name, not a repo; it may span several repos. Its folder is `~/<project>-local/`
 unless the user says otherwise, with lane prompts in `lanes/`.
 
-1. **Read the state first.** `~/<project>-local/STATE.md` (open lanes, waiting-on,
-   recent decisions, last lane number) and `COORDINATION.md` (repos, people, merge
-   policy, standing rules and grants, writing preferences). If they don't exist,
-   create them from [state-template.md](references/state-template.md) and
-   [coordination-template.md](references/coordination-template.md), filling them from
-   the lanes folder, open PRs/issues and what the user tells you. Ask only for what you
-   can't find.
+1. **Read the state first.** `~/<project>-local/STATE.md` (goal, critical path, open
+   lanes, waiting-on, current decisions, last lane number), `AGENTS.md` (project rules)
+   and `COORDINATION.md` (repos, the authority table, writing preferences). Look for
+   `PEOPLE.md`; fall back to the people section in COORDINATION.md. For missing state
+   or coordination files, use [state-template.md](references/state-template.md) and
+   [coordination-template.md](references/coordination-template.md). New projects can
+   use [people-template.md](references/people-template.md); don't duplicate an existing
+   people section. Fill from lane files, open PRs/issues and the user's words. Ask only
+   for what you can't find.
 2. **Re-check what's volatile.** For every open PR in STATE.md, `gh pr view <n> -R <repo>`:
    state, head, checks. Note anything that merged, closed or went red while you were away.
 3. **Give the user a short status:** what changed, what's waiting on whom, the
@@ -37,15 +39,30 @@ holds durable facts about people and preferences, not lane state.
 ## Keep STATE.md current
 
 Update it when a lane opens or closes, when what a lane waits on changes, when a decision
-lands, and before the session ends. Keep it to one screen: the critical path toward the
-current goal (each link with an owner), a table of open lanes, a waiting-on list by
-person, the last ~10 decisions with dates, session notes and what's upcoming.
-Closed lanes move to one "closed recently" line. A new chat should be able to pick up
-from STATE.md alone.
+lands, and before the session ends. The header names the single writer; other sessions
+leave notes in the project's report folder. Goal and critical path (each link owned)
+are required, alongside open lanes, waiting-on by person, decisions still in force,
+session notes and upcoming work. Aim for a scannable screen and roughly ten current
+decisions; line counts are guidance, not limits. Preserve facts needed for this pick-up
+test: **a fresh session can state the goal, the critical path and the human's next
+decision from STATE**. Archive closed history rather than burying current actions.
 
-If something took digging to find (an old URL, a process, who owns what), write it into
-COORDINATION.md right away. Copy lane handoffs that landed in `/tmp` into the project
-folder.
+For every coherent update:
+1. Reconcile changed prompts and STATE together; mark superseded instructions explicitly.
+2. Give every parked lane a stop/resume line: what it waits on, its first resume action
+   and its report location.
+3. Refuse to overwrite a file changed since it was read. Write a same-directory temp
+   file, check it is nonempty and STATE has unique lane rows, recheck the original,
+   then rename into place. On a mismatch, re-read and reconcile instead of overwriting.
+   The launch helper's STATE projection is an action of the single coordinator writer;
+   re-read STATE after it runs before preparing another update. This is stale-write
+   protection, not a lock against unrelated writers.
+4. Make one commit per coherent update, including its affected prompts and STATE where
+   the project authorizes versioning them. Do not silently add workflow artifacts to Git.
+
+If something took digging to find, put durable repo/process facts in COORDINATION.md
+and people facts in PEOPLE.md (or the existing people section). Follow the project's
+AGENTS.md for report locations; absent a rule, keep handoffs in the project folder.
 
 ## Write a lane prompt
 
@@ -62,12 +79,11 @@ folder.
   STATE.md; preserve filenames/numbering and all existing names. Honor explicit
   naming overrides that satisfy Herdr's alias constraints; reject invalid names
   or collisions, never truncate or invent suffixes.
-- Each lane gets its own worktree and branch from a freshly fetched base, never a shared
-  checkout.
-- One owning lane per PR. It keeps the PR current (base updates, retargets, review threads).
-  Don't add a "merge captain" lane on top; it blurs ownership.
-- Keep work in progress small: a few open PRs per repo from us at a time. Start new
-  implementation when something merges, not before.
+- Follow the project's AGENTS.md (or the repo's own rules) for worktrees, PR ownership,
+  sequencing, size, conflict resolution and publication; don't copy those rules into
+  each prompt. Use the repo row's WIP limit. If no rules exist, default to a fresh
+  worktree/branch from a fetched base, one owner per PR, small sequential PRs and a few
+  open PRs per repo. The owner keeps their PR current; no extra "merge captain".
 - **Shared hot files:** once two lanes will PR into the same repo, check which files every
   PR edits (changelog, repository maps, generated inventories, counts). Fix that first
   (fragments, directory-level maps) or every merge breaks every other open PR.
@@ -83,16 +99,10 @@ folder.
 - Parallel lanes in one repo share a rules file from
   [common-rules-template.md](references/common-rules-template.md): who owns which paths,
   and which open PRs to stay off.
-- Resuming someone else's PR (teammate out): merge main in, no rebase or force push, keep
-  their design, list each deviation, draft a short takeover comment for the user.
-- Stacked PRs in a repo that squash-merges: when the lower PR merges, the upper branch
-  still carries the lower PR's original commits, so merging main in conflicts on every
-  line it touched. Rebase our own upper branch instead:
-  `git rebase --onto origin/main <old lower head> <upper branch>`, then
-  `git push --force-with-lease=<branch>:<old upper head>`. Check COORDINATION.md for the
-  repo's merge method. Save each branch's old local/remote heads and a backup ref first.
-  After replay, compare each branch with its backup to preserve its own source, tests,
-  docs and merge-only fixes; rerun affected checks and collect CI for the new heads.
+- For takeovers and stacked-branch recovery, use the project's AGENTS.md (or the repo's
+  own rules), not a copied procedure. Absent rules, merge the base in, preserve the
+  original design, list deviations and draft any takeover comment for approval; do not
+  rewrite someone else's branch.
 - Before a lane closes or pauses for long, have it write a handoff from
   [handoff-template.md](references/handoff-template.md).
 
@@ -131,27 +141,41 @@ only new material scope/data/security/product choices, shared/destructive operat
 or actions outside authority; public text/publication and production/provider actions
 retain their exact approval requirements.
 
-1. **Verify before relaying.** `gh pr view <n> -R <repo> --json state,headRefOid,mergeable,files,statusCheckRollup`,
-   `gh pr diff <n> -R <repo>`, and the code at the lines that matter. Check that the head matches what
-   the lane tested, the checks ran on that head, the diff stays in the lane's files, and
-   nothing claims more than the evidence. Don't bounce a report for missing fields;
-   look them up.
-2. **Check size and scope.** Split additions by kind:
+1. **Read the summary first.** Require a decision summary of at most ten lines at the
+   top: PR/head and CI at that head, ready or blocked, and the human's next action.
+   Read the shared report and look up missing facts directly; have the owner fix a
+   buried or oversized summary, not relay the whole report through the user.
+2. **Reuse review evidence before reviewing again.** Match base, scope, content identity
+   and profile identity under the shared review contract; retain the reviewed head as
+   provenance. For a match, check freshness, blockers and the delta only. A changed head
+   alone does not invalidate matching content. If an identity or coverage differs,
+   review the affected scope; repository-required checks/reviews still apply.
+3. **Verify before calling ready.** Inspect `gh pr view <n> -R <repo> --json
+   state,headRefOid,mergeable,files,statusCheckRollup` and the delta's relevant diff/code.
+   Require **local HEAD = remote PR head = tested revision = CI revision**, with required
+   checks passing on that revision and no unresolved blockers. Inspect each check run's
+   revision, not just a green rollup. Confirm the diff stays in scope and no claim
+   exceeds evidence. Keep this readiness test separate from review-evidence reuse.
+4. **Check size and scope.** Split additions by kind:
    `gh pr view <n> -R <repo> --json files --jq '[.files[]|{p:.path,a:.additions}]|{tests:(map(select(.p|test("_test\\.|\\.(test|spec)\\.|/tests?/|test_")))|map(.a)|add // 0),docs:(map(select(.p|test("\\.md$")))|map(.a)|add // 0),product:(map(select(.p|test("_test\\.|\\.(test|spec)\\.|/tests?/|test_|\\.md$")|not))|map(.a)|add // 0)}'`.
    Flag tests above ~1.5× product unless each test is a distinct safety invariant, and
    flag new scripts or tools outside the lane's goal.
-3. **Check interactions.** List other open PRs touching the same files, commands or
+5. **Check interactions.** List other open PRs touching the same files, commands or
    flags. Recommend a merge order and say which lane absorbs the conflict (usually the
    one that owns the rename or the broader change).
-4. **Reply in this order:** what's true, what's off (with file:line), your recommendation,
+6. **Reply in this order:** what's true, what's off (with file:line), your recommendation,
    then one batched next instruction only if needed. Read shared files directly; provide
    a paste-ready reply only when no authorized direct handoff is available.
-5. **Recommend; don't just list options.** Push back on over-engineering, timeout bumps,
+7. **Recommend; don't just list options.** Push back on over-engineering, timeout bumps,
    scope creep, and process noise leaking into public text.
-6. When a lane asks to bypass something (a hook, a guard, a policy), find out why it
+8. When a lane asks to bypass something (a hook, a guard, a policy), find out why it
    failed and give the narrowest fix, as a full command the user can paste.
-7. For deep reviews, run read-only background reviewers with a specific focus, then
-   spot-check their top findings before drafting anything from them.
+9. Bound flake diagnosis: inspect failed logs and the base for the same failure, and
+   allow at most one rerun of the same unexplained failure before reporting a blocker
+   with evidence. This does not ban reproducing distinct failures or repo-required
+   checks. No timeout increases or test bypasses as a fix.
+10. For deep reviews, run read-only background reviewers with a specific uncovered
+    focus, then spot-check their top findings before drafting anything from them.
 
 ## Maintainer review profiles
 
@@ -177,6 +201,29 @@ When the user says "merged #N", verify it, then list every lane it unblocks or c
 with, each with its paste-ready next instruction, and update STATE.md. Do the same when
 a lane closes: what it frees up, and whether the critical path changed.
 
+## Maintenance
+
+**End of day:** run the project's drift check and fix STATE against observed facts.
+If no checker exists, compare open PR state/head/checks and lane waits with GitHub
+manually; record an observation time and unknown queries in a local drift report.
+Give overnight lanes a stop/resume note. Put tomorrow's first actions (critical-path
+step and the "needs the human" list) at the top of STATE, then commit the coherent
+update where authorized. A failed check is recorded as **unknown**; it does not block
+stopping or justify inventing a result.
+
+**Next morning:** start a fresh coordinator session from STATE and the drift report.
+Run the current-state checks. If the pick-up test fails, repair STATE first.
+
+**Weekly, in the coordinator session:**
+- Archive closed rows and drop decisions that no longer constrain work.
+- List duplicate, contradictory or superseded rules for the human to confirm.
+- Find unmarked superseded prompt sections and parked lanes without stop/resume lines.
+- List new rules since the last intent check, with their sources, for the human to
+  confirm against their own words. Don't turn an inference into a grant.
+
+**Human away more than two days:** re-plan the critical path in STATE so stalls and
+next authorized actions are visible. This does not expand the authority table.
+
 ## Live changes and demos
 
 Cloud, tenant, app-registration and cluster changes follow
@@ -188,23 +235,23 @@ with its undo, decide keep or delete explicitly. Recording and demo lanes follow
 
 Follow [writing-rules.md](references/writing-rules.md) for PR bodies, GitHub comments,
 reviews and chat messages.
-- **PR bodies** follow the project's PR policy in COORDINATION.md. Where it says lanes open
+- **PR bodies** follow the project's authority table in COORDINATION.md. Where it says lanes open
   PRs directly, lanes write short bodies and open the PR; don't route PR text through the
   user, and don't rewrite bodies unless something is actually wrong.
 - **Comments addressed to people** (reviews, issue comments, @-mentions, chat): show the
   exact draft; post only after the user approves that text. Edits mean a new draft.
-  Standing grants recorded in COORDINATION.md are the exception.
-- Match tone to the reader as recorded in COORDINATION.md's people table (seniority,
-  native language).
+  Explicit permission in the authority table is the exception.
+- Match tone to the reader in PEOPLE.md, falling back to COORDINATION.md's people
+  section (seniority, native language).
 - Never name customers, events or internal projects, or use lane numbers, in public repos.
 
 ## Hard rules
 
 - No product code. Trivial changes are OK when the user asks (a license line, a policy
   nudge).
-- Never push to main, never merge (the user merges), no force push on someone else's
-  branch. Resolve conflicts by merging the base in, except for our own stacked branches
-  after a squash merge (rebase --onto, force-with-lease; see "Write a lane prompt").
+- Git operations follow the project's AGENTS.md (or the repo's own rules). Without
+  rules: never push to a default branch or merge; never force push someone else's
+  branch; resolve conflicts by merging the base in.
 - Before pushing anything yourself, check the author (`git log -1 --format='%an <%ae>'`);
   never commit with a placeholder identity, even in a scratch merge.
 - No secrets in logs, output or command-line arguments.

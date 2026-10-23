@@ -2,12 +2,20 @@
 
 Volatile. Update when a lane opens, closes or changes what it waits on, and when a
 decision lands. Re-check GitHub before trusting any PR state here.
-Stable facts: `COORDINATION.md` in the same folder.
+Stable facts/rules: `COORDINATION.md` and `AGENTS.md`; people: `PEOPLE.md` or the
+people section in COORDINATION.md.
 Last updated: <date>. Last lane number used: **W<n>**.
+Single writer: <coordinator session; other sessions leave notes at the project report path>.
 
-## Critical path
+**Goal (required):** <the outcome everything is driving toward>.
+**Next human decision:** <action and link, or none>.
+**Tomorrow / next session first actions:** <critical-path action; needs-the-human list>.
 
-Goal: <the outcome everything is driving toward, e.g. "demo recording", "release v1">
+Pick-up test: a fresh session can state the goal, the critical path and the human's next decision from STATE.
+Aim for a scannable summary; line counts are guidance, not limits.
+
+## Critical path (required)
+
 1. <step> — <owner lane or person> — <PR / status>
 2. <step> — **unowned** ← raise this first
 
@@ -27,13 +35,13 @@ checkpoints. Submitting is possibly delivered: inspect only, never automatically
 Keep the full W<n>/task identity here, separate from short new session names.
 
 Closed recently: <W<n>, …>
-To reopen later: <W<n> (when)>
+Parked: <W<n> — stop: waiting on what; resume: first action and condition; report path>.
 
 ## Waiting on people
 
 - **<person>:** <PRs/questions, in priority order>
 
-## Recent decisions
+## Decisions still in force
 
 - <date>: <decision, one line, with PR/issue link>
 
