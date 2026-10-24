@@ -29,8 +29,11 @@ open PRs to stay off (or the shared rules file).>
 ## Steps
 
 1. <Audit/design: what to read and answer.> Write it to `<local report path>` and
-   **stop for approval**. Include a size estimate and a PR split if it's over ~1.5k
-   product lines. (Skip this gate if the scope is already approved; say so.)
+   **stop for approval**. Include a size estimate and a PR split above these defaults:
+   internal repos: ~1k hand-written product lines; flag tests above ~1.5× product.
+   External repos: ~1k changed lines in total. Use COORDINATION.md's internal-repo
+   list; otherwise treat the repo as external. The project's own rule wins.
+   (Skip this gate if the scope is already approved; say so.)
 2. <Implement the approved executable plan tasks: plan path, Task N IDs, owned files,
    dependencies, verified repo/profile/alias location. A decision brief must be converted
    to the canonical executable plan once before implementation.>
@@ -61,10 +64,11 @@ open PRs to stay off (or the shared rules file).>
 - Where the authority table permits direct PR publication, write a short body: what it
   does, what it doesn't and how verified. Otherwise keep it as a draft for the human.
 
-- Read the shared project-review contract bundled with `pr-closeout` and all applicable
-  profiles at their verified COORDINATION.md paths, including aliases. Return feedback
-  candidates (exact text plus evidence) to the coordinator; do not publish profiles
-  yourself. The coordinator performs automatic private maintenance safely and summarizes it.
+- Read only the **Review evidence** section of the shared project-review contract
+  bundled with `pr-closeout`, plus all applicable profiles at their verified
+  COORDINATION.md paths, including aliases. Return feedback candidates (exact text
+  plus evidence) to the coordinator; the coordinator alone writes profiles and
+  performs automatic private maintenance safely and summarizes it.
 
 ## Report
 
