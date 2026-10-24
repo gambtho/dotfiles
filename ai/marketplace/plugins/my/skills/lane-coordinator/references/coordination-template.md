@@ -29,6 +29,18 @@ lanes draft every public post.
 | Git publication / merge | <actors and limits; reference AGENTS.md> | <human decision> | <decision and date> |
 | Human away | <already-authorized work and maintenance> | <what waits for the human> | <decision and date> |
 
+## Routines
+
+Project-owned commands; replace placeholders with confirmed commands and limits.
+An unfilled command uses the skill's manual fallback; entries do not expand authority.
+
+| Routine | Command (including working directory) | Budget | Output |
+|---|---|---|---|
+| Drift check | <project drift-check command> | <time/query limit> | <local drift report path; observation time and unknowns> |
+| Morning sweep | <project sweep command> | <time/query limit> | <current PR/lane observations and unknowns> |
+
+Record failed checks or exhausted budgets as unknown, not clean results.
+
 ## Project facts
 
 <Only stable facts not already owned by AGENTS.md or repo instructions. Name the

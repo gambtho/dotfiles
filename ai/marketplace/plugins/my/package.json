@@ -7,11 +7,13 @@
   "private": true,
   "pi": {
     "prompts": [
+      "./prompts/eod.md",
       "./prompts/fix-pr.md",
       "./prompts/polish-pr.md",
       "./prompts/polish.md",
       "./prompts/review-prs.md",
-      "./prompts/second-opinion.md"
+      "./prompts/second-opinion.md",
+      "./prompts/weekly.md"
     ],
     "skills": [
       "./skills/blindspot-pass/SKILL.md",

@@ -48,6 +48,46 @@ PY
   [ "$status" -eq 0 ]
 }
 
+@test "coordinator routines expose catch-up rules and project-owned commands" {
+  run python3 - "$SKILL_DIR" <<'PY'
+from pathlib import Path
+import sys
+
+skill = Path(sys.argv[1])
+text = (skill / "SKILL.md").read_text()
+start = text.split("## Start or resume\n", 1)[1].split("\n## Keep STATE.md current", 1)[0]
+maintenance = text.split("## Maintenance\n", 1)[1].split("\n## Live changes", 1)[0]
+for phrase in ("coordinate <project>", "end of day <project>", "weekly <project>"):
+    assert phrase in text.split("\n---", 1)[0], phrase
+    assert phrase in maintenance, phrase
+for phrase in ("only one project folder", "Routines", "18 hours", "last STATE commit", "7 days", "missing"):
+    assert phrase in start, phrase
+assert start.index("pick-up test") < start.index("drift report") < start.index("morning sweep") < start.index("Give the user a short status")
+assert "Don't run it unasked" in start
+assert "--json state,headRefOid,statusCheckRollup" in start
+assert "manual" in maintenance and "budgets" in maintenance
+coordination = (skill / "references/coordination-template.md").read_text()
+for phrase in ("## Routines", "Drift check", "Morning sweep", "Budget", "report"):
+    assert phrase in coordination, phrase
+for stamp in ("Last end of day: <date time>", "Last weekly pass: <date>"):
+    assert stamp in maintenance and stamp in (skill / "references/state-template.md").read_text(), stamp
+PY
+  [ "$status" -eq 0 ]
+}
+
+@test "routine prompt wrappers select the named routine with unchanged project arguments" {
+  local name routine
+  for name in eod weekly; do
+    routine="weekly"
+    [ "$name" != eod ] || routine="end of day"
+    run grep -F "\"$routine\"" "$PACKAGE_DIR/prompts/$name.md"
+    [ "$status" -eq 0 ]
+    grep -Fq 'lane-coordinator' "$PACKAGE_DIR/prompts/$name.md"
+    grep -Fq '$ARGUMENTS' "$PACKAGE_DIR/prompts/$name.md"
+    jq -e --arg path "./prompts/$name.md" '.pi.prompts | index($path) != null' "$PACKAGE_DIR/package.json"
+  done
+}
+
 @test "state template remains consumable by the launch projection" {
   run python3 - "$SKILL_DIR" <<'PY'
 import importlib.util
