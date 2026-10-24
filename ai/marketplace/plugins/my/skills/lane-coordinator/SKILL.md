@@ -43,7 +43,8 @@ if several match, ask which project rather than guessing.
    more than 7 days old, flag it in the status with one suggested line:
    `weekly <project>`. Don't run it unasked. Treat an unreadable date as unknown/due.
 5. **Run the project's morning sweep**, using its Routines command and budgets. Without
-   one, re-check every open PR in STATE with `gh pr view <n> -R <repo>`: state, head,
+   one, re-check every open PR in STATE with
+   `gh pr view <n> -R <repo> --json state,headRefOid,statusCheckRollup` for state, head and
    checks. Note anything merged, closed or red; reuse observations from this catch-up.
 6. **Give the user a short status:** what changed, what's waiting on whom, the
    critical path (anything unowned first), the next one or two decisions, and any

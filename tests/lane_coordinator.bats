@@ -64,6 +64,7 @@ for phrase in ("only one project folder", "Routines", "18 hours", "last STATE co
     assert phrase in start, phrase
 assert start.index("pick-up test") < start.index("drift report") < start.index("morning sweep") < start.index("Give the user a short status")
 assert "Don't run it unasked" in start
+assert "--json state,headRefOid,statusCheckRollup" in start
 assert "manual" in maintenance and "budgets" in maintenance
 coordination = (skill / "references/coordination-template.md").read_text()
 for phrase in ("## Routines", "Drift check", "Morning sweep", "Budget", "report"):
