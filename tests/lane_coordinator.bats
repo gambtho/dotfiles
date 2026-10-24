@@ -88,6 +88,51 @@ PY
   done
 }
 
+@test "lane guidance scopes review loading, size defaults and live authority" {
+  run python3 - "$SKILL_DIR" "$PACKAGE_DIR" <<'PY'
+from pathlib import Path
+import sys
+
+skill, package = map(Path, sys.argv[1:])
+lane = (skill / "references/lane-template.md").read_text()
+closeout = (package / "skills/pr-closeout/SKILL.md").read_text()
+assert "Read only the **Review evidence** section" in lane
+assert "including aliases" in lane and "coordinator alone writes profiles" in lane
+for text in (lane, closeout):
+    for phrase in ("~1k hand-written product lines", "~1.5× product", "~1k changed lines in total",
+                   "COORDINATION.md", "otherwise treat", "project's own rule wins"):
+        assert phrase in text, phrase
+    assert "~1.5k" not in text
+live = (skill / "references/live-changes.md").read_text()
+for phrase in ("project's authority table", "approved plan with a cost cap", "lane's own resources",
+               "propose the exact commands and wait", "Use short-lived tokens.",
+               "only where the project's rules permit it", "Never print, log or pass secrets as arguments."):
+    assert phrase in live, phrase
+PY
+  [ "$status" -eq 0 ]
+}
+
+@test "STATE assigns one home per fact and weekly maintenance removes duplicates" {
+  run python3 - "$SKILL_DIR" <<'PY'
+from pathlib import Path
+import sys
+
+skill = Path(sys.argv[1])
+state = (skill / "references/state-template.md").read_text()
+for phrase in ("One home per fact", "one-word state", "PR numbers without heads or CI",
+               "next actor and action", "report path", "## Needs the human", "ordered one-liners",
+               "## Waiting on others", "not already a lane row's next actor", "at most about 10",
+               "not already in the project's rule files", "dated or triggered items", "not already in a lane row",
+               "Parked: <links to paused lane rows", "stop/resume condition in its row"):
+    assert phrase in state, phrase
+weekly = (skill / "SKILL.md").read_text().split("**Weekly, in the coordinator session:**", 1)[1].split("**Human away", 1)[0]
+for phrase in ("Remove a fact's duplicate copies", "home section", "Leave heads and CI to GitHub",
+               "drift check", "still over budget", "what to move where", "instead of stopping"):
+    assert phrase in weekly, phrase
+PY
+  [ "$status" -eq 0 ]
+}
+
 @test "state template remains consumable by the launch projection" {
   run python3 - "$SKILL_DIR" <<'PY'
 import importlib.util

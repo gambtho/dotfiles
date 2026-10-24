@@ -44,7 +44,12 @@ Before a PR exists, perform this review phase and local verification only; do no
 
    `OWNER/REPO` is the verified **base** repository (for a fork PR, upstream). Apply the contract's profile/alias rules and read applicable private `config.md`. Fix clear violations before pushing; return evidence-linked feedback candidates to the coordinator. With no coordinator, hand them to the human to designate one. Tracked guidance and public posting remain separately authorized.
 2. **Review phase.** For non-trivial changes, reuse matching base/scope/profile/working-content review evidence (record head provenance; an unchanged-content commit alone does not invalidate it) or run the repository's required review step (`$autoreview` where required, otherwise `polish-core --fix`). One fresh whole-change reviewer covers general and project checks by default; do not add a second automatic review on top of it. Add a specialist only for a named risk that review did not cover, or an explicit request. Review changed scope after material code/base/profile changes and honor mandatory repo re-review; CI retries alone do not require another review.
-3. **Size.** Report product vs test vs docs/generated lines. Flag (don't silently ship) a PR over ~1.5k hand-written product lines or with tests above ~1.5× product; suggest a split along ownership boundaries.
+3. **Size.** Report product vs test vs docs/generated lines. The project's own rule wins;
+   otherwise use these defaults: internal repos: ~1k hand-written product lines, with
+   tests flagged above ~1.5× product; external repos: ~1k changed lines in total.
+   Use the project's COORDINATION.md to identify internal repos; otherwise treat
+   the repo as external. Flag excess size (don't silently ship); suggest a split
+   along ownership boundaries.
 4. **Body.** Concise: what changed, compatibility/breaking notes, verification actually run (including any live run and its limits). Stacked PRs say "stacked on #N — review after it lands" and stay draft until the parent merges.
 
 ## Snapshot helper

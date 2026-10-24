@@ -10,25 +10,30 @@ Last weekly pass: <date>.
 Single writer: <coordinator session; other sessions leave notes at the project report path>.
 
 **Goal (required):** <the outcome everything is driving toward>.
-**Next human decision:** <action and link, or none>.
-**Tomorrow / next session first actions:** <critical-path action; needs-the-human list>.
+Next decision and first actions: see Critical path and Needs the human below.
 
 Pick-up test: a fresh session can state the goal, the critical path and the human's next decision from STATE.
+One home per fact: keep each fact in its section below; link rather than repeat it.
 Aim for a scannable summary; line counts are guidance, not limits.
 
 ## Critical path (required)
 
-1. <step> — <owner lane or person> — <PR / status>
-2. <step> — **unowned** ← raise this first
+Links only, each with an owner and a one-word state.
+
+1. <step link> — <owner lane or person> — <state>
+2. <step link> — **unowned** — <state> ← raise this first
 
 Recheck this chain whenever a lane reports or something merges. A link without an owner
 is the most important thing to surface.
 
 ## Open lanes
 
-| Lane | What | State | Waiting on | Launch |
+Status, PR numbers without heads or CI, next actor and action, and report path live here.
+For a parked lane, include its stop/resume condition in its row.
+
+| Lane | What / report | State | Next actor and action | Launch |
 |---|---|---|---|---|
-| W<n> | <one line: goal and current PR numbers> | Active / Waiting / Paused / Ready | <person, PR, or —> | Manual, or <W<n>-launch.json; project-slug-number; stage; workspace / root-pane ID> |
+| W<n> | <goal; PR numbers; report path> | Active / Waiting / Paused / Ready | <actor: next action> | Manual, or <W<n>-launch.json; project-slug-number; stage; workspace / root-pane ID> |
 
 Launch is terminal setup, not proof of completed work. Preserve the last confirmed
 stage and IDs on failure. The launch receipt is authoritative; this row is its concise
@@ -37,21 +42,33 @@ checkpoints. Submitting is possibly delivered: inspect only, never automatically
 Keep the full W<n>/task identity here, separate from short new session names.
 
 Closed recently: <W<n>, …>
-Parked: <W<n> — stop: waiting on what; resume: first action and condition; report path>.
+Parked: <links to paused lane rows, without repeating their facts>.
 
-## Waiting on people
+## Needs the human
 
-- **<person>:** <PRs/questions, in priority order>
+Priority-ordered one-liners; link to a lane row rather than repeating its facts.
+
+1. <decision or action and link, or none>
+
+## Waiting on others
+
+Only waits not already a lane row's next actor.
+
+- **<person>:** <question or action and link>
 
 ## Decisions still in force
+
+Keep at most about 10, only those not already in the project's rule files.
 
 - <date>: <decision, one line, with PR/issue link>
 
 ## Session notes
 
-In-flight judgment that isn't a decision yet, so the next session doesn't re-ask
-(e.g. "waiting for <person>'s re-approval on #N after a push dismissed it").
+In-flight judgment that isn't a decision yet, so the next session doesn't re-ask.
+Link to its home action above; keep only distinct context here.
 
 ## Upcoming
+
+Only dated or triggered items not already in a lane row.
 
 - <date or trigger>: <what>
