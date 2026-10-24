@@ -112,6 +112,27 @@ PY
   [ "$status" -eq 0 ]
 }
 
+@test "STATE assigns one home per fact and weekly maintenance removes duplicates" {
+  run python3 - "$SKILL_DIR" <<'PY'
+from pathlib import Path
+import sys
+
+skill = Path(sys.argv[1])
+state = (skill / "references/state-template.md").read_text()
+for phrase in ("One home per fact", "one-word state", "PR numbers without heads or CI",
+               "next actor and action", "report path", "## Needs the human", "ordered one-liners",
+               "## Waiting on others", "not already a lane row's next actor", "at most about 10",
+               "not already in the project's rule files", "dated or triggered items", "not already in a lane row",
+               "Parked: <links to paused lane rows", "stop/resume condition in its row"):
+    assert phrase in state, phrase
+weekly = (skill / "SKILL.md").read_text().split("**Weekly, in the coordinator session:**", 1)[1].split("**Human away", 1)[0]
+for phrase in ("Remove a fact's duplicate copies", "home section", "Leave heads and CI to GitHub",
+               "drift check", "still over budget", "what to move where", "instead of stopping"):
+    assert phrase in weekly, phrase
+PY
+  [ "$status" -eq 0 ]
+}
+
 @test "state template remains consumable by the launch projection" {
   run python3 - "$SKILL_DIR" <<'PY'
 import importlib.util

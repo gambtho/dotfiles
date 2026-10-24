@@ -248,6 +248,9 @@ it repairs STATE, catches up on drift and runs the morning sweep before status.
 
 **Weekly, in the coordinator session:**
 - Archive closed rows and drop decisions that no longer constrain work.
+- Remove a fact's duplicate copies, keeping it in its home section in the STATE template.
+- Leave heads and CI to GitHub and the drift check.
+- If STATE is still over budget, give the human a list of what to move where instead of stopping.
 - List duplicate, contradictory or superseded rules for the human to confirm.
 - Find unmarked superseded prompt sections and parked lanes without stop/resume lines.
 - List new rules since the last intent check, with their sources, for the human to
