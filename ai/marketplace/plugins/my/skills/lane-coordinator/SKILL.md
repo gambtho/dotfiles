@@ -1,6 +1,6 @@
 ---
 name: lane-coordinator
-description: Use when coordinating parallel work lanes across Pi, Claude Code, or a Claude app session, writing lane prompts, explicitly starting a lane in Herdr, verifying lane reports, or keeping project coordination state. Triggers include "coordinate", "lane coordinator", "start W12", "write a lane prompt", "W<n>", or a pasted lane report.
+description: Use when coordinating parallel work lanes across Pi, Claude Code, or a Claude app session, writing lane prompts, explicitly starting a lane in Herdr, verifying lane reports, or keeping project coordination state. Triggers include "coordinate <project>", "end of day <project>", "weekly <project>" (project optional with only one project folder), "lane coordinator", "start W12", "write a lane prompt", "W<n>", or a pasted lane report.
 ---
 
 # Lane coordinator
@@ -15,7 +15,10 @@ implementation worker. Focused read-only investigation and review remain allowed
 
 Invocation: `coordinate <project>` (for example `coordinate sample`). The project is a
 short name, not a repo; it may span several repos. Its folder is `~/<project>-local/`
-unless the user says otherwise, with lane prompts in `lanes/`.
+unless the user says otherwise, with lane prompts in `lanes/`. For all three routines,
+if there's only one project folder, the project name is optional. Look in the known
+project folders and `~/*-local/` folders containing STATE.md or COORDINATION.md;
+if several match, ask which project rather than guessing.
 
 1. **Read the state first.** `~/<project>-local/STATE.md` (goal, critical path, open
    lanes, waiting-on, current decisions, last lane number), `AGENTS.md` (project rules)
@@ -26,11 +29,25 @@ unless the user says otherwise, with lane prompts in `lanes/`.
    use [people-template.md](references/people-template.md); don't duplicate an existing
    people section. Fill from lane files, open PRs/issues and the user's words. Ask only
    for what you can't find.
-2. **Re-check what's volatile.** For every open PR in STATE.md, `gh pr view <n> -R <repo>`:
-   state, head, checks. Note anything that merged, closed or went red while you were away.
-3. **Give the user a short status:** what changed, what's waiting on whom, the
-   critical path (anything unowned first), and the next one or two decisions. Then wait
-   for their lead.
+2. **Run the pick-up test:** can the goal, the critical path and the human's next
+   decision be read from STATE? If not, repair STATE before anything else, using
+   observed facts and the single-writer/stale-write rules below; respect project authority.
+3. **Catch up on drift.** Read the project's `Routines` row or section in COORDINATION.md
+   for its drift-check command, drift report location, morning sweep and budgets
+   (see Maintenance). If the drift report is missing, older than the last STATE commit,
+   or older than about 18 hours, run the project's drift check first and reconcile STATE.
+   Compare the report's observation time, not merely when it was copied. If STATE is
+   unversioned, use its last-updated time; unknown freshness also needs a check.
+   This catches skipped end-of-day work; even an end-of-day commit can make a report stale.
+4. **Check weekly maintenance.** If STATE's `Last weekly pass:` line is missing or
+   more than 7 days old, flag it in the status with one suggested line:
+   `weekly <project>`. Don't run it unasked. Treat an unreadable date as unknown/due.
+5. **Run the project's morning sweep**, using its Routines command and budgets. Without
+   one, re-check every open PR in STATE with `gh pr view <n> -R <repo>`: state, head,
+   checks. Note anything merged, closed or red; reuse observations from this catch-up.
+6. **Give the user a short status:** what changed, what's waiting on whom, the
+   critical path (anything unowned first), the next one or two decisions, and any
+   overdue weekly reminder. Then wait for their lead.
 
 Also read each repo's `AGENTS.md`/`CLAUDE.md`/`CONTRIBUTING` once per session. If the
 harness has persistent memory, the state files are still the source of truth: memory
@@ -204,16 +221,29 @@ a lane closes: what it frees up, and whether the critical path changed.
 
 ## Maintenance
 
+One phrase selects each routine: `coordinate <project>` starts/resumes the session;
+`end of day <project>` runs end of day; `weekly <project>` runs the weekly pass.
+When there's only one project folder, the project name is optional (see Start or resume).
+
+Read commands and budgets from the project's `Routines` row or section in COORDINATION.md,
+not from this skill. It supplies drift check, report location and morning sweep, with
+budgets such as elapsed time or query limits. Existing authority still applies: a
+command entry grants no new permissions. For absent commands, use the manual steps
+below and the per-PR sweep in Start or resume. Record failed checks or exhausted
+budgets as **unknown**, then continue with that uncertainty visible; never invent results.
+
 **End of day:** run the project's drift check and fix STATE against observed facts.
 If no checker exists, compare open PR state/head/checks and lane waits with GitHub
 manually; record an observation time and unknown queries in a local drift report.
 Give overnight lanes a stop/resume note. Put tomorrow's first actions (critical-path
 step and the "needs the human" list) at the top of STATE, then commit the coherent
 update where authorized. A failed check is recorded as **unknown**; it does not block
-stopping or justify inventing a result.
+stopping or justify inventing a result. End by stamping `Last end of day: <date time>`
+(with timezone) in the STATE header, included in the coherent update where authorized;
+the stamp records the routine, not success for checks marked unknown.
 
-**Next morning:** start a fresh coordinator session from STATE and the drift report.
-Run the current-state checks. If the pick-up test fails, repair STATE first.
+**Next morning:** start a fresh coordinator session using Start or resume above;
+it repairs STATE, catches up on drift and runs the morning sweep before status.
 
 **Weekly, in the coordinator session:**
 - Archive closed rows and drop decisions that no longer constrain work.
@@ -221,6 +251,8 @@ Run the current-state checks. If the pick-up test fails, repair STATE first.
 - Find unmarked superseded prompt sections and parked lanes without stop/resume lines.
 - List new rules since the last intent check, with their sources, for the human to
   confirm against their own words. Don't turn an inference into a grant.
+- End by stamping `Last weekly pass: <date>` in the STATE header, following its
+  single-writer and coherent-update rules.
 
 **Human away more than two days:** re-plan the critical path in STATE so stalls and
 next authorized actions are visible. This does not expand the authority table.

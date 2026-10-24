@@ -5,6 +5,8 @@ decision lands. Re-check GitHub before trusting any PR state here.
 Stable facts/rules: `COORDINATION.md` and `AGENTS.md`; people: `PEOPLE.md` or the
 people section in COORDINATION.md.
 Last updated: <date>. Last lane number used: **W<n>**.
+Last end of day: <date time>.
+Last weekly pass: <date>.
 Single writer: <coordinator session; other sessions leave notes at the project report path>.
 
 **Goal (required):** <the outcome everything is driving toward>.
