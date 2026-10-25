@@ -112,7 +112,7 @@ PY
   [ "$status" -eq 0 ]
 }
 
-@test "STATE assigns one home per fact and weekly maintenance removes duplicates" {
+@test "STATE stays small at write time and daily maintenance enforces its budget" {
   run python3 - "$SKILL_DIR" <<'PY'
 from pathlib import Path
 import sys
@@ -125,10 +125,19 @@ for phrase in ("One home per fact", "one-word state", "PR numbers without heads 
                "not already in the project's rule files", "dated or triggered items", "not already in a lane row",
                "Parked: <links to paused lane rows", "stop/resume condition in its row"):
     assert phrase in state, phrase
-weekly = (skill / "SKILL.md").read_text().split("**Weekly, in the coordinator session:**", 1)[1].split("**Human away", 1)[0]
-for phrase in ("Remove a fact's duplicate copies", "home section", "Leave heads and CI to GitHub",
-               "drift check", "still over budget", "what to move where", "instead of stopping"):
+text = (skill / "SKILL.md").read_text()
+updates = text.split("For every coherent update:", 1)[1].split("If something took digging", 1)[0]
+for phrase in ("Closing a lane", "same update", "CLOSED-<month>.md", "25 words", "full record",
+               "done, superseded", "rule files", "oldest", "archive", "Replace, don't add", "one home"):
+    assert phrase in updates, phrase
+eod = text.split("**End of day:**", 1)[1].split("**Next morning:**", 1)[0]
+for phrase in ("Routines", "budget", "inspection", "lane reports", "archive", "current fact",
+               "by section", "where", "human", "weekly pass"):
+    assert phrase in eod, phrase
+weekly = text.split("**Weekly, in the coordinator session:**", 1)[1].split("**Human away", 1)[0]
+for phrase in ("daily", "duplicate", "superseded", "intent check", "budgets", "AGENTS", "COORDINATION", "PEOPLE"):
     assert phrase in weekly, phrase
+assert "Full record: `reports/decision.md`." in state
 PY
   [ "$status" -eq 0 ]
 }

@@ -60,7 +60,7 @@ Only waits not already a lane row's next actor.
 
 Keep at most about 10, only those not already in the project's rule files.
 
-- <date>: <decision, one line, with PR/issue link>
+- <date>: Keep deployment manual until rollback checks pass; the release owner confirms readiness before each rollout. Full record: `reports/decision.md`.
 
 ## Session notes
 

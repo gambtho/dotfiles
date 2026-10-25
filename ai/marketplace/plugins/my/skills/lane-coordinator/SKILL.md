@@ -77,6 +77,14 @@ For every coherent update:
    protection, not a lock against unrelated writers.
 4. Make one commit per coherent update, including its affected prompts and STATE where
    the project authorizes versioning them. Do not silently add workflow artifacts to Git.
+5. **Closing a lane** moves its row to the project's archive (for example
+   `CLOSED-<month>.md`) in the same update. Replace it with nothing or one done-list line.
+6. **A decision** is one line of about 25 words or fewer, plus a pointer to its full record
+   (session file, lane report or archive). Decisions that are done, superseded or now in
+   the project's rule files leave STATE in the same update. Keep about 10 at most;
+   adding one past 10 moves the oldest to the archive.
+7. **Replace, don't add.** When a fact changes, edit its one home and delete the old
+   wording. Don't add a second copy in another section.
 
 If something took digging to find, put durable repo/process facts in COORDINATION.md
 and people facts in PEOPLE.md (or the existing people section). Follow the project's
@@ -236,6 +244,10 @@ budgets as **unknown**, then continue with that uncertainty visible; never inven
 **End of day:** run the project's drift check and fix STATE against observed facts.
 If no checker exists, compare open PR state/head/checks and lane waits with GitHub
 manually; record an observation time and unknown queries in a local drift report.
+Bring STATE within the project's budget from its Routines and budgets entry, not just
+below the inspection line. Move detail to owning lane reports and the archive. If that
+would drop a current fact, give the human the remaining excess by section and where
+that detail would move. Don't leave STATE for the weekly pass.
 Give overnight lanes a stop/resume note. Put tomorrow's first actions (critical-path
 step and the "needs the human" list) at the top of STATE, then commit the coherent
 update where authorized. A failed check is recorded as **unknown**; it does not block
@@ -247,11 +259,9 @@ the stamp records the routine, not success for checks marked unknown.
 it repairs STATE, catches up on drift and runs the morning sweep before status.
 
 **Weekly, in the coordinator session:**
-- Archive closed rows and drop decisions that no longer constrain work.
-- Remove a fact's duplicate copies, keeping it in its home section in the STATE template.
-- Leave heads and CI to GitHub and the drift check.
-- If STATE is still over budget, give the human a list of what to move where instead of stopping.
-- List duplicate, contradictory or superseded rules for the human to confirm.
+- Check that daily STATE trimming is happening and the project budget is being met.
+- Focus on rule files: list duplicate, contradictory or superseded rules for the human
+  to confirm, and check the project's budgets for AGENTS.md, COORDINATION.md and PEOPLE.md.
 - Find unmarked superseded prompt sections and parked lanes without stop/resume lines.
 - List new rules since the last intent check, with their sources, for the human to
   confirm against their own words. Don't turn an inference into a grant.
