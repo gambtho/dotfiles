@@ -90,8 +90,19 @@ After integrating the reviewed source into the canonical checkout:
    canonical checkout, never the implementation worktree. This removes the
    tab-status selection while retaining Herdr's state/prompt bridges. Start a
    fresh Pi session after the remaining configuration steps.
-2. Back up `~/.config/herdr/config.toml`. Merge these values into its existing
-   tables; do not append duplicate TOML tables or replace unrelated preferences:
+2. Explicitly refresh an existing config by backing it up first:
+
+   ```bash
+   config="$HOME/.config/herdr/config.toml"
+   backup=$(mktemp "$config.backup.XXXXXX")
+   cp -p "$config" "$backup"
+   printf 'Backup: %s\n' "$backup"
+   ```
+
+   Manually merge the following defaults into the existing tables, preserving
+   intentional overrides. Add missing tables only once; do not append duplicate
+   TOML tables or replace unrelated preferences, keybindings, or onboarding state.
+   Normal install/update only reports drift and never performs this refresh:
 
    ```toml
    [ui]
@@ -101,6 +112,9 @@ After integrating the reviewed source into the canonical checkout:
 
    [ui.toast]
    delivery = "herdr"
+
+   [ui.sidebar.spaces]
+   rows = [["state_icon", "workspace"]]
    ```
 
 3. Remove only existing `[[keys.command]]` blocks whose `command` is exactly
@@ -109,8 +123,11 @@ After integrating the reviewed source into the canonical checkout:
    and none of its plugin panes is in use, run `herdr plugin uninstall devcontainer`
    in the intended session. No installer automatically uninstalls it. Do not
    stop containers or delete their data or `~/.config/herdr-devcontainer`.
-4. Run `herdr server reload-config`, check that the retired bindings are absent
-   and the new preferences work, then start fresh Pi and try one disposable lane
+4. Run `herdr config check` before `herdr server reload-config`; reload only if
+   validation succeeds. If validation fails, correct the merge or restore the
+   backup with `cp -p "$backup" "$config"` before reloading. No server restart is
+   needed. Check that the retired bindings are absent and the new preferences
+   work, then start fresh Pi and try one disposable lane
    with an explicit launch request. Check its space name, Pi `/session` and
    `/resume` identity, unchanged focus, and the coordinator's recorded IDs.
 

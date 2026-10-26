@@ -167,6 +167,7 @@ assert ui["prompt_new_workspace_name"] is True
 assert ui["agent_panel_sort"] == "priority"
 assert ui["hide_tab_bar_when_single_tab"] is True
 assert ui["toast"]["delivery"] == "herdr"
+assert ui["sidebar"]["spaces"]["rows"] == [["state_icon", "workspace"]]
 PY
   [ "$status" -eq 0 ]
 }
