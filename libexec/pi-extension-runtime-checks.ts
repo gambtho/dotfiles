@@ -11,7 +11,10 @@ import type { AssistantMessage, ToolCall } from "@earendil-works/pi-ai";
 import type { PermissionDecisionEvent, PermissionUiPromptEvent } from "@gotgenes/pi-permission-system";
 import type { SubagentsService } from "@gotgenes/pi-subagents";
 
-type EvidenceEntry = { sessionId: string } & (ToolCallEvent | ToolResultEvent | ToolExecutionStartEvent | ToolExecutionUpdateEvent | ToolExecutionEndEvent | { type: "loadout"; active: string[]; all: string[] });
+type EvidenceEntry = { sessionId: string } & (ToolCallEvent | ToolResultEvent | ToolExecutionStartEvent | ToolExecutionUpdateEvent | ToolExecutionEndEvent | { type: "loadout"; active: string[]; all: string[] } | { type: "permission_decision"; decision: PermissionDecisionEvent } | { type: "permission_prompt"; prompt: PermissionUiPromptEvent });
+
+const metadataCommands = ["printenv PI_PROVIDER PI_MODEL", "printenv HERDR_PANE_ID HERDR_WORKSPACE_ID"];
+const permissionFailure = /Denied by policy|requires approval|no interactive UI|Script failed/;
 
 function option(name: string): string {
   const index = process.argv.indexOf(name);
@@ -87,8 +90,14 @@ import { appendFileSync } from "node:fs";
 import { Type } from "typebox";
 import { getSubagentsService } from ${JSON.stringify(pathToFileURL(join(subagentsRoot, "src/service/service.ts")).href)};
 export default function(pi) {
-  pi.on("session_start", () => pi.events.emit("fixture:subagents-service", getSubagentsService()));
+  let sessionContext;
+  pi.on("session_start", (_, ctx) => {
+    sessionContext = ctx;
+    pi.events.emit("fixture:subagents-service", getSubagentsService());
+  });
   const log = (entry, ctx) => appendFileSync(${JSON.stringify(evidencePath)}, JSON.stringify({ ...entry, sessionId: ctx.sessionManager.getSessionId() }) + "\\n");
+  pi.events.on("permissions:decision", decision => { if (sessionContext) log({ type: "permission_decision", decision }, sessionContext); });
+  pi.events.on("permissions:ui_prompt", prompt => { if (sessionContext) log({ type: "permission_prompt", prompt }, sessionContext); });
   pi.registerTool({ name: "unknown_child_tool", label: "Decoy", description: "Must not reach a child", parameters: Type.Object({}), execute: async () => ({ content: [{type: "text", text: "unknown-tool-executed"}], details: undefined }) });
   pi.on("before_agent_start", (_, ctx) => log({ type: "loadout", active: pi.getActiveTools(), all: pi.getAllTools().map(t => t.name) }, ctx));
   pi.on("tool_call", (event, ctx) => log(event, ctx));
@@ -220,6 +229,20 @@ async function parentScript(source: string): Promise<string> {
   assert.deepEqual(errors, []);
   return text;
 }
+
+function assertMetadataEvidence(entries: EvidenceEntry[], sessionId: string): void {
+  for (const command of metadataCommands) {
+    const label = `${sessionId}: ${command}`;
+    const call = entries.find(entry => entry.sessionId === sessionId && entry.type === "tool_call" && entry.toolName === "bash" && entry.input.command === command);
+    assert.ok(call?.type === "tool_call" && call.parentToolCallId, `${label} actually issues a nested Bash call`);
+    const end = entries.find(entry => entry.sessionId === sessionId && entry.type === "tool_execution_end" && entry.toolCallId === call.toolCallId && entry.parentToolCallId === call.parentToolCallId);
+    assert.ok(end?.type === "tool_execution_end", `${label} actually executes`);
+    assert.doesNotMatch(JSON.stringify(end.result), permissionFailure);
+    assert.ok(!entries.some(entry => entry.sessionId === sessionId && entry.type === "permission_prompt" && entry.prompt.value === command), `${label} does not prompt`);
+    assert.ok(!entries.some(entry => entry.sessionId === sessionId && entry.type === "permission_decision" && entry.decision.value === command && (entry.decision.result === "deny" || entry.decision.forwarding)), `${label} is not denied or forwarded; policy_allow is valid`);
+  }
+}
+
 try {
   for (const name of ["read", "bash", "edit", "write", "codemode"]) assert.ok(session.getActiveToolNames().includes(name), `${name} retains direct exposure`);
   assert.equal(settingsManager.getSettings().codemode?.inlineBudget, 100);
@@ -241,12 +264,20 @@ try {
   assert.equal(readFileSync(join(primary, "fix.ts"), "utf8"), "original\n");
   assert.match(await parentScript('return await tools.write({path: "allowed.txt", content: "linked-write"});'), /Script completed/);
   assert.equal(readFileSync(join(linked, "allowed.txt"), "utf8"), "linked-write");
-  assert.match(await parentScript('return await tools.bash({command: "printenv PI_PROVIDER PI_MODEL PI_REASONING_LEVEL"});'), /Script completed/);
+  for (const command of ["printenv PI_PROVIDER PI_MODEL PI_REASONING_LEVEL", ...metadataCommands]) {
+    const before = prompts.length;
+    const result = await parentScript(`return await tools.bash({command: ${JSON.stringify(command)}});`);
+    assert.match(result, /Script completed/);
+    assert.doesNotMatch(result, permissionFailure);
+    assert.equal(prompts.length, before, `${command} does not prompt even if variables are unset`);
+  }
   const asksBefore = prompts.length;
   assert.match(await parentScript('return await tools.bash({command: "printenv GH_TOKEN"});'), /Script failed/);
   assert.equal(prompts.length, asksBefore + 1, "inner ask reaches actual permission dialog");
   assert.match(await parentScript('return await tools.bash({command: "printenv PI_PROVIDER PI_MODEL PI_REASONING_LEVEL GH_TOKEN"});'), /Script failed/);
   assert.equal(prompts.length, asksBefore + 2, "a secret operand cannot ride the exact metadata approval");
+  assert.match(await parentScript('return await tools.bash({command: "printenv HERDR_PANE_ID HERDR_WORKSPACE_ID GH_TOKEN"});'), /Script failed/);
+  assert.equal(prompts.length, asksBefore + 3, "a secret cannot ride the Herdr metadata approval");
 
   assert.ok(service, "the installed parent subagents service is published through its public locator");
   for (const name of children) {
@@ -258,14 +289,27 @@ try {
       tools.bash({command: "printenv GH_TOKEN"}),
       tools.bash({command: "printenv PI_PROVIDER PI_MODEL PI_REASONING_LEVEL GH_TOKEN"}),
       tools.bash({command: ${JSON.stringify(name === "smart" ? "git status --short" : "git add README.md")}}),
-      tools.bash({command: ${JSON.stringify(name === "smart" ? "git branch --show-current" : "git branch must-not-exist")}})
-    ]); text(out.map(r => r.status === "rejected" ? { status: r.status, error: r.reason.message } : r)); text(ALL_TOOLS.map(t => t.name));
+      tools.bash({command: ${JSON.stringify(name === "smart" ? "git branch --show-current" : "git branch must-not-exist")}}),
+      tools.bash({command: ${JSON.stringify(metadataCommands[0])}}),
+      tools.bash({command: ${JSON.stringify(metadataCommands[1])}}),
+      tools.bash({command: "grep -E 'TODO$' README.md"}),
+      tools.bash({command: "printenv HERDR_PANE_ID HERDR_WORKSPACE_ID GH_TOKEN"})
+    ]); text(out.map(r => r.status === "rejected" ? { status: r.status, error: r.reason.message } : r)); text("metadata-results:" + JSON.stringify(out.slice(7, 9))); text(ALL_TOOLS.map(t => t.name));
     ${name === "smart" ? 'text((await Promise.allSettled([tools.write({path:"smart.txt",content:"smart-linked"}), tools.write({path:"primary/smart-blocked.txt",content:"blocked"})])).map(r => r.status === "rejected" ? {status:r.status,error:r.reason.message} : r));' : `text({write: "write" in tools, edit: "edit" in tools}); for (const tool of ["write", "edit"]) { try { await tools[tool]({path: "${name}-blocked.txt",content:"must-not-write",oldText:"original",newText:"mutated"}); } catch (e) { text(e.message); } }`}`;
     const id = service.spawn(name, `NATIVE:${source}`, { foreground: true, maxTurns: 4 });
     await service.waitForAll();
     const record = service.getRecord(id);
     assert.ok(record?.result, "a completed native child has a result");
     assert.equal(record.status, "completed", JSON.stringify(record));
+    // The aggregate also contains intentionally denied siblings; inspect fixed metadata indices only.
+    const metadataLine = record.result.match(/metadata-results:(\[[^\n]+\])/);
+    assert.ok(metadataLine?.[1], `${name} reports its own metadata results`);
+    const metadataResults = JSON.parse(metadataLine[1]) as Array<PromiseSettledResult<unknown>>;
+    assert.equal(metadataResults.length, metadataCommands.length);
+    for (const result of metadataResults) {
+      assert.equal(result.status, "fulfilled", `${name}: ${JSON.stringify(result)}`);
+      assert.doesNotMatch(JSON.stringify(result), permissionFailure);
+    }
     assert.match(record.result, /native-readable-decoy/);
     assert.doesNotMatch(record.result, /FAKE_SECRET|not-for-models|unknown_child_tool/);
     assert.ok(childIds.has(name), `${name} actually created a native child`);
@@ -285,6 +329,8 @@ try {
   const entries = readFileSync(evidencePath, "utf8").trim().split("\n").map(line => JSON.parse(line)) as EvidenceEntry[];
   for (const name of children) {
     const id = childIds.get(name);
+    assert.ok(id);
+    assertMetadataEvidence(entries, id);
     const calls = entries.filter((entry): entry is ToolCallEvent & { sessionId: string } => entry.sessionId === id && entry.type === "tool_call" && entry.parentToolCallId !== undefined);
     assert.ok(calls.some(call => call.toolName === "read"));
     assert.ok(calls.some(call => call.toolName === "bash"));
@@ -297,10 +343,12 @@ try {
     assert.ok(loadout?.type === "loadout");
     assert.ok(loadout.active.includes("codemode"));
     for (const tool of ["unknown_child_tool", "subagent", "get_subagent_result", "steer_subagent"]) assert.ok(!loadout.all.includes(tool), `${name} cannot reach ${tool}`);
-    for (const command of ["printenv GH_TOKEN", "printenv PI_PROVIDER PI_MODEL PI_REASONING_LEVEL GH_TOKEN"]) {
+    for (const command of ["printenv GH_TOKEN", "printenv PI_PROVIDER PI_MODEL PI_REASONING_LEVEL GH_TOKEN", "printenv HERDR_PANE_ID HERDR_WORKSPACE_ID GH_TOKEN"]) {
       assert.ok(decisions.some(decision => decision.forwarding?.requesterSessionId === id && decision.result === "deny" && decision.value === command && decision.resolution === "user_denied"), `${name} actual ask forwarded to parent and denied`);
     }
+    assert.ok(entries.some(entry => entry.sessionId === id && entry.type === "permission_decision" && entry.decision.value === "grep -E 'TODO$' README.md" && entry.decision.result === "deny" && entry.decision.matchedPattern === "*$*"), `${name} retains its dollar denial`);
   }
+  assertMetadataEvidence(entries, session.sessionManager.getSessionId());
   assert.equal(git("diff", "--cached", "--name-only"), "", "reader child Git mutations leave index unchanged");
   assert.equal(git("branch", "--list", "must-not-exist"), "");
   assert.ok(nested.some(event => event.toolName === "write" && event.isError));
