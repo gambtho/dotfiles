@@ -96,6 +96,24 @@ setup() {
   [ -z "$output" ]
 }
 
+@test "global ignore excludes Claude local settings but keeps shared settings" {
+  local repo="$TEST_ROOT/claude-ignore"
+  git init -q "$repo"
+  mkdir -p "$repo/.claude" "$repo/nested/.claude"
+  touch "$repo/.claude/settings.local.json" "$repo/nested/.claude/settings.local.json" \
+    "$repo/.claude/settings.json" "$repo/nested/.claude/settings.json"
+
+  run git -C "$repo" -c core.excludesFile="$REPO_ROOT/core/git/gitignore.symlink" \
+    check-ignore .claude/settings.local.json nested/.claude/settings.local.json
+  [ "$status" -eq 0 ]
+  [ "$output" = $'.claude/settings.local.json\nnested/.claude/settings.local.json' ]
+
+  run git -C "$repo" -c core.excludesFile="$REPO_ROOT/core/git/gitignore.symlink" \
+    check-ignore .claude/settings.json nested/.claude/settings.json
+  [ "$status" -eq 1 ]
+  [ -z "$output" ]
+}
+
 @test "tracked files do not contain editor or generated backups" {
   run git -C "$REPO_ROOT" ls-files '*backup*' '*.bak' '*.orig'
   [ "$status" -eq 0 ]

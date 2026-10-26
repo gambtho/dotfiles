@@ -9,6 +9,7 @@ AGENTS.local.md
 .pi/overnight-run-state.md
 
 # Other AI assistant scratch / config
+**/.claude/settings.local.json
 .aider*
 .cursor/
 # Superpowers subagent-driven-development scratch: per-plan ledgers, briefs and

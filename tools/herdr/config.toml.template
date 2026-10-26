@@ -22,9 +22,12 @@ name = "tokyo-night"
 version_check = false
 
 [ui]
-prompt_new_workspace_name = true
+prompt_new_workspace_name = false
 agent_panel_sort = "priority"
 hide_tab_bar_when_single_tab = true
 
 [ui.toast]
 delivery = "herdr"
+
+[ui.sidebar.spaces]
+rows = [["state_icon", "workspace"]]
