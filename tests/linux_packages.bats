@@ -358,7 +358,8 @@ setup_asciinema_apt_fixture() {
 
 @test "package audit summarizes unmanaged extras in a sorted detail file" {
   local audit_root="$TEST_ROOT/audit-repo"
-  mkdir -p "$audit_root/tmp"
+  mkdir -p "$audit_root/tmp" "$audit_root/platforms/linux/packages"
+  cp "$REPO_ROOT/platforms/linux/packages/keyring_apt" "$audit_root/platforms/linux/packages/"
 
   run env INSTALL_SOURCE_ONLY=1 bash -c '
     source "$1/bin/dot-install"
