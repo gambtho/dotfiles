@@ -10,10 +10,34 @@ permission:
   edit: deny
   bash:
     "*": allow
+    "printenv PI_PROVIDER": allow
+    "printenv PI_MODEL": allow
+    "printenv PI_REASONING_LEVEL": allow
+    "printenv PI_PROVIDER PI_MODEL": allow
     "printenv PI_PROVIDER PI_MODEL PI_REASONING_LEVEL": allow
     "printenv XDG_CONFIG_HOME PI_CODING_AGENT_DIR": allow
+    "printenv HERDR_ENV": allow
+    "printenv HERDR_SESSION": allow
+    "printenv HERDR_SOCKET_PATH": allow
+    "printenv HERDR_PANE_ID": allow
+    "printenv HERDR_WORKSPACE_ID": allow
+    "printenv HERDR_PANE_ID HERDR_ENV": allow
+    "printenv HERDR_PANE_ID HERDR_WORKSPACE_ID": allow
+    "printenv HERDR_ENV HERDR_SESSION HERDR_SOCKET_PATH HERDR_PANE_ID HERDR_WORKSPACE_ID": allow
+    "/usr/bin/printenv PI_PROVIDER": allow
+    "/usr/bin/printenv PI_MODEL": allow
+    "/usr/bin/printenv PI_REASONING_LEVEL": allow
+    "/usr/bin/printenv PI_PROVIDER PI_MODEL": allow
     "/usr/bin/printenv PI_PROVIDER PI_MODEL PI_REASONING_LEVEL": allow
     "/usr/bin/printenv XDG_CONFIG_HOME PI_CODING_AGENT_DIR": allow
+    "/usr/bin/printenv HERDR_ENV": allow
+    "/usr/bin/printenv HERDR_SESSION": allow
+    "/usr/bin/printenv HERDR_SOCKET_PATH": allow
+    "/usr/bin/printenv HERDR_PANE_ID": allow
+    "/usr/bin/printenv HERDR_WORKSPACE_ID": allow
+    "/usr/bin/printenv HERDR_PANE_ID HERDR_ENV": allow
+    "/usr/bin/printenv HERDR_PANE_ID HERDR_WORKSPACE_ID": allow
+    "/usr/bin/printenv HERDR_ENV HERDR_SESSION HERDR_SOCKET_PATH HERDR_PANE_ID HERDR_WORKSPACE_ID": allow
     "*git *": deny
     "git status*": allow
     "git show*": allow

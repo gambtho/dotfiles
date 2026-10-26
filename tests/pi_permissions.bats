@@ -699,15 +699,28 @@ setup() {
 @test "Pi metadata approvals are exact and follow environment asks" {
   run jq -e '
     .permission.bash as $bash | ($bash | keys_unsorted) as $keys
-    | all([
-        "printenv PI_PROVIDER PI_MODEL PI_REASONING_LEVEL",
-        "printenv XDG_CONFIG_HOME PI_CODING_AGENT_DIR",
-        "/usr/bin/printenv PI_PROVIDER PI_MODEL PI_REASONING_LEVEL",
-        "/usr/bin/printenv XDG_CONFIG_HOME PI_CODING_AGENT_DIR"
-      ][]; . as $command
+    | all(["printenv", "/usr/bin/printenv"][]; . as $program
+      | all([
+        "PI_PROVIDER",
+        "PI_MODEL",
+        "PI_REASONING_LEVEL",
+        "PI_PROVIDER PI_MODEL",
+        "PI_PROVIDER PI_MODEL PI_REASONING_LEVEL",
+        "XDG_CONFIG_HOME PI_CODING_AGENT_DIR",
+        "HERDR_ENV",
+        "HERDR_SESSION",
+        "HERDR_SOCKET_PATH",
+        "HERDR_PANE_ID",
+        "HERDR_WORKSPACE_ID",
+        "HERDR_PANE_ID HERDR_ENV",
+        "HERDR_PANE_ID HERDR_WORKSPACE_ID",
+        "HERDR_ENV HERDR_SESSION HERDR_SOCKET_PATH HERDR_PANE_ID HERDR_WORKSPACE_ID"
+      ][]; "\($program) \(.)" as $command
         | $bash[$command] == "allow"
         and ($bash | has($command + "*") | not)
-        and (($keys | index($command)) > ($keys | index("*/printenv*"))))
+        and (($keys | index($command)) > ($keys | index("*/printenv*")))))
+    and ([$bash | to_entries[] | select(.value == "allow"
+      and (.key | startswith("printenv ") or startswith("/usr/bin/printenv ")))] | length) == 28
     and $bash.printenv == "ask"
     and $bash["printenv *"] == "ask"
     and $bash["*/printenv*"] == "ask"

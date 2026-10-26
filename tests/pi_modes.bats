@@ -251,13 +251,26 @@ JS
     actual=$(agent_frontmatter "$agent")
     run jq -e '
       .permission.bash as $bash
-      | all([
-          "printenv PI_PROVIDER PI_MODEL PI_REASONING_LEVEL",
-          "printenv XDG_CONFIG_HOME PI_CODING_AGENT_DIR",
-          "/usr/bin/printenv PI_PROVIDER PI_MODEL PI_REASONING_LEVEL",
-          "/usr/bin/printenv XDG_CONFIG_HOME PI_CODING_AGENT_DIR"
-        ][]; . as $command | $bash[$command] == "allow"
-          and ($bash | has($command + "*") | not))
+      | all(["printenv", "/usr/bin/printenv"][]; . as $program
+        | all([
+          "PI_PROVIDER",
+          "PI_MODEL",
+          "PI_REASONING_LEVEL",
+          "PI_PROVIDER PI_MODEL",
+          "PI_PROVIDER PI_MODEL PI_REASONING_LEVEL",
+          "XDG_CONFIG_HOME PI_CODING_AGENT_DIR",
+          "HERDR_ENV",
+          "HERDR_SESSION",
+          "HERDR_SOCKET_PATH",
+          "HERDR_PANE_ID",
+          "HERDR_WORKSPACE_ID",
+          "HERDR_PANE_ID HERDR_ENV",
+          "HERDR_PANE_ID HERDR_WORKSPACE_ID",
+          "HERDR_ENV HERDR_SESSION HERDR_SOCKET_PATH HERDR_PANE_ID HERDR_WORKSPACE_ID"
+        ][]; "\($program) \(.)" as $command | $bash[$command] == "allow"
+          and ($bash | has($command + "*") | not)))
+      and ([$bash | to_entries[] | select(.value == "allow"
+        and (.key | startswith("printenv ") or startswith("/usr/bin/printenv ")))] | length) == 28
       and ([$bash | keys[] | select(contains("ls-remote"))] | length == 0)
       and ($bash | has("gh api *") | not)
       and ($bash | has("*/gh api *") | not)

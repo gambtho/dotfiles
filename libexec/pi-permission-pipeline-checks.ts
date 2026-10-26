@@ -810,20 +810,33 @@ for (const shell of ["sh", "bash", "zsh", "dash", "ksh"] as const) {
 // Literal policy boundaries: do not derive expectations from the authored rules.
 const QUERY_PIPELINE_CASES: PipelineCase[] = [];
 for (const agentName of [undefined, "rush", "smart", "inspector", "deep", "review"] as const) {
-  for (const command of [
-    "printenv PI_PROVIDER PI_MODEL PI_REASONING_LEVEL",
-    "printenv XDG_CONFIG_HOME PI_CODING_AGENT_DIR",
-    "/usr/bin/printenv PI_PROVIDER PI_MODEL PI_REASONING_LEVEL",
-    "/usr/bin/printenv XDG_CONFIG_HOME PI_CODING_AGENT_DIR",
-  ]) {
+  // Minimized captured parent/child queries hit the bash printenv ask, not a path gate.
+  // Child dollar denials below remain intentional, including harmless regex anchors.
+  for (const command of ["printenv", "/usr/bin/printenv"].flatMap((program) => [
+    "PI_PROVIDER",
+    "PI_MODEL",
+    "PI_REASONING_LEVEL",
+    "PI_PROVIDER PI_MODEL",
+    "PI_PROVIDER PI_MODEL PI_REASONING_LEVEL",
+    "XDG_CONFIG_HOME PI_CODING_AGENT_DIR",
+    "HERDR_ENV",
+    "HERDR_SESSION",
+    "HERDR_SOCKET_PATH",
+    "HERDR_PANE_ID",
+    "HERDR_WORKSPACE_ID",
+    "HERDR_PANE_ID HERDR_ENV",
+    "HERDR_PANE_ID HERDR_WORKSPACE_ID",
+    "HERDR_ENV HERDR_SESSION HERDR_SOCKET_PATH HERDR_PANE_ID HERDR_WORKSPACE_ID",
+  ].map((operands) => `${program} ${operands}`))) {
     QUERY_PIPELINE_CASES.push(
       { label: `${agentName ?? "global"} exact metadata: ${command}`, command, agentName, expected: "allow", raw: true },
       { label: `${agentName ?? "global"} composed metadata: ${command}`, command: `pwd && ${command}`, agentName, expected: "allow" },
       { label: `${agentName ?? "global"} appended secret: ${command}`, command: `${command} GITHUB_TOKEN`, agentName, expected: "ask", raw: true },
       { label: `${agentName ?? "global"} metadata denied chain: ${command}`, command: `${command} && sudo true`, agentName, expected: "deny" },
+      { label: `${agentName ?? "global"} metadata protected chain: ${command}`, command: `${command} && cat ~/.ssh/config`, agentName, expected: "deny", surface: "path_read" },
     );
   }
-  for (const command of ["printenv", "/usr/bin/printenv", "env", "/usr/bin/env", "printenv PI_MODEL", "printenv PI_PROVIDER PI_MODEL PI_REASONING_LEVEL_EXTRA"]) {
+  for (const command of ["printenv", "/usr/bin/printenv", "env", "/usr/bin/env", "printenv GH_TOKEN", "printenv HERDR_PANE", "printenv HERDR_SPACE_ID", "printenv HERDR_ENV_EXTRA", "printenv --null HERDR_ENV", "printenv PI_PROVIDER PI_MODEL PI_REASONING_LEVEL_EXTRA"]) {
     QUERY_PIPELINE_CASES.push({ label: `${agentName ?? "global"} environment still asks: ${command}`, command, agentName, expected: "ask", raw: true });
   }
   for (const [toolName, input] of [
@@ -837,7 +850,9 @@ for (const agentName of [undefined, "rush", "smart", "inspector", "deep", "revie
     QUERY_PIPELINE_CASES.push({ label: `${agentName ?? "global"} unknown tool asks: ${toolName}`, command: "", toolName, input: {}, agentName, expected: "ask" });
   }
   if (agentName !== undefined) {
-    QUERY_PIPELINE_CASES.push({ label: `${agentName} metadata variable denial`, command: 'printenv PI_PROVIDER PI_MODEL "$PI_REASONING_LEVEL"', agentName, expected: "deny" });
+    for (const command of ['printenv PI_PROVIDER PI_MODEL "$PI_REASONING_LEVEL"', "grep -E 'TODO$' README.md", 'D=docs; ls "$D"']) {
+      QUERY_PIPELINE_CASES.push({ label: `${agentName} retained dollar denial: ${command}`, command, agentName, expected: "deny", surface: "bash", pattern: "*$*", origin: "agent" });
+    }
   }
 }
 

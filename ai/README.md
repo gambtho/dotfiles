@@ -61,6 +61,28 @@ Each `subagent` invocation supplies one self-contained `prompt`, a 3–5 word `d
 
 `rush`, `inspector`, `deep`, and `review` omit write/edit tools and allow routine inspection and verification silently. Their explicit rules deny selected repository and remote mutations; other recognized risky operations follow the composed permission policy instead of an absolute read-only guarantee. `smart` otherwise inherits the permissive global attention policy. Every named child hard-denies Bash commands containing unresolved `$` expansion so a curated reader cannot hide a sensitive operand from path extraction. Children cannot recursively dispatch more children. Worktree and file-context UI packages are excluded from children; permission-system, worktree-guard, and the selected skills remain inherited. Full Superpowers is the process router; the filtered agent-skills router and commands are not loaded. The local `my` selection provides seven prompts, eleven skills, and no extensions.
 
+### Exact runtime metadata queries
+
+The parent and all five named children silently allow the following exact
+`printenv` operands, with either `printenv` or `/usr/bin/printenv` as the command:
+
+| Metadata | Exact operand strings |
+|---|---|
+| Pi model selection | `PI_PROVIDER`; `PI_MODEL`; `PI_REASONING_LEVEL`; `PI_PROVIDER PI_MODEL`; `PI_PROVIDER PI_MODEL PI_REASONING_LEVEL` |
+| Pi configuration locations | `XDG_CONFIG_HOME PI_CODING_AGENT_DIR` |
+| Herdr identity | `HERDR_ENV`; `HERDR_SESSION`; `HERDR_SOCKET_PATH`; `HERDR_PANE_ID`; `HERDR_WORKSPACE_ID` |
+| Herdr identity groups | `HERDR_PANE_ID HERDR_ENV`; `HERDR_PANE_ID HERDR_WORKSPACE_ID`; `HERDR_ENV HERDR_SESSION HERDR_SOCKET_PATH HERDR_PANE_ID HERDR_WORKSPACE_ID` |
+
+Herdr's session and socket path are non-secret control metadata already inherited
+by these processes; inspecting them helps verify the intended server, not grant
+access to another one. These exact exceptions are not precedent for allowing
+other environment operands or arbitrary combinations/orderings. Bare environment
+dumps, unknown names (including `HERDR_PANE` and `HERDR_SPACE_ID`), and extra
+secret operands still require approval. Every child's blanket `*$*` denial
+remains unchanged: variable-based queries and even literal regex/jq dollars can
+still be denied. Use the reviewed literal query forms instead of weakening that
+guard. An unset variable may make `printenv` exit 1 without a permission failure.
+
 ### Context and turn budgets
 
 The four exact chat model IDs are `github-copilot/gpt-6-luna`, `github-copilot/gpt-6.1-sol`, `github-copilot/gpt-6-astra`, and `github-copilot/claude-opus-5.5`. Each has a `650000` reserve / `60000` recent-token compaction override. Global fallback is `16384` / `20000`, so other models, including 200K/400K-context choices, do not inherit the large reserve. Selected SDK catalog and compaction behavior were checked without paid requests; catalog checks do not prove provider availability or response quality.
@@ -78,7 +100,7 @@ Superpowers planning is a development process, not a read-only UI/security mode.
 - bounded lexical `curl` tripwires ask for `--data`, `--data-raw`, `--data-binary`, `--data-urlencode`, or separate-token `-d`; `--form`/`-F`; `--upload-file`/`-T`; explicit `POST`, `PUT`, `PATCH`, or `DELETE` through `--request`/`-X`; and recognized authorization, user, cookie, certificate, key, or netrc arguments; uppercase `Authorization:` and lowercase `authorization:` literals are covered, while arbitrary mixed-case header spellings, aliases, interpreters, generated arguments, attached short-option values, and semantically equivalent requests are outside that coverage;
 - policy denies recognized credential and browser-profile path access, persistent Git config writes, Git options that execute subprocesses, catastrophic deletion, force operations, subprocess-capable search flags, and privilege escalation; worktree guard separately denies direct model-facing write, edit, and mutating LSP operations in primary checkouts;
 - common reader/output commands containing unresolved `$` expansion and direct environment-dump commands ask, while named children hard-deny all unresolved shell-variable indirection; use `NAME=value command` rather than the opaque `env NAME=value command` wrapper so ordinary scoped commands remain inspectable and silent;
-- optional metadata inspection allows only the literal `printenv PI_PROVIDER PI_MODEL PI_REASONING_LEVEL` and `printenv XDG_CONFIG_HOME PI_CODING_AGENT_DIR` commands, plus their `/usr/bin/printenv` spellings; it is not a startup requirement or permission to add secret operands/dump the environment;
+- optional metadata inspection allows only the literal queries listed under [Exact runtime metadata queries](#exact-runtime-metadata-queries), with bare or `/usr/bin/printenv`; it is not a startup requirement or permission to add secret operands/dump the environment;
 - the parent allows twenty literal Git HEAD queries: bare and `/usr/bin/git ls-remote https://github.com/OWNER/REPO.git HEAD` for the ten repositories explicitly listed in the policy. Other Git remote queries still ask. Read-oriented children retain their Git-query deny and use existing `gh api` read permissions: query `.default_branch`, then the verified literal branch ref. API mutation flags still ask; selected destructive/DELETE operations and child variable indirection remain denied;
 - only the canonical `~/.dotfiles/config/versions.env` dependency inventory has a narrow read exception, after operator verification; writes stay denied and worktree copies remain denied unless explicitly authorized for that exact temporary file;
 - external-directory read and write catch-alls allow ambiguous external paths to avoid false prompts; explicit protected-path denies remain later tripwires, not containment;
