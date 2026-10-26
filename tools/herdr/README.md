@@ -77,7 +77,7 @@ an already-running server; arrange a controlled cutover after saving agent work.
 
 ## Lane workflow and existing-host rollout
 
-The defaults name spaces at creation, sort Agents by attention priority, hide a
+The defaults skip the workspace-name prompt, sort Agents by attention priority, hide a
 single tab's bar, and show in-app background notifications. Keep Spaces as the
 stable lane list; Agents is an attention queue, not a requirement to group lanes
 by repository or run several agents per space. Pi's coordinator skill can launch
@@ -94,8 +94,14 @@ After integrating the reviewed source into the canonical checkout:
 
    ```bash
    config="$HOME/.config/herdr/config.toml"
-   backup=$(mktemp "$config.backup.XXXXXX")
-   cp -p "$config" "$backup"
+   if ! backup=$(mktemp "$config.backup.XXXXXX"); then
+     printf 'Could not create the Herdr configuration backup.\n' >&2
+     exit 1
+   fi
+   if ! cp -p "$config" "$backup"; then
+     printf 'Could not copy the Herdr configuration to %s.\n' "$backup" >&2
+     exit 1
+   fi
    printf 'Backup: %s\n' "$backup"
    ```
 
@@ -106,7 +112,7 @@ After integrating the reviewed source into the canonical checkout:
 
    ```toml
    [ui]
-   prompt_new_workspace_name = true
+   prompt_new_workspace_name = false
    agent_panel_sort = "priority"
    hide_tab_bar_when_single_tab = true
 
