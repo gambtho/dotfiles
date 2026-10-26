@@ -273,6 +273,70 @@ only by that `gh auth login`). Bootstrap authoring the file does not link it,
 so a run interrupted between those two steps leaves an identity that exists in
 the repo but not in `$HOME`.
 
+## Linux credential keyring
+
+GitHub CLI normally uses the system credential store. If that store is unavailable
+or locked, `gh auth login` can fall back to saving its token in a plaintext file.
+Linux provisioning installs GNOME Keyring and system-Python D-Bus bindings in a
+separate `--no-install-recommends` APT call. This does not add the recommended PAM
+integration or change recommendation policy for other packages. Existing PAM
+configuration is left alone. GNOME Keyring still requires some GTK libraries;
+a graphical display, Seahorse, and a desktop session are not required by these
+commands. macOS continues to use its native Keychain.
+
+From the dotfiles checkout, explicitly unlock an **existing Login keyring**:
+
+```bash
+make keyring-check
+make keyring-unlock
+make keyring-check
+```
+
+`keyring-check` does not activate a provider or read stored passwords. It exits
+zero when the login keyring is unlocked, or nonzero with a diagnostic when it is
+locked, absent, inactive, unsupported, or the session bus is unavailable.
+`keyring-unlock` may request native D-Bus activation; it never starts another
+keyring daemon itself. It skips the password prompt if already unlocked, otherwise
+reads a hidden password from your controlling terminal. It refuses noninteractive
+or unhidden input. No password is saved in files, shell history, arguments, or
+environment variables. Passwords do remain in process memory while used.
+
+The unlock is shared by clients on the **same user session bus**, including other
+terminals and background tools. Repeat it after the keyring is locked or restarted;
+there is no shell-startup prompt or unattended unlock. WSL requires systemd and a
+working user session bus; installing dependencies alone does not establish a bus
+in an already-running shell. The helper uses `/usr/bin/python3` because APT's Gio
+bindings are not necessarily available to a mise-managed Python.
+
+These commands do **not** create missing keyrings, reset passwords, switch Secret
+Service providers, or migrate tokens. Fresh-host keyring initialization is a
+separate enrollment step. The headless unlock uses a GNOME-specific internal API;
+an incompatible provider/version produces an error, with no unsafe fallback to
+`gnome-keyring-daemon --unlock`.
+
+After unlocking, reauthenticate interactively for each GitHub identity that was
+using plaintext storage, from a repository routed to that identity (or with its
+explicit `GH_CONFIG_DIR`):
+
+```bash
+gh auth login --hostname github.com --web
+gh auth status --hostname github.com
+```
+
+Confirm that status reports `(keyring)`. Do not use `--insecure-storage` or
+`--show-token`. Existing plaintext credentials are not automatically migrated by
+the dotfiles installer.
+
+For an opt-in real-provider smoke test, after installing the Linux dependencies:
+
+```bash
+/usr/bin/python3 tests/keyring_smoke.py
+```
+
+It uses a disposable keyring, an isolated session bus without service activation,
+and temporary HOME/XDG paths. Ordinary Python tests use fakes and need neither
+GI nor a running keyring. No test uses your production keyring or restarts services.
+
 ## Routine Updates
 
 ```bash

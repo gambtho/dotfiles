@@ -32,6 +32,30 @@ compose_apt_packages() {
   awk 'NF' "$DOTFILES_ROOT/platforms/linux/packages/base_apt" "$platform_file" "$profile_file" | sort -u
 }
 
+compose_keyring_apt_packages() {
+  awk 'NF' "$DOTFILES_ROOT/platforms/linux/packages/keyring_apt" | sort -u
+}
+
+compose_managed_apt_packages() {
+  local ordinary keyring
+  ordinary=$(compose_apt_packages) || return
+  keyring=$(compose_keyring_apt_packages) || return
+  printf '%s\n' "$ordinary" "$keyring" | sort -u
+}
+
+install_keyring_apt_packages() {
+  local package package_list
+  local -a packages=()
+  package_list=$(compose_keyring_apt_packages) || return
+  [[ -n "$package_list" ]] || return 1
+  while IFS= read -r package; do
+    [[ -n "$package" ]] && packages+=("$package")
+  done <<<"$package_list"
+  # GNOME Keyring recommends PAM integration. Do not add that integration
+  # implicitly, or change recommendation policy for the ordinary package set.
+  sudo apt-get install -y --no-install-recommends "${packages[@]}" >/dev/null
+}
+
 install_apt_packages() {
   local package package_list
   local -a apt_packages=()
@@ -49,6 +73,7 @@ install_apt_packages() {
     [[ -n "$package" ]] && apt_packages+=("$package")
   done <<<"$package_list"
   sudo apt install -y "${apt_packages[@]}" >/dev/null || return
+  install_keyring_apt_packages || return
   sudo apt upgrade -y >/dev/null || return
   sudo apt autoremove -y >/dev/null || return
   sudo apt autoclean -y >/dev/null
@@ -84,7 +109,7 @@ check_unsaved_apt_packages() {
   mkdir -p "$DOTFILES_ROOT/tmp"
   audit_file="$DOTFILES_ROOT/tmp/unmanaged-apt-${OS,,}-${PROFILE}.txt"
   manifest_file=$(mktemp "$DOTFILES_ROOT/tmp/managed-apt.XXXXXX")
-  compose_apt_packages >"$manifest_file" || {
+  compose_managed_apt_packages >"$manifest_file" || {
     rm -f -- "$manifest_file"
     return 1
   }

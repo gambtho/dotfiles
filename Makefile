@@ -14,6 +14,16 @@ update: ## Update packages, runtimes, neovim plugins
 relink: ## Remove dead symlinks and re-create from current layout
 	bash libexec/relink
 
+# ── Linux credential keyring ───────────────────────────────────────────────────
+
+.PHONY: keyring-check keyring-unlock
+
+keyring-check: ## Inspect the existing GNOME login keyring without activating it
+	/usr/bin/python3 libexec/keyring check
+
+keyring-unlock: ## Explicitly unlock the GNOME login keyring with hidden password input
+	/usr/bin/python3 libexec/keyring unlock
+
 # ── AI tools ──────────────────────────────────────────────────────────────────
 
 .PHONY: agent-knowledge agent-knowledge-check agent-knowledge-adopt agent-knowledge-sync
