@@ -75,6 +75,31 @@ publishes no checksum file, so these digests are computed from downloaded
 artifacts and are trust-on-first-use. Replacing a binary does not itself upgrade
 an already-running server; arrange a controlled cutover after saving agent work.
 
+### Web links on headless WSL
+
+With mouse capture enabled (the default), Herdr v0.9.5 handles Ctrl-clicks itself
+instead of passing labeled hyperlinks to Windows Terminal. File links can be
+claimed by plugins; unmatched HTTP(S) links use the client's Linux `xdg-open`.
+Without a Linux browser, web clicks can therefore silently do nothing even when
+file links work.
+
+`core/env.zsh` supplies a `BROWSER` fallback to the Windows default browser through
+`rundll32.exe` when either the `WSLInterop` or `WSLInterop-late` registration is
+enabled and the executable exists at the standard
+`/mnt/c/Windows/System32/rundll32.exe` path. An existing nonempty `BROWSER` is
+preserved. The command includes a `%s` URL placeholder for compatibility with
+Python's `webbrowser` module as well as `xdg-open`. This also works without a
+display, where `xdg-open` ignores desktop
+MIME registrations. Hosts with a different Windows mount can set their own
+`BROWSER` in `~/.localrc`.
+
+After integrating the change into the canonical checkout, start a fresh shell
+before attaching Herdr so the client inherits the fallback. For a live session,
+detach with Ctrl+B then Q, open a fresh outer shell, and run `herdr` again. Do not
+stop the server: its Pi sessions can keep running. Check with
+`xdg-open https://example.com`, then Ctrl-click a web link inside Herdr. A running
+client does not pick up environment changes through `herdr server reload-config`.
+
 ### Reviewed release pin
 
 The repository pins [Herdr v0.9.5](https://github.com/herdrdev/herdr/releases/tag/v0.9.5)

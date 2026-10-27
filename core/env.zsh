@@ -24,3 +24,13 @@ export CLICOLOR=1
 # Pi otherwise hides clickable file links when terminal detection is inconclusive
 # (for example xterm-256color over SSH). Preserve explicit 0/auto overrides.
 export PI_HYPERLINKS="${PI_HYPERLINKS-1}"
+
+# Herdr handles web clicks itself when mouse capture is on. Headless WSL's
+# xdg-open needs BROWSER to reach Windows; desktop MIME registrations are ignored.
+if [[ -z ${BROWSER:-} && -x /mnt/c/Windows/System32/rundll32.exe &&
+      ( ( -r /proc/sys/fs/binfmt_misc/WSLInterop &&
+          $(</proc/sys/fs/binfmt_misc/WSLInterop) == enabled$'\n'* ) ||
+        ( -r /proc/sys/fs/binfmt_misc/WSLInterop-late &&
+          $(</proc/sys/fs/binfmt_misc/WSLInterop-late) == enabled$'\n'* ) ) ]]; then
+  export BROWSER='/mnt/c/Windows/System32/rundll32.exe url.dll,FileProtocolHandler %s'
+fi
