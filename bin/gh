@@ -80,13 +80,27 @@ real_gh="$(find_real_gh)" || {
   exit 127
 }
 
+exec_real_gh() {
+  local helper="$IDENTITY_DOTFILES_ROOT/libexec/keyring"
+  if [ "$(uname -s)" = Linux ] && [ -r "$helper" ] && [ -x /usr/bin/python3 ]; then
+    # The preflight must not consume stdin (Git's credential protocol, API input,
+    # etc.) or prompt. Identity selection has already established the config.
+    if ! /usr/bin/python3 "$helper" gh-check -- "$@" </dev/null; then
+      printf 'gh: credential keyring locked or unavailable; unlock in a human terminal:\n' >&2
+      printf '  make -C %q keyring-unlock\n' "$IDENTITY_DOTFILES_ROOT" >&2
+      exit 6
+    fi
+  fi
+  exec "$real_gh" "$@"
+}
+
 # An explicit GH_CONFIG_DIR means the caller has already chosen. Never
 # second-guess it -- it is the documented escape hatch for mixed-owner repos.
 if [ -n "${GH_CONFIG_DIR:-}" ]; then
-  exec "$real_gh" "$@"
+  exec_real_gh "$@"
 fi
 
-git rev-parse --is-inside-work-tree >/dev/null 2>&1 || exec "$real_gh" "$@"
+git rev-parse --is-inside-work-tree >/dev/null 2>&1 || exec_real_gh "$@"
 
 # Inside a git repository, an unusable map is a hard error. Falling through
 # would silently use the default account for a repo that may not be its.
@@ -104,7 +118,7 @@ while IFS= read -r owner; do
 done < <(identity_repo_owners)
 
 if [ "$owner_count" -eq 0 ]; then
-  exec "$real_gh" "$@"
+  exec_real_gh "$@"
 fi
 
 if [ "$owner_count" -gt 1 ]; then
@@ -117,7 +131,7 @@ owner="${owners# }"
 slug="$(identity_owner_slug "$owner")"
 
 if [ "$slug" = default ]; then
-  exec "$real_gh" "$@"
+  exec_real_gh "$@"
 fi
 
 if ! identity_slug_provisioned "$slug"; then
@@ -130,4 +144,4 @@ fi
 
 GH_CONFIG_DIR="$(identity_slug_configdir "$slug")"
 export GH_CONFIG_DIR
-exec "$real_gh" "$@"
+exec_real_gh "$@"

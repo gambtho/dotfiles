@@ -302,11 +302,53 @@ or unhidden input. No password is saved in files, shell history, arguments, or
 environment variables. Passwords do remain in process memory while used.
 
 The unlock is shared by clients on the **same user session bus**, including other
-terminals and background tools. Repeat it after the keyring is locked or restarted;
-there is no shell-startup prompt or unattended unlock. WSL requires systemd and a
-working user session bus; installing dependencies alone does not establish a bus
-in an already-running shell. The helper uses `/usr/bin/python3` because APT's Gio
-bindings are not necessarily available to a mise-managed Python.
+terminals and background tools. On Linux, an interactive foreground zsh terminal
+prompts with hidden input **only while the existing Login keyring is locked**,
+before Powerlevel10k's instant prompt. Already-unlocked terminals stay silent.
+Inspection/native activation has a two-second overall limit; entering the password
+has no time limit, followed by a ten-second unlock limit. No password is saved and
+there is no unattended unlock. macOS Keychain is unchanged.
+
+Ctrl-C or Ctrl-Z cancels the one password attempt without stopping shell
+initialization. A later terminal may offer another attempt. Simultaneous terminals
+never compete for password input: only one prompts and others continue silently.
+If you do not see a prompt (another, possibly unseen terminal may hold it), run
+`make keyring-unlock` explicitly in your terminal. Missing dependencies, an absent
+keyring/bus, an unsupported provider, or unsafe/missing private runtime storage
+silently skip automatic prompting; `make keyring-check` provides diagnostics.
+
+Set `DOTFILES_KEYRING_PROMPT=0` **before creating a shell** to disable automatic
+password input. The lane launcher passes this variable when creating its Herdr
+workspace, before the root shell starts. Other automation that creates interactive
+terminals must set it too; terminal checks cannot reliably identify every agent.
+Noninteractive shells, `zsh -ic` command shells, non-terminal input/output, CI, and
+shells with `GH_PROMPT_DISABLED` set do not prompt. Human Herdr terminals are not
+blanket-excluded. Existing panes cannot be opted out retroactively once prompting.
+
+The `gh` identity wrapper never prompts for a keyring password. On Linux it uses a
+bounded, nonactivating check for likely keyring-dependent calls and exits **6** with
+an explicit unlock command when the GNOME keyring is locked, inactive or unavailable.
+All existing identity routing (including explicit `GH_CONFIG_DIR`) still applies.
+Help/version/completion and supported local config/alias operations pass through.
+To prevent plaintext fallback, `gh auth login` requires an unlocked keyring even
+when a token override or plaintext credential already exists. Other Secret Service
+providers are left to native `gh`; this helper does not switch them.
+
+This guard is deliberately conservative, not a replacement credential resolver:
+ordinary calls with any supported token environment variable or an `oauth_token`
+key in the effective `hosts.yml` delegate to native `gh`, as do unconfigured clients.
+A token for another host or plaintext for another account can therefore suppress
+the hint in mixed setups; native `gh` behavior, including possible waits, remains.
+No tokens are migrated or printed. The preflight preserves stdin and writes refusal
+messages only to stderr, including for Git credential requests. Git itself may
+then try its own username/password prompt; use `GIT_TERMINAL_PROMPT=0` in automation
+when that fallback must be disabled. Credential `store`/`erase` remain native no-ops.
+
+WSL requires systemd and a working user session bus; installing dependencies alone
+does not establish a bus in an already-running shell. The helper uses
+`/usr/bin/python3` because APT's Gio bindings are not necessarily available to a
+mise-managed Python. Main-checkout shell, wrapper and skill resources are linked
+live: stop Pi before integrating this change there; do not deploy from a worktree.
 
 These commands do **not** create missing keyrings, reset passwords, switch Secret
 Service providers, or migrate tokens. Fresh-host keyring initialization is a

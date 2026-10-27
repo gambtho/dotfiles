@@ -46,6 +46,10 @@ python3 <skill-dir>/scripts/launch.py --requested \
 `--requested` attests to the actual user launch request; it does not grant scope,
 publication or provider/production authority. Do not add it for "prepare W12".
 The helper uses argv subprocess calls, not executable shell text or `eval`.
+It creates agent workspaces with `--env DOTFILES_KEYRING_PROMPT=0`, before the
+root shell starts, so locked-keyring password input cannot consume the agent-start
+command. Caller-created or existing panes need that opt-out at creation too;
+setting it after a password prompt is already active is too late.
 
 The installed Herdr 0.8.0 CLI capabilities and protocol 19 response shapes were
 inspected for this helper (`api snapshot`, `workspace create/get`, `agent start/get/
