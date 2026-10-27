@@ -89,7 +89,52 @@ source_installer() {
   [ -x "$TEST_ROOT/bin/herdr" ]
   [ ! -L "$TEST_ROOT/bin/herdr" ]
   run cat "$TEST_ROOT/state/installed-version"
-  [[ "$output" == "v0.8.0" ]]
+  [[ "$output" == "v0.9.5" ]]
+}
+
+@test "the reviewed pin selects the verified Linux asset and checksum for each architecture" {
+  local arch digest
+  while read -r arch digest; do
+    source_installer HERDR_EXPECTED_URL="https://github.com/herdrdev/herdr/releases/download/v0.9.5/herdr-linux-$arch" \
+      HERDR_EXPECTED_SHA256="$digest" bash -c '
+      source "$1/tools/herdr/install.sh"
+      download_verified_artifact() {
+        [[ "$1" == "$HERDR_EXPECTED_URL" && "$2" == "$HERDR_EXPECTED_SHA256" && "$4" == 0755 ]] || {
+          printf "Unexpected Herdr artifact request: %s %s %s\n" "$1" "$2" "$4" >&2
+          return 1
+        }
+        printf "verified-asset\n" >"$3"
+        chmod "$4" "$3"
+      }
+      install_pinned_binary "$2"
+    ' _ "$REPO_ROOT" "$arch"
+
+    [ "$status" -eq 0 ]
+    [ -x "$TEST_ROOT/bin/herdr" ]
+    [ "$(<"$TEST_ROOT/bin/herdr")" = verified-asset ]
+    [ "$(<"$TEST_ROOT/state/installed-version")" = v0.9.5 ]
+    rm "$TEST_ROOT/bin/herdr" "$TEST_ROOT/state/installed-version"
+  done <<'ASSETS'
+x86_64 14d9e8bc8b4a9e0118d77c32266f76d461f09b40342eb23752960bd89f59929d
+aarch64 17d7536f2da50859523680ef279dffcac8e4a235f4e46fe8da6c2ec44141897c
+ASSETS
+}
+
+@test "a previous 0.8.0 marker does not skip the reviewed upgrade" {
+  mkdir -p "$TEST_ROOT/bin" "$TEST_ROOT/state"
+  printf 'old-herdr\n' >"$TEST_ROOT/bin/herdr"
+  chmod +x "$TEST_ROOT/bin/herdr"
+  printf 'v0.8.0\n' >"$TEST_ROOT/state/installed-version"
+
+  source_installer bash -c '
+    source "$1/tools/herdr/install.sh"
+    download_verified_artifact() { printf "replacement-herdr\n" >"$3"; chmod "$4" "$3"; }
+    install_pinned_binary x86_64
+  ' _ "$REPO_ROOT"
+
+  [ "$status" -eq 0 ]
+  [ "$(<"$TEST_ROOT/bin/herdr")" = replacement-herdr ]
+  [ "$(<"$TEST_ROOT/state/installed-version")" = v0.9.5 ]
 }
 
 @test "a second run with a matching marker does not re-download" {
@@ -113,10 +158,10 @@ source_installer() {
   # skip the reinstall and leave the mismatch in place forever.
   mkdir -p "$TEST_ROOT/bin" "$TEST_ROOT/state"
   ln -s /nonexistent "$TEST_ROOT/bin/herdr"
-  printf 'v0.8.0\n' >"$TEST_ROOT/state/installed-version"
 
   source_installer bash -c '
     source "$1/tools/herdr/install.sh"
+    printf "%s\n" "$HERDR_VERSION" >"$HERDR_STATE_ROOT/installed-version"
     download_verified_artifact() { printf "fake-herdr\n" >"$3"; chmod "$4" "$3"; }
     install_pinned_binary x86_64
   ' _ "$REPO_ROOT"
@@ -218,7 +263,7 @@ PY
   ' _ "$REPO_ROOT"
 
   [ "$status" -eq 0 ]
-  [[ "$output" == *"v0.8.0"* ]]
+  [[ "$output" == *"v0.9.5"* ]]
   [[ "$output" != *"plugin:"* ]]
   [[ "$output" == *"(none)"* ]]
   [ ! -e "$TEST_ROOT/bin/herdr" ]

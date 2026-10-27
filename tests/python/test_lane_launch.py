@@ -51,6 +51,23 @@ def save():
 def reply(kind, **data):
     print(json.dumps({'id': 'fixture', 'result': {'type': kind, **data}}))
 if a == ['api', 'snapshot']:
+    boundary, _, shape = mode.partition('-')
+    if boundary in ('envelope', 'result', 'snapshot') and shape in ('null', 'list', 'string', 'missing'):
+        value = {'null': None, 'list': [], 'string': 'invalid', 'missing': None}[shape]
+        packet = {'result': {'type': 'session_snapshot', 'snapshot': s}}
+        if boundary == 'envelope':
+            packet = {} if shape == 'missing' else value
+        elif boundary == 'result':
+            if shape == 'missing':
+                del packet['result']
+            else:
+                packet['result'] = value
+        elif shape == 'missing':
+            del packet['result']['snapshot']
+        else:
+            packet['result']['snapshot'] = value
+        print(json.dumps(packet))
+        sys.exit(0)
     if mode == 'snapshot-workspace-list':
         s['workspaces'] = [[]]
     reply('session_snapshot', snapshot=s)
@@ -85,6 +102,8 @@ elif a[:2] == ['agent', 'start']:
     p = next(p for p in s['panes'] if p['pane_id'] == 'opaque-root')
     agent = dict(p, agent='pi', name=a[2], agent_status='done', interactive_ready=True,
                  agent_session={'agent':'pi','source':'herdr:pi','kind':'path','value':'session-new'})
+    if mode == 'agent-status-list':
+        agent['agent_status'] = []
     s['agents'] = [agent]
     save()
     reply('agent_started', agent=[] if mode == 'start-agent-list' else agent,
@@ -94,7 +113,7 @@ elif a[:2] == ['agent', 'get']:
     if not s['agents']:
         sys.exit(1)
     agent = dict(s['agents'][0])
-    if mode in ('welcome', 'dialog', 'welcome-dialog', 'read-list') and not s.get('read'):
+    if mode in ('welcome', 'dialog', 'welcome-dialog', 'read-list', 'read-text-list') and not s.get('read'):
         agent.update(agent_status='blocked', interactive_ready=False)
     reply('agent_info', agent=agent)
 elif a[:2] == ['agent', 'read']:
@@ -104,7 +123,8 @@ elif a[:2] == ['agent', 'read']:
     text = 'Welcome back!\nPress any key to continue (1s)' if mode == 'welcome' else 'Trust this project? Allow?'
     if mode == 'welcome-dialog':
         text += '\nWelcome back!\nPress any key to continue (1s)'
-    reply('pane_read', read=[] if mode == 'read-list' else {'pane_id':'opaque-root','text':text})
+    reply('pane_read', read=[] if mode == 'read-list' else {
+        'pane_id':'opaque-root','text':[] if mode == 'read-text-list' else text})
 elif a[:2] == ['agent', 'prompt']:
     assert a == ['agent', 'prompt', 'opaque-root', 'Read ' + os.environ['FAKE_PROMPT'] + ' and follow it.']
     receipt = json.loads((root / 'W12-launch.json').read_text())
@@ -123,7 +143,9 @@ else:
 '''
 
 
-class LaunchTests(unittest.TestCase):
+class LaunchFixture:
+    PROFILE = (19, '0.8.0')
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -147,10 +169,12 @@ class LaunchTests(unittest.TestCase):
                         HERDR_PANE_ID='caller-pane', HERDR_WORKSPACE_ID='caller-workspace',
                         FAKE_ROOT=str(self.root), FAKE_REPO=str(self.repo), FAKE_PROMPT=str(self.prompt))
         self.live = self.root / 'live.json'
-        self.live.write_text(json.dumps({'version': '0.8.0', 'protocol': 19,
+        self.live.write_text(json.dumps({'version': self.PROFILE[1], 'protocol': self.PROFILE[0],
             'workspaces': [], 'agents': [], 'tabs': [], 'layouts': [], 'panes': [{
                 'pane_id': 'caller-pane', 'workspace_id': 'caller-workspace',
                 'terminal_id': 'caller-terminal'}]}))
+        self.initial_live = self.live.read_text()
+        self.initial_state = self.state.read_bytes()
 
     def tearDown(self):
         allowed = {('api','snapshot'), ('workspace','create'), ('workspace','get'),
@@ -173,6 +197,27 @@ class LaunchTests(unittest.TestCase):
 
     def mutations(self, verb):
         return [a for a in self.calls() if a[:2] == verb]
+
+    def reset_fixture(self, live):
+        self.live.write_text(json.dumps(live))
+        self.state.write_bytes(self.initial_state)
+        self.receipt.unlink(missing_ok=True)
+        (self.root / 'calls.jsonl').write_text('')
+
+    def assert_stopped(self, result, reason=None):
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertNotIn('Unsupported Herdr', result.stderr)
+        self.assertNotIn('Traceback', result.stderr)
+        if reason:
+            self.assertIn(reason, result.stderr)
+
+
+class LaunchTests(LaunchFixture, unittest.TestCase):
+    def run_launch(self, mode='', extra=(), env=None):
+        result = super().run_launch(mode, extra, env)
+        # Every workflow case has an accepted profile; failures must reach its boundary.
+        self.assertNotIn('Unsupported Herdr', result.stderr)
+        return result
 
     def test_success_exact_targets_names_and_no_focus_then_reconcile(self):
         result = self.run_launch()
@@ -202,12 +247,14 @@ class LaunchTests(unittest.TestCase):
 
     def test_live_collision_or_wrong_caller_prevents_creation(self):
         initial = json.loads(self.live.read_text())
-        for field, value in [('workspaces', [{'label':'double-holo-12','workspace_id':'other'}]),
-                             ('agents', [{'name':'double-holo-12','pane_id':'other'}]),
-                             ('panes', [])]:
+        for field, value, reason in [
+            ('workspaces', [{'label':'double-holo-12','workspace_id':'other'}], 'Name collision'),
+            ('agents', [{'name':'double-holo-12','pane_id':'other'}], 'Name collision'),
+            ('panes', [], 'Inherited caller'),
+        ]:
             with self.subTest(field=field):
                 self.live.write_text(json.dumps(dict(initial, **{field:value})))
-                self.assertNotEqual(self.run_launch().returncode, 0)
+                self.assert_stopped(self.run_launch(), reason)
                 self.assertEqual(self.mutations(['workspace', 'create']), [])
 
     def test_creation_metadata_mismatch_preserves_observed_ids_without_advancing(self):
@@ -232,10 +279,17 @@ class LaunchTests(unittest.TestCase):
 
     def test_malformed_nested_responses_use_normal_error_path(self):
         initial_live, initial_state = self.live.read_text(), self.state.read_text()
-        cases = [('snapshot-workspace-list', None), ('create-workspace-list', 'Creating'),
-                 ('create-pane-list', 'Creating'), ('start-agent-list', 'Starting'),
-                 ('read-list', 'Starting'), ('prompt-agent-list', 'Submitting')]
-        for mode, stage in cases:
+        cases = [
+            ('snapshot-workspace-list', None, 'Invalid response collection: workspaces'),
+            ('create-workspace-list', 'Creating', 'Invalid response object: workspace'),
+            ('create-pane-list', 'Creating', 'Invalid response object: root_pane'),
+            ('start-agent-list', 'Starting', 'Invalid response object: agent'),
+            ('read-list', 'Starting', 'Invalid response object: read'),
+            ('read-text-list', 'Starting', 'Invalid response field: text'),
+            ('agent-status-list', 'Starting', 'Invalid response field: agent_status'),
+            ('prompt-agent-list', 'Submitting', 'Invalid response object: agent'),
+        ]
+        for mode, stage, reason in cases:
             with self.subTest(mode=mode):
                 self.live.write_text(initial_live)
                 self.state.write_text(initial_state)
@@ -244,7 +298,8 @@ class LaunchTests(unittest.TestCase):
                 result = self.run_launch(mode)
                 self.assertEqual(result.returncode, 2)
                 self.assertIn('Launch stopped:', result.stderr)
-                self.assertIn('has no attribute', result.stderr)
+                self.assertIn(reason, result.stderr)
+                self.assertNotIn('Unsupported Herdr', result.stderr)
                 self.assertNotIn('Traceback', result.stderr)
                 if stage is None:
                     self.assertFalse(self.receipt.exists())
@@ -252,7 +307,11 @@ class LaunchTests(unittest.TestCase):
                 else:
                     record = json.loads(self.receipt.read_text())
                     self.assertEqual(record['stage'], stage)
-                    self.assertIn('has no attribute', record['error'])
+                    self.assertIn(reason, record['error'])
+                    if mode == 'create-pane-list':
+                        self.assertNotIn('created_response', record)
+                        self.assertNotIn('Created', record['checkpoints'])
+                        self.assertEqual(self.mutations(['agent', 'start']), [])
                     self.assertIn('inspect receipt', self.state.read_text())
                     if stage in ('Creating', 'Submitting'):
                         self.assertEqual(self.run_launch().returncode, 2)
@@ -301,16 +360,16 @@ class LaunchTests(unittest.TestCase):
         self.assertEqual(len(self.mutations(['agent','read'])), 1)
 
     def test_real_dialog_stops(self):
-        self.assertNotEqual(self.run_launch('dialog').returncode, 0)
+        self.assert_stopped(self.run_launch('dialog'), 'Startup blocked/unknown')
         self.assertEqual(self.mutations(['agent','prompt']), [])
 
     def test_real_dialog_with_stale_welcome_text_stops(self):
-        self.assertNotEqual(self.run_launch('welcome-dialog').returncode, 0)
+        self.assert_stopped(self.run_launch('welcome-dialog'), 'Startup blocked/unknown')
         self.assertEqual(self.mutations(['agent','prompt']), [])
 
     def test_state_existing_launch_without_receipt_prevents_creation(self):
         self.state.write_text(self.state.read_text().replace('Manual', 'old-workspace / old-pane; Submitted'))
-        self.assertNotEqual(self.run_launch().returncode, 0)
+        self.assert_stopped(self.run_launch(), 'STATE records an existing launch')
         self.assertEqual(self.mutations(['workspace','create']), [])
 
     def test_blocked_start_pins_session_and_refuses_replacement(self):
@@ -358,10 +417,13 @@ class LaunchTests(unittest.TestCase):
         argv = [str(SCRIPT), '--requested', '--project','double-holo', '--lane','W12',
                 '--prompt',str(self.prompt), '--repo',str(self.repo), '--state',str(self.state),
                 '--session','intended']
+        stderr = io.StringIO()
         with mock.patch.dict(os.environ, self.env, clear=True), mock.patch.object(sys, 'argv', argv), \
                 mock.patch.object(module.subprocess, 'run', side_effect=timeout_after_delivery), \
-                contextlib.redirect_stderr(io.StringIO()):
+                contextlib.redirect_stderr(stderr):
             self.assertEqual(module.main(), 2)
+        self.assertNotIn('Unsupported Herdr', stderr.getvalue())
+        self.assertIn('timed out', stderr.getvalue())
         self.assertEqual(json.loads(self.receipt.read_text())['stage'], 'Submitting')
         self.assertNotEqual(self.run_launch().returncode, 0)
         self.assertEqual(json.loads(self.live.read_text())['delivered'], 1)
@@ -424,6 +486,107 @@ class LaunchTests(unittest.TestCase):
         self.live.write_text(json.dumps(live))
         self.assertNotEqual(self.run_launch().returncode, 0)
         self.assertEqual(len(self.mutations(['agent','prompt'])), 1)
+
+
+class Protocol22LaunchTests(LaunchTests):
+    PROFILE = (22, '0.9.5')
+
+
+class ProtocolPolicyTests(LaunchFixture, unittest.TestCase):
+    def assert_preflight_rejected(self, reason):
+        result = self.run_launch()
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn(reason, result.stderr)
+        self.assertNotIn('Traceback', result.stderr)
+        self.assertFalse(self.receipt.exists())
+        self.assertEqual(self.state.read_bytes(), self.initial_state)
+        self.assertEqual(self.calls(), [['api', 'snapshot']])
+
+    def test_legacy19_version_metadata_remains_nonbinding(self):
+        for present, version in [(False, None), (True, None), (True, '0.9.5'),
+                                 (True, 'unreviewed'), (True, False), (True, []), (True, {})]:
+            with self.subTest(present=present, version=version):
+                live = dict(json.loads(self.initial_live), protocol=19, version=version)
+                if not present:
+                    del live['version']
+                self.reset_fixture(live)
+                result = self.run_launch()
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(json.loads(self.receipt.read_text())['stage'], 'Submitted')
+                for verb in (['workspace', 'create'], ['agent', 'start'], ['agent', 'prompt']):
+                    self.assertEqual(len(self.mutations(verb)), 1)
+
+    def test_rejected_protocol_preflight_has_no_effects(self):
+        for present, protocol in [(False, None), *((True, value) for value in (
+                None, True, False, 19.0, 22.0, '19', '22', [], {}, 20, 21, 23))]:
+            with self.subTest(present=present, protocol=protocol):
+                live = dict(json.loads(self.initial_live), protocol=protocol, version='0.9.5')
+                if not present:
+                    del live['protocol']
+                self.reset_fixture(live)
+                self.assert_preflight_rejected('Unsupported Herdr')
+
+    def test_protocol22_requires_exact_snapshot_version(self):
+        for present, version in [(False, None), *((True, value) for value in (
+                None, True, 0.95, [], {}, '0.8.0', '0.9.4', '0.9.6', 'v0.9.5',
+                '0.9.5+build', ' 0.9.5', '0.9.5 ', '0.9.5\n'))]:
+            with self.subTest(present=present, version=version):
+                live = dict(json.loads(self.initial_live), protocol=22, version=version)
+                if not present:
+                    del live['version']
+                self.reset_fixture(live)
+                self.assert_preflight_rejected('Unsupported Herdr')
+
+    def test_snapshot_consumed_collections_reject_malformed_shapes(self):
+        for protocol, version in ((19, '0.8.0'), (22, '0.9.5')):
+            for field in ('panes', 'workspaces', 'agents'):
+                for present, value in [(False, None), *((True, value) for value in (
+                        None, {}, 'invalid', 17, [None], [[]]))]:
+                    with self.subTest(protocol=protocol, field=field, present=present, value=value):
+                        live = dict(json.loads(self.initial_live), protocol=protocol, version=version)
+                        if present:
+                            live[field] = value
+                        else:
+                            del live[field]
+                        self.reset_fixture(live)
+                        self.assert_preflight_rejected('Invalid response collection: ' + field)
+
+    def test_malformed_snapshot_envelope_and_result_are_preflight_only(self):
+        for protocol, version in ((19, '0.8.0'), (22, '0.9.5')):
+            for boundary in ('envelope', 'result', 'snapshot'):
+                for shape in ('null', 'list', 'string', 'missing'):
+                    with self.subTest(protocol=protocol, boundary=boundary, shape=shape):
+                        self.reset_fixture(dict(json.loads(self.initial_live), protocol=protocol, version=version))
+                        result = self.run_launch(boundary + '-' + shape)
+                        self.assertEqual(result.returncode, 2, result.stderr)
+                        self.assertIn('Invalid response object: snapshot' if boundary == 'snapshot'
+                                      else 'malformed JSON', result.stderr)
+                        self.assertNotIn('Unsupported Herdr', result.stderr)
+                        self.assertNotIn('Traceback', result.stderr)
+                        self.assertFalse(self.receipt.exists())
+                        self.assertEqual(self.state.read_bytes(), self.initial_state)
+                        self.assertEqual(self.calls(), [['api', 'snapshot']])
+
+    def test_rejected_snapshot_preserves_submitted_receipt(self):
+        for protocol, version in ((19, '0.8.0'), (22, '0.9.5')):
+            with self.subTest(protocol=protocol):
+                self.reset_fixture(dict(json.loads(self.initial_live), protocol=protocol, version=version))
+                result = self.run_launch()
+                self.assertEqual(result.returncode, 0, result.stderr)
+                receipt, state = self.receipt.read_bytes(), self.state.read_bytes()
+                for changed in ({'protocol': 23}, {'protocol': 22, 'version': '0.9.6'}, {'agents': {}}):
+                    with self.subTest(changed=changed):
+                        live = json.loads(self.live.read_text())
+                        live.update(protocol=protocol, version=version, agents=[])
+                        live.update(changed)
+                        self.live.write_text(json.dumps(live))
+                        (self.root / 'calls.jsonl').write_text('')
+                        result = self.run_launch()
+                        self.assertEqual(result.returncode, 2, result.stderr)
+                        self.assertNotIn('Traceback', result.stderr)
+                        self.assertEqual(self.receipt.read_bytes(), receipt)
+                        self.assertEqual(self.state.read_bytes(), state)
+                        self.assertEqual(self.calls(), [['api', 'snapshot']])
 
 
 if __name__ == '__main__':
