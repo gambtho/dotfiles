@@ -56,7 +56,8 @@ if a == ['api', 'snapshot']:
     reply('session_snapshot', snapshot=s)
 elif a[:2] == ['workspace', 'create']:
     assert a == ['workspace', 'create', '--cwd', os.environ['FAKE_REPO'],
-                 '--label', os.environ.get('FAKE_NAME', 'double-holo-12'), '--no-focus']
+                 '--label', os.environ.get('FAKE_NAME', 'double-holo-12'), '--no-focus',
+                 '--env', 'DOTFILES_KEYRING_PROMPT=0']
     w = dict(workspace_id='opaque-workspace', label=a[5])
     p = dict(pane_id='opaque-root', terminal_id='terminal-new', workspace_id=w['workspace_id'],
              cwd=a[3], tab_id='opaque-tab', focused=False, agent_status='unknown', revision=1)

@@ -1,9 +1,17 @@
 #!/usr/bin/python3
-"""Explicit headless unlock for an existing GNOME login keyring."""
+"""Inspect and unlock an existing GNOME Login keyring."""
 
 import argparse
+import contextlib
 import getpass
+import hashlib
+import os
+import pathlib
+import re
+import signal
+import stat
 import sys
+import threading
 import warnings
 import xml.etree.ElementTree as ET
 
@@ -17,6 +25,10 @@ DBUS_PATH = "/org/freedesktop/DBus"
 
 class KeyringError(Exception):
     """An actionable error safe to display without secret payloads."""
+
+
+class UnsupportedProvider(KeyringError):
+    """Leave other Secret Service implementations to the native client."""
 
 
 class SessionBus:
@@ -96,7 +108,7 @@ class GnomeKeyring:
             self.bus_call("GetNameOwner", "(s)", ("org.gnome.keyring",))[0]
             != self.owner
         ):
-            raise KeyringError(
+            raise UnsupportedProvider(
                 "Unsupported Secret Service provider; GNOME keyring is required."
             )
         xml = self.call("org.freedesktop.DBus.Introspectable", "Introspect", "()", ())[
@@ -180,6 +192,155 @@ def read_password():
         ) from error
 
 
+@contextlib.contextmanager
+def deadline(seconds, exit_code=1):
+    # A Python signal handler can wait behind a blocking Gio C call. A watchdog
+    # exits this short-lived CLI even then; the OS releases its bus and locks.
+    timer = threading.Timer(seconds, lambda: os._exit(exit_code))
+    timer.daemon = True
+    timer.start()
+    try:
+        yield
+    finally:
+        timer.cancel()
+
+
+def foreground_terminal():
+    if not sys.stdin.isatty() or not sys.stderr.isatty():
+        return False
+    try:
+        with open("/dev/tty") as terminal:
+            return os.tcgetpgrp(terminal.fileno()) == os.getpgrp()
+    except OSError:
+        return False
+
+
+@contextlib.contextmanager
+def startup_lock():
+    import fcntl
+
+    acquired = False
+    with contextlib.ExitStack() as resources:
+        try:
+            runtime = os.environ.get("XDG_RUNTIME_DIR", "")
+            if not os.path.isabs(runtime):
+                raise OSError("no private runtime directory")
+            directory = os.open(runtime, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            resources.callback(os.close, directory)
+            info = os.fstat(directory)
+            if info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700:
+                raise OSError("unsafe runtime directory")
+            address = os.environ.get("DBUS_SESSION_BUS_ADDRESS") or f"unix:path={runtime}/bus"
+            name = "dotfiles-keyring-" + hashlib.sha256(address.encode()).hexdigest()[:16] + ".lock"
+            lock = os.open(name, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600, dir_fd=directory)
+            resources.callback(os.close, lock)
+            info = os.fstat(lock)
+            if (info.st_uid != os.getuid() or not stat.S_ISREG(info.st_mode)
+                    or stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink != 1):
+                raise OSError("unsafe prompt lock")
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            acquired = True
+        except OSError:
+            pass
+        yield acquired
+
+
+def startup(provider_factory=None, prompt=read_password):
+    previous = signal.getsignal(signal.SIGTSTP)
+
+    def cancel(signum, frame):
+        raise KeyboardInterrupt
+
+    # Cover inspection as well as password input: suspending a lock holder
+    # before the prompt would silently prevent every later shell from prompting.
+    signal.signal(signal.SIGTSTP, cancel)
+    try:
+        if not foreground_terminal():
+            return 0
+        with startup_lock() as acquired:
+            if not acquired:
+                return 0
+            try:
+                with deadline(2, exit_code=0):
+                    provider = (provider_factory or GnomeKeyring)()
+                    if not provider.inspect(activate=True):
+                        return 0
+            except KeyringError:
+                # Automatic startup stays quiet on hosts without this integration.
+                return 0
+            print("GitHub keyring is locked; unlock for this user session (Ctrl-C to skip).", file=sys.stderr)
+            password = prompt()
+            if not password:
+                raise KeyringError("Password must not be empty.")
+            with deadline(10, exit_code=0):
+                provider.unlock(password)
+    except (EOFError, KeyboardInterrupt):
+        print("\nkeyring: Cancelled; unlock later with make keyring-unlock.", file=sys.stderr)
+    except KeyringError as error:
+        print(f"keyring: {error}", file=sys.stderr)
+    finally:
+        signal.signal(signal.SIGTSTP, previous)
+    return 0
+
+
+def auth_free(args):
+    if not args or args[0] in ("help", "--help", "-h", "version", "--version", "completion"):
+        return True
+    if args[1:] == ["--help"]:
+        return True
+    if len(args) == 3 and args[:2] in (
+        ["auth", "login"], ["auth", "status"], ["auth", "git-credential"],
+    ) and args[2] == "--help":
+        return True
+    if args[0] in ("config", "alias") and len(args) > 1:
+        return args[1] in ({"config": ("get", "list", "set"), "alias": ("list", "set", "delete")}[args[0]])
+    # gh implements store/erase as no-ops; unknown operations report native
+    # validation errors without consulting credentials (cli/cli v2.103.2).
+    if args[:2] != ["auth", "git-credential"]:
+        return False
+    operation = args[2:]
+    if "--" in operation:
+        operation.remove("--")
+    return operation != ["get"]
+
+
+def gh_check(args, provider_factory=None):
+    if args[:1] == ["--"]:
+        args = args[1:]
+    with deadline(2):
+        if auth_free(args):
+            return 0
+        login = args[:2] == ["auth", "login"]
+        if not login:
+            if any(os.environ.get(key) for key in (
+                "GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN",
+            )):
+                return 0
+            directory = os.environ.get("GH_CONFIG_DIR")
+            if not directory:
+                if os.environ.get("XDG_CONFIG_HOME"):
+                    directory = os.path.join(os.environ["XDG_CONFIG_HOME"], "gh")
+                else:
+                    directory = os.path.expanduser("~/.config/gh")
+            try:
+                with (pathlib.Path(directory) / "hosts.yml").open() as hosts:
+                    # Presence only: never extract or report token values. A
+                    # mixed-host config deliberately delegates to gh's resolver.
+                    if any(re.match(r'''\s*["']?oauth_token["']?\s*:''', line) for line in hosts):
+                        return 0
+            except (OSError, UnicodeError):
+                # No configured keyring dependency, or a malformed config that
+                # gh can diagnose more accurately. Never force enrollment.
+                return 0
+        try:
+            provider = (provider_factory or GnomeKeyring)()
+            return int(provider.inspect())
+        except UnsupportedProvider:
+            return 0
+        except KeyringError:
+            return 1
+
+
 def run(command, provider, prompt=read_password):
     try:
         if not provider.inspect(activate=command == "unlock"):
@@ -204,7 +365,8 @@ def run(command, provider, prompt=read_password):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("check", "unlock"))
+    parser.add_argument("command", choices=("check", "unlock", "startup", "gh-check"))
+    parser.add_argument("gh_args", nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
     if sys.platform != "linux":
         print(
@@ -212,6 +374,10 @@ def main(argv=None):
             file=sys.stderr,
         )
         return 1
+    if args.command == "startup":
+        return startup()
+    if args.command == "gh-check":
+        return gh_check(args.gh_args)
     try:
         provider = GnomeKeyring()
     except KeyringError as error:

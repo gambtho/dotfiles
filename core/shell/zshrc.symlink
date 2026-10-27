@@ -27,6 +27,26 @@ cleanup_retired_vekil_env \
 unfunction cleanup_retired_vekil_env
 unset VEKIL_MANAGED_CODEX_FUNCTION
 
+# Password input must happen before instant prompt redirects terminal input.
+# Agent-created terminals opt out before their shell starts, not after launch.
+if [[ $OSTYPE == linux* && -o interactive && -z ${ZSH_EXECUTION_STRING:-} &&
+      -t 0 && -t 2 && ${DOTFILES_KEYRING_PROMPT:-1} != 0 &&
+      -z ${CI:-} && -z ${GH_PROMPT_DISABLED:-} ]]; then
+  function _dotfiles_keyring_startup() {
+    setopt localtraps
+    # Catch rather than ignore INT so the child can cancel normally. Interactive
+    # zsh already ignores TSTP; the helper handles it without leaving a stopped job.
+    trap ':' INT
+    local helper="${DOTFILES:-$HOME/.dotfiles}/libexec/keyring"
+    if [[ -r $helper && -x /usr/bin/python3 ]]; then
+      /usr/bin/python3 "$helper" startup
+    fi
+    return 0
+  }
+  _dotfiles_keyring_startup
+  unfunction _dotfiles_keyring_startup
+fi
+
 # Enable Powerlevel10k instant prompt. Should stay close to the top of ~/.zshrc.
 # Initialization code that may require console input (password prompts, [y/n]
 # confirmations, etc.) must go above this block; everything else may go below.

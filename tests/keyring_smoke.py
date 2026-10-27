@@ -7,6 +7,7 @@ import importlib.util
 import io
 import os
 import pathlib
+import pty
 import shutil
 import subprocess
 import sys
@@ -39,7 +40,34 @@ def isolated_test():
             code = helper.run(action, helper.GnomeKeyring(transport), lambda: password)
         return code, output.getvalue()
 
+    config_dir = root / "config" / "gh"
+    config_dir.mkdir()
+    (config_dir / "hosts.yml").write_text("github.com:\n    user: smoke-test\n")
+    binary = root / "bin"
+    binary.mkdir()
+    real_gh = binary / "gh"
+    real_gh.write_text("#!/bin/sh\nprintf 'native-gh\\n'\n")
+    real_gh.chmod(0o700)
+    env = dict(os.environ, DOTFILES=str(HELPER.parent.parent), GH_CONFIG_DIR=str(config_dir),
+               PATH=str(binary) + os.pathsep + os.environ["PATH"])
+    for key in ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"):
+        env.pop(key, None)
+
+    def wrapped_gh(expected, arguments=("auth", "status")):
+        start = time.monotonic()
+        result = subprocess.run([str(HELPER.parent.parent / "bin/gh"), *arguments],
+                                cwd=root, env=env, capture_output=True, timeout=4, check=False)
+        elapsed = time.monotonic() - start
+        assert result.returncode == expected, result.stderr
+        assert elapsed < 3, "guard exceeded its overall inspection budget"
+        if expected:
+            assert result.stdout == b"" and b"keyring-unlock" in result.stderr
+        else:
+            assert result.stdout == b"native-gh\n" and result.stderr == b""
+        return elapsed
+
     assert owner(helper.PROVIDER) is None
+    wrapped_gh(6)
     assert command("check")[0] == 1
     assert owner(helper.PROVIDER) is None, "check must not autoactivate a daemon"
     daemon = subprocess.Popen(
@@ -92,6 +120,11 @@ def isolated_test():
             current, helper.SERVICE, helper.SECRETS, "Lock", "(ao)", ([collection],)
         )
         assert command("check")[0] == 1
+        wrapped_gh(6)
+        for arguments in (("auth", "git-credential", "get"),
+                          ("auth", "git-credential", "--", "get"),
+                          ("auth", "git-credential", "get", "--")):
+            wrapped_gh(6, arguments)
         code, output = command("unlock", "wrong-password")
         assert code == 1 and "wrong-password" not in output
         assert command("check")[0] == 1
@@ -99,9 +132,30 @@ def isolated_test():
         assert command("check")[0] == 0
         assert command("unlock")[0] == 0, "unlocked fast path must skip password prompt"
         assert owner(helper.PROVIDER) == current == owner("org.gnome.keyring")
-        print(
-            "PASS: inactive check, owned daemon, locked check, wrong password, unlock, unlocked fast path"
-        )
+        gh_elapsed = wrapped_gh(0)
+        # A real foreground terminal exercises startup's unlocked fast path;
+        # redirected stdin would skip before it even inspected the provider.
+        start = time.monotonic()
+        child, terminal = pty.fork()
+        if child == 0:
+            os.execv(sys.executable, [sys.executable, str(HELPER), "startup"])
+        try:
+            data = b""
+            while True:
+                try:
+                    chunk = os.read(terminal, 4096)
+                except OSError:
+                    break
+                if not chunk:
+                    break
+                data += chunk
+            _, status = os.waitpid(child, 0)
+            assert os.waitstatus_to_exitcode(status) == 0 and data == b"", data
+        finally:
+            os.close(terminal)
+        startup_elapsed = time.monotonic() - start
+        print("PASS: isolated inactive/locked gh guard, unlock, unlocked foreground startup")
+        print(f"Latency: unlocked startup {startup_elapsed * 1000:.0f}ms; guarded gh {gh_elapsed * 1000:.0f}ms")
     finally:
         if daemon.poll() is None:
             daemon.terminate()
