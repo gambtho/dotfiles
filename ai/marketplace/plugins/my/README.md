@@ -14,6 +14,7 @@ Personal prompt templates and skills loaded directly from this dotfiles reposito
 
 - `blindspot-pass` — pre-implementation risk and uncertainty pass.
 - `change-explainer` — reviewer-facing explanation of a completed change.
+- `cli-ergonomics` — evidence-backed CLI audits and command design, with help, errors, output and scripting checks.
 - `implementation-plan` — evidence-based implementation planning.
 - `improve` — holistic codebase audit with ranked findings.
 - `jekyll-media-gallery` — Jekyll media-gallery workflow.

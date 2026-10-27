@@ -18,6 +18,7 @@
     "skills": [
       "./skills/blindspot-pass/SKILL.md",
       "./skills/change-explainer/SKILL.md",
+      "./skills/cli-ergonomics/SKILL.md",
       "./skills/implementation-plan/SKILL.md",
       "./skills/improve/SKILL.md",
       "./skills/jekyll-media-gallery/SKILL.md",
