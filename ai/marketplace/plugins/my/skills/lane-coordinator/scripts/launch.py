@@ -224,7 +224,7 @@ class Launch:
             self.record = dict(version=1, **identity)
             self.checkpoint('Creating')
             result = call('workspace', 'create', '--cwd', str(args.repo), '--label', identity['name'],
-                          '--no-focus', kind='workspace_created')
+                          '--no-focus', '--env', 'DOTFILES_KEYRING_PROMPT=0', kind='workspace_created')
             w = mapping(result.get('workspace'), 'workspace')
             p = mapping(result.get('root_pane'), 'root_pane')
             workspace, pane, terminal = string(w, 'workspace_id'), string(p, 'pane_id'), string(p, 'terminal_id')

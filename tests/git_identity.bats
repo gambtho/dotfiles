@@ -1407,3 +1407,85 @@ render_routes() {
   [ "$status" -eq 0 ]
   [ "$output" = "feat-a" ]
 }
+
+setup_keyring_preflight() {
+  mkdir -p "$DOTFILES/libexec"
+  cat >"$DOTFILES/libexec/keyring" <<'EOF'
+import os, sys
+with open(os.environ['PREFLIGHT_LOG'], 'w') as stream:
+    stream.write(os.environ.get('GH_CONFIG_DIR', 'unset') + '\n')
+    stream.write(repr(sys.argv[1:]) + '\n')
+    stream.write('stdin=' + sys.stdin.read())
+raise SystemExit(int(os.environ.get('PREFLIGHT_RESULT', '1')))
+EOF
+  export PREFLIGHT_LOG="$TEST_ROOT/preflight"
+}
+
+@test "keyring preflight covers default secondary unmapped outside and explicit config routes" {
+  [ "$(uname -s)" = Linux ] || skip "Linux keyring only"
+  setup_shim_repo "$TEST_ROOT/r" https://github.com/gambtho/repo.git
+  setup_keyring_preflight
+  cd "$TEST_ROOT/r"
+  run "$REPO_ROOT/bin/gh" auth status
+  [ "$status" -eq 6 ]
+  [[ "$output" == *keyring-unlock* ]]
+  [[ "$output" != *"real gh:"* ]]
+  grep -q '^unset$' "$PREFLIGHT_LOG"
+
+  git remote set-url origin https://github.com/guarzo/repo.git
+  provision_guarzo_files
+  run "$REPO_ROOT/bin/gh" pr list
+  [ "$status" -eq 6 ]
+  grep -Fxq "$HOME/.gh-guarzo" "$PREFLIGHT_LOG"
+
+  git remote set-url origin https://github.com/unmapped/repo.git
+  run "$REPO_ROOT/bin/gh" pr list
+  [ "$status" -eq 6 ]
+  cd "$TEST_ROOT"
+  run "$REPO_ROOT/bin/gh" pr list
+  [ "$status" -eq 6 ]
+
+  export GH_CONFIG_DIR="$TEST_ROOT/explicit config"
+  run "$REPO_ROOT/bin/gh" auth status
+  [ "$status" -eq 6 ]
+  grep -Fxq "$GH_CONFIG_DIR" "$PREFLIGHT_LOG"
+}
+
+@test "keyring preflight preserves stdin and real gh result after success" {
+  [ "$(uname -s)" = Linux ] || skip "Linux keyring only"
+  setup_shim_repo "$TEST_ROOT/r" https://github.com/gambtho/repo.git
+  setup_keyring_preflight
+  printf '#!/usr/bin/env bash\nIFS= read -r line\nprintf "input=%%s\\n" "$line"\nexit 9\n' >"$STUB_BIN/real/gh"
+  export PREFLIGHT_RESULT=0
+  cd "$TEST_ROOT/r"
+  run bash -c 'printf "protocol=https\n\n" | "$1/bin/gh" auth git-credential get' _ "$REPO_ROOT"
+  [ "$status" -eq 9 ]
+  [ "$output" = input=protocol=https ]
+  grep -Fxq 'stdin=' "$PREFLIGHT_LOG"
+}
+
+@test "keyring refusal is stderr-only and remedy supports a spaced dotfiles root" {
+  [ "$(uname -s)" = Linux ] || skip "Linux keyring only"
+  setup_shim_repo "$TEST_ROOT/r" https://github.com/gambtho/repo.git
+  setup_keyring_preflight
+  mv "$DOTFILES" "$TEST_ROOT/dot files"
+  export DOTFILES="$TEST_ROOT/dot files"
+  cd "$TEST_ROOT/r"
+  run bash -c '"$1/bin/gh" auth git-credential get >"$2/out" 2>"$2/err"' _ "$REPO_ROOT" "$TEST_ROOT"
+  [ "$status" -eq 6 ]
+  [ ! -s "$TEST_ROOT/out" ]
+  grep -q 'keyring-unlock' "$TEST_ROOT/err"
+  grep -Fq 'dot\ files' "$TEST_ROOT/err"
+}
+
+@test "macOS delegation does not invoke system Python keyring preflight" {
+  setup_shim_repo "$TEST_ROOT/r" https://github.com/gambtho/repo.git
+  setup_keyring_preflight
+  printf '#!/bin/sh\necho Darwin\n' >"$STUB_BIN/uname"
+  chmod +x "$STUB_BIN/uname"
+  cd "$TEST_ROOT/r"
+  run "$REPO_ROOT/bin/gh" auth status
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"real gh:"* ]]
+  [ ! -e "$PREFLIGHT_LOG" ]
+}
