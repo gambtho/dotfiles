@@ -62,12 +62,25 @@ def call(*argv, kind, timeout=10):
         # Do not copy terminal output or arbitrary stderr into durable state.
         raise LaunchError(f'{argv[0:2]} failed (exit {completed.returncode}); inspect recorded target')
     try:
-        result = json.loads(completed.stdout)['result']
+        envelope = mapping(json.loads(completed.stdout), 'envelope')
+        result = mapping(envelope.get('result'), 'result')
         if result['type'] != kind:
             raise ValueError('Unexpected response type')
         return result
     except (ValueError, KeyError, TypeError) as exc:
         raise LaunchError(f'{argv[0:2]} returned malformed JSON; effects may be uncertain') from exc
+
+
+def mapping(value: object, label: str) -> dict:
+    if not isinstance(value, dict):
+        raise LaunchError(f'Invalid response object: {label}')
+    return value
+
+
+def object_list(value: object, label: str) -> list[dict]:
+    if not isinstance(value, list) or any(not isinstance(item, dict) for item in value):
+        raise LaunchError(f'Invalid response collection: {label}')
+    return value
 
 
 def string(obj, key):
@@ -93,9 +106,13 @@ def inherited_context(session):
 
 
 def snapshot(context):
-    live = call('api', 'snapshot', kind='session_snapshot')['snapshot']
-    if live['protocol'] != 19:
-        raise LaunchError('Unsupported Herdr protocol; inspect installed capabilities, do not update')
+    live = mapping(call('api', 'snapshot', kind='session_snapshot').get('snapshot'), 'snapshot')
+    protocol = live.get('protocol')
+    if type(protocol) is not int or not (
+            protocol == 19 or (protocol == 22 and live.get('version') == '0.9.5')):
+        raise LaunchError('Unsupported Herdr protocol/version; inspect installed capabilities, do not update')
+    for key in ('panes', 'workspaces', 'agents'):
+        object_list(live.get(key), key)
     caller = [p for p in live['panes'] if p['pane_id'] == context['caller']
               and p['workspace_id'] == context['workspace']]
     if len(caller) != 1:
@@ -129,6 +146,7 @@ class Launch:
     def agent(self, a=None):
         if a is None:
             a = call('agent', 'get', self.record['pane'], kind='agent_info')['agent']
+        a = mapping(a, 'agent')
         expected = {'pane_id': self.record['pane'], 'workspace_id': self.record['workspace'],
                     'terminal_id': self.record['terminal'], 'name': self.record['name'], 'agent': 'pi'}
         if any(a.get(k) != v for k, v in expected.items()):
@@ -143,6 +161,7 @@ class Launch:
         if 'agent_session' not in self.record:
             # Pin first recognition, even when a dialog prevents reaching Ready.
             self.checkpoint(agent_session=session)
+        string(a, 'agent_status')
         return a
 
     def ready(self):
@@ -154,11 +173,13 @@ class Launch:
             if a.get('interactive_ready') is True and a['agent_status'] in ('idle', 'done'):
                 self.checkpoint('Ready', agent_session=a['agent_session'])
                 return
-            read = call('agent', 'read', self.record['pane'], '--source', 'visible', '--lines', '80',
-                        kind='pane_read')['read']
+            read = mapping(call('agent', 'read', self.record['pane'], '--source', 'visible', '--lines', '80',
+                                kind='pane_read').get('read'), 'read')
             if read.get('pane_id') != self.record['pane']:
                 raise LaunchError('Read returned a different pane')
-            text = read['text']
+            text = read.get('text')
+            if not isinstance(text, str):
+                raise LaunchError('Invalid response field: text')
             welcome = 'Welcome back!' in text and re.search(r'Press any key to continue \(([0-9]|[12][0-9]|30)s\)', text)
             dialog = re.search(r'(?i)\b(trust|permission|approve|allow|deny)\b|\?', text)
             if not welcome or dialog or time.monotonic() >= deadline:
@@ -178,7 +199,8 @@ class Launch:
             self.record = candidate
             if self.record['stage'] == 'Creating':
                 raise LaunchError('Creation uncertain; inspect live workspace list, never create again automatically')
-            w = call('workspace', 'get', self.record['workspace'], kind='workspace_info')['workspace']
+            w = mapping(call('workspace', 'get', self.record['workspace'],
+                             kind='workspace_info').get('workspace'), 'workspace')
             if w.get('workspace_id') != self.record['workspace'] or w.get('label') != identity['name']:
                 raise LaunchError('Workspace identity differs from receipt')
             panes = [p for p in self.live['panes'] if p['pane_id'] == self.record['pane']
@@ -203,7 +225,8 @@ class Launch:
             self.checkpoint('Creating')
             result = call('workspace', 'create', '--cwd', str(args.repo), '--label', identity['name'],
                           '--no-focus', '--env', 'DOTFILES_KEYRING_PROMPT=0', kind='workspace_created')
-            w, p = result['workspace'], result['root_pane']
+            w = mapping(result.get('workspace'), 'workspace')
+            p = mapping(result.get('root_pane'), 'root_pane')
             workspace, pane, terminal = string(w, 'workspace_id'), string(p, 'pane_id'), string(p, 'terminal_id')
             # Preserve observed IDs for inspection without certifying a valid creation.
             self.checkpoint(created_response={'workspace': workspace, 'pane': pane, 'terminal': terminal})

@@ -25,6 +25,8 @@ Other harnesses retain their manual fallback; this is only a Pi fast path.
   and inherited socket/caller pane/workspace exist. Supply that verified session to
   `--session`; it is an assertion, **not** a session selector. The helper never
   overrides the inherited destination. Missing/mismatched context means manual handoff.
+  A default session may omit `HERDR_SESSION` (observed with v0.8.0); do not invent
+  a value or switch sessions to bypass that precondition.
 - STATE.md needs the five-column Open lanes table from the state template, including
   exactly one row for the lane, with Launch initially `Manual` or `—`. Existing launch
   state or a receipt must be reconciled, not erased. Keep receipts in the same local,
@@ -51,12 +53,37 @@ root shell starts, so locked-keyring password input cannot consume the agent-sta
 command. Caller-created or existing panes need that opt-out at creation too;
 setting it after a password prompt is already active is too late.
 
-The installed Herdr 0.8.0 CLI capabilities and protocol 19 response shapes were
-inspected for this helper (`api snapshot`, `workspace create/get`, `agent start/get/
-read/prompt`). It checks protocol 19 and fails closed on unsupported/malformed shapes;
-there is no per-launch help dump or global capability cache. On incompatibility,
-inspect installed help/schema once and report manual fallback; do not update Herdr/Pi
-or broaden permissions to make a launch work.
+Historical Herdr 0.8.0 capability inspection informed this helper's protocol 19
+contract (`api snapshot`, `workspace create/get`, `agent start/get/read/prompt`).
+The snapshot acceptance policy is explicit:
+
+| JSON protocol | Snapshot version | Result |
+|---|---|---|
+| Integer `19` | Any or absent, preserving legacy behavior | Continue context/shape checks |
+| Integer `22` | Exactly string `0.9.5` | Continue the same checks |
+| Anything else | Any | Stop before receipt/create/start/prompt |
+
+Floats such as `19.0`, booleans, strings and missing protocols are rejected, with
+no coercion or semver normalization. Snapshot panes/workspaces/agents must be lists
+of objects; consumed workspace/root-pane, agent/session and read boundaries are
+checked before use. Receipt version 1 and at-most-once delivery remain unchanged.
+There is no per-launch help/status dump or global capability cache. On
+incompatibility, inspect installed help/schema once and report manual fallback;
+do not update Herdr/Pi or broaden permissions to make a launch work.
+
+Use matched client/server installations: 0.8.0/0.8.0 for the previous path or
+0.9.5/0.9.5 for the upgrade. Before launching after an approved cutover/rollback,
+verify the client resolved by PATH **inside the coordinator pane** matches the
+intended running server; an operator shell can resolve a different executable.
+Legacy version-metadata acceptance does not certify mixed installations, and the
+helper does not automatically detect every mixed pair. Stop before replacing a
+shared binary; rollback must restore old compatible config/state, not open newer
+state with an older binary.
+
+Deterministic fixtures exercise both accepted profiles. Isolated 0.9.5 server health
+has passed, but actual Pi startup/readiness, prompt delivery, client-focus behavior,
+bridge transitions and layout recovery are not certified for this upgrade. A
+snapshot passing this policy is not proof of those end-to-end behaviors.
 
 One `W12-launch.json` is authoritative. It stores prompt hash, source cwd, name,
 inherited socket/session/caller fingerprint, returned opaque workspace/root-pane/

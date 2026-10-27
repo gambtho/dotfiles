@@ -75,6 +75,46 @@ publishes no checksum file, so these digests are computed from downloaded
 artifacts and are trust-on-first-use. Replacing a binary does not itself upgrade
 an already-running server; arrange a controlled cutover after saving agent work.
 
+### Reviewed release pin
+
+The repository pins [Herdr v0.9.5](https://github.com/herdrdev/herdr/releases/tag/v0.9.5)
+for Linux. Both assets were downloaded from that release and hashed with
+`sha256sum`; the measured values also match the release API's asset digests:
+
+| Asset | SHA-256 |
+|---|---|
+| `herdr-linux-x86_64` | `14d9e8bc8b4a9e0118d77c32266f76d461f09b40342eb23752960bd89f59929d` |
+| `herdr-linux-aarch64` | `17d7536f2da50859523680ef279dffcac8e4a235f4e46fe8da6c2ec44141897c` |
+
+API digests corroborate the downloaded bytes, not independent provenance or a
+signature. Matching hashes and installer tests do not certify a running-server
+upgrade. An isolated v0.9.5 server reports snapshot protocol **22**. The
+lane-coordinator launcher accepts integer protocol **19** with legacy version
+metadata unchanged, or integer **22** only with snapshot version exactly `0.9.5`.
+Other protocols, floats and malformed consumed response objects are rejected;
+this is an explicit compatibility allowlist, not a minimum-version rule.
+
+The isolated v0.9.5 Heeler version/ping checks pass. Actual Pi startup/readiness,
+prompt delivery, client-focus preservation, bridge transitions and layout recovery
+are not certified for this upgrade. A legacy v0.8.0 default-session fixture omitted
+`HERDR_SESSION` and correctly failed the launcher's inherited-context precondition;
+no session value is guessed or injected. Deterministic launcher fixtures cover both
+accepted protocol/version profiles, not those unperformed live paths. This is not
+certification of live Heeler or phone access.
+
+The intervening release notes include operational changes: v0.9.0 removes
+`--no-session` and changes client/server compatibility; v0.9.2 removes the
+`pane.graphics.*` API; v0.9.4 leaves Unix servers running after `SIGHUP`. Do not
+assume closing the launching shell stops a newer server. Preserve version-matched
+binary, configuration and session backups, and use a separately approved
+stop-before-install cutover. Use matching client/server versions: v0.8.0/v0.8.0
+for rollback or v0.9.5/v0.9.5 for the upgrade. Verify the client resolved by PATH in
+the coordinator's own pane, not only an operator shell; mixed pairs are not
+certified or automatically detected by the launcher. Restore the original quiescent
+old state/config before opening it with an older binary, never candidate-written
+state. The preference-only reload procedure below is not a binary-upgrade procedure.
+No plugin or integration adoption follows from this pin.
+
 ## Lane workflow and existing-host rollout
 
 The defaults skip the workspace-name prompt, sort Agents by attention priority, hide a
