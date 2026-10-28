@@ -1,7 +1,60 @@
-# <effort>: shared lane rules
+# <project or effort>: shared lane rules
 
-Every lane in this effort reads this file with its own prompt. If they conflict, stop and
+<Coordinator: project the Shared workflow section once into the project's
+`lanes/COMMON-RULES.md`, with the heading "Shared lane workflow". Keep project authority,
+repo-specific policies and stronger local rules in AGENTS.md/COORDINATION.md. Every
+lane prompt and the project's AGENTS.md name the shared file. For a parallel effort's
+separate rules file, include only Ownership, Open PRs to stay off, Rules for every lane
+and Sequencing; point to the project-level workflow rather than copying it. Resolve
+paths and remove these instructions and unused placeholder sections before delivery.>
+
+Every lane reads the project-level shared workflow, the project's AGENTS.md and its
+own prompt. Parallel lanes also read their effort rules. If instructions conflict, stop and
 ask the coordinator.
+
+## Shared workflow
+
+Read this file with your lane prompt and the project's AGENTS.md. Project and repository instructions and the human's
+explicit decisions take precedence. This file changes no publication, merge, cloud or desktop authority.
+
+### Design, then plan
+
+- New product work starts with a short design, before any plan: the user value, which repo owns it, which existing
+  mechanism it extends (or why none fits), and what new packages, rules or refusals it adds.
+- Run `/second-opinion` on the design alone, revise, and stop for the human's approval. Then write the plan and run
+  `/second-opinion --with-spec` on the plan with its design. A plan reviewed without its design doesn't count.
+- Before reporting a PR ready, run `/adversarial-review` on it and put its verdict in the report.
+- Work the human already approved continues under its approved design.
+
+### Worktrees and pull requests
+
+- Work in your own fresh worktree from a freshly fetched base. Never edit another lane's worktree.
+- You own your PR end to end: keep it current with its base, answer its review threads, and keep CI green.
+- Write a short PR body yourself: what it does, what it doesn't, how verified; under ~10 lines. Publication and replies
+  follow the project's authority table.
+- Follow the repo's changelog mechanism; never edit a shared file that every PR touches.
+- Prefer sequential PRs over stacks: open the next PR only after the previous one merges, from a freshly fetched
+  default branch. Never push branches to someone else's repo to make stacking work.
+- Resolve conflicts the way the repo's own AGENTS or CONTRIBUTING says. Never force-push anyone else's branch.
+- No timeout increases as a fix.
+- No tag, release note or note to users until a person has walked the path the release claims to support, without
+  workarounds.
+
+### Scope and evidence
+
+- Don't invent requirements beyond what the human decided; our own issue text isn't a requirement if the human says
+  otherwise. Lanes add no prompts, confirmations, refusals or safety rules without the human's OK.
+- Put code in the repo that will own it in production. Proof harnesses for unbuilt features don't get a home in a
+  product repo just because the test infrastructure is there; ask the coordinator.
+- Demos and proofs: build the smallest thing that shows the point. No general subsystems, setup layers or extra
+  tooling around them, and label them clearly so they're easy to delete.
+
+### Private information and writing
+
+- No secrets in files, logs or command-line arguments.
+- No lane numbers, local paths or customer names in anything public: branches, commits, PRs, comments, issues, labels,
+  milestones, gists. Keep internal projects and private events out of public text. Follow any stronger project limits.
+- Short sentences, plain words.
 
 ## Ownership
 
@@ -20,13 +73,14 @@ material; start/publish authority does not authorize source takeover or a shadow
 
 ## Rules for every lane
 
-Read the project's AGENTS.md (or the repo's own rules) for Git, PRs, privacy, tests
-and reports. This file records effort-specific ownership and exceptions, not another
-copy of those rules. If none exist, use small sequential PRs, never push to a default
-branch or merge, never rewrite someone else's branch, and keep private details out
-of public text.
+Read the project's AGENTS.md, shared workflow and the repo's own rules for Git, PRs,
+privacy, tests and reports. This effort file records ownership and exceptions, not
+another copy of that workflow. Without project or repo Git rules, never push to a
+default branch or merge, never rewrite someone else's branch, and merge the base in
+for conflicts. Project authority remains unchanged.
 
-- Audit first and stop for approval, unless the scope is already approved.
+- Follow the project shared workflow's design/plan sequence for new product work.
+  Audit-only work stops at its assigned approval gate. Don't re-gate approved work.
 - Small PRs, one theme each, from a fresh base. Follow `pr-closeout` for scoped
   review/finalization, preserving publication approval and reusing valid review evidence.
 - Profiles/aliases come from COORDINATION.md; executable plan/task ownership comes from the lane prompt.
