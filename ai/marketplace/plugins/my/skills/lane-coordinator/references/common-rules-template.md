@@ -9,13 +9,13 @@ and Sequencing; point to the project-level workflow rather than copying it. Reso
 paths and remove these instructions and unused placeholder sections before delivery.>
 
 Every lane reads the project-level shared workflow, the project's AGENTS.md and its
-own prompt. Parallel lanes also read their effort rules. If instructions conflict, stop and
-ask the coordinator.
+own prompt. Parallel lanes also read their effort rules.
 
 ## Shared workflow
 
 Read this file with your lane prompt and the project's AGENTS.md. Project and repository instructions and the human's
 explicit decisions take precedence. This file changes no publication, merge, cloud or desktop authority.
+If instructions conflict, stop and ask the coordinator.
 
 ### Design, then plan
 
@@ -78,6 +78,7 @@ privacy, tests and reports. This effort file records ownership and exceptions, n
 another copy of that workflow. Without project or repo Git rules, never push to a
 default branch or merge, never rewrite someone else's branch, and merge the base in
 for conflicts. Project authority remains unchanged.
+If instructions conflict, stop and ask the coordinator.
 
 - Follow the project shared workflow's design/plan sequence for new product work.
   Audit-only work stops at its assigned approval gate. Don't re-gate approved work.

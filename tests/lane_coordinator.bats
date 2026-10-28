@@ -27,7 +27,10 @@ for phrase in ("/second-opinion`", "/second-opinion --with-spec", "/adversarial-
                "only after the previous one merges", "No secrets in files"):
     assert phrase in workflow, phrase
 assert "equivalent review" not in workflow
-assert "If instructions conflict, stop and ask the coordinator." in " ".join(text.split())
+conflict_rule = "If instructions conflict, stop and ask the coordinator."
+assert conflict_rule in " ".join(workflow.split()), "Projection omits conflict stop rule"
+effort = text.split("## Rules for every lane\n", 1)[1].split("\n## Sequencing", 1)[0]
+assert conflict_rule in " ".join(effort.split()), "Effort rules omit conflict stop rule"
 for name in ("SKILL.md", "references/lane-template.md"):
     assert "lanes/COMMON-RULES.md" in (skill / name).read_text(), name
 PY
@@ -41,7 +44,7 @@ import sys
 
 lane = (Path(sys.argv[1]) / "references/lane-template.md").read_text()
 assert "If none exist:" not in lane
-fallback = " ".join(lane.split("If no applicable Git policy exists:", 1)[1].split())
+fallback = " ".join(lane.split("If no project or repo Git policy exists:", 1)[1].split())
 for phrase in ("merge the base in for conflicts", "never push to a default branch or merge",
                "never rewrite someone else's branch"):
     assert phrase in fallback, phrase

@@ -63,7 +63,7 @@ open PRs to stay off (or the shared rules file).>
 - Use the project's AGENTS.md, shared workflow and repo rules for Git/conflicts,
   PR size/sequencing, review replies, privacy, tests and report locations. Don't copy
   their baseline rules into this prompt.
-  If no applicable Git policy exists: keep one small PR current end to end, merge the
+  If no project or repo Git policy exists: keep one small PR current end to end, merge the
   base in for conflicts, never push to a default branch or merge, and never rewrite
   someone else's branch.
   Keep secrets and internal identities out of public text; put reports in the project
