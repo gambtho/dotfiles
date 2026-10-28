@@ -105,11 +105,17 @@ AGENTS.md for report locations; absent a rule, keep handoffs in the project fold
   STATE.md; preserve filenames/numbering and all existing names. Honor explicit
   naming overrides that satisfy Herdr's alias constraints; reject invalid names
   or collisions, never truncate or invent suffixes.
-- Follow the project's AGENTS.md (or the repo's own rules) for worktrees, PR ownership,
-  sequencing, size, conflict resolution and publication; don't copy those rules into
-  each prompt. Use the repo row's WIP limit. If no rules exist, default to a fresh
-  worktree/branch from a fetched base, one owner per PR, small sequential PRs and a few
-  open PRs per repo. The owner keeps their PR current; no extra "merge captain".
+- Follow the project's AGENTS.md and each repo's contribution rules for authority,
+  worktrees, PR ownership, sequencing, size, conflicts and publication. Use the repo
+  row's WIP limit. Keep the owner responsible end to end; no extra "merge captain".
+- Maintain a project-local `lanes/COMMON-RULES.md` using the shared workflow section
+  of [common-rules-template.md](references/common-rules-template.md). Every lane,
+  including a solitary lane, reads it with its prompt and AGENTS.md. Name its resolved
+  path in every prompt. Keep project authority and stronger or different local rules
+  in AGENTS.md/COORDINATION.md; the shared workflow supplements, not replaces, them.
+  When relocating existing rules, create the destination and reconcile affected
+  prompts before deleting source clauses. Give already-running lanes an explicit
+  reread instruction; editing a template does not update their context.
 - **Shared hot files:** once two lanes will PR into the same repo, check which files every
   PR edits (changelog, repository maps, generated inventories, counts). Fix that first
   (fragments, directory-level maps) or every merge breaks every other open PR.
@@ -121,10 +127,13 @@ AGENTS.md for report locations; absent a rule, keep handoffs in the project fold
   report. After a rule or ownership change, reconcile affected prompts and STATE.md in
   the same approved update; mark old instructions superseded, without rewriting history.
 - Non-trivial work: audit or design first, stop for the user's OK, then one PR at a time.
-  Don't re-gate scope that's already approved.
-- Parallel lanes in one repo share a rules file from
-  [common-rules-template.md](references/common-rules-template.md): who owns which paths,
-  and which open PRs to stay off.
+  For new product work, use the shared workflow's design-before-plan sequence,
+  independent design/paired-plan reviews and required adversarial readiness evidence.
+  Don't re-gate work that already has an approved design.
+- Parallel lanes in one repo also share effort-specific ownership, open PRs to stay off
+  and sequencing, using those sections of
+  [common-rules-template.md](references/common-rules-template.md). Keep the common
+  workflow in the one project-level file rather than copying it into every effort.
 - For takeovers and stacked-branch recovery, use the project's AGENTS.md (or the repo's
   own rules), not a copied procedure. Absent rules, merge the base in, preserve the
   original design, list deviations and draft any takeover comment for approval; do not

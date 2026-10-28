@@ -8,6 +8,50 @@ setup() {
   SKILL_DIR="$PACKAGE_DIR/skills/lane-coordinator"
 }
 
+@test "shared workflow projection retains nested rules and unchanged review commands" {
+  run python3 - "$SKILL_DIR" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+skill = Path(sys.argv[1])
+text = (skill / "references/common-rules-template.md").read_text()
+match = re.search(r"^## Shared workflow\n(.*?)(?=^#{1,2} |\Z)", text, re.M | re.S)
+assert match, "Missing shared workflow section"
+workflow = match.group(1)
+for title in ("Design, then plan", "Worktrees and pull requests", "Scope and evidence",
+              "Private information and writing"):
+    assert f"### {title}\n" in workflow, f"Rules escaped shared section: {title}"
+for phrase in ("/second-opinion`", "/second-opinion --with-spec", "/adversarial-review",
+               "No timeout increases as a fix", "Never edit another lane's worktree",
+               "only after the previous one merges", "No secrets in files"):
+    assert phrase in workflow, phrase
+assert "equivalent review" not in workflow
+conflict_rule = "If instructions conflict, stop and ask the coordinator."
+assert conflict_rule in " ".join(workflow.split()), "Projection omits conflict stop rule"
+effort = text.split("## Rules for every lane\n", 1)[1].split("\n## Sequencing", 1)[0]
+assert conflict_rule in " ".join(effort.split()), "Effort rules omit conflict stop rule"
+for name in ("SKILL.md", "references/lane-template.md"):
+    assert "lanes/COMMON-RULES.md" in (skill / name).read_text(), name
+PY
+  [ "$status" -eq 0 ]
+}
+
+@test "lane Git fallback depends on absent policy rather than absent rule files" {
+  run python3 - "$SKILL_DIR" <<'PY'
+from pathlib import Path
+import sys
+
+lane = (Path(sys.argv[1]) / "references/lane-template.md").read_text()
+assert "If none exist:" not in lane
+fallback = " ".join(lane.split("If no project or repo Git policy exists:", 1)[1].split())
+for phrase in ("merge the base in for conflicts", "never push to a default branch or merge",
+               "never rewrite someone else's branch"):
+    assert phrase in fallback, phrase
+PY
+  [ "$status" -eq 0 ]
+}
+
 @test "lane coordinator is discoverable through the validated Pi package inventory" {
   run bash "$REPO_ROOT/libexec/validate-ai" --verbose
   [ "$status" -eq 0 ]
