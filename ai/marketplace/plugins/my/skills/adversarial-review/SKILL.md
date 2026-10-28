@@ -32,8 +32,8 @@ Reuse matching prior coverage; retain repository-required reviews. Never edit pr
 Record current provider/model and known author model. Reviewer A must use a different model family from the current model; prefer a family different from the author too.
 Default routing: current GPT/Gemini/Grok → `review`; current Claude → `deep`. These are configured roles, not proof of their models.
 An explicit `--model` selects A; pass that override only when supplied. If it is same-family or cannot resolve, report the conflict rather than silently relaxing independence.
-Reviewer B uses `deep` for a named failure/concurrency/state risk, otherwise `inspector` for a named consumer/representation risk.
-Verify **actual resolved models**, and A's different family, in tool receipts before accepting coverage; replace a mismatched selection if available. If tools/models/context are unavailable, return INCOMPLETE with any limited evidence; do not simulate independent reviewers in one conversation.
+Resolve A's actual model before selecting B. Reviewer B must use a different model family from A's resolved family. Prefer `deep` for a named failure/concurrency/state risk, otherwise `inspector` for a named consumer/representation risk; if that role resolves to A's family, choose another eligible role while retaining B's boundary mandate.
+Verify **both actual resolved models** in their tool receipts before accepting coverage: A's family must differ from the current model's, and B's family must differ from A's. Replace a mismatched selection if available. If no eligible different-family reviewer is available, or tools/models/context are unavailable, return INCOMPLETE with any limited evidence and do not claim complete coverage; do not simulate independent reviewers in one conversation.
 
 Issue sibling `subagent` calls with `run_in_background: true`, `inherit_context: false`, self-contained prompts and 3–5 word descriptions. Record IDs; collect with `get_subagent_result` without tight polling.
 A covers whole-change behavioral claims and seams. B independently attacks the highest-risk boundary you name before dispatch; it is not another full maintainability pass.
