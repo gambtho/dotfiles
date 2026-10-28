@@ -4,6 +4,7 @@ Personal prompt templates and skills loaded directly from this dotfiles reposito
 
 ## Prompt templates
 
+- `/adversarial-review` — try to break a PR or diff with two isolated reviewers from different model families.
 - `/fix-pr` — collect unresolved PR feedback and failing CI, then write an implementation plan.
 - `/polish` — review the diff and project-specific expectations; use `--fix` for high-confidence cleanups.
 - `/polish-pr` — run the conservative polish workflow in an isolated PR worktree.
@@ -12,6 +13,7 @@ Personal prompt templates and skills loaded directly from this dotfiles reposito
 
 ## Skills
 
+- `adversarial-review` — counterexample-driven PR review: claims, failure paths, misuse, and code or names the change does not need.
 - `blindspot-pass` — pre-implementation risk and uncertainty pass.
 - `change-explainer` — reviewer-facing explanation of a completed change.
 - `cli-ergonomics` — evidence-backed CLI audits and command design, with help, errors, output and scripting checks.

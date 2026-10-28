@@ -7,6 +7,7 @@
   "private": true,
   "pi": {
     "prompts": [
+      "./prompts/adversarial-review.md",
       "./prompts/eod.md",
       "./prompts/fix-pr.md",
       "./prompts/polish-pr.md",
@@ -16,6 +17,7 @@
       "./prompts/weekly.md"
     ],
     "skills": [
+      "./skills/adversarial-review/SKILL.md",
       "./skills/blindspot-pass/SKILL.md",
       "./skills/change-explainer/SKILL.md",
       "./skills/cli-ergonomics/SKILL.md",
