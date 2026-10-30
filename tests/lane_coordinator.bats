@@ -37,6 +37,26 @@ PY
   [ "$status" -eq 0 ]
 }
 
+@test "coordinator checks bundled skills without replacing required lane tools" {
+  run python3 - "$SKILL_DIR" <<'PY'
+from pathlib import Path
+import sys
+
+skill = Path(sys.argv[1])
+text = " ".join((skill / "SKILL.md").read_text().split())
+for phrase in ("../<name>/SKILL.md", "not the current session's skill list or slash commands",
+               "says nothing about what a lane has", "Never remove or swap these tools",
+               "lane prompt, template or project's rules", "report it to the human and stop"):
+    assert phrase in text, phrase
+for name in ("pr-closeout", "polish-core", "second-opinion-core", "adversarial-review"):
+    assert name in text and (skill.parent / name / "SKILL.md").is_file(), name
+for name in ("lane-template.md", "common-rules-template.md"):
+    template = (skill / "references" / name).read_text()
+    assert "<resolved harness-notes path>" in template, name
+PY
+  [ "$status" -eq 0 ]
+}
+
 @test "lane Git fallback depends on absent policy rather than absent rule files" {
   run python3 - "$SKILL_DIR" <<'PY'
 from pathlib import Path
