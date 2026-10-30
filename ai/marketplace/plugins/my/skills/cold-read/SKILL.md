@@ -64,6 +64,10 @@ toolCall blocks; check there are zero tool execution events. Require the termina
 assistant's `stopReason` to be `stop`: `length` is truncated output even if the process
 exits 0. Missing output, a missing or non-`stop` completion reason, a tool call,
 same-family reviewer, unverifiable isolation or model, or a failed process means INCOMPLETE.
+Validate that the response contains answers 1, 2, and 3. Answer 3 must state “none”
+or provide an exact quote, explanation, and specific suggested fix for every guessed
+passage. Any missing required section or field means INCOMPLETE: stop before intent
+comparison and do not report the response as complete.
 If the CLI lacks these options, report INCOMPLETE rather than substituting a context-rich
 reviewer or weakening permissions. Only use the user's already-authorized model service;
 never upload private documents to an additional analysis service.
