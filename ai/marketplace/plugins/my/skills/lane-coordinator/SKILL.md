@@ -11,6 +11,17 @@ lanes own source/test implementation and their CI-fix loops. Permission to start
 publish a lane is not permission to take over through your own edits or a shadow
 implementation worker. Focused read-only investigation and review remain allowed.
 
+## Bundled workflow tools
+
+`pr-closeout`, `polish-core`, `second-opinion-core` and `adversarial-review` ship
+next to this skill. Check `../<name>/SKILL.md` relative to this skill, not the current
+session's skill list or slash commands. What the coordinator's harness lists says
+nothing about what a lane has; their harnesses may differ.
+Never remove or swap these tools in a lane prompt, template or project's rules
+because they are not listed in the coordinator's session. If a sibling file really
+is missing, report it to the human and stop. See [harness notes](references/harness-notes.md)
+for invocation and capability limits outside Pi.
+
 ## Start or resume
 
 Invocation: `coordinate <project>` (for example `coordinate sample`). The project is a

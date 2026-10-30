@@ -1,7 +1,8 @@
 # Harness notes
 
 The skill is harness-neutral. Use whatever the current harness offers for these jobs;
-skip a job if there's no tool for it.
+skip optional jobs if there's no tool for them. Required reviews remain required;
+report a capability blocker rather than silently skipping or replacing them.
 
 | Job | Claude Code | Pi |
 |---|---|---|
@@ -21,6 +22,29 @@ sessions without terminal tools use the manual handoff.
 
 Background reviewers are read-only helpers, not lanes: say so in their prompt (no edits,
 commits, pushes or posts) and spot-check what they find.
+
+## Bundled review tools
+
+The package includes `pr-closeout`, `polish-core`, `second-opinion-core` and `adversarial-review`.
+
+- **Pi:** the package loads these skills and the `/second-opinion` and
+  `/adversarial-review` prompt wrappers.
+- **Claude Code:** read and follow the sibling `SKILL.md` directly, or optionally
+  link each skill directory for discovery (replace `<name>` with a name above):
+  `mkdir -p "$HOME/.claude/skills" && ln -s "$HOME/.dotfiles/ai/marketplace/plugins/my/skills/<name>" "$HOME/.claude/skills/<name>"`.
+  This is manual setup, not an installer step; the Pi prompt wrappers are not
+  Claude Code commands. Resolve sibling paths from the source directory, not the link.
+- `pr-closeout` and `polish-core` can use Claude Code's Agent tool for an isolated,
+  read-only reviewer; Pi's `inspector`/`deep`/`review` routes and
+  `get_subagent_result` are not built-in Claude Code equivalents. Use its native
+  background/result handling. Without an independent agent, disclose self-review
+  and incomplete independence as `polish-core` requires.
+- `second-opinion-core` requires a different-family model; `adversarial-review`
+  requires two isolated reviewers with the specified family separation and verified
+  resolved models. Claude Code's native Claude model selection alone cannot meet
+  these requirements. Linking files does not supply Pi's dispatch/model routing.
+  Use a verified capable lane/tool; otherwise report blocked (`INCOMPLETE` for
+  adversarial review), not an equivalent pass. See [Claude Code subagents](https://code.claude.com/docs/en/sub-agents).
 
 ## Shell pitfalls (zsh)
 
