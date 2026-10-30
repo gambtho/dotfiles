@@ -38,8 +38,13 @@ Use these options with the chosen exact model:
 ```sh
 pi --mode json --no-session --no-tools --no-extensions --no-mcp \
   --no-skills --no-prompt-templates --no-context-files --no-themes \
-  --no-approve --offline --model PROVIDER/MODEL --system-prompt READER_PROMPT
+  --no-approve --offline --model PROVIDER/MODEL --system-prompt READER_PROMPT \
+  --append-system-prompt ""
 ```
+
+The empty append argument suppresses discovered `APPEND_SYSTEM.md` files, which
+`--no-context-files` does not disable. Verify the installed Pi accepts the empty
+argument and adds no discovered append content before claiming an isolated result.
 
 `READER_PROMPT` is the following text, not the skill or the intent:
 
@@ -54,9 +59,11 @@ pi --mode json --no-session --no-tools --no-extensions --no-mcp \
 > from what you cannot tell. Do not judge pass/fail.
 
 Capture JSON stdout and stderr separately in private local scratch. Inspect completed
-`message_end` assistant messages for actual provider/model, errors and toolCall blocks;
-check there are zero tool execution events. Missing output, a tool call, same-family
-reviewer, unverifiable isolation or model, or a failed process means INCOMPLETE.
+`message_end` assistant messages for actual provider/model, `stopReason`, errors and
+toolCall blocks; check there are zero tool execution events. Require the terminal
+assistant's `stopReason` to be `stop`: `length` is truncated output even if the process
+exits 0. Missing output, a missing or non-`stop` completion reason, a tool call,
+same-family reviewer, unverifiable isolation or model, or a failed process means INCOMPLETE.
 If the CLI lacks these options, report INCOMPLETE rather than substituting a context-rich
 reviewer or weakening permissions. Only use the user's already-authorized model service;
 never upload private documents to an additional analysis service.
