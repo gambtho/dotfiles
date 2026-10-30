@@ -8,6 +8,7 @@
   "pi": {
     "prompts": [
       "./prompts/adversarial-review.md",
+      "./prompts/cold-read.md",
       "./prompts/eod.md",
       "./prompts/fix-pr.md",
       "./prompts/polish-pr.md",
@@ -21,6 +22,7 @@
       "./skills/blindspot-pass/SKILL.md",
       "./skills/change-explainer/SKILL.md",
       "./skills/cli-ergonomics/SKILL.md",
+      "./skills/cold-read/SKILL.md",
       "./skills/implementation-plan/SKILL.md",
       "./skills/improve/SKILL.md",
       "./skills/jekyll-media-gallery/SKILL.md",
