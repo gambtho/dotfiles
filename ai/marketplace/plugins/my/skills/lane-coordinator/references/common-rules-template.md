@@ -17,8 +17,9 @@ Read this file with your lane prompt and the project's AGENTS.md. Project and re
 explicit decisions take precedence. This file changes no publication, merge, cloud or desktop authority.
 If instructions conflict, stop and ask the coordinator.
 
-The review skills and `/second-opinion` and `/adversarial-review` wrappers ship with the package, including
-`pr-closeout`; see [harness notes](harness-notes.md#bundled-review-tools) for invocation outside Pi. Requirements are unchanged.
+The review skills, including `pr-closeout`, and `/second-opinion` and `/adversarial-review` wrappers ship with the package.
+Read `<resolved harness-notes path>` for invocation outside Pi; resolve it to the skill's bundled
+`references/harness-notes.md` before delivery. Requirements are unchanged.
 
 ### Design, then plan
 

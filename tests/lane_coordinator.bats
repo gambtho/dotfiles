@@ -50,6 +50,9 @@ for phrase in ("../<name>/SKILL.md", "not the current session's skill list or sl
     assert phrase in text, phrase
 for name in ("pr-closeout", "polish-core", "second-opinion-core", "adversarial-review"):
     assert name in text and (skill.parent / name / "SKILL.md").is_file(), name
+for name in ("lane-template.md", "common-rules-template.md"):
+    template = (skill / "references" / name).read_text()
+    assert "<resolved harness-notes path>" in template, name
 PY
   [ "$status" -eq 0 ]
 }

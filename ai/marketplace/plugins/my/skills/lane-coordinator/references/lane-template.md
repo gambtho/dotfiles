@@ -29,8 +29,9 @@ open PRs to stay off (or the shared rules file).>
 
 ## Steps
 
-These review tools ship with the package; see [harness notes](harness-notes.md#bundled-review-tools)
-for invocation outside Pi. The requirements below are unchanged.
+These review tools ship with the package; read `<resolved harness-notes path>` for invocation outside Pi.
+Coordinator: resolve that path to the skill's bundled `references/harness-notes.md` before delivery.
+The requirements below are unchanged.
 
 1. <Audit/design: what to read and answer; local design/report path.> For new product
    work follow the shared workflow's design-before-plan, independent design review,
