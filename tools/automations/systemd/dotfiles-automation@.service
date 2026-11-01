@@ -1,0 +1,10 @@
+[Unit]
+Description=Weekly dotfiles automation: %i
+After=network-online.target
+
+[Service]
+Type=oneshot
+Environment=PATH=%h/.dotfiles/bin:%h/.local/bin:%h/.pi/agent/bin:%h/.local/share/mise/shims:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/env python3 %h/.dotfiles/libexec/automation_run.py %i
+TimeoutStartSec=90min
+Nice=10

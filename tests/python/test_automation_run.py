@@ -1,0 +1,251 @@
+"""Publication policy and sandbox boundary for the weekly automations."""
+import importlib.util
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest import mock
+
+ROOT = Path(__file__).resolve().parents[2]
+SCRIPT = ROOT / 'libexec/automation_run.py'
+spec = importlib.util.spec_from_file_location('automation_run', SCRIPT)
+assert spec is not None and spec.loader is not None
+automation = importlib.util.module_from_spec(spec)
+sys.modules['automation_run'] = automation
+spec.loader.exec_module(automation)
+
+HEALTH = automation.PROFILES['dotfiles-health']
+LANE = automation.PROFILES['lane-review']
+
+
+def git(repo, *args):
+    subprocess.run(['git', '-C', str(repo), *args], check=True, capture_output=True)
+
+
+class DowngradeTests(unittest.TestCase):
+    def test_small_safe_fix_is_kept(self):
+        self.assertIsNone(automation.downgrade_reason(HEALTH, ['README.md'], 10, False))
+
+    def test_report_only_profile_never_keeps_fixes(self):
+        self.assertIn('reports only', automation.downgrade_reason(LANE, ['README.md'], 1, False))
+
+    def test_protected_paths_drop_fixes(self):
+        for path in ('.github/workflows/check.yml', 'bin/gh', 'tools/automations/guard.ts',
+                     'Makefile', 'ai/pi/config/permission-system.json', 'libexec/automation_run.py'):
+            self.assertIn('protected', automation.downgrade_reason(HEALTH, [path], 1, False), path)
+
+    def test_symlink_and_size_limits_drop_fixes(self):
+        self.assertIn('symlink', automation.downgrade_reason(HEALTH, ['a'], 1, True))
+        many = [f'f{index}' for index in range(automation.MAX_FIX_FILES + 1)]
+        self.assertIn('files', automation.downgrade_reason(HEALTH, many, 1, False))
+        self.assertIn('lines', automation.downgrade_reason(HEALTH, ['a'], automation.MAX_FIX_LINES + 1, False))
+
+
+class SecretScanTests(unittest.TestCase):
+    def test_token_shapes_are_blocked_without_echoing_them(self):
+        token = 'gho_' + 'a' * 36
+        hit = automation.secret_hit(f'leaked {token}', set())
+        self.assertIsNotNone(hit)
+        self.assertNotIn(token, hit)
+
+    def test_auth_file_values_are_blocked(self):
+        literals = automation.collect_secret_literals({'copilot': {'refresh': 'x' * 20, 'type': 'oauth'}, 'n': 1})
+        self.assertEqual(literals, {'x' * 20})
+        self.assertIsNotNone(automation.secret_hit('value ' + 'x' * 20, literals))
+
+    def test_clean_text_passes(self):
+        self.assertIsNone(automation.secret_hit('see docs/readme.md:12', {'x' * 20}))
+
+
+class SandboxTests(unittest.TestCase):
+    def setUp(self):
+        self.home = Path('/home/person')
+        self.args = automation.sandbox_args(
+            home=self.home,
+            repo=Path('/state/repo'),
+            evidence=Path('/state/evidence'),
+            agent_dir=Path('/state/agent'),
+            guard=Path('/guard.ts'),
+            node_root=self.home / '.local/share/mise/installs/node/1',
+            resolv=Path('/mnt/wsl/resolv.conf'),
+            pi_agent=self.home / '.pi/agent',
+        )
+
+    def binds(self, flag):
+        return [self.args[i + 1] for i, value in enumerate(self.args) if value == flag]
+
+    def test_home_is_empty_and_only_runtime_is_mounted(self):
+        self.assertIn(str(self.home), self.binds('--tmpfs'))
+        mounted = self.binds('--ro-bind') + self.binds('--bind')
+        under_home = sorted(path for path in mounted if path.startswith(str(self.home)))
+        self.assertEqual(under_home, [
+            str(self.home / '.local/share/mise/installs/node/1'),
+            str(self.home / '.pi/agent/bin'),
+            str(self.home / '.pi/agent/install'),
+        ])
+
+    def test_git_metadata_and_evidence_are_read_only(self):
+        self.assertIn('/state/repo/.git', self.binds('--ro-bind'))
+        self.assertIn('/state/evidence', self.binds('--ro-bind'))
+        self.assertEqual(sorted(self.binds('--bind')), ['/state/agent', '/state/repo'])
+
+
+class TargetTests(unittest.TestCase):
+    def test_repo_slug_accepts_both_remote_forms(self):
+        self.assertEqual(automation.repo_slug('git@github.com:o/r.git'), 'o/r')
+        self.assertEqual(automation.repo_slug('https://github.com/o/r.git\n'), 'o/r')
+        with self.assertRaises(automation.AutomationError):
+            automation.repo_slug('https://example.com/o/r')
+
+    def test_private_profile_refuses_a_public_repository(self):
+        public = '{"visibility":"PUBLIC","defaultBranchRef":{"name":"main"}}'
+        with mock.patch.object(automation, 'run', return_value=public):
+            with self.assertRaisesRegex(automation.AutomationError, 'refusing'):
+                automation.check_target(LANE, 'o/r')
+            self.assertEqual(automation.check_target(HEALTH, 'o/r'), 'main')
+
+    def test_open_pr_filter_is_per_automation(self):
+        prs = [{'headRefName': 'automation/lane-review/2026-11-02'}, {'headRefName': 'automation/lane-review-x/1'},
+               {'headRefName': 'feature'}]
+        self.assertEqual(len(automation.filter_automation_prs(prs, 'lane-review')), 1)
+
+
+class PolicyTests(unittest.TestCase):
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.repo = Path(temp.name)
+        git(self.repo, 'init', '-q')
+        git(self.repo, 'config', 'user.email', 'test@example.com')
+        git(self.repo, 'config', 'user.name', 'Test')
+        (self.repo / 'README.md').write_text('old\n')
+        (self.repo / 'Makefile').write_text('old\n')
+        git(self.repo, 'add', '.')
+        git(self.repo, 'commit', '-qm', 'initial')
+
+    def write_report(self, profile, text='# Report\n'):
+        path = self.repo / profile.report_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+
+    def staged(self):
+        return automation.git(self.repo, 'diff', '--cached', '--name-only').split()
+
+    def test_no_changes_means_nothing_to_publish(self):
+        self.assertEqual(automation.enforce_policy(HEALTH, self.repo), ([], None))
+
+    def test_changes_without_a_report_fail(self):
+        (self.repo / 'README.md').write_text('new\n')
+        with self.assertRaisesRegex(automation.AutomationError, 'without writing its report'):
+            automation.enforce_policy(HEALTH, self.repo)
+
+    def test_safe_fix_ships_with_report(self):
+        self.write_report(HEALTH)
+        (self.repo / 'README.md').write_text('new\n')
+        fixes, note = automation.enforce_policy(HEALTH, self.repo)
+        self.assertEqual((fixes, note), (['README.md'], None))
+        self.assertEqual(sorted(self.staged()), sorted(['README.md', HEALTH.report_path]))
+
+    def test_report_is_published_even_when_the_target_ignores_it(self):
+        (self.repo / '.gitignore').write_text('docs/*\nautomation-reports/\n')
+        git(self.repo, 'add', '.gitignore')
+        git(self.repo, 'commit', '-qm', 'ignore')
+        self.write_report(HEALTH)
+        self.assertEqual(automation.enforce_policy(HEALTH, self.repo), ([], None))
+        self.assertEqual(self.staged(), [HEALTH.report_path])
+
+    def test_protected_fix_downgrades_to_the_report_alone(self):
+        self.write_report(HEALTH)
+        (self.repo / 'README.md').write_text('new\n')
+        (self.repo / 'Makefile').write_text('evil\n')
+        (self.repo / 'stray.txt').write_text('stray\n')
+        fixes, note = automation.enforce_policy(HEALTH, self.repo)
+        self.assertEqual(fixes, [])
+        self.assertIn('Makefile', note)
+        self.assertEqual(self.staged(), [HEALTH.report_path])
+        self.assertEqual((self.repo / 'Makefile').read_text(), 'old\n')
+        self.assertFalse((self.repo / 'stray.txt').exists())
+
+    def test_lane_review_only_ever_publishes_its_report(self):
+        self.write_report(LANE)
+        (self.repo / 'README.md').write_text('new\n')
+        fixes, note = automation.enforce_policy(LANE, self.repo)
+        self.assertEqual(fixes, [])
+        self.assertIn('reports only', note)
+        self.assertEqual(self.staged(), [LANE.report_path])
+
+    def test_empty_and_oversized_reports_fail(self):
+        self.write_report(HEALTH, '  \n')
+        with self.assertRaisesRegex(automation.AutomationError, 'empty'):
+            automation.enforce_policy(HEALTH, self.repo)
+        self.write_report(HEALTH, 'x' * (automation.MAX_REPORT_BYTES + 1))
+        with self.assertRaisesRegex(automation.AutomationError, 'limit'):
+            automation.enforce_policy(HEALTH, self.repo)
+
+    def test_agent_written_git_hook_does_not_run(self):
+        hook = self.repo / '.git/hooks/pre-commit'
+        marker = self.repo.parent / f'{self.repo.name}-hook-ran'
+        hook.write_text(f'#!/bin/sh\ntouch {marker}\n')
+        hook.chmod(0o755)
+        self.write_report(HEALTH)
+        automation.enforce_policy(HEALTH, self.repo)
+        automation.git(self.repo, '-c', 'user.name=T', '-c', 'user.email=t@example.com', 'commit', '-qm', 'x')
+        self.assertFalse(marker.exists())
+
+
+class LaneEvidenceTests(unittest.TestCase):
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.home = Path(temp.name)
+
+    def test_only_coordination_folders_are_selected(self):
+        (self.home / 'alpha-local').mkdir()
+        (self.home / 'alpha-local/STATE.md').write_text('state')
+        (self.home / 'other-local').mkdir()
+        (self.home / 'alpha').mkdir()
+        self.assertEqual([path.name for path in automation.lane_folders(self.home)], ['alpha-local'])
+
+    def test_people_notes_are_never_copied(self):
+        self.assertNotIn('PEOPLE.md', automation.LANE_FILES)
+
+    def test_recent_activity_skips_old_files_and_symlinks(self):
+        lanes = self.home / 'lanes'
+        lanes.mkdir()
+        (lanes / 'new.md').write_text('x')
+        old = lanes / 'old.md'
+        old.write_text('x')
+        import os
+        os.utime(old, (1, 1))
+        (lanes / 'link.md').symlink_to(self.home / 'lanes/new.md')
+        (lanes / 'skip.txt').write_text('x')
+        now = (lanes / 'new.md').stat().st_mtime
+        self.assertEqual([path.name for path in automation.recent_activity(self.home, now)], ['new.md'])
+
+
+class RepositoryTests(unittest.TestCase):
+    def test_public_reports_are_not_gitignored(self):
+        for profile in (HEALTH, automation.PROFILES['tooling-radar']):
+            result = subprocess.run(['git', '-C', str(ROOT), 'check-ignore', '-q', profile.report_path], check=False)
+            self.assertEqual(result.returncode, 1, profile.report_path)
+
+
+class PromptTests(unittest.TestCase):
+    def test_every_profile_has_a_prompt_and_timer(self):
+        for name in automation.PROFILES:
+            prompt = (ROOT / f'tools/automations/prompts/{name}.md').read_text()
+            for placeholder in ('{{REPORT}}', '{{EVIDENCE}}', '{{REPO}}', '{{DATE}}'):
+                self.assertIn(placeholder, prompt, f'{name} missing {placeholder}')
+            self.assertTrue((ROOT / f'tools/automations/systemd/dotfiles-automation@{name}.timer').is_file())
+
+    def test_prompts_name_the_same_protected_paths_as_the_policy(self):
+        for name in ('dotfiles-health', 'tooling-radar'):
+            prompt = (ROOT / f'tools/automations/prompts/{name}.md').read_text()
+            for path in (*automation.PROTECTED_PREFIXES, 'Makefile', 'config/versions.env',
+                         'ai/pi/install.sh', 'ai/pi/settings.json', 'ai/pi/config/permission-system.json'):
+                self.assertIn(f'`{path}`', prompt, f'{name} missing {path}')
+
+
+if __name__ == '__main__':
+    unittest.main()

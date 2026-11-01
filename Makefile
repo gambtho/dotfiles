@@ -1,4 +1,4 @@
-.PHONY: install bootstrap update relink ai ai-check ai-heeler ai-heeler-check ai-heeler-setup pins pins-check pins-update check syntax lint test python-test pi-runtime-test validate
+.PHONY: install bootstrap update relink ai ai-check ai-heeler ai-heeler-check ai-heeler-setup automations automations-check automation-run pins pins-check pins-update check syntax lint test python-test pi-runtime-test validate
 
 # ── Main targets ──────────────────────────────────────────────────────────────
 
@@ -65,6 +65,15 @@ ai-heeler-check: ## Inspect prepared or live managed Heeler state without mutati
 
 ai-heeler-setup: ## Guide explicit per-host enrollment and one operator-approved Root publication
 	bash tools/herdr/heeler/setup.sh
+
+automations: ## Install and enable the weekly review timers on this machine
+	bash tools/automations/install.sh --apply
+
+automations-check: ## Show weekly review timers and each automation's last result
+	bash tools/automations/install.sh --check
+
+automation-run: ## Run one review now: make automation-run NAME=<name> [DRY_RUN=1]
+	python3 libexec/automation_run.py "$(NAME)" $(if $(DRY_RUN),--dry-run)
 
 pins: ## List managed dependency versions and refs
 	bash libexec/versions list

@@ -70,6 +70,10 @@ Pi authenticates directly to the GitHub Copilot subscription through `/login`. S
 - After changing Pi configuration or package resources, run `make validate` and the relevant tests.
 - Prompt and skill edits take effect after `/reload` or in the next Pi session.
 
+## Weekly Automations
+
+`tools/automations/` holds three opt-in Monday reviews (`tooling-radar`, `dotfiles-health`, `lane-review`), run by `libexec/automation_run.py` from systemd user timers. Each opens a PR with a report and, where allowed, small fixes; none merges. The agent runs sandboxed with file tools only, and the runner does all publishing. `lane-review` reads private project data, so it publishes only to a verified private repository. See `tools/automations/README.md`. Keep the sandbox allowlist, protected paths and secret scan in step with that README.
+
 ## Adding resources
 
 For a skill, create `ai/marketplace/plugins/my/skills/<name>/SKILL.md` with valid `name` and `description` frontmatter, then add it to `package.json`.

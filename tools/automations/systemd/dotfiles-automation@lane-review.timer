@@ -1,0 +1,10 @@
+[Unit]
+Description=Weekly lane system review
+
+[Timer]
+OnCalendar=Mon 08:00
+Persistent=true
+RandomizedDelaySec=10min
+
+[Install]
+WantedBy=timers.target
