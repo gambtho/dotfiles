@@ -14,7 +14,8 @@ usage() {
 }
 
 require_host() {
-  local tool service_path
+  local tool service_path entry real_gh=""
+  local -a entries=()
   command -v systemctl >/dev/null 2>&1 || {
     printf 'automations: systemctl is required on this machine\n' >&2
     exit 1
@@ -33,6 +34,25 @@ require_host() {
       exit 1
     }
   done
+  # bin/gh satisfies the lookup above but only hands off to a real gh further
+  # along the same PATH, so it does not count as gh being installed.
+  IFS=: read -r -a entries <<<"$service_path"
+  for entry in "${entries[@]}"; do
+    if [[ -x "$entry/gh" && ! "$entry/gh" -ef "$REPO_ROOT/bin/gh" ]]; then
+      real_gh="$entry/gh"
+      break
+    fi
+  done
+  [[ -n "$real_gh" ]] || {
+    printf 'automations: only the bin/gh shim is on the PATH the timers use; install gh: %s\n' "$service_path" >&2
+    exit 1
+  }
+  # The runner launches this exact path inside the sandbox, so a pi found
+  # elsewhere on PATH does not help.
+  [[ -x "$HOME/.pi/agent/bin/pi" ]] || {
+    printf 'automations: the runner needs Pi at %s\n' "$HOME/.pi/agent/bin/pi" >&2
+    exit 1
+  }
 }
 
 apply() {

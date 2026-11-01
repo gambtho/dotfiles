@@ -10,6 +10,9 @@ setup() {
   cp "$REPO_ROOT/tools/automations/install.sh" "$CHECKOUT/tools/automations/"
   printf 'Environment=PATH=%%h/service-bin\n' >"$CHECKOUT/tools/automations/systemd/dotfiles-automation@.service"
   git init -q "$CHECKOUT"
+  mkdir -p "$CHECKOUT/bin" "$HOME/.pi/agent/bin"
+  printf '#!/bin/sh\n' | tee "$CHECKOUT/bin/gh" "$HOME/.pi/agent/bin/pi" >/dev/null
+  chmod +x "$CHECKOUT/bin/gh" "$HOME/.pi/agent/bin/pi"
   # Every tool is on the installer's own PATH, so only the service PATH can fail.
   local tool
   for tool in systemctl bwrap gh mise pi python3; do
@@ -40,6 +43,39 @@ add_service_tools() {
   [ "$status" -eq 1 ]
   [[ "$output" != *"not on the PATH"* ]]
   [[ "$output" == *"units expect the checkout"* ]]
+}
+
+@test "automation install rejects a service PATH with only the gh shim" {
+  add_service_tools bwrap mise pi python3
+  ln -s "$CHECKOUT/bin/gh" "$SERVICE_BIN/gh"
+  run bash "$CHECKOUT/tools/automations/install.sh" --apply
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"only the bin/gh shim"* ]]
+}
+
+@test "automation install accepts a real gh after the shim without reordering PATH" {
+  add_service_tools bwrap mise pi python3
+  mkdir -p "$HOME/real-bin"
+  ln -s "$STUB_BIN/gh" "$HOME/real-bin/gh"
+  ln -s "$CHECKOUT/bin/gh" "$SERVICE_BIN/gh"
+  printf 'Environment=PATH=%%h/service-bin:%%h/real-bin\n' >"$CHECKOUT/tools/automations/systemd/dotfiles-automation@.service"
+  run bash "$CHECKOUT/tools/automations/install.sh" --apply
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"units expect the checkout"* ]]
+  grep -Fxq 'Environment=PATH=%h/service-bin:%h/real-bin' "$CHECKOUT/tools/automations/systemd/dotfiles-automation@.service"
+}
+
+@test "automation install requires Pi at the path the runner launches" {
+  add_service_tools bwrap gh mise pi python3
+  rm "$HOME/.pi/agent/bin/pi"
+  run bash "$CHECKOUT/tools/automations/install.sh" --apply
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"runner needs Pi at $HOME/.pi/agent/bin/pi"* ]]
+}
+
+@test "the shipped service unit keeps the gh shim ahead of the real gh" {
+  run grep -c '^Environment=PATH=%h/.dotfiles/bin:' "$REPO_ROOT/tools/automations/systemd/dotfiles-automation@.service"
+  [ "$output" = 1 ]
 }
 
 @test "automation install fails clearly when the unit sets no PATH" {
