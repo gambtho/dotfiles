@@ -57,6 +57,23 @@ setup() {
   [ "$output" = selected-yq ]
 }
 
+@test "the sandbox captures jq from a user-level directory" {
+  local fixture="$TEST_ROOT/tool-order"
+  mkdir -p "$fixture/bin"
+  printf '#!/bin/sh\necho selected-jq\n' >"$fixture/bin/jq"
+  chmod +x "$fixture/bin/jq"
+
+  run bash -c '
+    PATH="$2/bin:$PATH"
+    source "$1/tests/test_helper.bash"
+    setup_dotfiles_test
+    jq
+  ' _ "$REPO_ROOT" "$fixture"
+
+  [ "$status" -eq 0 ]
+  [ "$output" = selected-jq ]
+}
+
 @test "the sandbox keeps explicit stubs ahead of captured tools" {
   local fixture="$TEST_ROOT/tool-order"
   mkdir -p "$fixture/bin"
@@ -80,7 +97,7 @@ setup() {
   # executable installed beside them in a user-level bin directory.
   run find "$SANDBOX_TOOL_BIN" -mindepth 1 -maxdepth 1 -printf '%f\n'
   [ "$status" -eq 0 ]
-  run bash -c 'comm -23 <(printf "%s\n" "$@" | sort) <(printf "%s\n" node yq | sort)' _ "${lines[@]}"
+  run bash -c 'comm -23 <(printf "%s\n" "$@" | sort) <(printf "%s\n" jq node yq | sort)' _ "${lines[@]}"
   [ "$status" -eq 0 ]
   [ -z "$output" ]
 }
