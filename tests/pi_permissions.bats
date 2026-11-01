@@ -4,7 +4,7 @@ load test_helper
 
 setup() {
   # Preserve discovery without requiring Pi for configuration-only tests.
-  HOST_PI=$(command -v pi) || HOST_PI=""
+  HOST_PI=$(resolve_host_tool pi) || HOST_PI=""
   setup_dotfiles_test
   CONFIG_DIR="$REPO_ROOT/ai/pi/config"
   PERMISSION_CONFIG="$CONFIG_DIR/permission-system.json"

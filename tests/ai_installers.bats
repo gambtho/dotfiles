@@ -5,9 +5,9 @@ load test_helper
 setup() {
   LEGACY_VEKIL_PID=""
   local real_pi real_npm real_node
-  real_pi=$(command -v pi) || real_pi=""
-  real_npm=$(command -v npm)
-  real_node=$(command -v node)
+  real_pi=$(resolve_host_tool pi) || real_pi=""
+  real_npm=$(resolve_host_tool npm)
+  real_node=$(resolve_host_tool node)
   source "$BATS_TEST_DIRNAME/../libexec/lib/pi-runtime.sh"
   resolve_pi_runtime "$real_pi" "${PI_TEST_HOST_ROOT:-}"
   export HOST_ROOT=$PI_RUNTIME_PACKAGE_ROOT REAL_NPM=$real_npm REAL_NODE=$real_node

@@ -3,6 +3,9 @@
 load test_helper
 
 setup() {
+  # Preserve discovery without requiring Pi for tests that publish nothing.
+  HOST_PI=$(resolve_host_tool pi) || HOST_PI=""
+  export HOST_PI
   setup_dotfiles_test
   export AGENT="$TEST_ROOT/agent" OWNED="$TEST_ROOT/owned"
   mkdir -p "$AGENT" "$OWNED/ai/pi/config"
@@ -19,6 +22,7 @@ migration() {
     [[ ! -f "$ROOT/ai/pi/migrate-runtime-config.sh" ]] || source "$ROOT/ai/pi/migrate-runtime-config.sh"
     PI_AGENT_DIR=$AGENT
     PI_HOST_ROOT=${PI_TEST_HOST_ROOT:-}
+    PI_BINARY=$HOST_PI
     MANAGED_SOURCE_ROOTS=("$OWNED" "$REPO_ROOT")
     MODE=${TEST_MODE:-apply}
     "$@"
@@ -186,6 +190,14 @@ refresh() {
   refresh
   [ "$status" -eq 0 ]
   [ "$before" = "$(snapshot)" ]
+}
+
+@test "refresh fails rather than skips when no Pi host was selected" {
+  seed_preferences
+  export PI_AI_REFRESH_PREFERENCES=1 HOST_PI=""
+  PI_TEST_HOST_ROOT="" refresh
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Pi executable not found on PATH"* ]]
 }
 
 @test "explicit refresh selectively upgrades legacy roles compaction and Codemode preserving extras" {
