@@ -289,6 +289,8 @@ class PublishTests(unittest.TestCase):
             if cmd[0] == 'gh':
                 created.append(cmd[cmd.index('--head') + 1])
                 return 'https://example.com/pr\n'
+            if cmd[-2:] == ['config', 'user.name'] or cmd[-2:] == ['config', 'user.email']:
+                return 'test@example.com\n'
             return real_run(cmd, **kwargs)
 
         with tempfile.TemporaryDirectory() as temp:
