@@ -204,6 +204,12 @@ retain their exact approval requirements.
    checks passing on that revision and no unresolved blockers. Inspect each check run's
    revision, not just a green rollup. Confirm the diff stays in scope and no claim
    exceeds evidence. Keep this readiness test separate from review-evidence reuse.
+   Check [closeout's snapshot](../pr-closeout/SKILL.md#snapshot-helper) for a changed
+   or unreadable final PR observation; refresh before recommending ready. A later
+   head change invalidates that recommendation.
+   Before calling ready, require the lane's bot opportunity and final thread read from
+   [closeout's bounded waiting](../pr-closeout/SKILL.md#bounded-waiting); do not make
+   the human relay or babysit that wait.
 4. **Check size and scope.** Split additions by kind:
    `gh pr view <n> -R <repo> --json files --jq '[.files[]|{p:.path,a:.additions}]|{tests:(map(select(.p|test("_test\\.|\\.(test|spec)\\.|/tests?/|test_")))|map(.a)|add // 0),docs:(map(select(.p|test("\\.md$")))|map(.a)|add // 0),product:(map(select(.p|test("_test\\.|\\.(test|spec)\\.|/tests?/|test_|\\.md$")|not))|map(.a)|add // 0)}'`.
    Flag tests above ~1.5× product unless each test is a distinct safety invariant, and

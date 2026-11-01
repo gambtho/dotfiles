@@ -236,3 +236,16 @@ with tempfile.TemporaryDirectory() as directory:
 PY
   [ "$status" -eq 0 ]
 }
+
+@test "coordinator delegates bot waiting and requires snapshot consistency" {
+  run python3 - "$SKILL_DIR/SKILL.md" <<'PY'
+from pathlib import Path
+import sys
+text = " ".join(Path(sys.argv[1]).read_text().split())
+assert "../pr-closeout/SKILL.md#bounded-waiting" in text
+assert "../pr-closeout/SKILL.md#snapshot-helper" in text
+assert "unreadable final PR observation; refresh before recommending ready" in text
+assert "do not make the human relay or babysit that wait" in text
+PY
+  [ "$status" -eq 0 ]
+}

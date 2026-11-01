@@ -106,6 +106,20 @@ if [[ "$github_repo" != */* || -z "$owner" || -z "$repo" ]]; then
   exit 2
 fi
 
+# Normalize only the metadata whose changes invalidate this collection.
+pr_observation() {
+  jq -ce '
+    if type != "object" then error("invalid PR observation") else . end
+    | if (.number | type) == "number" and .number > 0 and .number == (.number | floor)
+      and all(.url, .state, .baseRefName, .mergeStateStatus; type == "string" and length > 0)
+      and (.isDraft | type) == "boolean"
+      and (.headRefOid | type) == "string" and (.headRefOid | test("^[0-9a-fA-F]{40}$"))
+      and has("reviewDecision") and (.reviewDecision == null or (.reviewDecision | type) == "string")
+      then {number,url,state,isDraft,headRefOid,baseRefName,mergeStateStatus,reviewDecision}
+      else error("incomplete PR observation") end'
+}
+observation_fields='number,url,state,isDraft,headRefOid,baseRefName,mergeStateStatus,reviewDecision'
+observation_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 pr_fields='number,url,title,state,isDraft,baseRefName,headRefName,headRefOid,mergeStateStatus,reviewDecision,updatedAt,author,headRepositoryOwner'
 if [[ -n "$pr_selector" ]]; then
   pr_json="$(gh pr view "$pr_selector" --repo "$github_repo" --json "$pr_fields")"
@@ -264,6 +278,21 @@ all_checks_no_checks_pending="$(jq -r '.noChecksPending' <<<"$checks_result")"
 required_checks_no_checks_reported="$(jq -r '.noChecksReported' <<<"$required_checks_result")"
 required_checks_no_checks_pending="$(jq -r '.noChecksPending' <<<"$required_checks_result")"
 
+# A failed final read must preserve earlier evidence, but cannot certify it.
+start_observation="$(pr_observation <<<"$pr_json" 2>/dev/null)" || start_observation=null
+end_observation=null
+observation_lookup_failed=true
+observation_changed=false
+if final_pr_json="$(gh pr view "$pr_number" --repo "$github_repo" --json "$observation_fields" 2>/dev/null)" &&
+  final_observation="$(pr_observation <<<"$final_pr_json" 2>/dev/null)"; then
+  end_observation="$final_observation"
+  if [[ "$start_observation" != null ]]; then
+    observation_lookup_failed=false
+    [[ "$start_observation" == "$end_observation" ]] || observation_changed=true
+  fi
+fi
+observation_finished_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
 local_json="$(jq -n \
   --arg currentBranch "$current_branch" \
   --arg headOid "$local_head" \
@@ -315,6 +344,12 @@ fi
 
 snapshot="$(jq -n \
   --arg generatedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  --arg observationStartedAt "$observation_started_at" \
+  --arg observationFinishedAt "$observation_finished_at" \
+  --argjson startObservation "$start_observation" \
+  --argjson endObservation "$end_observation" \
+  --argjson observationChanged "$observation_changed" \
+  --argjson observationLookupFailed "$observation_lookup_failed" \
   --arg repository "$github_repo" \
   --argjson pr "$pr_json" \
   --argjson local "$local_json" \
@@ -339,12 +374,13 @@ snapshot="$(jq -n \
   --argjson failingChecks "$failing_checks" \
   --argjson pendingChecks "$pending_checks" \
   --argjson unresolvedReviewThreads "$unresolved_threads" \
-  '{generatedAt:$generatedAt, repository:$repository, local:$local, pr:$pr, reviewThreads:{unresolvedCount:($unresolvedThreads|length), unresolved:$unresolvedThreads}, checks:{summary:$checksSummary, requiredSummary:$checksSummary, allSummary:$allChecksSummary, commandExitCode:$checksCommandExitCode, requiredCommandExitCode:$requiredChecksCommandExitCode, commandError:$checksCommandError, requiredCommandError:$requiredChecksCommandError, lookupFailed:($checksLookupFailed or $requiredChecksLookupFailed), requiredLookupFailed:$requiredChecksLookupFailed, allNoChecksReported:$allChecksNoChecksReported, allNoChecksPending:$allChecksNoChecksPending, requiredNoChecksReported:$requiredChecksNoChecksReported, requiredNoChecksPending:$requiredChecksNoChecksPending, items:$checks, requiredItems:$requiredChecks}, blockers:{wrongHeadBranch:($local.branchMatchesPrHead|not), wrongHeadSha:($local.headMatchesPrHeadOid|not), dirtyWorktree:$local.dirty, prStateBlocking:$prStateBlocking, mergeStateBlocking:$mergeStateBlocking, reviewDecisionBlocking:$reviewDecisionBlocking, unresolvedReviewThreads:$unresolvedReviewThreads, checksLookupFailed:($checksLookupFailed or $requiredChecksLookupFailed), failingChecks:$failingChecks, pendingChecks:$pendingChecks}}')"
+  '{generatedAt:$generatedAt, observation:{startedAt:$observationStartedAt,finishedAt:$observationFinishedAt,start:$startObservation,end:$endObservation,consistent:(($observationChanged or $observationLookupFailed)|not),lookupFailed:$observationLookupFailed}, repository:$repository, local:$local, pr:$pr, reviewThreads:{unresolvedCount:($unresolvedThreads|length), unresolved:$unresolvedThreads}, checks:{summary:$checksSummary, requiredSummary:$checksSummary, allSummary:$allChecksSummary, commandExitCode:$checksCommandExitCode, requiredCommandExitCode:$requiredChecksCommandExitCode, commandError:$checksCommandError, requiredCommandError:$requiredChecksCommandError, lookupFailed:($checksLookupFailed or $requiredChecksLookupFailed), requiredLookupFailed:$requiredChecksLookupFailed, allNoChecksReported:$allChecksNoChecksReported, allNoChecksPending:$allChecksNoChecksPending, requiredNoChecksReported:$requiredChecksNoChecksReported, requiredNoChecksPending:$requiredChecksNoChecksPending, items:$checks, requiredItems:$requiredChecks}, blockers:{prObservationChanged:$observationChanged,prObservationLookupFailed:$observationLookupFailed,wrongHeadBranch:($local.branchMatchesPrHead|not), wrongHeadSha:($local.headMatchesPrHeadOid|not), dirtyWorktree:$local.dirty, prStateBlocking:$prStateBlocking, mergeStateBlocking:$mergeStateBlocking, reviewDecisionBlocking:$reviewDecisionBlocking, unresolvedReviewThreads:$unresolvedReviewThreads, checksLookupFailed:($checksLookupFailed or $requiredChecksLookupFailed), failingChecks:$failingChecks, pendingChecks:$pendingChecks}}')"
 
 if [[ "$summary" -eq 1 ]]; then
   jq -r '
     "PR #\(.pr.number): \(.pr.title)",
     "URL: \(.pr.url)",
+    "Observation: \(if .observation.lookupFailed then "unknown" elif .blockers.prObservationChanged then "changed" else "consistent" end) (\(.observation.start.headRefOid // "unknown") -> \(.observation.end.headRefOid // "unknown"); \(.observation.startedAt) to \(.observation.finishedAt))",
     "Head: \(.pr.headRefName) @ \(.pr.headRefOid[0:8])",
     "Local: \(.local.currentBranch) @ \(.local.headOid[0:8]) (branch match: \(.local.branchMatchesPrHead), head match: \(.local.headMatchesPrHeadOid), dirty: \(.local.dirty))",
     "State: \(.pr.state)",

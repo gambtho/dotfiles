@@ -1,0 +1,95 @@
+{
+  "generatedAt": "<timestamp>",
+  "repository": "example/project",
+  "local": {
+    "currentBranch": "feature",
+    "headOid": "823bfc2d5c286811757282492fbfb40942c2cc1c",
+    "upstream": "",
+    "dirty": false,
+    "branchMatchesPrHead": true,
+    "headMatchesPrHeadOid": true,
+    "prUpdatedAgeSeconds": "<age>",
+    "statusShort": "## feature"
+  },
+  "pr": {
+    "number": 123,
+    "url": "https://github.com/example/project/pull/123",
+    "title": "Fixture PR",
+    "state": "OPEN",
+    "isDraft": false,
+    "baseRefName": "main",
+    "headRefName": "feature",
+    "headRefOid": "823bfc2d5c286811757282492fbfb40942c2cc1c",
+    "mergeStateStatus": "CLEAN",
+    "reviewDecision": "APPROVED",
+    "updatedAt": "2020-01-01T00:00:00Z",
+    "author": {
+      "login": "fixture"
+    },
+    "headRepositoryOwner": {
+      "login": "example"
+    }
+  },
+  "reviewThreads": {
+    "unresolvedCount": 0,
+    "unresolved": []
+  },
+  "checks": {
+    "summary": {
+      "total": 1,
+      "pass": 1
+    },
+    "requiredSummary": {
+      "total": 1,
+      "pass": 1
+    },
+    "allSummary": {
+      "total": 1,
+      "pass": 1
+    },
+    "commandExitCode": 0,
+    "requiredCommandExitCode": 0,
+    "commandError": "",
+    "requiredCommandError": "",
+    "lookupFailed": false,
+    "requiredLookupFailed": false,
+    "allNoChecksReported": false,
+    "allNoChecksPending": false,
+    "requiredNoChecksReported": false,
+    "requiredNoChecksPending": false,
+    "items": [
+      {
+        "name": "test",
+        "state": "SUCCESS",
+        "bucket": "pass",
+        "link": "https://example.invalid/check",
+        "workflow": "CI",
+        "startedAt": "2020-01-01T00:00:00Z",
+        "completedAt": "2020-01-01T00:01:00Z"
+      }
+    ],
+    "requiredItems": [
+      {
+        "name": "test",
+        "state": "SUCCESS",
+        "bucket": "pass",
+        "link": "https://example.invalid/check",
+        "workflow": "CI",
+        "startedAt": "2020-01-01T00:00:00Z",
+        "completedAt": "2020-01-01T00:01:00Z"
+      }
+    ]
+  },
+  "blockers": {
+    "wrongHeadBranch": false,
+    "wrongHeadSha": false,
+    "dirtyWorktree": false,
+    "prStateBlocking": false,
+    "mergeStateBlocking": false,
+    "reviewDecisionBlocking": false,
+    "unresolvedReviewThreads": false,
+    "checksLookupFailed": false,
+    "failingChecks": false,
+    "pendingChecks": false
+  }
+}
