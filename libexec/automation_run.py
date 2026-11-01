@@ -183,6 +183,14 @@ def collect_secret_literals(value: object) -> set[str]:
     return set()
 
 
+def load_secret_literals(auth_file: Path) -> set[str]:
+    # Absent is fine, since a provider can be configured without this file. A
+    # malformed file still raises, because then the scan's coverage is unknown.
+    if not auth_file.exists():
+        return set()
+    return collect_secret_literals(json.loads(auth_file.read_text(encoding="utf-8")))
+
+
 def secret_hit(text: str, literals: set[str]) -> str | None:
     """Name what matched without echoing the secret into the logs."""
     for pattern in SECRET_PATTERNS:
@@ -673,7 +681,7 @@ def run_automation(profile: Profile, dry_run: bool) -> tuple[str, str]:
         gather_previous_prs(evidence, slug, profile.name)
         GATHER[profile.name](evidence, repo)
         prepare_agent_dir(agent_dir)
-        literals = collect_secret_literals(json.loads((agent_dir / "auth.json").read_text(encoding="utf-8")))
+        literals = load_secret_literals(agent_dir / "auth.json")
         run_agent(profile, repo, evidence, agent_dir, log_path, date)
 
         fix_paths, note = enforce_policy(profile, repo)

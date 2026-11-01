@@ -14,10 +14,22 @@ usage() {
 }
 
 require_host() {
-  local tool
-  for tool in systemctl bwrap gh mise pi; do
-    command -v "$tool" >/dev/null 2>&1 || {
-      printf 'automations: %s is required on this machine\n' "$tool" >&2
+  local tool service_path
+  command -v systemctl >/dev/null 2>&1 || {
+    printf 'automations: systemctl is required on this machine\n' >&2
+    exit 1
+  }
+  # The timers run with the unit's PATH, not this shell's, so a tool found only
+  # here would pass this check and then fail every Monday.
+  service_path="$(sed -n 's/^Environment=PATH=//p' "$SCRIPT_DIR/systemd/dotfiles-automation@.service")"
+  service_path="${service_path//'%h'/$HOME}"
+  [[ -n "$service_path" ]] || {
+    printf 'automations: the service unit does not set PATH\n' >&2
+    exit 1
+  }
+  for tool in bwrap gh mise pi python3; do
+    PATH="$service_path" command -v "$tool" >/dev/null 2>&1 || {
+      printf 'automations: %s is not on the PATH the timers use: %s\n' "$tool" "$service_path" >&2
       exit 1
     }
   done

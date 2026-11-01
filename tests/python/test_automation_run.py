@@ -70,6 +70,23 @@ class SecretScanTests(unittest.TestCase):
         self.assertEqual(literals, {'x' * 20})
         self.assertIsNotNone(automation.secret_hit('value ' + 'x' * 20, literals))
 
+    def test_missing_auth_file_means_no_literals(self):
+        with tempfile.TemporaryDirectory() as temp:
+            self.assertEqual(automation.load_secret_literals(Path(temp) / 'auth.json'), set())
+
+    def test_existing_auth_file_is_scanned(self):
+        with tempfile.TemporaryDirectory() as temp:
+            auth = Path(temp) / 'auth.json'
+            auth.write_text('{"copilot": {"refresh": "%s"}}' % ('x' * 20))
+            self.assertEqual(automation.load_secret_literals(auth), {'x' * 20})
+
+    def test_malformed_auth_file_fails_rather_than_scanning_nothing(self):
+        with tempfile.TemporaryDirectory() as temp:
+            auth = Path(temp) / 'auth.json'
+            auth.write_text('not json')
+            with self.assertRaises(ValueError):
+                automation.load_secret_literals(auth)
+
     def test_clean_text_passes(self):
         self.assertIsNone(automation.secret_hit('see docs/readme.md:12', {'x' * 20}))
 
