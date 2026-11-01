@@ -37,13 +37,15 @@ for clause in ("installed", "required by repository policy", "active on this PR"
                "unknown", "verified absence", "roughly ten minutes", "not draft creation",
                "not a guessed push time", "completed current-head", "even when CI is green",
                "mandatory missing review remains a blocker", "Elapsed time is not completed review evidence",
-               "every in-scope bot has completed", "only merges the base", "current-head review bodies",
+               "every in-scope bot has completed", "only merges the base", "any carried-over head",
                "cannot wait or be resumed"):
     assert clause in waiting, clause
 report = text.split("## Final report\n", 1)[1]
 assert "Bot opportunity:" in report and "final thread-read time" in report
 assert "review-body findings" in report
-assert "describe the `--repo` checkout" in " ".join(text.split())
+flat = " ".join(text.split())
+assert "describe the `--repo` checkout" in flat
+assert "then repeat `gh pr view`; a failed read or changed" in flat
 PY
   [ "$status" -eq 0 ]
 }

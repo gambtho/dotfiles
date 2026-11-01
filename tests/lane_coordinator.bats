@@ -246,7 +246,7 @@ assert "../pr-closeout/SKILL.md#bounded-waiting" in text
 assert "../pr-closeout/SKILL.md#snapshot-helper" in text
 assert "unreadable final PR observation; refresh before recommending ready" in text
 assert "do not make the human relay or babysit that wait" in text
-assert "--repo <lane worktree>" in text
+assert "--repo <lane worktree> --github-repo <repo> --pr <n>" in text
 assert "ignore only its local blockers" in text
 PY
   [ "$status" -eq 0 ]

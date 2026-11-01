@@ -205,9 +205,10 @@ retain their exact approval requirements.
    revision, not just a green rollup. Confirm the diff stays in scope and no claim
    exceeds evidence. Keep this readiness test separate from review-evidence reuse.
    Run [closeout's snapshot](../pr-closeout/SKILL.md#snapshot-helper) with
-   `--repo <lane worktree>`. Without that worktree, run it from another checkout and
-   ignore only its local blockers, taking local HEAD from the report; with no checkout,
-   use closeout's fallback commands. Check for a changed
+   `--repo <lane worktree> --github-repo <repo> --pr <n>`. Without that worktree, point
+   `--repo` at another checkout, keep the other flags, and ignore only its local
+   blockers, taking local HEAD from the report; with no checkout, use closeout's
+   fallback commands. Check for a changed
    or unreadable final PR observation; refresh before recommending ready. A later
    head change invalidates that recommendation.
    Before calling ready, require the lane's bot opportunity and final thread and

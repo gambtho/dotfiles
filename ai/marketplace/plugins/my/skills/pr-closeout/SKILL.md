@@ -62,7 +62,7 @@ Read-only; use it first and after every push or GitHub write batch:
 <skill-dir>/scripts/pr_snapshot.sh --github-repo OWNER/REPO --pr 123 --summary
 ```
 
-It reports local branch/head, PR metadata, unresolved review threads (bodies omitted), all-check and required-check buckets, and blocker booleans. Empty check lists on a just-pushed PR count as pending, not green. `wrongHeadBranch`, `wrongHeadSha` and `dirtyWorktree` describe the `--repo` checkout (default `.`), which must be a Git checkout. It re-reads PR identity, head/base and readiness metadata after checks/threads; changed metadata or an unreadable observation blocks readiness without relabeling the earlier evidence. Refresh before recommending ready, and inspect each check's revision separately. A consistent observation is not an atomic snapshot or CI attestation; a later push invalidates the recommendation. If the helper fails (auth, missing `gh`/`jq`), report that and fall back to `gh pr view`, `gh pr checks` and GraphQL `reviewThreads`.
+It reports local branch/head, PR metadata, unresolved review threads (bodies omitted), all-check and required-check buckets, and blocker booleans. Empty check lists on a just-pushed PR count as pending, not green. `wrongHeadBranch`, `wrongHeadSha` and `dirtyWorktree` describe the `--repo` checkout (default `.`), which must be a Git checkout. It re-reads PR identity, head/base and readiness metadata after checks/threads; changed metadata or an unreadable observation blocks readiness without relabeling the earlier evidence. Refresh before recommending ready, and inspect each check's revision separately. A consistent observation is not an atomic snapshot or CI attestation; a later push invalidates the recommendation. If the helper fails (auth, missing `gh`/`jq`), report that and fall back to `gh pr view`, `gh pr checks` and GraphQL `reviewThreads`, then repeat `gh pr view`; a failed read or changed identity, head/base or readiness metadata blocks recommending ready.
 
 ## Workflow
 
@@ -94,8 +94,8 @@ no change to the PR's own diff; for such a head, the last relevant head's round 
 feedback carry over, and the report names both heads. An unknown start time uses the
 current observation, not a guessed push time or PR `updatedAt`. Overlap the wait with
 CI; it ends early only when every in-scope bot has completed a current-head round.
-Then re-read threads even when CI is green, and read each bot's current-head review
-bodies (`gh api --paginate repos/OWNER/REPO/pulls/N/reviews`: `commit_id`, `body`). Bots can put
+Then re-read threads even when CI is green, and read each bot's review bodies for the
+current head and any carried-over head (`gh api --paginate repos/OWNER/REPO/pulls/N/reviews`: `commit_id`, `body`). Bots can put
 findings there, and neither thread counts nor the snapshot show them. Verify a body
 finding like a thread finding; with no thread to resolve, record its disposition in
 the report. Record the head, start/observation time, bot identity, completion or
