@@ -1018,6 +1018,7 @@ printf '%064d  %s\n' 0 "$3"
 SCRIPT
   chmod +x "$fallback_bin/shasum"
   ln -sf "$STUB_BIN/node" "$fallback_bin/node"
+  ln -sf "$(command -v jq)" "$fallback_bin/jq"
 
   run env HOME="$HOME" PATH="$fallback_bin" PI_VERSION="$PI_VERSION" \
     bash "$REPO_ROOT/ai/pi/install.sh"

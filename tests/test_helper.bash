@@ -20,13 +20,13 @@ setup_dotfiles_test() {
   export SANDBOX_TOOL_BIN="$TEST_ROOT/tool-bin"
   mkdir -p "$SANDBOX_TOOL_BIN"
   local tool tool_path
-  for tool in yq node; do
+  for tool in yq node jq; do
     tool_path="$(command -v "$tool" 2>/dev/null)" || continue
     ln -sf "$tool_path" "$SANDBOX_TOOL_BIN/$tool"
   done
 
   # Stubs win, followed by explicitly selected tools: a system namesake must
-  # not replace the runtime or yq implementation selected before sandboxing.
+  # not replace the runtime, yq, or jq implementation selected before sandboxing.
   export PATH="$STUB_BIN:$SANDBOX_TOOL_BIN:/usr/bin:/bin"
   # Sanitizing PATH is not enough on a machine where the interactive shell ran
   # `mise activate` (languages/mise/env.zsh). That exports mise's session state,
