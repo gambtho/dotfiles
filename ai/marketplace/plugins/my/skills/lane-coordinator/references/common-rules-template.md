@@ -27,7 +27,8 @@ Read `<resolved harness-notes path>` for invocation outside Pi; resolve it to th
   mechanism it extends (or why none fits), and what new packages, rules or refusals it adds.
 - Run `/second-opinion` on the design alone, revise, and stop for the human's approval. Then write the plan and run
   `/second-opinion --with-spec` on the plan with its design. A plan reviewed without its design doesn't count.
-- Before reporting a PR ready, run `/adversarial-review` on it and put its verdict in the report.
+- Before reporting a PR ready, run `/adversarial-review` on it and put its verdict in the report. Also complete
+  `pr-closeout`'s bounded bot opportunity and final thread and review-body read, and put that evidence in the report.
 - Work the human already approved continues under its approved design.
 - Optional: for risky state transitions, consider the owning lane's bounded, human-approved check in
   `<resolved state-model-check path>` within its existing design stage; resolve that path to the
