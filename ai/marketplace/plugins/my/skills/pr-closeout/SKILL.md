@@ -62,7 +62,7 @@ Read-only; use it first and after every push or GitHub write batch:
 <skill-dir>/scripts/pr_snapshot.sh --github-repo OWNER/REPO --pr 123 --summary
 ```
 
-It reports local branch/head, PR metadata, unresolved review threads (bodies omitted), all-check and required-check buckets, and blocker booleans. Empty check lists on a just-pushed PR count as pending, not green. It re-reads PR identity, head/base and readiness metadata after checks/threads; changed metadata or an unreadable observation blocks readiness without relabeling the earlier evidence. Refresh before recommending ready, and inspect each check's revision separately. A consistent observation is not an atomic snapshot or CI attestation; a later push invalidates the recommendation. If the helper fails (auth, missing `gh`/`jq`), report that and fall back to `gh pr view`, `gh pr checks` and GraphQL `reviewThreads`.
+It reports local branch/head, PR metadata, unresolved review threads (bodies omitted), all-check and required-check buckets, and blocker booleans. Empty check lists on a just-pushed PR count as pending, not green. `wrongHeadBranch`, `wrongHeadSha` and `dirtyWorktree` describe the `--repo` checkout (default `.`), which must be a Git checkout. It re-reads PR identity, head/base and readiness metadata after checks/threads; changed metadata or an unreadable observation blocks readiness without relabeling the earlier evidence. Refresh before recommending ready, and inspect each check's revision separately. A consistent observation is not an atomic snapshot or CI attestation; a later push invalidates the recommendation. If the helper fails (auth, missing `gh`/`jq`), report that and fall back to `gh pr view`, `gh pr checks` and GraphQL `reviewThreads`.
 
 ## Workflow
 
@@ -89,12 +89,20 @@ unknown, use the budget and disclose that uncertainty.
 The lane owns a bounded opportunity before reporting ready: prefer completed
 current-head review evidence; otherwise wait roughly ten minutes from ready-for-review
 or first observation of a review-relevant new head,
-not draft creation. An unknown start time uses the current observation, not a
-guessed push time or PR `updatedAt`. Overlap the wait with CI; a completed
-current-head round can end it sooner. Then re-read threads even when CI is green.
-Record the head, start/observation time, bot identity, completion or absence, and
-final thread-read time. At the budget end, disclose optional no-round-observed,
-skipped or rate-limited review; mandatory missing review remains a blocker.
+not draft creation. A new head is review-relevant unless it only merges the base with
+no change to the PR's own diff; for such a head, the last relevant head's round and
+feedback carry over, and the report names both heads. An unknown start time uses the
+current observation, not a guessed push time or PR `updatedAt`. Overlap the wait with
+CI; it ends early only when every in-scope bot has completed a current-head round.
+Then re-read threads even when CI is green, and read each bot's current-head review
+bodies (`gh api --paginate repos/OWNER/REPO/pulls/N/reviews`: `commit_id`, `body`). Bots can put
+findings there, and neither thread counts nor the snapshot show them. Verify a body
+finding like a thread finding; with no thread to resolve, record its disposition in
+the report. Record the head, start/observation time, bot identity, completion or
+absence, and final thread-read time. At the budget end, disclose optional
+no-round-observed, skipped or rate-limited review; mandatory missing review remains a
+blocker. If the session cannot wait or be resumed for the remaining budget, do not
+report ready: report the head, start time and remaining budget as the blocker.
 Elapsed time is not completed review evidence. Skip the bot wait only for verified absence
 of installed/required/active bots. Existing posting/re-trigger authority and independent
 reviews are unchanged.
@@ -105,7 +113,7 @@ reviews are unchanged.
 - Size (product / test / docs), and any split recommendation.
 - Conflicts resolved; CI checks inspected and final status (including external/pending blockers and flake evidence).
 - Threads: bots replied/resolved; human threads with **drafted replies** (verbatim, one line each where possible) or posted ones if authorized; anything left open and why.
-- Bot opportunity: head, ready-for-review/new-head observation time, bot identity and completed/no-round-observed/skipped/rate-limited status, final thread-read time and mandatory blockers.
+- Bot opportunity: head, ready-for-review/new-head observation time, bot identity and completed/no-round-observed/skipped/rate-limited status, final thread-read time, bot review-body findings with dispositions, and mandatory blockers.
 - Local verification commands run; review step (`$autoreview`/polish) run or why not.
 - Loaded profile paths and review evidence reused/run; feedback candidates and pending coordinator maintenance.
 - Each independent P1's disposition/verification and posted-record URL, or the human's exact draft and pending posting action.

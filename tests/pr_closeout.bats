@@ -36,10 +36,14 @@ waiting = " ".join(text.split("## Bounded waiting\n", 1)[1].split("## Final repo
 for clause in ("installed", "required by repository policy", "active on this PR",
                "unknown", "verified absence", "roughly ten minutes", "not draft creation",
                "not a guessed push time", "completed current-head", "even when CI is green",
-               "mandatory missing review remains a blocker", "Elapsed time is not completed review evidence"):
+               "mandatory missing review remains a blocker", "Elapsed time is not completed review evidence",
+               "every in-scope bot has completed", "only merges the base", "current-head review bodies",
+               "cannot wait or be resumed"):
     assert clause in waiting, clause
 report = text.split("## Final report\n", 1)[1]
 assert "Bot opportunity:" in report and "final thread-read time" in report
+assert "review-body findings" in report
+assert "describe the `--repo` checkout" in " ".join(text.split())
 PY
   [ "$status" -eq 0 ]
 }

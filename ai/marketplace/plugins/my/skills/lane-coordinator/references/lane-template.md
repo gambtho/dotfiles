@@ -49,6 +49,8 @@ The requirements below are unchanged.
 4. Use `pr-closeout` for the one review/finalization phase, reusing valid review
    evidence and retaining required specialist reviews, including the shared workflow's
    `/adversarial-review` before a PR is reported ready. Put its verdict in the report.
+   Complete closeout's bounded bot opportunity and final thread and review-body read
+   before reporting a PR ready.
    Open the PR with a short body per COORDINATION.md's authority table (unless this
    prompt says to stop first). For an approved PR, report CI/threads/readiness at the
    exact head; for local or deliberately draft work, report only that status/blockers.
@@ -92,6 +94,7 @@ and remaining decisions. Before calling a PR ready, local HEAD, remote PR head,
 tested revision and CI revision must all match. Include reusable review evidence
 (base, head provenance, scope, content identity, profile identity, model and dispositions)
 so the coordinator can check freshness, blockers and the delta without redoing review.
+For a PR, include closeout's bot-opportunity evidence from its final report.
 The user may say "W<n> ready"; the coordinator reads the report directly. Manual
 sessions are not automatically monitored. Escalate only genuinely new material
 scope/data/security/product choices, shared/destructive operations or actions outside
