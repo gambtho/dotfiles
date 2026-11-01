@@ -262,5 +262,8 @@ result = subprocess.run(["jq", "-c", filters[0]], input=json.dumps({"files": fil
 assert json.loads(result.stdout) == {"tests": total(tests), "docs": total(docs),
                                      "product": total(product)}, result.stdout
 PY
-  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$status" -eq 0 ] || {
+    echo "$output"
+    false
+  }
 }
