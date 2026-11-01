@@ -141,6 +141,8 @@ AGENTS.md for report locations; absent a rule, keep handoffs in the project fold
   For new product work, use the shared workflow's design-before-plan sequence,
   independent design/paired-plan reviews and required adversarial readiness evidence.
   Don't re-gate work that already has an approved design.
+  For state-transition risk, optionally recommend one bounded, human-approved
+  [state-model check](references/state-model-check.md); most lanes don't need it.
 - Parallel lanes in one repo also share effort-specific ownership, open PRs to stay off
   and sequencing, using those sections of
   [common-rules-template.md](references/common-rules-template.md). Keep the common
