@@ -267,3 +267,36 @@ PY
     false
   }
 }
+
+@test "coordinator delegates bot waiting and requires snapshot consistency" {
+  run python3 - "$SKILL_DIR/SKILL.md" <<'PY'
+from pathlib import Path
+import sys
+text = " ".join(Path(sys.argv[1]).read_text().split())
+assert "../pr-closeout/SKILL.md#bounded-waiting" in text
+assert "../pr-closeout/SKILL.md#snapshot-helper" in text
+assert "unreadable final PR observation; refresh before recommending ready" in text
+assert "do not make the human relay or babysit that wait" in text
+assert "--repo <lane worktree> --github-repo <repo> --pr <n>" in text
+assert "ignore only its local blockers" in text
+PY
+  [ "$status" -eq 0 ]
+}
+
+@test "lane contract and harness notes carry the bot opportunity" {
+  run python3 - "$SKILL_DIR/references" <<'PY'
+from pathlib import Path
+import sys
+references = Path(sys.argv[1])
+def read(name):
+    return " ".join((references / name).read_text().split())
+lane = read("lane-template.md")
+assert "Complete closeout's bounded bot opportunity" in lane
+assert "bot-opportunity evidence" in lane
+assert "bounded bot opportunity and final thread and review-body read" in read("common-rules-template.md")
+harness = read("harness-notes.md")
+assert "Wait for the bot-review budget" in harness
+assert "remaining budget as the stop/resume line" in harness
+PY
+  [ "$status" -eq 0 ]
+}
