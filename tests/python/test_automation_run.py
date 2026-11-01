@@ -231,6 +231,28 @@ class PolicyTests(unittest.TestCase):
         self.assertIn('Makefile', note)
         self.assertEqual(self.staged(), [HEALTH.report_path])
 
+    def test_binary_fix_is_dropped_because_the_secret_scan_cannot_read_it(self):
+        self.write_report(HEALTH)
+        (self.repo / 'README.md').write_bytes(b'\0binary\n')
+        fixes, note = automation.enforce_policy(HEALTH, self.repo)
+        self.assertEqual(fixes, [])
+        self.assertIn('lines', note)
+        self.assertEqual(self.staged(), [HEALTH.report_path])
+        self.assertEqual((self.repo / 'README.md').read_text(), 'old\n')
+
+    def test_text_fix_line_counts_are_unchanged(self):
+        self.write_report(HEALTH)
+        (self.repo / 'README.md').write_text('new\n')
+        automation.git(self.repo, 'add', '-A')
+        _, changed, _ = automation.stage_all(self.repo)
+        self.assertEqual(changed, 3)
+
+    def test_binary_report_fails(self):
+        self.write_report(HEALTH)
+        (self.repo / HEALTH.report_path).write_bytes(b'# Report\0\n')
+        with self.assertRaisesRegex(automation.AutomationError, 'binary report'):
+            automation.enforce_policy(HEALTH, self.repo)
+
     def test_lane_review_only_ever_publishes_its_report(self):
         self.write_report(LANE)
         (self.repo / 'README.md').write_text('new\n')
@@ -258,6 +280,44 @@ class PolicyTests(unittest.TestCase):
         self.assertFalse(marker.exists())
 
 
+class PublishTests(unittest.TestCase):
+    def test_retry_on_the_same_day_publishes_to_a_new_recognized_branch(self):
+        real_run = automation.run
+        created = []
+
+        def fake_run(cmd, **kwargs):
+            if cmd[0] == 'gh':
+                created.append(cmd[cmd.index('--head') + 1])
+                return 'https://example.com/pr\n'
+            return real_run(cmd, **kwargs)
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            origin = root / 'origin.git'
+            subprocess.run(['git', 'init', '-q', '--bare', str(origin)], check=True)
+            seed = root / 'seed'
+            subprocess.run(['git', 'init', '-q', str(seed)], check=True)
+            git(seed, 'config', 'user.email', 'test@example.com')
+            git(seed, 'config', 'user.name', 'Test')
+            (seed / 'README.md').write_text('old\n')
+            git(seed, 'add', '.')
+            git(seed, 'commit', '-qm', 'initial')
+            git(seed, 'push', '-q', str(origin), 'HEAD:refs/heads/main')
+            with mock.patch.object(automation, 'run', side_effect=fake_run):
+                for attempt in ('first', 'second'):
+                    work = root / attempt / 'repo'
+                    subprocess.run(['git', 'clone', '-q', '--branch', 'main', str(origin), str(work)], check=True)
+                    report = work / HEALTH.report_path
+                    report.parent.mkdir(parents=True)
+                    report.write_text(f'# {attempt}\n')
+                    automation.git(work, 'add', '-f', '--', HEALTH.report_path)
+                    automation.publish(HEALTH, work, 'o/r', 'main', '2026-11-02', [], None)
+        self.assertEqual(len(set(created)), 2)
+        for branch in created:
+            self.assertRegex(branch, r'^automation/dotfiles-health/2026-11-02-[0-9a-f]{12}$')
+        self.assertEqual(len(automation.filter_automation_prs([{'headRefName': b} for b in created], HEALTH.name)), 2)
+
+
 class LaneEvidenceTests(unittest.TestCase):
     def setUp(self):
         temp = tempfile.TemporaryDirectory()
@@ -273,6 +333,12 @@ class LaneEvidenceTests(unittest.TestCase):
 
     def test_people_notes_are_never_copied(self):
         self.assertNotIn('PEOPLE.md', automation.LANE_FILES)
+        lanes = self.home / 'lanes'
+        lanes.mkdir()
+        for name in ('PEOPLE.md', 'people.md', 'People.md', 'W1.md'):
+            (lanes / name).write_text('x')
+        now = (lanes / 'W1.md').stat().st_mtime
+        self.assertEqual([path.name for path in automation.recent_activity(self.home, now)], ['W1.md'])
 
     def test_recent_activity_skips_old_files_and_symlinks(self):
         lanes = self.home / 'lanes'

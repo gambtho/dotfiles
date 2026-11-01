@@ -453,6 +453,8 @@ def recent_activity(folder: Path, now: float) -> list[Path]:
         if not directory.is_dir():
             continue
         for entry in os.scandir(directory):
+            if entry.name.casefold() == "people.md":
+                continue
             if entry.name.endswith(".md") and entry.is_file(follow_symlinks=False):
                 modified = entry.stat(follow_symlinks=False).st_mtime
                 if modified >= cutoff:
@@ -579,8 +581,9 @@ def stage_all(repo: Path) -> tuple[list[str], int, bool]:
     changed = 0
     for line in git(repo, "diff", "--cached", "--numstat").splitlines():
         added, removed, _ = line.split("\t", 2)
-        if added != "-":
-            changed += int(added) + int(removed)
+        # A binary diff has no line count and hides its content from the secret
+        # scan, so any binary row is over the limit.
+        changed += MAX_FIX_LINES + 1 if added == "-" else int(added) + int(removed)
     symlink = bool(re.search(r"^:\d+ 120000 ", git(repo, "diff", "--cached", "--raw"), re.MULTILINE))
     return paths, changed, symlink
 
@@ -600,6 +603,8 @@ def enforce_policy(profile: Profile, repo: Path) -> tuple[list[str], str | None]
     report = report_file.read_bytes()
     if not report.strip():
         raise AutomationError("agent wrote an empty report")
+    if b"\0" in report:
+        raise AutomationError("agent wrote a binary report, which the secret scan cannot read")
     if len(report) > MAX_REPORT_BYTES:
         raise AutomationError(f"report is {len(report)} bytes (limit {MAX_REPORT_BYTES})")
 
@@ -624,9 +629,12 @@ def enforce_policy(profile: Profile, repo: Path) -> tuple[list[str], str | None]
 def publish(profile: Profile, repo: Path, slug: str, base: str, date: str, fix_paths: list[str], note: str | None) -> str:
     name = run(["git", "-C", str(DOTFILES), "config", "user.name"]).strip()
     email = run(["git", "-C", str(DOTFILES), "config", "user.email"]).strip()
-    branch = f"automation/{profile.name}/{date}"
     title = f"{profile.title} {date}" + (" with fixes" if fix_paths else "")
     git(repo, "-c", f"user.name={name}", "-c", f"user.email={email}", "commit", "-q", "--no-verify", "-m", title)
+    # The SHA keeps a retry from colliding with a branch left by a run that pushed
+    # but failed to open its PR.
+    sha = git(repo, "rev-parse", "--short=12", "HEAD").strip()
+    branch = f"automation/{profile.name}/{date}-{sha}"
     git(repo, "push", "-q", "origin", f"HEAD:refs/heads/{branch}", timeout=180)
     report = (repo / profile.report_path).read_text(encoding="utf-8")
     body_file = repo.parent / "pr-body.md"

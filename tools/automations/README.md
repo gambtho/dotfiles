@@ -1,6 +1,6 @@
 # Weekly automations
 
-Three reviews run from systemd user timers on Monday mornings. Each one opens a pull request carrying a report, with small fixes when they are safe. Nothing merges by itself.
+Three reviews run from systemd user timers on Monday mornings. A run opens a pull request only when it has something to publish and passes the checks. The PR carries a report, with small fixes when they are safe. Nothing merges by itself.
 
 | Automation | Timer | Publishes to | Can include fixes |
 |---|---|---|---|
