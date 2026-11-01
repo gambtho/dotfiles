@@ -205,7 +205,7 @@ retain their exact approval requirements.
    revision, not just a green rollup. Confirm the diff stays in scope and no claim
    exceeds evidence. Keep this readiness test separate from review-evidence reuse.
 4. **Check size and scope.** Split additions by kind:
-   `gh pr view <n> -R <repo> --json files --jq '[.files[]|{p:.path,a:.additions}]|{tests:(map(select(.p|test("_test\\.|\\.(test|spec)\\.|/tests?/|test_")))|map(.a)|add // 0),docs:(map(select(.p|test("\\.md$")))|map(.a)|add // 0),product:(map(select(.p|test("_test\\.|\\.(test|spec)\\.|/tests?/|test_|\\.md$")|not))|map(.a)|add // 0)}'`.
+   `gh pr view <n> -R <repo> --json files --jq '[.files[]|{p:.path,a:.additions}]|{tests:(map(select(.p|test("_test\\.|\\.(test|spec)\\.|(^|/)tests?/|test_")))|map(.a)|add // 0),docs:(map(select(.p|test("\\.md$")))|map(.a)|add // 0),product:(map(select(.p|test("_test\\.|\\.(test|spec)\\.|(^|/)tests?/|test_|\\.md$")|not))|map(.a)|add // 0)}'`.
    Flag tests above ~1.5× product unless each test is a distinct safety invariant, and
    flag new scripts or tools outside the lane's goal.
 5. **Check interactions.** List other open PRs touching the same files, commands or
