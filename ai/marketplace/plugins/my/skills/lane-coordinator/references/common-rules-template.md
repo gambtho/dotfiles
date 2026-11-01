@@ -29,6 +29,8 @@ Read `<resolved harness-notes path>` for invocation outside Pi; resolve it to th
   `/second-opinion --with-spec` on the plan with its design. A plan reviewed without its design doesn't count.
 - Before reporting a PR ready, run `/adversarial-review` on it and put its verdict in the report.
 - Work the human already approved continues under its approved design.
+- Optional, when state transitions are the risk: consider a human-approved, bounded
+  [state-model check](state-model-check.md) inside the owning lane's existing design stage.
 
 ### Worktrees and pull requests
 
