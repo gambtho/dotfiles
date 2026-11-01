@@ -1,4 +1,5 @@
 """Publication policy and sandbox boundary for the weekly automations."""
+import dataclasses
 import importlib.util
 import subprocess
 import sys
@@ -36,10 +37,25 @@ class DowngradeTests(unittest.TestCase):
             self.assertIn('protected', automation.downgrade_reason(HEALTH, [path], 1, False), path)
 
     def test_symlink_and_size_limits_drop_fixes(self):
-        self.assertIn('symlink', automation.downgrade_reason(HEALTH, ['a'], 1, True))
-        many = [f'f{index}' for index in range(automation.MAX_FIX_FILES + 1)]
-        self.assertIn('files', automation.downgrade_reason(HEALTH, many, 1, False))
-        self.assertIn('lines', automation.downgrade_reason(HEALTH, ['a'], automation.MAX_FIX_LINES + 1, False))
+        self.assertIn('symlink', automation.downgrade_reason(HEALTH, ['README.md'], 1, True))
+        many = [f'docs/guides/f{index}.md' for index in range(automation.MAX_FIX_FILES + 1)]
+        self.assertIn('limit', automation.downgrade_reason(HEALTH, many, 1, False))
+        self.assertIn('lines', automation.downgrade_reason(HEALTH, ['README.md'], automation.MAX_FIX_LINES + 1, False))
+
+    def test_fixes_outside_the_profile_scope_are_dropped(self):
+        for path in ('ai/pi/AGENTS.md', 'ai/marketplace/plugins/my/skills/x/SKILL.md',
+                     'core/shell/zshrc.symlink', 'tests/x.bats', '.gitignore'):
+            self.assertIn('allowed files', automation.downgrade_reason(HEALTH, [path], 1, False), path)
+
+    def test_radar_reads_untrusted_text_so_cannot_edit_agent_guidance(self):
+        radar = automation.PROFILES['tooling-radar']
+        self.assertIsNone(automation.downgrade_reason(radar, ['tools/herdr/config.toml.template'], 1, False))
+        for path in ('AGENTS.md', 'README.md', 'docs/guides/x.md'):
+            self.assertIn('allowed files', automation.downgrade_reason(radar, [path], 1, False), path)
+
+    def test_protected_paths_win_over_the_scope_check(self):
+        protected_and_listed = dataclasses.replace(HEALTH, fix_globs=('*',))
+        self.assertIn('protected', automation.downgrade_reason(protected_and_listed, ['Makefile'], 1, False))
 
 
 class SecretScanTests(unittest.TestCase):
@@ -85,6 +101,9 @@ class SandboxTests(unittest.TestCase):
             str(self.home / '.pi/agent/install'),
         ])
 
+    def test_environment_is_cleared(self):
+        self.assertEqual(self.args[1], '--clearenv')
+
     def test_git_metadata_and_evidence_are_read_only(self):
         self.assertIn('/state/repo/.git', self.binds('--ro-bind'))
         self.assertIn('/state/evidence', self.binds('--ro-bind'))
@@ -104,6 +123,40 @@ class TargetTests(unittest.TestCase):
             with self.assertRaisesRegex(automation.AutomationError, 'refusing'):
                 automation.check_target(LANE, 'o/r')
             self.assertEqual(automation.check_target(HEALTH, 'o/r'), 'main')
+
+    def test_private_target_requires_a_valid_repository_setting(self):
+        for content in ('[]', '{}', '{"repository": 7}', '{"repository": "not a slug"}', '{"repository": "../x/y"}'):
+            with tempfile.TemporaryDirectory() as temp:
+                config = Path(temp) / 'config.json'
+                config.write_text(content)
+                with mock.patch.object(automation, 'KNOWLEDGE_CONFIG', config):
+                    with self.assertRaisesRegex(automation.AutomationError, 'no valid repository', msg=content):
+                        automation.resolve_slug(LANE)
+
+    def test_private_target_reads_a_valid_repository_setting(self):
+        with tempfile.TemporaryDirectory() as temp:
+            config = Path(temp) / 'config.json'
+            config.write_text('{"repository": "o/r.x"}')
+            with mock.patch.object(automation, 'KNOWLEDGE_CONFIG', config):
+                self.assertEqual(automation.resolve_slug(LANE), 'o/r.x')
+
+    def test_missing_default_branch_is_reported(self):
+        for details in ('[]', '{"visibility":"PUBLIC"}', '{"visibility":"PUBLIC","defaultBranchRef":null}',
+                        '{"visibility":"PUBLIC","defaultBranchRef":{"name":""}}'):
+            with mock.patch.object(automation, 'run', return_value=details):
+                with self.assertRaises(automation.AutomationError, msg=details):
+                    automation.check_target(HEALTH, 'o/r')
+
+    def test_fork_prs_are_ignored(self):
+        prs = [{'headRefName': 'automation/lane-review/1', 'isCrossRepository': True}]
+        self.assertEqual(automation.filter_automation_prs(prs, 'lane-review'), [])
+
+    def test_only_trusted_comments_reach_the_next_review(self):
+        comments = [{'authorAssociation': value, 'body': value}
+                    for value in ('OWNER', 'MEMBER', 'COLLABORATOR', 'CONTRIBUTOR', 'NONE')]
+        comments.append({'body': 'no association'})
+        self.assertEqual([item['body'] for item in automation.trusted_comments(comments)],
+                         ['OWNER', 'MEMBER', 'COLLABORATOR'])
 
     def test_open_pr_filter_is_per_automation(self):
         prs = [{'headRefName': 'automation/lane-review/2026-11-02'}, {'headRefName': 'automation/lane-review-x/1'},
@@ -166,6 +219,17 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(self.staged(), [HEALTH.report_path])
         self.assertEqual((self.repo / 'Makefile').read_text(), 'old\n')
         self.assertFalse((self.repo / 'stray.txt').exists())
+
+    def test_ignored_report_survives_dropping_a_protected_fix(self):
+        (self.repo / '.gitignore').write_text('docs/*\n')
+        git(self.repo, 'add', '.gitignore')
+        git(self.repo, 'commit', '-qm', 'ignore')
+        self.write_report(HEALTH)
+        (self.repo / 'Makefile').write_text('evil\n')
+        fixes, note = automation.enforce_policy(HEALTH, self.repo)
+        self.assertEqual(fixes, [])
+        self.assertIn('Makefile', note)
+        self.assertEqual(self.staged(), [HEALTH.report_path])
 
     def test_lane_review_only_ever_publishes_its_report(self):
         self.write_report(LANE)
@@ -239,9 +303,12 @@ class PromptTests(unittest.TestCase):
                 self.assertIn(placeholder, prompt, f'{name} missing {placeholder}')
             self.assertTrue((ROOT / f'tools/automations/systemd/dotfiles-automation@{name}.timer').is_file())
 
-    def test_prompts_name_the_same_protected_paths_as_the_policy(self):
+    def test_prompts_name_the_same_paths_as_the_policy(self):
         for name in ('dotfiles-health', 'tooling-radar'):
             prompt = (ROOT / f'tools/automations/prompts/{name}.md').read_text()
+            for glob in automation.PROFILES[name].fix_globs:
+                self.assertIn(f'`{glob}`', prompt, f'{name} missing {glob}')
+                self.assertFalse(automation.is_protected(glob), f'{glob} can never be applied')
             for path in (*automation.PROTECTED_PREFIXES, 'Makefile', 'config/versions.env',
                          'ai/pi/install.sh', 'ai/pi/settings.json', 'ai/pi/config/permission-system.json'):
                 self.assertIn(f'`{path}`', prompt, f'{name} missing {path}')

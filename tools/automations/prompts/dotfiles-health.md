@@ -30,6 +30,8 @@ Return at most 10 findings, ranked by impact. Six sharp findings beat ten padded
 
 You may apply small mechanical fixes that cannot change behavior: correcting docs and inventories, and fixing stale references in comments or documentation. Apply at most 5 such fixes. List everything else as a recommendation, including any removal, any rule change, and anything that changes how a script runs.
 
+You may only change these files: `AGENTS.md`, `README.md`, `ai/README.md`, `ai/marketplace/plugins/my/README.md`, `tools/herdr/README.md` and `docs/guides/*.md`. An edit to any other file discards all your fixes, so recommend those changes instead.
+
 You cannot run anything, so the pull request's CI is the test of your edits. `tests/repository_hygiene.bats` enforces repository inventories; read it before changing one. Edits to `.github/`, `bin/`, `core/git/`, `config/mise/`, `config/versions.env`, `ai/pi/extensions/`, `ai/pi/install.sh`, `ai/pi/settings.json`, `ai/pi/config/permission-system.json`, `Makefile` or `tools/automations/` discard all your fixes, so recommend those instead.
 
 ## Report

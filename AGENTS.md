@@ -72,7 +72,7 @@ Pi authenticates directly to the GitHub Copilot subscription through `/login`. S
 
 ## Weekly Automations
 
-`tools/automations/` holds three opt-in Monday reviews (`tooling-radar`, `dotfiles-health`, `lane-review`), run by `libexec/automation_run.py` from systemd user timers. Each opens a PR with a report and, where allowed, small fixes; none merges. The agent runs sandboxed with file tools only, and the runner does all publishing. `lane-review` reads private project data, so it publishes only to a verified private repository. See `tools/automations/README.md`. Keep the sandbox allowlist, protected paths and secret scan in step with that README.
+`tools/automations/` holds three opt-in Monday reviews (`tooling-radar`, `dotfiles-health`, `lane-review`), run by `libexec/automation_run.py` from systemd user timers. Each opens a PR with a report and, where allowed, small fixes; none merges. The agent runs sandboxed with file tools only, and the runner does all publishing. `lane-review` reads private project data, so it publishes only to a verified private repository. See `tools/automations/README.md`. Keep the sandbox allowlist, per-automation fix lists, protected paths and secret scan in step with that README and the prompts.
 
 ## Adding resources
 

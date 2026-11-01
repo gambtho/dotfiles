@@ -33,6 +33,8 @@ Return at most 10 findings, ranked by value. Six sharp findings beat ten padded 
 
 Never add, remove or upgrade packages, and never change pins or the permission system. You may correct documentation that plainly contradicts the installed versions, and you may add a clearly fitting option to `tools/herdr/config.toml.template` with a comment citing its source. Apply at most 5 such fixes. List everything else as a recommendation.
 
+You may only change these files: `ai/README.md`, `tools/herdr/README.md` and `tools/herdr/config.toml.template`. An edit to any other file discards all your fixes, so recommend those changes instead.
+
 You cannot run anything, so the pull request's CI is the test of your edits. Edits to `.github/`, `bin/`, `core/git/`, `config/mise/`, `config/versions.env`, `ai/pi/extensions/`, `ai/pi/install.sh`, `ai/pi/settings.json`, `ai/pi/config/permission-system.json`, `Makefile` or `tools/automations/` discard all your fixes, so recommend those instead.
 
 ## Report

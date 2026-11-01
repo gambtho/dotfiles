@@ -14,6 +14,7 @@ import argparse
 import dataclasses
 import datetime as dt
 import fcntl
+import fnmatch
 import json
 import os
 import re
@@ -60,6 +61,23 @@ PROTECTED_FILES = frozenset(
     }
 )
 
+# What each review may change, matching what its prompt allows. The radar reads
+# text from strangers, so unlike dotfiles-health it cannot edit AGENTS.md, which
+# steers future agents.
+DOTFILES_HEALTH_FIXES = (
+    "AGENTS.md",
+    "README.md",
+    "ai/README.md",
+    "ai/marketplace/plugins/my/README.md",
+    "tools/herdr/README.md",
+    "docs/guides/*.md",
+)
+TOOLING_RADAR_FIXES = ("ai/README.md", "tools/herdr/README.md", "tools/herdr/config.toml.template")
+
+# Comments on a public repository can come from anyone, and later runs treat them
+# as guidance about which findings were rejected.
+TRUSTED_COMMENT_AUTHORS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
+
 SECRET_PATTERNS = (
     re.compile(r"\bgh[opusr]_[A-Za-z0-9]{20,}"),
     re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}"),
@@ -89,14 +107,25 @@ class Profile:
     report_path: str
     fixes_allowed: bool
     private_only: bool
+    fix_globs: tuple[str, ...] = ()
 
 
 PROFILES = {
     "dotfiles-health": Profile(
-        "dotfiles-health", "Weekly dotfiles health", "docs/automation-reports/dotfiles-health.md", True, False
+        "dotfiles-health",
+        "Weekly dotfiles health",
+        "docs/automation-reports/dotfiles-health.md",
+        True,
+        False,
+        DOTFILES_HEALTH_FIXES,
     ),
     "tooling-radar": Profile(
-        "tooling-radar", "Weekly tooling radar", "docs/automation-reports/tooling-radar.md", True, False
+        "tooling-radar",
+        "Weekly tooling radar",
+        "docs/automation-reports/tooling-radar.md",
+        True,
+        False,
+        TOOLING_RADAR_FIXES,
     ),
     "lane-review": Profile("lane-review", "Weekly lane review", "automation-reports/lane-review.md", False, True),
 }
@@ -130,6 +159,11 @@ def downgrade_reason(
     protected = sorted(path for path in fix_paths if is_protected(path))
     if protected:
         return "fixes touched protected paths: " + ", ".join(protected)
+    outside = sorted(
+        path for path in fix_paths if not any(fnmatch.fnmatchcase(path, glob) for glob in profile.fix_globs)
+    )
+    if outside:
+        return "fixes went outside this automation's allowed files: " + ", ".join(outside)
     if has_symlink:
         return "fixes added a symlink"
     if len(fix_paths) > MAX_FIX_FILES:
@@ -161,7 +195,16 @@ def secret_hit(text: str, literals: set[str]) -> str | None:
 
 def filter_automation_prs(prs: list[dict], name: str) -> list[dict]:
     prefix = f"automation/{name}/"
-    return [pr for pr in prs if pr.get("headRefName", "").startswith(prefix)]
+    # A fork can use any branch name, and must not pause runs or supply evidence.
+    return [
+        pr
+        for pr in prs
+        if pr.get("headRefName", "").startswith(prefix) and not pr.get("isCrossRepository", False)
+    ]
+
+
+def trusted_comments(comments: list[dict]) -> list[dict]:
+    return [item for item in comments if item.get("authorAssociation") in TRUSTED_COMMENT_AUTHORS]
 
 
 def pr_body(report: str, note: str | None, fix_paths: list[str]) -> str:
@@ -185,7 +228,9 @@ def sandbox_args(
     pi_agent: Path,
 ) -> list[str]:
     """Build a bubblewrap allowlist. Everything unlisted, including $HOME, is absent."""
-    args = ["bwrap", "--die-with-parent", "--unshare-pid", "--unshare-ipc"]
+    # Cleared so tokens and sockets in the caller's environment stay outside; the
+    # runner sets what Pi needs afterwards.
+    args = ["bwrap", "--clearenv", "--die-with-parent", "--unshare-pid", "--unshare-ipc"]
     for path in ("/usr", "/bin", "/lib", "/etc"):
         args += ["--ro-bind", path, path]
     args += ["--ro-bind-try", "/lib64", "/lib64"]
@@ -260,7 +305,7 @@ def gather_previous_prs(evidence: Path, slug: str, name: str) -> None:
     raw = observe(
         [
             "gh", "pr", "list", "-R", slug, "--state", "all", "--limit", "200",
-            "--json", "number,title,state,mergedAt,headRefName,body,comments,url",
+            "--json", "number,title,state,mergedAt,headRefName,isCrossRepository,body,comments,url",
         ]
     )
     try:
@@ -270,7 +315,7 @@ def gather_previous_prs(evidence: Path, slug: str, name: str) -> None:
         return
     sections = []
     for pr in prs:
-        comments = "\n".join(f"- {item.get('body', '')[:1000]}" for item in pr.get("comments", []))
+        comments = "\n".join(f"- {item.get('body', '')[:1000]}" for item in trusted_comments(pr.get("comments", [])))
         sections.append(
             f"## #{pr['number']} {pr['title']} ({pr['state']})\n\n"
             f"Comments:\n{comments or 'none'}\n\nBody:\n{pr.get('body', '')[:6000]}\n"
@@ -452,16 +497,26 @@ def resolve_slug(profile: Profile) -> str:
     if profile.private_only:
         if not KNOWLEDGE_CONFIG.exists():
             raise AutomationError(f"{profile.name} publishes to the private knowledge repo; {KNOWLEDGE_CONFIG} is missing")
-        return json.loads(KNOWLEDGE_CONFIG.read_text(encoding="utf-8"))["repository"]
+        config = json.loads(KNOWLEDGE_CONFIG.read_text(encoding="utf-8"))
+        repository = config.get("repository") if isinstance(config, dict) else None
+        if not isinstance(repository, str) or not re.fullmatch(r"[\w.-]+/[\w.-]+", repository):
+            raise AutomationError(f"{KNOWLEDGE_CONFIG} has no valid repository")
+        return repository
     return repo_slug(run(["git", "-C", str(DOTFILES), "remote", "get-url", "origin"]))
 
 
 def check_target(profile: Profile, slug: str) -> str:
     info = json.loads(run(["gh", "repo", "view", slug, "--json", "visibility,defaultBranchRef"]))
+    if not isinstance(info, dict):
+        raise AutomationError(f"unexpected repository details for {slug}")
     # Checked every run: a repo that later went public must stop receiving these.
     if profile.private_only and info.get("visibility") != "PRIVATE":
         raise AutomationError(f"{slug} is {info.get('visibility')}, refusing to publish private lane evidence")
-    return info["defaultBranchRef"]["name"]
+    branch = info.get("defaultBranchRef")
+    name = branch.get("name") if isinstance(branch, dict) else None
+    if not isinstance(name, str) or not name:
+        raise AutomationError(f"{slug} has no default branch")
+    return name
 
 
 # ── Sandbox ──────────────────────────────────────────────────────────────────
@@ -561,7 +616,7 @@ def enforce_policy(profile: Profile, repo: Path) -> tuple[list[str], str | None]
         git(repo, "clean", "-fdqx")
         report_file.parent.mkdir(parents=True, exist_ok=True)
         report_file.write_bytes(report)
-        git(repo, "add", "--", profile.report_path)
+        git(repo, "add", "-f", "--", profile.report_path)
         fix_paths = []
     return fix_paths, note
 
@@ -592,7 +647,7 @@ def run_automation(profile: Profile, dry_run: bool) -> tuple[str, str]:
     slug = resolve_slug(profile)
     base = check_target(profile, slug)
     open_prs = filter_automation_prs(
-        json.loads(run(["gh", "pr", "list", "-R", slug, "--state", "open", "--limit", "100", "--json", "headRefName,url"])),
+        json.loads(run(["gh", "pr", "list", "-R", slug, "--state", "open", "--limit", "100", "--json", "headRefName,isCrossRepository,url"])),
         profile.name,
     )
     # Backpressure: an unreviewed PR means another weekly model run adds noise and cost.

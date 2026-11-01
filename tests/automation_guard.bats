@@ -46,6 +46,28 @@ NODE
   [[ "$output" == *"under .git"* ]]
 }
 
+@test "automation guard rejects paths Pi would reinterpret after the check" {
+  local path
+  for path in "@$AGENT/auth.json" "@escape" "~" "~/.ssh/id_rsa" "~other/x" \
+    "file://$AGENT/auth.json" "file:$AGENT/auth.json" "FILE:$AGENT/auth.json" \
+    $'report\u00a0.md' $'report\u2003.md' $'report\u202f.md' $'report\u3000.md'; do
+    run decide read "$path"
+    [[ "$output" == *"path form"* ]] || {
+      printf 'allowed: %s\n%s\n' "$path" "$output"
+      false
+    }
+    run decide write "$path"
+    [[ "$output" == *"path form"* ]]
+  done
+}
+
+@test "automation guard still allows ordinary names containing those characters" {
+  run decide read "notes@work.md"
+  [ "$output" = allowed ]
+  run decide read "a~b.md"
+  [ "$output" = allowed ]
+}
+
 @test "automation guard rejects tools outside the review allowlist" {
   run decide bash ls
   [[ "$output" == *"not allowed"* ]]

@@ -34,7 +34,7 @@ make automation-run NAME=dotfiles-health DRY_RUN=1
 4. **Check.** The runner applies the path policy and a secret scan to what the agent produced.
 5. **Publish.** The runner, not the agent, commits, pushes and opens the PR. The PR's CI is the test gate, because agent-written code is never run on this machine.
 
-If the agent changes nothing, there is no PR. If fixes touch a protected path, or exceed 12 files or 300 lines, they are dropped and the report still goes out, with a note in the PR. If the secret scan matches anything, nothing is published and the run is marked failed.
+If the agent changes nothing, there is no PR. Each automation has a short list of files it may fix, in `libexec/automation_run.py`. If fixes go outside that list, touch a protected path, or exceed 12 files or 300 lines, they are dropped and the report still goes out, with a note in the PR. If the secret scan matches anything, nothing is published and the run is marked failed.
 
 ## Why the agent is sandboxed
 
@@ -42,7 +42,8 @@ The radar reads text written by strangers, and this machine's `gh` token can del
 
 - The agent's `$HOME` is empty apart from the Pi runtime and a throwaway agent directory. It cannot see `~/*-local`, `~/.ssh`, the `gh` keyring or real Pi sessions.
 - The `.git` directory is read-only, so the agent can't plant hooks or config for the publishing step. Publishing also disables hooks.
-- `guard.ts` limits file tools to the clone and the evidence, which keeps the credential copy in the throwaway directory out of reach. That directory is deleted when the run ends.
+- The sandbox starts with an empty environment, so tokens and sockets from the caller's shell don't carry over.
+- `guard.ts` limits file tools to the clone and the evidence, and rejects path forms Pi would reinterpret after the check (`@`, `~`, `file:` and Unicode spaces). This keeps the credential copy in the throwaway directory out of reach. That directory is deleted when the run ends.
 - Pi still needs network access to reach the model, so the sandbox is not offline. It has no tool that can make its own requests.
 
 ## Private lane data
@@ -51,7 +52,7 @@ The radar reads text written by strangers, and this machine's `gh` token can del
 
 ## Rejecting findings
 
-Close the PR without merging, and comment with the reason if it matters. The next run reads recent PRs and their comments and does not raise rejected findings again unless the facts change.
+Close the PR without merging, and comment with the reason if it matters. The next run reads recent PRs and comments from the owner, members and collaborators, and does not raise rejected findings again unless the facts change.
 
 ## Failures
 

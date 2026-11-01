@@ -7,6 +7,9 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const READ_TOOLS = new Set(["read", "grep", "find", "ls"]);
 const WRITE_TOOLS = new Set(["write", "edit"]);
+// Pi strips a leading @, expands ~, follows file: URLs and normalizes these spaces
+// after this check, so such a path could be approved here and open somewhere else.
+const REINTERPRETED_PATH = /^(?:[@~]|file:)|[\u00A0\u2000-\u200A\u202F\u205F\u3000]/i;
 
 function canonical(target: string): string {
   let current = target;
@@ -35,6 +38,9 @@ export function blockReason(
   const isRead = READ_TOOLS.has(toolName);
   if (!isRead && !WRITE_TOOLS.has(toolName)) return `tool ${toolName} is not allowed in review runs`;
   const requested = (input as { path?: unknown } | undefined)?.path;
+  if (typeof requested === "string" && REINTERPRETED_PATH.test(requested)) {
+    return `path form ${JSON.stringify(requested)} is not allowed in review runs`;
+  }
   const target = canonical(resolve(cwd, typeof requested === "string" && requested ? requested : "."));
   const roots = isRead ? readRoots : writeRoots;
   if (!roots.some((root) => within(target, root))) return `${target} is outside this review's allowed paths`;
