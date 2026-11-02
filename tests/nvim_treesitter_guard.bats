@@ -21,7 +21,7 @@ setup() {
   # /usr/bin:/bin. Distros ship an older nvim there — Debian bookworm has 0.9.5,
   # which predates vim.system() (added in 0.10) — so a bare `nvim` would probe a
   # binary that reports every stub as broken and make this suite pass vacuously.
-  NVIM_BIN="$(command -v nvim || true)"
+  NVIM_BIN="$(resolve_host_tool nvim || true)"
 
   setup_dotfiles_test
   INIT_LUA="$REPO_ROOT/config/nvim/init.lua"

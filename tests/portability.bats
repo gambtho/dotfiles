@@ -102,6 +102,64 @@ setup() {
   [ -z "$output" ]
 }
 
+# A fake mise with the two behaviours that matter: every shim fails the way a real
+# one does under a sandboxed HOME, and `which` only answers under the ambient HOME
+# holding the trust state. A capture that runs too late or keeps the shim fails.
+make_mise_fixture() {
+  MISE_FIXTURE="$TEST_ROOT/mise-fixture"
+  mkdir -p "$MISE_FIXTURE/home" "$MISE_FIXTURE/mise-bin" "$MISE_FIXTURE/shims" "$MISE_FIXTURE/installs"
+  cat >"$MISE_FIXTURE/mise-bin/mise" <<EOF
+#!/bin/sh
+if [ "\${0##*/}" != mise ]; then
+  echo "mise ERROR Config files are not trusted" >&2
+  exit 1
+fi
+[ "\$1 \$HOME" = "which $MISE_FIXTURE/home" ] && [ "\$2" = node ] || exit 1
+echo "$MISE_FIXTURE/installs/node"
+EOF
+  printf '#!/bin/sh\necho real-node\n' >"$MISE_FIXTURE/installs/node"
+  chmod +x "$MISE_FIXTURE/mise-bin/mise" "$MISE_FIXTURE/installs/node"
+  ln -s "$MISE_FIXTURE/mise-bin/mise" "$MISE_FIXTURE/shims/node"
+  ln -s "$MISE_FIXTURE/mise-bin/mise" "$MISE_FIXTURE/shims/neighbour"
+}
+
+@test "the sandbox captures the real binary behind a mise shim" {
+  make_mise_fixture
+
+  run bash -c '
+    HOME="$2/home" PATH="$2/shims:$PATH"
+    source "$1/tests/test_helper.bash"
+    setup_dotfiles_test
+    readlink "$SANDBOX_TOOL_BIN/node"
+    node
+    [ ! -e "$SANDBOX_TOOL_BIN/neighbour" ] && echo no-neighbour
+  ' _ "$REPO_ROOT" "$MISE_FIXTURE"
+
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = "$MISE_FIXTURE/installs/node" ]
+  [ "${lines[1]}" = real-node ]
+  [ "${lines[2]}" = no-neighbour ]
+}
+
+@test "a mise shim that cannot resolve falls through to the next PATH entry" {
+  make_mise_fixture
+  mkdir -p "$MISE_FIXTURE/later"
+  printf '#!/bin/sh\necho later-node\n' >"$MISE_FIXTURE/later/node"
+  chmod +x "$MISE_FIXTURE/later/node"
+
+  # An ambient HOME other than the fixture's makes `mise which` fail.
+  run bash -c '
+    PATH="$2/shims:$2/later:$PATH"
+    source "$1/tests/test_helper.bash"
+    resolve_host_tool node
+    resolve_host_tool neighbour || echo unresolved
+  ' _ "$REPO_ROOT" "$MISE_FIXTURE"
+
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = "$MISE_FIXTURE/later/node" ]
+  [ "${lines[1]}" = unresolved ]
+}
+
 @test "repository shell tooling avoids Bash-4-only mapfile" {
   run rg -n '(^|[[:space:]])mapfile([[:space:]]|$)' "$REPO_ROOT/bin" "$REPO_ROOT/libexec" \
     "$REPO_ROOT"/ai/*/install.sh "$REPO_ROOT/fonts/install.sh" "$REPO_ROOT/work/install.sh"

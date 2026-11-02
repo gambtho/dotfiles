@@ -1,13 +1,29 @@
+# Print the executable a host tool really runs. Call this before HOME changes: a
+# mise shim re-resolves its tool on every run, and under a sandboxed HOME it
+# dies with "Config files ... are not trusted" because mise walks up from a cwd
+# under the real home while its trust state now lives in the sandbox. A shim mise
+# cannot resolve falls through to the next PATH entry, as the shim itself would.
+resolve_host_tool() {
+  local tool="$1" candidate target resolved
+  while IFS= read -r candidate; do
+    target="$(readlink "$candidate" 2>/dev/null)" || target=""
+    if [[ "${target##*/}" != mise ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+    [[ "$target" == /* ]] || target="${candidate%/*}/$target"
+    if resolved="$("$target" which "$tool" 2>/dev/null)" && [[ -x "$resolved" ]]; then
+      printf '%s\n' "$resolved"
+      return 0
+    fi
+  done < <(type -aP "$tool")
+  return 1
+}
+
 setup_dotfiles_test() {
   REPO_ROOT="$(cd "$BATS_TEST_DIRNAME/.." && pwd -P)"
   export REPO_ROOT
   export TEST_ROOT="$BATS_TEST_TMPDIR/test-root"
-  export HOME="$TEST_ROOT/home"
-  export XDG_CONFIG_HOME="$HOME/.config"
-  export XDG_DATA_HOME="$HOME/.local/share"
-  export XDG_STATE_HOME="$HOME/.local/state"
-  export STUB_BIN="$TEST_ROOT/bin"
-  mkdir -p "$HOME" "$STUB_BIN"
 
   # Resolve tools the sandbox needs but cannot assume are in a system
   # directory while the ambient PATH is still intact. A tool installed through
@@ -21,9 +37,16 @@ setup_dotfiles_test() {
   mkdir -p "$SANDBOX_TOOL_BIN"
   local tool tool_path
   for tool in yq node jq; do
-    tool_path="$(command -v "$tool" 2>/dev/null)" || continue
+    tool_path="$(resolve_host_tool "$tool")" || continue
     ln -sf "$tool_path" "$SANDBOX_TOOL_BIN/$tool"
   done
+
+  export HOME="$TEST_ROOT/home"
+  export XDG_CONFIG_HOME="$HOME/.config"
+  export XDG_DATA_HOME="$HOME/.local/share"
+  export XDG_STATE_HOME="$HOME/.local/state"
+  export STUB_BIN="$TEST_ROOT/bin"
+  mkdir -p "$HOME" "$STUB_BIN"
 
   # Stubs win, followed by explicitly selected tools: a system namesake must
   # not replace the runtime, yq, or jq implementation selected before sandboxing.

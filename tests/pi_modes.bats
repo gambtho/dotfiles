@@ -4,7 +4,7 @@ load test_helper
 
 setup() {
   local real_pi
-  real_pi=$(command -v pi) || real_pi=""
+  real_pi=$(resolve_host_tool pi) || real_pi=""
   source "$BATS_TEST_DIRNAME/../libexec/lib/pi-runtime.sh"
   resolve_pi_runtime "$real_pi" "${PI_TEST_HOST_ROOT:-}"
   export HOST_ROOT=$PI_RUNTIME_PACKAGE_ROOT
