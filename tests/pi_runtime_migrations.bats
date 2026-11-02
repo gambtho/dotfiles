@@ -194,8 +194,17 @@ refresh() {
 
 @test "refresh fails rather than skips when no Pi host was selected" {
   seed_preferences
+  # The installer falls back to `command -v pi`, which a system Pi would satisfy.
+  stub_command pi 'exit 99'
+  local no_pi_path="$TEST_ROOT/no-pi-bin" tool
+  mkdir -p "$no_pi_path"
+  for tool in awk basename bash cat chmod cmp cp cut date dirname env find grep head jq ln mkdir mktemp mv readlink rm sed sha256sum sort stat tail touch tr uname; do
+    ln -s "$(command -v "$tool")" "$no_pi_path/$tool"
+  done
+  PATH="$no_pi_path" run command -v pi
+  [ "$status" -ne 0 ]
   export PI_AI_REFRESH_PREFERENCES=1 HOST_PI=""
-  PI_TEST_HOST_ROOT="" refresh
+  PATH="$no_pi_path" PI_TEST_HOST_ROOT="" refresh
   [ "$status" -ne 0 ]
   [[ "$output" == *"Pi executable not found on PATH"* ]]
 }
