@@ -237,6 +237,37 @@ PY
   [ "$status" -eq 0 ]
 }
 
+@test "lane report size filter counts tests at any depth without claiming product paths" {
+  run python3 - "$SKILL_DIR" <<'PY'
+import json
+from pathlib import Path
+import re
+import subprocess
+import sys
+
+text = (Path(sys.argv[1]) / "SKILL.md").read_text()
+filters = re.findall(r"--json files --jq '([^']+)'", text)
+assert len(filters) == 1, filters
+# Each kind's additions are distinct bits, so a miscounted path changes the exact total.
+tests = ["tests/lane_coordinator.bats", "tests/python/pr_snapshot_stable.json", "test/run.sh",
+         "pkg/tests/run.py", "pkg/test/run.py", "src/app_test.go", "src/app.spec.ts"]
+docs = ["README.md", "docs/guide.md"]
+product = ["bin/dot-install", "latests/run.sh", "src/tests.py", "libexec/testsuite/run.sh"]
+paths = tests + docs + product
+files = [{"path": path, "additions": 1 << bit} for bit, path in enumerate(paths)]
+def total(group):
+    return sum(item["additions"] for item in files if item["path"] in group)
+result = subprocess.run(["jq", "-c", filters[0]], input=json.dumps({"files": files}),
+                        capture_output=True, text=True, check=True)
+assert json.loads(result.stdout) == {"tests": total(tests), "docs": total(docs),
+                                     "product": total(product)}, result.stdout
+PY
+  [ "$status" -eq 0 ] || {
+    echo "$output"
+    false
+  }
+}
+
 @test "coordinator delegates bot waiting and requires snapshot consistency" {
   run python3 - "$SKILL_DIR/SKILL.md" <<'PY'
 from pathlib import Path
