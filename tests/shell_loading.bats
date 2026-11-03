@@ -190,6 +190,88 @@ assert_install_lookup() {
   [[ "$output" == *"CUSTOM_DOTFILES_LOADED"* ]]
 }
 
+# Prezto is installed separately, not available in CI. Model its registration
+# without loading its prompt/completion stack; keep make/diff dispatch real.
+setup_utility_autoloads() {
+  export ZDOTDIR="${1:-$HOME/zsh config}" DOTFILES="$HOME/custom-dotfiles"
+  local utility="$ZDOTDIR/.zprezto/modules/utility/functions" name
+  mkdir -p "$utility" "$DOTFILES/core/shell"
+  printf ':\n' >"$DOTFILES/core/shell/load-custom.zsh"
+  printf '%s\n' \
+    'ZPREZTODIR=${0:h}' \
+    'fpath=("$ZPREZTODIR/modules/utility/functions" $fpath)' \
+    'autoload -Uz diff dut make prep psub wdiff zsh-help' >"$ZDOTDIR/.zprezto/init.zsh"
+  for name in diff dut make prep psub wdiff zsh-help; do
+    printf 'print -r -- %s\n' "$name" >"$utility/$name"
+  done
+  printf 'command make "$@"\n' >"$utility/make"
+  printf 'command diff "$@"\n' >"$utility/diff"
+  printf 'snapshot_target:\n\t@echo MAKE_OK\n' >"$HOME/snapshot.mk"
+  printf 'different\n' >"$HOME/different"
+  stub_command kubectl 'exit 0'
+}
+
+@test "zshrc keeps interactive utility wrappers lazy and FPATH unexported" {
+  setup_utility_autoloads
+
+  run zsh -dfi -c '
+    typeset +x FPATH
+    source "$REPO_ROOT/core/shell/zshrc.symlink" || exit 1
+    [[ ${(t)FPATH} != *export* ]] || exit 1
+    for name in diff dut make prep psub wdiff zsh-help; do
+      [[ $functions[$name] == *"autoload -X"* ]] || exit 1
+    done
+    make -f "$HOME/snapshot.mk" snapshot_target || exit 1
+    diff /dev/null /dev/null || exit 1
+    diff /dev/null "$HOME/different" >/dev/null
+    (( $? == 1 )) || exit 1
+    # Re-sourcing must not discard an already loaded wrapper body.
+    body=$functions[make]
+    source "$REPO_ROOT/core/shell/zshrc.symlink" || exit 1
+    [[ $functions[make] == "$body" ]] || exit 1
+    print INTERACTIVE_OK
+  '
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"MAKE_OK"* ]]
+  [[ "$output" == *"INTERACTIVE_OK"* ]]
+}
+
+@test "zshrc utility snapshots run without Prezto on fpath or inherited FPATH" {
+  # zsh 5.9 emits stored autoload paths unquoted; use a space-free path for
+  # serialization, matching the standard installation. Interactive use above
+  # separately exercises a ZDOTDIR containing spaces.
+  setup_utility_autoloads "$HOME/zsh"
+
+  run zsh -dfi -c '
+    typeset +x FPATH
+    source "$REPO_ROOT/core/shell/zshrc.symlink" || exit 1
+    # The real snapshot saves function definitions, not fpath/FPATH.
+    functions diff dut make prep psub wdiff zsh-help >"$HOME/snapshot.zsh"
+    zsh -dfc '\''
+      fpath=()
+      source "$HOME/snapshot.zsh" || exit 1
+      make -f "$HOME/snapshot.mk" snapshot_target || exit 1
+      diff /dev/null /dev/null || exit 1
+      diff /dev/null "$HOME/different" >/dev/null
+      (( $? == 1 )) || exit 1
+      for name in dut prep psub wdiff zsh-help; do
+        "$name" || exit 1
+      done
+      (( $#fpath == 0 )) || exit 1
+      [[ ${(t)FPATH} != *export* ]] || exit 1
+    '\''
+  '
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"MAKE_OK"* ]]
+  [[ "$output" != *"function definition file not found"* ]]
+  local name
+  for name in dut prep psub wdiff zsh-help; do
+    [[ "$output" == *"$name"* ]]
+  done
+}
+
 @test "zshrc performs no network or git operations" {
   stub_command git 'echo git-called >&2; exit 99'
   stub_command curl 'echo curl-called >&2; exit 99'
