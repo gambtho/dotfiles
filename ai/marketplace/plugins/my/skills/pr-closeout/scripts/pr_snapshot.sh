@@ -278,15 +278,15 @@ all_checks_no_checks_pending="$(jq -r '.noChecksPending' <<<"$checks_result")"
 required_checks_no_checks_reported="$(jq -r '.noChecksReported' <<<"$required_checks_result")"
 required_checks_no_checks_pending="$(jq -r '.noChecksPending' <<<"$required_checks_result")"
 
-# `gh pr checks` omits the commit each check ran on; read it from the status rollup.
-# A failed read, an unmatched check or an ambiguous name records "unknown".
-revisions_json="$(gh api graphql \
+# `gh pr checks` omits the commit it read checks from (`commits(last:1)`, not always
+# the head); read it per check from the same rollup. A failed read or unmatched check is "unknown".
+revisions_json="$(gh api graphql --paginate \
   -f owner="$owner" \
   -f repo="$repo" \
   -F number="$pr_number" \
-  -f query='query($owner:String!, $repo:String!, $number:Int!) { repository(owner:$owner, name:$repo) { pullRequest(number:$number) { commits(last:1) { nodes { commit { statusCheckRollup { contexts(first:100) { nodes { __typename ... on CheckRun { name checkSuite { commit { oid } workflowRun { workflow { name } } } } ... on StatusContext { context commit { oid } } } } } } } } } } }' \
-  --jq '[.data.repository.pullRequest.commits.nodes[0].commit.statusCheckRollup.contexts.nodes[]? | if .__typename == "CheckRun" then {key:"\(.name)\u0000\(.checkSuite.workflowRun.workflow.name // "")", oid:.checkSuite.commit.oid} else {key:"\(.context)\u0000", oid:.commit.oid} end] | group_by(.key) | map({key:.[0].key, value:(if ([.[].oid] | unique | length) == 1 then .[0].oid // "unknown" else "unknown" end)}) | from_entries' \
-  2>/dev/null)" || revisions_json='{}'
+  -f query='query($owner:String!, $repo:String!, $number:Int!, $endCursor:String) { repository(owner:$owner, name:$repo) { pullRequest(number:$number) { commits(last:1) { nodes { commit { statusCheckRollup { contexts(first:100, after:$endCursor) { nodes { __typename ... on CheckRun { name checkSuite { commit { oid } workflowRun { workflow { name } } } } ... on StatusContext { context commit { oid } } } pageInfo { hasNextPage endCursor } } } } } } } } }' \
+  --jq '[.data.repository.pullRequest.commits.nodes[0].commit.statusCheckRollup.contexts.nodes[]? | if .__typename == "CheckRun" then {key:"\(.name)\u0000\(.checkSuite.workflowRun.workflow.name // "")", value:(.checkSuite.commit.oid // "unknown")} else {key:"\(.context)\u0000", value:(.commit.oid // "unknown")} end]' \
+  2>/dev/null | jq -cs 'add | from_entries' 2>/dev/null)" || revisions_json='{}'
 jq -e 'type == "object"' >/dev/null 2>&1 <<<"$revisions_json" || revisions_json='{}'
 with_revisions() {
   jq --argjson revs "$revisions_json" 'map(. + {revision:($revs["\(.name)\u0000\(.workflow // "")"] // "unknown")})'

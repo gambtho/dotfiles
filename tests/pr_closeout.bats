@@ -51,7 +51,7 @@ PY
 }
 
 # Stub gh for a PR whose head is the test checkout's HEAD. Tests set CHECKS (gh pr
-# checks JSON) and ROLLUP (status rollup nodes; unset makes that read fail).
+# checks JSON) and ROLLUP (status rollup nodes, one page per argument; unset fails the read).
 stub_pr_snapshot() {
   git init -q -b topic "$TEST_ROOT/repo"
   git -C "$TEST_ROOT/repo" -c user.name=t -c user.email=t@example.com commit -q --allow-empty -m init
@@ -67,7 +67,9 @@ case "$1 $2" in
     if [[ "$*" != *statusCheckRollup* ]]; then
       echo '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}}}'
     elif [[ -n "${ROLLUP:-}" ]]; then
-      jq -c "${@: -1}" <<<"{\"data\":{\"repository\":{\"pullRequest\":{\"commits\":{\"nodes\":[{\"commit\":{\"statusCheckRollup\":{\"contexts\":{\"nodes\":$ROLLUP}}}}]}}}}}"
+      for page in "$ROLLUP" ${ROLLUP_PAGE2:+"$ROLLUP_PAGE2"}; do
+        jq -c "${@: -1}" <<<"{\"data\":{\"repository\":{\"pullRequest\":{\"commits\":{\"nodes\":[{\"commit\":{\"statusCheckRollup\":{\"contexts\":{\"nodes\":$page}}}}]}}}}}"
+      done
     else
       exit 1
     fi ;;
@@ -86,12 +88,12 @@ check_run() { # name workflow oid
   printf '{"__typename":"CheckRun","name":"%s","checkSuite":{"commit":{"oid":"%s"},"workflowRun":{"workflow":{"name":"%s"}}}}' "$1" "$3" "$2"
 }
 
-@test "snapshot blocks a green check that ran on an older head" {
+@test "snapshot blocks green checks read from a commit other than the head" {
   stub_pr_snapshot
   export CHECKS='[{"name":"test","bucket":"pass","workflow":"ci"},{"name":"bot","bucket":"pass","workflow":""}]'
-  export ROLLUP="[$(check_run test ci "$OLD_OID"),{\"__typename\":\"StatusContext\",\"context\":\"bot\",\"commit\":{\"oid\":\"$HEAD_OID\"}}]"
+  export ROLLUP="[$(check_run test ci "$OLD_OID"),{\"__typename\":\"StatusContext\",\"context\":\"bot\",\"commit\":{\"oid\":\"$OLD_OID\"}}]"
   run_snapshot
-  [ "${lines[0]}" = "test=$OLD_OID bot=$HEAD_OID" ]
+  [ "${lines[0]}" = "test=$OLD_OID bot=$OLD_OID" ]
   [ "${lines[1]}" = true ]
   [ "${lines[2]}" = false ]
   [ "${lines[3]}" = false ]
@@ -118,11 +120,12 @@ check_run() { # name workflow oid
   [ "${lines[2]}" = true ]
 }
 
-@test "snapshot treats one check name on two revisions as unknown" {
+@test "snapshot reads check revisions past the first rollup page" {
   stub_pr_snapshot
-  export CHECKS='[{"name":"test","bucket":"pass","workflow":"ci"}]'
-  export ROLLUP="[$(check_run test ci "$HEAD_OID"),$(check_run test ci "$OLD_OID")]"
+  export CHECKS='[{"name":"a","bucket":"pass","workflow":"ci"},{"name":"b","bucket":"pass","workflow":"ci"}]'
+  export ROLLUP="[$(check_run a ci "$HEAD_OID")]" ROLLUP_PAGE2="[$(check_run b ci "$HEAD_OID")]"
   run_snapshot
-  [ "${lines[0]}" = "test=unknown" ]
-  [ "${lines[2]}" = true ]
+  [ "${lines[0]}" = "a=$HEAD_OID b=$HEAD_OID" ]
+  [ "${lines[1]}" = false ]
+  [ "${lines[2]}" = false ]
 }
