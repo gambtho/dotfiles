@@ -201,9 +201,10 @@ retain their exact approval requirements.
 3. **Verify before calling ready.** Inspect `gh pr view <n> -R <repo> --json
    state,headRefOid,mergeable,files,statusCheckRollup` and the delta's relevant diff/code.
    Require **local HEAD = remote PR head = tested revision = CI revision**, with required
-   checks passing on that revision and no unresolved blockers. Inspect each check run's
-   revision, not just a green rollup. Confirm the diff stays in scope and no claim
-   exceeds evidence. Keep this readiness test separate from review-evidence reuse.
+   checks passing on that revision and no unresolved blockers. Check closeout's snapshot
+   blockers `staleCheckRevision` and `checkRevisionUnknown`, not just a green rollup.
+   Confirm the diff stays in scope and no claim exceeds evidence. Keep this readiness
+   test separate from review-evidence reuse.
    Run [closeout's snapshot](../pr-closeout/SKILL.md#snapshot-helper) with
    `--repo <lane worktree> --github-repo <repo> --pr <n>`. Without that worktree, point
    `--repo` at another checkout, keep the other flags, and ignore only its local
