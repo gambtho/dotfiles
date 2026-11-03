@@ -175,6 +175,17 @@ class TargetTests(unittest.TestCase):
         self.assertEqual([item['body'] for item in automation.trusted_comments(comments)],
                          ['OWNER', 'MEMBER', 'COLLABORATOR'])
 
+    def test_sibling_prs_are_other_automations_from_this_repository(self):
+        prs = [{'headRefName': 'automation/tooling-radar/1', 'url': 'r'},
+               {'headRefName': 'automation/dotfiles-health/1', 'url': 'own'},
+               {'headRefName': 'automation/tooling-radar/2', 'isCrossRepository': True},
+               {'headRefName': 'feature'}]
+        self.assertEqual([pr['url'] for pr in automation.sibling_automation_prs(prs, 'dotfiles-health')], ['r'])
+
+    def test_locked_paths_name_the_pr_that_holds_them(self):
+        prs = [{'url': 'u1', 'files': [{'path': 'ai/README.md'}]}, {'url': 'u2', 'files': None}]
+        self.assertEqual(automation.locked_paths(prs), {'ai/README.md': 'u1'})
+
     def test_open_pr_filter_is_per_automation(self):
         prs = [{'headRefName': 'automation/lane-review/2026-11-02'}, {'headRefName': 'automation/lane-review-x/1'},
                {'headRefName': 'feature'}]
@@ -236,6 +247,53 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(self.staged(), [HEALTH.report_path])
         self.assertEqual((self.repo / 'Makefile').read_text(), 'old\n')
         self.assertFalse((self.repo / 'stray.txt').exists())
+
+    def test_locked_fix_is_dropped_alone(self):
+        (self.repo / 'docs/guides').mkdir(parents=True)
+        self.write_report(HEALTH)
+        (self.repo / 'README.md').write_text('new\n')
+        (self.repo / 'docs/guides/x.md').write_text('new\n')
+        (self.repo / 'docs/guides/held.md').write_text('new\n')
+        locked = {'README.md': 'https://example.com/pr/1', 'docs/guides/held.md': 'https://example.com/pr/1'}
+        fixes, note = automation.enforce_policy(HEALTH, self.repo, locked)
+        self.assertEqual(fixes, ['docs/guides/x.md'])
+        self.assertIn('README.md (https://example.com/pr/1)', note)
+        self.assertEqual(sorted(self.staged()), sorted(['docs/guides/x.md', HEALTH.report_path]))
+        self.assertEqual((self.repo / 'README.md').read_text(), 'old\n')
+        self.assertFalse((self.repo / 'docs/guides/held.md').exists())
+
+    def test_lock_note_survives_a_later_downgrade(self):
+        self.write_report(HEALTH)
+        (self.repo / 'README.md').write_text('new\n')
+        (self.repo / 'Makefile').write_text('evil\n')
+        fixes, note = automation.enforce_policy(HEALTH, self.repo, {'README.md': 'u'})
+        self.assertEqual(fixes, [])
+        self.assertIn('README.md (u)', note)
+        self.assertIn('protected', note)
+        self.assertEqual(self.staged(), [HEALTH.report_path])
+
+    def test_locked_file_outside_the_allowed_list_still_drops_all_fixes(self):
+        (self.repo / 'tools/herdr').mkdir(parents=True)
+        (self.repo / 'tools/herdr/config.toml.template').write_text('old\n')
+        git(self.repo, 'add', '.')
+        git(self.repo, 'commit', '-qm', 'template')
+        self.write_report(HEALTH)
+        (self.repo / 'README.md').write_text('new\n')
+        (self.repo / 'tools/herdr/config.toml.template').write_text('new\n')
+        fixes, note = automation.enforce_policy(HEALTH, self.repo, {'tools/herdr/config.toml.template': 'u'})
+        self.assertEqual(fixes, [])
+        self.assertIn('allowed files', note)
+        self.assertEqual(self.staged(), [HEALTH.report_path])
+        self.assertEqual((self.repo / 'README.md').read_text(), 'old\n')
+
+    def test_moving_a_protected_file_counts_as_touching_it(self):
+        (self.repo / 'docs/guides').mkdir(parents=True)
+        self.write_report(HEALTH)
+        automation.git(self.repo, 'mv', 'Makefile', 'docs/guides/x.md')
+        fixes, note = automation.enforce_policy(HEALTH, self.repo)
+        self.assertEqual(fixes, [])
+        self.assertIn('Makefile', note)
+        self.assertEqual((self.repo / 'Makefile').read_text(), 'old\n')
 
     def test_ignored_report_survives_dropping_a_protected_fix(self):
         (self.repo / '.gitignore').write_text('docs/*\n')
@@ -337,6 +395,13 @@ class PublishTests(unittest.TestCase):
         self.assertEqual(len(automation.filter_automation_prs([{'headRefName': b} for b in created], HEALTH.name)), 2)
 
 
+class PrBodyTests(unittest.TestCase):
+    def test_partial_drop_reports_both_dropped_and_applied_fixes(self):
+        body = automation.pr_body('# R', 'another automation\'s open PR edits README.md (u)', ['docs/guides/x.md'])
+        self.assertIn('Fixes were dropped:', body)
+        self.assertIn('Applied fixes: `docs/guides/x.md`.', body)
+
+
 class LaneEvidenceTests(unittest.TestCase):
     def setUp(self):
         temp = tempfile.TemporaryDirectory()
@@ -387,6 +452,11 @@ class PromptTests(unittest.TestCase):
             for placeholder in ('{{REPORT}}', '{{EVIDENCE}}', '{{REPO}}', '{{DATE}}'):
                 self.assertIn(placeholder, prompt, f'{name} missing {placeholder}')
             self.assertTrue((ROOT / f'tools/automations/systemd/dotfiles-automation@{name}.timer').is_file())
+
+    def test_fixing_prompts_explain_locked_files(self):
+        for name in ('dotfiles-health', 'tooling-radar'):
+            prompt = (ROOT / f'tools/automations/prompts/{name}.md').read_text()
+            self.assertIn('`open-automation-prs.md`', prompt, name)
 
     def test_prompts_name_the_same_paths_as_the_policy(self):
         for name in ('dotfiles-health', 'tooling-radar'):

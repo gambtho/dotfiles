@@ -11,6 +11,7 @@ Evidence, read-only: {{EVIDENCE}}
 - `discovery-*`: new or popular Pi packages and agent skills from npm and GitHub.
 - `claude-skills-installed.txt`: skills already installed for Claude Code.
 - `previous-prs.md`: earlier runs. A PR closed without merging means its findings were rejected; do not raise them again unless the facts changed.
+- `open-automation-prs.md`: other automations' open PRs and the files they edit. Do not edit those files; recommend the change instead, or the edit is dropped. Do not repeat findings those PRs already make.
 
 A line starting `UNKNOWN` means a check failed. Say so; never guess the result.
 
