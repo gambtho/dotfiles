@@ -49,3 +49,80 @@ assert "then repeat `gh pr view`; a failed read or changed" in flat
 PY
   [ "$status" -eq 0 ]
 }
+
+# Stub gh for a PR whose head is the test checkout's HEAD. Tests set CHECKS (gh pr
+# checks JSON) and ROLLUP (status rollup nodes; unset makes that read fail).
+stub_pr_snapshot() {
+  git init -q -b topic "$TEST_ROOT/repo"
+  git -C "$TEST_ROOT/repo" -c user.name=t -c user.email=t@example.com commit -q --allow-empty -m init
+  HEAD_OID="$(git -C "$TEST_ROOT/repo" rev-parse HEAD)"
+  OLD_OID="$(printf 'a%.0s' {1..40})"
+  export HEAD_OID
+  cat >"$STUB_BIN/gh" <<'GH'
+#!/usr/bin/env bash
+case "$1 $2" in
+  "pr view") jq -n --arg h "$HEAD_OID" '{number:7,url:"https://github.com/o/r/pull/7",title:"t",state:"OPEN",isDraft:false,baseRefName:"main",headRefName:"topic",headRefOid:$h,mergeStateStatus:"CLEAN",reviewDecision:null,updatedAt:"2020-01-01T00:00:00Z"}' ;;
+  "pr checks") printf '%s\n' "$CHECKS" ;;
+  "api graphql")
+    if [[ "$*" != *statusCheckRollup* ]]; then
+      echo '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}}}'
+    elif [[ -n "${ROLLUP:-}" ]]; then
+      jq -c "${@: -1}" <<<"{\"data\":{\"repository\":{\"pullRequest\":{\"commits\":{\"nodes\":[{\"commit\":{\"statusCheckRollup\":{\"contexts\":{\"nodes\":$ROLLUP}}}}]}}}}}"
+    else
+      exit 1
+    fi ;;
+esac
+GH
+  chmod +x "$STUB_BIN/gh"
+}
+
+run_snapshot() {
+  run "$SKILL_DIR/scripts/pr_snapshot.sh" --repo "$TEST_ROOT/repo" --pr 7 --github-repo o/r --compact
+  [ "$status" -eq 0 ]
+  run jq -r '(.checks.items | map("\(.name)=\(.revision)") | join(" ")), .blockers.staleCheckRevision, .blockers.checkRevisionUnknown, .blockers.failingChecks, .blockers.pendingChecks' <<<"$output"
+}
+
+check_run() { # name workflow oid
+  printf '{"__typename":"CheckRun","name":"%s","checkSuite":{"commit":{"oid":"%s"},"workflowRun":{"workflow":{"name":"%s"}}}}' "$1" "$3" "$2"
+}
+
+@test "snapshot blocks a green check that ran on an older head" {
+  stub_pr_snapshot
+  export CHECKS='[{"name":"test","bucket":"pass","workflow":"ci"},{"name":"bot","bucket":"pass","workflow":""}]'
+  export ROLLUP="[$(check_run test ci "$OLD_OID"),{\"__typename\":\"StatusContext\",\"context\":\"bot\",\"commit\":{\"oid\":\"$HEAD_OID\"}}]"
+  run_snapshot
+  [ "${lines[0]}" = "test=$OLD_OID bot=$HEAD_OID" ]
+  [ "${lines[1]}" = true ]
+  [ "${lines[2]}" = false ]
+  [ "${lines[3]}" = false ]
+}
+
+@test "snapshot records unknown for a pending check missing from the rollup" {
+  stub_pr_snapshot
+  export CHECKS='[{"name":"test","bucket":"pass","workflow":"ci"},{"name":"slow","bucket":"pending","workflow":"ci"}]'
+  export ROLLUP="[$(check_run test ci "$HEAD_OID")]"
+  run_snapshot
+  [ "${lines[0]}" = "test=$HEAD_OID slow=unknown" ]
+  [ "${lines[1]}" = false ]
+  [ "${lines[2]}" = true ]
+  [ "${lines[4]}" = true ]
+}
+
+@test "snapshot records unknown, not a pass, when revisions are unreadable" {
+  stub_pr_snapshot
+  export CHECKS='[{"name":"test","bucket":"pass","workflow":"ci"}]'
+  unset ROLLUP
+  run_snapshot
+  [ "${lines[0]}" = "test=unknown" ]
+  [ "${lines[1]}" = false ]
+  [ "${lines[2]}" = true ]
+}
+
+@test "snapshot treats one check name on two revisions as unknown" {
+  stub_pr_snapshot
+  export CHECKS='[{"name":"test","bucket":"pass","workflow":"ci"}]'
+  export ROLLUP="[$(check_run test ci "$HEAD_OID"),$(check_run test ci "$OLD_OID")]"
+  run_snapshot
+  [ "${lines[0]}" = "test=unknown" ]
+  [ "${lines[2]}" = true ]
+}

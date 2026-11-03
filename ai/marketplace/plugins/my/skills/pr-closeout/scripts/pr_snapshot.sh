@@ -278,6 +278,22 @@ all_checks_no_checks_pending="$(jq -r '.noChecksPending' <<<"$checks_result")"
 required_checks_no_checks_reported="$(jq -r '.noChecksReported' <<<"$required_checks_result")"
 required_checks_no_checks_pending="$(jq -r '.noChecksPending' <<<"$required_checks_result")"
 
+# `gh pr checks` omits the commit each check ran on; read it from the status rollup.
+# A failed read, an unmatched check or an ambiguous name records "unknown".
+revisions_json="$(gh api graphql \
+  -f owner="$owner" \
+  -f repo="$repo" \
+  -F number="$pr_number" \
+  -f query='query($owner:String!, $repo:String!, $number:Int!) { repository(owner:$owner, name:$repo) { pullRequest(number:$number) { commits(last:1) { nodes { commit { statusCheckRollup { contexts(first:100) { nodes { __typename ... on CheckRun { name checkSuite { commit { oid } workflowRun { workflow { name } } } } ... on StatusContext { context commit { oid } } } } } } } } } } }' \
+  --jq '[.data.repository.pullRequest.commits.nodes[0].commit.statusCheckRollup.contexts.nodes[]? | if .__typename == "CheckRun" then {key:"\(.name)\u0000\(.checkSuite.workflowRun.workflow.name // "")", oid:.checkSuite.commit.oid} else {key:"\(.context)\u0000", oid:.commit.oid} end] | group_by(.key) | map({key:.[0].key, value:(if ([.[].oid] | unique | length) == 1 then .[0].oid // "unknown" else "unknown" end)}) | from_entries' \
+  2>/dev/null)" || revisions_json='{}'
+jq -e 'type == "object"' >/dev/null 2>&1 <<<"$revisions_json" || revisions_json='{}'
+with_revisions() {
+  jq --argjson revs "$revisions_json" 'map(. + {revision:($revs["\(.name)\u0000\(.workflow // "")"] // "unknown")})'
+}
+checks_json="$(with_revisions <<<"$checks_json")"
+required_checks_json="$(with_revisions <<<"$required_checks_json")"
+
 # A failed final read must preserve earlier evidence, but cannot certify it.
 start_observation="$(pr_observation <<<"$pr_json" 2>/dev/null)" || start_observation=null
 end_observation=null
@@ -374,7 +390,8 @@ snapshot="$(jq -n \
   --argjson failingChecks "$failing_checks" \
   --argjson pendingChecks "$pending_checks" \
   --argjson unresolvedReviewThreads "$unresolved_threads" \
-  '{generatedAt:$generatedAt, observation:{startedAt:$observationStartedAt,finishedAt:$observationFinishedAt,start:$startObservation,end:$endObservation,consistent:(($observationChanged or $observationLookupFailed)|not),lookupFailed:$observationLookupFailed}, repository:$repository, local:$local, pr:$pr, reviewThreads:{unresolvedCount:($unresolvedThreads|length), unresolved:$unresolvedThreads}, checks:{summary:$checksSummary, requiredSummary:$checksSummary, allSummary:$allChecksSummary, commandExitCode:$checksCommandExitCode, requiredCommandExitCode:$requiredChecksCommandExitCode, commandError:$checksCommandError, requiredCommandError:$requiredChecksCommandError, lookupFailed:($checksLookupFailed or $requiredChecksLookupFailed), requiredLookupFailed:$requiredChecksLookupFailed, allNoChecksReported:$allChecksNoChecksReported, allNoChecksPending:$allChecksNoChecksPending, requiredNoChecksReported:$requiredChecksNoChecksReported, requiredNoChecksPending:$requiredChecksNoChecksPending, items:$checks, requiredItems:$requiredChecks}, blockers:{prObservationChanged:$observationChanged,prObservationLookupFailed:$observationLookupFailed,wrongHeadBranch:($local.branchMatchesPrHead|not), wrongHeadSha:($local.headMatchesPrHeadOid|not), dirtyWorktree:$local.dirty, prStateBlocking:$prStateBlocking, mergeStateBlocking:$mergeStateBlocking, reviewDecisionBlocking:$reviewDecisionBlocking, unresolvedReviewThreads:$unresolvedReviewThreads, checksLookupFailed:($checksLookupFailed or $requiredChecksLookupFailed), failingChecks:$failingChecks, pendingChecks:$pendingChecks}}')"
+  --arg headOid "$head_oid" \
+  '($checks + $requiredChecks | map(.revision)) as $revs | {generatedAt:$generatedAt, observation:{startedAt:$observationStartedAt,finishedAt:$observationFinishedAt,start:$startObservation,end:$endObservation,consistent:(($observationChanged or $observationLookupFailed)|not),lookupFailed:$observationLookupFailed}, repository:$repository, local:$local, pr:$pr, reviewThreads:{unresolvedCount:($unresolvedThreads|length), unresolved:$unresolvedThreads}, checks:{summary:$checksSummary, requiredSummary:$checksSummary, allSummary:$allChecksSummary, commandExitCode:$checksCommandExitCode, requiredCommandExitCode:$requiredChecksCommandExitCode, commandError:$checksCommandError, requiredCommandError:$requiredChecksCommandError, lookupFailed:($checksLookupFailed or $requiredChecksLookupFailed), requiredLookupFailed:$requiredChecksLookupFailed, allNoChecksReported:$allChecksNoChecksReported, allNoChecksPending:$allChecksNoChecksPending, requiredNoChecksReported:$requiredChecksNoChecksReported, requiredNoChecksPending:$requiredChecksNoChecksPending, items:$checks, requiredItems:$requiredChecks}, blockers:{prObservationChanged:$observationChanged,prObservationLookupFailed:$observationLookupFailed,wrongHeadBranch:($local.branchMatchesPrHead|not), wrongHeadSha:($local.headMatchesPrHeadOid|not), dirtyWorktree:$local.dirty, prStateBlocking:$prStateBlocking, mergeStateBlocking:$mergeStateBlocking, reviewDecisionBlocking:$reviewDecisionBlocking, unresolvedReviewThreads:$unresolvedReviewThreads, checksLookupFailed:($checksLookupFailed or $requiredChecksLookupFailed), failingChecks:$failingChecks, pendingChecks:$pendingChecks, staleCheckRevision:any($revs[]; . != "unknown" and . != $headOid), checkRevisionUnknown:any($revs[]; . == "unknown")}}')"
 
 if [[ "$summary" -eq 1 ]]; then
   jq -r '
@@ -389,6 +406,7 @@ if [[ "$summary" -eq 1 ]]; then
     "Unresolved review threads: \(.reviewThreads.unresolvedCount)",
     "Required checks: total=\(.checks.requiredSummary.total // 0) pass=\(.checks.requiredSummary.pass // 0) pending=\(.checks.requiredSummary.pending // 0) fail=\(.checks.requiredSummary.fail // 0) cancel=\(.checks.requiredSummary.cancel // 0) noChecksPending=\(.checks.requiredNoChecksPending) lookupFailed=\(.checks.requiredLookupFailed) exit=\(.checks.requiredCommandExitCode)",
     "All checks: total=\(.checks.allSummary.total // 0) pass=\(.checks.allSummary.pass // 0) pending=\(.checks.allSummary.pending // 0) fail=\(.checks.allSummary.fail // 0) cancel=\(.checks.allSummary.cancel // 0) noChecksPending=\(.checks.allNoChecksPending) lookupFailed=\(.checks.lookupFailed) exit=\(.checks.commandExitCode)",
+    "Check revisions: \([.checks.items[] | "\(.name)@\(.revision[0:8])"] | join(" "))",
     "Blockers: \(.blockers)"
   ' <<<"$snapshot"
 elif [[ "$compact" -eq 1 ]]; then
