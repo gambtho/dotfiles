@@ -65,7 +65,8 @@
         "link": "https://example.invalid/check",
         "workflow": "CI",
         "startedAt": "2020-01-01T00:00:00Z",
-        "completedAt": "2020-01-01T00:01:00Z"
+        "completedAt": "2020-01-01T00:01:00Z",
+        "revision": "823bfc2d5c286811757282492fbfb40942c2cc1c"
       }
     ],
     "requiredItems": [
@@ -76,7 +77,8 @@
         "link": "https://example.invalid/check",
         "workflow": "CI",
         "startedAt": "2020-01-01T00:00:00Z",
-        "completedAt": "2020-01-01T00:01:00Z"
+        "completedAt": "2020-01-01T00:01:00Z",
+        "revision": "823bfc2d5c286811757282492fbfb40942c2cc1c"
       }
     ]
   },
@@ -90,6 +92,8 @@
     "unresolvedReviewThreads": false,
     "checksLookupFailed": false,
     "failingChecks": false,
-    "pendingChecks": false
+    "pendingChecks": false,
+    "staleCheckRevision": false,
+    "checkRevisionUnknown": false
   }
 }

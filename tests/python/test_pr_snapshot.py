@@ -60,6 +60,8 @@ elif args[:2] == ['pr', 'checks']:
         checks = [dict(checks[0], bucket='fail', state='FAILURE')]
     print(json.dumps(checks))
     sys.exit(1 if mode == 'check-failure' else 0)
+elif args[:2] == ['api', 'graphql'] and any('commits(last:1)' in value for value in args):
+    print(data['pr']['headRefOid'])
 elif args[:2] == ['api', 'graphql']:
     second = any(value.startswith('after=') for value in args)
     node = {'id': 'thread-1', 'isResolved': False, 'isOutdated': False,
@@ -188,7 +190,8 @@ class SnapshotTests(unittest.TestCase):
                 self.assertTrue(snapshot['observation']['consistent'])
                 self.assertTrue(snapshot['blockers'][blocker])
                 if mode == 'pagination':
-                    self.assertEqual(len([c for c in calls if c[:2] == ['api', 'graphql']]), 2)
+                    self.assertEqual(len([c for c in calls if c[:2] == ['api', 'graphql']
+                                         and not any('commits(last:1)' in v for v in c)]), 2)
 
     def test_summary_identifies_consistent_changed_and_unknown_observations(self):
         for mode, label in (('stable', 'consistent'), ('head', 'changed'), ('final-error', 'unknown')):
