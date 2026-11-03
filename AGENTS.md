@@ -20,6 +20,8 @@ ai/
       file-context.json       # Mutable file picker/shortcut baseline
       web-search.json         # Keyless web routing baseline
     extensions/
+      herdr-agent-state.ts    # Herdr agent lifecycle state bridge
+      herdr-prompt-state.ts   # Herdr prompt state bridge
       worktree-guard.ts       # Blocks direct writes in primary checkouts
     install.sh                # Managed Pi configuration and native extension update
   marketplace/plugins/my/    # Local personal Pi package
@@ -40,6 +42,10 @@ Pi authenticates directly to the GitHub Copilot subscription through `/login`. S
 
 ### Prompt templates
 
+- `/adversarial-review` — attack a PR or diff with two isolated reviewers from different model families.
+- `/cold-read` — check document understanding with a fresh, context-free reader; report only.
+- `/eod` — run the lane coordinator's end-of-day routine.
+- `/weekly` — run the lane coordinator's weekly routine.
 - `/fix-pr` — collect unresolved PR review comments and failing CI, then write a plan under `~/.pi/pr-fix-plans/`.
 - `/polish` — analyze changed code, auto-fix high-confidence issues, and report the rest.
 - `/polish-pr` — polish a PR in an isolated worktree and prompt before pushing.
@@ -48,6 +54,11 @@ Pi authenticates directly to the GitHub Copilot subscription through `/login`. S
 
 ### Skills
 
+- `adversarial-review` — counterexample-driven PR or diff review.
+- `cli-ergonomics` — evidence-backed CLI audits and command design.
+- `cold-read` — advisory document-understanding check without project context.
+- `jekyll-media-gallery` — Jekyll media-gallery workflow.
+- `product-owner` — product strategy conversation and outcome-focused feature briefs.
 - `improve` — holistic codebase audit with ranked findings.
 - `overnight-improve` — autonomous iterative improvement using Pi Ralph tooling.
 - `polish-core` — shared engine behind `/polish`, including per-language idiom rules.

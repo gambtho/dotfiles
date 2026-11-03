@@ -583,7 +583,7 @@ GPT-6 Astra now uses Pi's native Copilot transport. The installer retires only t
 
 The installer links the authored extension directory, and `ai/pi/settings.json` loads the local `my` package. The guard blocks Pi's direct file-write tools in primary checkouts; use a linked worktree, or place an intentional exception in `~/.pi/worktree-guard-allow`.
 
-The personal package provides `/fix-pr`, `/polish`, `/polish-pr`, `/review-prs`, and `/second-opinion`, plus the `improve`, `overnight-improve`, `polish-core`, `blindspot-pass`, `implementation-plan`, and `change-explainer` skills. See `AGENTS.md` and `ai/marketplace/plugins/my/README.md` for details.
+The personal package provides review, planning, document-understanding, and lane-coordination workflows. See the [package inventory](ai/marketplace/plugins/my/README.md) for all prompt templates and skills, and `AGENTS.md` for repository conventions.
 
 Pi's always-loaded global working agreement is `ai/pi/AGENTS.md`; project instructions override it through repository `AGENTS.md` files. Native iPhone access to the actual default Herdr/Pi terminal uses the opt-in [Heeler setup](tools/herdr/heeler/README.md), with explicit boot preparation and operator-only SSH publication. No browser backend, reverse proxy or DNS-provider API credential is required.
 

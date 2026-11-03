@@ -5,6 +5,9 @@ Personal prompt templates and skills loaded directly from this dotfiles reposito
 ## Prompt templates
 
 - `/adversarial-review` — try to break a PR or diff with two isolated reviewers from different model families.
+- `/cold-read` — check whether a fresh reader understands a document without project context; report only.
+- `/eod` — run the lane coordinator's end-of-day routine for a project.
+- `/weekly` — run the lane coordinator's weekly routine for a project.
 - `/fix-pr` — collect unresolved PR feedback and failing CI, then write an implementation plan.
 - `/polish` — review the diff and project-specific expectations; use `--fix` for high-confidence cleanups.
 - `/polish-pr` — run the conservative polish workflow in an isolated PR worktree.
@@ -17,13 +20,16 @@ Personal prompt templates and skills loaded directly from this dotfiles reposito
 - `blindspot-pass` — pre-implementation risk and uncertainty pass.
 - `change-explainer` — reviewer-facing explanation of a completed change.
 - `cli-ergonomics` — evidence-backed CLI audits and command design, with help, errors, output and scripting checks.
+- `cold-read` — advisory document-understanding check using a fresh reader without project context.
 - `implementation-plan` — evidence-based implementation planning.
 - `improve` — holistic codebase audit with ranked findings.
 - `jekyll-media-gallery` — Jekyll media-gallery workflow.
+- `lane-coordinator` — coordinate lanes across harnesses, maintain project state, and launch Herdr lanes only on explicit request.
 - `overnight-improve` — iterative improvement loop using Pi Ralph tooling.
 - `pr-closeout` — drive a PR to merge-ready in any repo: conflicts, CI (with flake discipline), review threads (bots answered, human replies follow project authority), project review profiles, size check.
 - `polish-core` — shared diff review, maintainer checklist, project profiles, and conservative auto-fix engine.
 - `product-owner` — project-specific product strategy conversation and outcome-focused feature briefs.
+- `second-opinion-core` — independent cross-model spec and plan review, backing `/second-opinion`.
 
 ## Project-aware polish
 
