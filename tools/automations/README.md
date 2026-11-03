@@ -28,7 +28,7 @@ make automation-run NAME=dotfiles-health DRY_RUN=1
 
 ## How a run works
 
-1. **Backpressure.** If this automation already has an open PR, the run stops without spending anything. Merge or close last week's PR to resume.
+1. **Backpressure.** If this automation already has an open PR, the run stops without spending anything. Merge or close last week's PR to resume. Files that another automation's open PR edits are locked for this run: the agent sees those PRs as evidence, and its edits to a locked file are dropped while its other fixes stay.
 2. **Gather.** The runner clones a fresh copy of the target and collects evidence. Failed checks are recorded as `UNKNOWN` rather than skipped.
 3. **Review.** Pi runs in a bubblewrap sandbox with only file tools. It sees the clone and the evidence, with no shell, no web tools and no extensions other than `guard.ts`.
 4. **Check.** The runner applies the path policy and a secret scan to what the agent produced.
