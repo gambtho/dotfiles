@@ -69,9 +69,9 @@ The requirements below are unchanged.
 - Use the project's AGENTS.md, shared workflow and repo rules for Git/conflicts,
   PR size/sequencing, review replies, privacy, tests and report locations. Don't copy
   their baseline rules into this prompt.
-  If no project or repo Git policy exists: keep one small PR current end to end, merge the
-  base in for conflicts, never push to a default branch or merge, and never rewrite
-  someone else's branch.
+  If no project or repo Git policy exists: keep one small PR current end to end, never push
+  to a default branch or merge a PR, never rewrite someone else's branch, and resolve
+  conflicts by merging the base branch into yours.
   Keep secrets and internal identities out of public text; put reports in the project
   folder. Tests cover distinct invariants; no timeout bumps or test bypasses as a fix.
 - Where the authority table permits direct PR publication, write a short body: what it
