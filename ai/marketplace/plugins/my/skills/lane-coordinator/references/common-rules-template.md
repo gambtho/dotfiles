@@ -1,12 +1,12 @@
 # <project or effort>: shared lane rules
 
 <Coordinator: project the Shared workflow section once into the project's
-`lanes/COMMON-RULES.md`, with the heading "Shared lane workflow". Keep project authority,
-repo-specific policies and stronger local rules in AGENTS.md/COORDINATION.md. Every
-lane prompt and the project's AGENTS.md name the shared file. For a parallel effort's
-separate rules file, include only Ownership, Open PRs to stay off, Rules for every lane
-and Sequencing; point to the project-level workflow rather than copying it. Resolve
-paths and remove these instructions and unused placeholder sections before delivery.>
+`lanes/COMMON-RULES.md`, with the heading "Shared lane workflow". It carries every rule
+that holds for any lane. Keep project authority, repo-specific policies and stronger local
+rules in AGENTS.md/COORDINATION.md. Every lane prompt and the project's AGENTS.md name the
+shared file. For a parallel effort's separate rules file, include only Ownership, Open PRs
+to stay off, the Rules for every lane pointer and Sequencing; don't copy the workflow.
+Resolve paths and remove these instructions and unused placeholder sections before delivery.>
 
 Every lane reads the project-level shared workflow, the project's AGENTS.md and its
 own prompt. Parallel lanes also read their effort rules.
@@ -29,7 +29,8 @@ Read `<resolved harness-notes path>` for invocation outside Pi; resolve it to th
   `/second-opinion --with-spec` on the plan with its design. A plan reviewed without its design doesn't count.
 - Before reporting a PR ready, run `/adversarial-review` on it and put its verdict in the report. Also complete
   `pr-closeout`'s bounded bot opportunity and final thread and review-body read, and put that evidence in the report.
-- Work the human already approved continues under its approved design.
+- Work the human already approved continues under its approved design; don't re-gate it. Audit-only work stops at
+  its assigned approval gate.
 - Optional: for risky state transitions, consider the owning lane's bounded, human-approved check in
   `<resolved state-model-check path>` within its existing design stage; resolve that path to the
   skill's bundled `references/state-model-check.md` before delivery.
@@ -38,15 +39,32 @@ Read `<resolved harness-notes path>` for invocation outside Pi; resolve it to th
 
 - Work in your own fresh worktree from a freshly fetched base. Never edit another lane's worktree.
 - You own your PR end to end: keep it current with its base, answer its review threads, and keep CI green.
-- Write a short PR body yourself: what it does, what it doesn't, how verified; under ~10 lines. Publication and replies
-  follow the project's authority table.
+- Small PRs, one theme each. Follow `pr-closeout` for scoped review and finalization, preserving publication approval
+  and reusing valid review evidence.
+- Write a short PR body yourself: what it does, what it doesn't, how verified; under ~10 lines.
+- PR publication, replies and other public text follow the authority table in COORDINATION.md. Without permission
+  there, draft exact text for the human. Production and provider approvals are unchanged.
 - Follow the repo's changelog mechanism; never edit a shared file that every PR touches.
 - Prefer sequential PRs over stacks: open the next PR only after the previous one merges, from a freshly fetched
   default branch. Never push branches to someone else's repo to make stacking work.
 - Resolve conflicts the way the repo's own AGENTS or CONTRIBUTING says. Never force-push anyone else's branch.
+  Without project or repo Git rules, never push to a default branch or merge, never rewrite someone else's branch,
+  and merge the base in for conflicts.
 - No timeout increases as a fix.
 - No tag, release note or note to users until a person has walked the path the release claims to support, without
   workarounds.
+
+### Reviews, delivery and reports
+
+- Profiles and aliases come from COORDINATION.md; executable plan and task ownership comes from the lane prompt.
+  Return feedback candidates to the coordinator; only that coordinator writes profiles and commits/pushes them with
+  plain Git in the private store.
+- Approved LOCAL delivery covers authorized setup/verification, safe in-scope corrections and exact restoration of
+  tool-generated temporary changes. Save the pre-run bytes/hash; confirm no unrelated edits, restore only generated
+  changes and verify the original hash. No arbitrary resource/config changes or test bypasses.
+- Return one consolidated shared readiness report or ONE batched real blocker. The user can signal "W<n> ready"; the
+  coordinator reads it directly. Manual sessions are not automatically monitored. Escalate new material choices,
+  shared/destructive operations and actions outside authority, not routine authorized LOCAL steps.
 
 ### Scope and evidence
 
@@ -83,29 +101,7 @@ material; start/publish authority does not authorize source takeover or a shadow
 
 Read the project's AGENTS.md, shared workflow and the repo's own rules for Git, PRs,
 privacy, tests and reports. This effort file records ownership and exceptions, not
-another copy of that workflow. Without project or repo Git rules, never push to a
-default branch or merge, never rewrite someone else's branch, and merge the base in
-for conflicts. Project authority remains unchanged.
-If instructions conflict, stop and ask the coordinator.
-
-- Follow the project shared workflow's design/plan sequence for new product work.
-  Audit-only work stops at its assigned approval gate. Don't re-gate approved work.
-- Small PRs, one theme each, from a fresh base. Follow `pr-closeout` for scoped
-  review/finalization, preserving publication approval and reusing valid review evidence.
-- Profiles/aliases come from COORDINATION.md; executable plan/task ownership comes from the lane prompt.
-  Return feedback candidates to the coordinator; only that coordinator writes profiles
-  and commits/pushes them with plain Git in the private store.
-- Approved LOCAL delivery covers authorized setup/verification, safe in-scope
-  corrections and exact restoration of tool-generated temporary changes. Save the
-  pre-run bytes/hash; confirm no unrelated edits, restore only generated changes and
-  verify the original hash. No arbitrary resource/config changes or test bypasses.
-- Return one consolidated shared readiness report or ONE batched real blocker. The
-  user can signal "W<n> ready"; the coordinator reads it directly. Manual sessions
-  are not automatically monitored. Escalate new material choices, shared/destructive
-  operations and actions outside authority, not routine authorized LOCAL steps.
-- PR publication and other public text follow the authority table in COORDINATION.md.
-  Without permission there, draft exact text for the human. Production/provider
-  approvals are unchanged.
+another copy of that workflow. If instructions conflict, stop and ask the coordinator.
 
 ## Sequencing
 
