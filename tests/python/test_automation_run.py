@@ -272,6 +272,20 @@ class PolicyTests(unittest.TestCase):
         self.assertIn('protected', note)
         self.assertEqual(self.staged(), [HEALTH.report_path])
 
+    def test_locked_file_outside_the_allowed_list_still_drops_all_fixes(self):
+        (self.repo / 'tools/herdr').mkdir(parents=True)
+        (self.repo / 'tools/herdr/config.toml.template').write_text('old\n')
+        git(self.repo, 'add', '.')
+        git(self.repo, 'commit', '-qm', 'template')
+        self.write_report(HEALTH)
+        (self.repo / 'README.md').write_text('new\n')
+        (self.repo / 'tools/herdr/config.toml.template').write_text('new\n')
+        fixes, note = automation.enforce_policy(HEALTH, self.repo, {'tools/herdr/config.toml.template': 'u'})
+        self.assertEqual(fixes, [])
+        self.assertIn('allowed files', note)
+        self.assertEqual(self.staged(), [HEALTH.report_path])
+        self.assertEqual((self.repo / 'README.md').read_text(), 'old\n')
+
     def test_moving_a_protected_file_counts_as_touching_it(self):
         (self.repo / 'docs/guides').mkdir(parents=True)
         self.write_report(HEALTH)

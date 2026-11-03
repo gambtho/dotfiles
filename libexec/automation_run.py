@@ -657,21 +657,21 @@ def enforce_policy(profile: Profile, repo: Path, locked: dict[str, str] | None =
         raise AutomationError(f"report is {len(report)} bytes (limit {MAX_REPORT_BYTES})")
 
     fix_paths = [path for path in paths if path != profile.report_path]
-    # Another automation's open PR already edits these files, so this run's edits
-    # would conflict with it. Only those edits go; the rest are judged as usual.
-    clashing = sorted(path for path in fix_paths if path in (locked or {}))
-    lock_note = None
-    if clashing:
-        revert_paths(repo, clashing)
-        fix_paths = [path for path in fix_paths if path not in clashing]
-        lock_note = "another automation's open PR edits " + ", ".join(f"{path} ({locked[path]})" for path in clashing)
     report_lines = sum(
         int(line.split("\t")[0]) + int(line.split("\t")[1])
         for line in git(repo, "diff", "--cached", "--numstat", "--", profile.report_path).splitlines()
         if not line.startswith("-")
     )
     _, total_lines, symlink = stage_all(repo)
+    # Judged on every edit, locked ones included, so reverting a locked file can't
+    # hide the edit that should have dropped all fixes.
     note = downgrade_reason(profile, fix_paths, total_lines - report_lines, symlink)
+    # Another automation's open PR already edits these files, so this run's edits
+    # would conflict with it. Only those edits go.
+    clashing = sorted(path for path in fix_paths if path in (locked or {}))
+    lock_note = None
+    if clashing:
+        lock_note = "another automation's open PR edits " + ", ".join(f"{path} ({locked[path]})" for path in clashing)
     if note:
         git(repo, "reset", "-q", "--hard")
         git(repo, "clean", "-fdqx")
@@ -679,6 +679,9 @@ def enforce_policy(profile: Profile, repo: Path, locked: dict[str, str] | None =
         report_file.write_bytes(report)
         git(repo, "add", "-f", "--", profile.report_path)
         fix_paths = []
+    elif clashing:
+        revert_paths(repo, clashing)
+        fix_paths = [path for path in fix_paths if path not in clashing]
     return fix_paths, "; ".join(item for item in (lock_note, note) if item) or None
 
 
