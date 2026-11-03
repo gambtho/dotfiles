@@ -48,8 +48,8 @@ Read `<resolved harness-notes path>` for invocation outside Pi; resolve it to th
 - Prefer sequential PRs over stacks: open the next PR only after the previous one merges, from a freshly fetched
   default branch. Never push branches to someone else's repo to make stacking work.
 - Resolve conflicts the way the repo's own AGENTS or CONTRIBUTING says. Never force-push anyone else's branch.
-  Without project or repo Git rules, never push to a default branch or merge, never rewrite someone else's branch,
-  and merge the base in for conflicts.
+  Without project or repo Git rules, never push to a default branch or merge a PR, never rewrite someone else's branch,
+  and resolve conflicts by merging the base branch into yours.
 - No timeout increases as a fix.
 - No tag, release note or note to users until a person has walked the path the release claims to support, without
   workarounds.

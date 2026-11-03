@@ -65,7 +65,8 @@ import sys
 lane = (Path(sys.argv[1]) / "references/lane-template.md").read_text()
 assert "If none exist:" not in lane
 fallback = " ".join(lane.split("If no project or repo Git policy exists:", 1)[1].split())
-for phrase in ("merge the base in for conflicts", "never push to a default branch or merge",
+for phrase in ("resolve conflicts by merging the base branch into yours",
+               "never push to a default branch or merge a PR",
                "never rewrite someone else's branch"):
     assert phrase in fallback, phrase
 PY

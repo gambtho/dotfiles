@@ -331,8 +331,8 @@ reviews and chat messages.
 - No product code. Trivial changes are OK when the user asks (a license line, a policy
   nudge).
 - Git operations follow the project's AGENTS.md (or the repo's own rules). Without
-  rules: never push to a default branch or merge; never force push someone else's
-  branch; resolve conflicts by merging the base in.
+  rules: never push to a default branch or merge a PR; never rewrite someone else's
+  branch; resolve conflicts by merging the base branch into yours.
 - Before pushing anything yourself, check the author (`git log -1 --format='%an <%ae>'`);
   never commit with a placeholder identity, even in a scratch merge.
 - No secrets in logs, output or command-line arguments.
