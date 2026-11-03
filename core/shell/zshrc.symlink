@@ -57,6 +57,9 @@ fi
 # Source Prezto.
 if [[ -r "${ZDOTDIR:-$HOME}/.zprezto/init.zsh" ]]; then
   source "${ZDOTDIR:-$HOME}/.zprezto/init.zsh"
+  # Keep utility bodies lazy, but pin their lookup directories so shell
+  # snapshots can replay the stubs without preserving Prezto's fpath.
+  autoload -rUz "$ZPREZTODIR/modules/utility/functions/"{diff,dut,make,prep,psub,wdiff,zsh-help}
 fi
 
 
