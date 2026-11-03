@@ -30,7 +30,7 @@ This report goes to a private GitHub repository, but some of these projects have
 
 ## What to change
 
-Change nothing except the report. Project rule files have a single writer, and the skill lives in a public repository, so a fix cannot land from here. For each skill change, include a short unified diff in the finding, written so it could go in a public repository: no project names, no lane numbers and nothing private.
+Change nothing except the report. Project rule files have a single writer, and the skill lives in a public repository, so a fix cannot land from here. For each skill change, include a short unified diff in the finding with paths relative to the dotfiles repository root (`ai/marketplace/plugins/my/skills/<skill>/...`, corresponding to evidence `skills/<skill>/...`), written so it could go in a public repository: no project names, no lane numbers and nothing private.
 
 ## Report
 
