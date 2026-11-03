@@ -60,13 +60,8 @@ elif args[:2] == ['pr', 'checks']:
         checks = [dict(checks[0], bucket='fail', state='FAILURE')]
     print(json.dumps(checks))
     sys.exit(1 if mode == 'check-failure' else 0)
-elif args[:2] == ['api', 'graphql'] and any('statusCheckRollup' in value for value in args):
-    import subprocess
-    contexts = [{'__typename': 'CheckRun', 'name': 'test', 'checkSuite': {
-        'commit': {'oid': data['pr']['headRefOid']}, 'workflowRun': {'workflow': {'name': 'CI'}}}}]
-    rollup = {'statusCheckRollup': {'contexts': {'nodes': contexts}}}
-    page = json.dumps({'data': {'repository': {'pullRequest': {'commits': {'nodes': [{'commit': rollup}]}}}}})
-    subprocess.run(['jq', '-c', args[args.index('--jq') + 1]], input=page, text=True, check=True)
+elif args[:2] == ['api', 'graphql'] and any('commits(last:1)' in value for value in args):
+    print(data['pr']['headRefOid'])
 elif args[:2] == ['api', 'graphql']:
     second = any(value.startswith('after=') for value in args)
     node = {'id': 'thread-1', 'isResolved': False, 'isOutdated': False,
@@ -196,7 +191,7 @@ class SnapshotTests(unittest.TestCase):
                 self.assertTrue(snapshot['blockers'][blocker])
                 if mode == 'pagination':
                     self.assertEqual(len([c for c in calls if c[:2] == ['api', 'graphql']
-                                         and not any('statusCheckRollup' in v for v in c)]), 2)
+                                         and not any('commits(last:1)' in v for v in c)]), 2)
 
     def test_summary_identifies_consistent_changed_and_unknown_observations(self):
         for mode, label in (('stable', 'consistent'), ('head', 'changed'), ('final-error', 'unknown')):
