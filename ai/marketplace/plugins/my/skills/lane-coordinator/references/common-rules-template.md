@@ -39,11 +39,11 @@ Read `<resolved harness-notes path>` for invocation outside Pi; resolve it to th
 
 - Work in your own fresh worktree from a freshly fetched base. Never edit another lane's worktree.
 - You own your PR end to end: keep it current with its base, answer its review threads, and keep CI green.
-- Small PRs, one theme each. Follow `pr-closeout` for scoped review and finalization, preserving publication approval
+- Small PRs, one theme each. Follow `pr-closeout` for scoped review/finalization, preserving publication approval
   and reusing valid review evidence.
 - Write a short PR body yourself: what it does, what it doesn't, how verified; under ~10 lines.
 - PR publication, replies and other public text follow the authority table in COORDINATION.md. Without permission
-  there, draft exact text for the human. Production and provider approvals are unchanged.
+  there, draft exact text for the human. Production/provider approvals are unchanged.
 - Follow the repo's changelog mechanism; never edit a shared file that every PR touches.
 - Prefer sequential PRs over stacks: open the next PR only after the previous one merges, from a freshly fetched
   default branch. Never push branches to someone else's repo to make stacking work.
@@ -56,7 +56,7 @@ Read `<resolved harness-notes path>` for invocation outside Pi; resolve it to th
 
 ### Reviews, delivery and reports
 
-- Profiles and aliases come from COORDINATION.md; executable plan and task ownership comes from the lane prompt.
+- Profiles/aliases come from COORDINATION.md; executable plan/task ownership comes from the lane prompt.
   Return feedback candidates to the coordinator; only that coordinator writes profiles and commits/pushes them with
   plain Git in the private store.
 - Approved LOCAL delivery covers authorized setup/verification, safe in-scope corrections and exact restoration of
