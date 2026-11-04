@@ -10,8 +10,7 @@ if [[ "${1:-}" == --check ]]; then
   exit 0
 fi
 
-installer=$(mktemp)
-trap 'rm -f "$installer"' EXIT
-curl -fsSL https://gh.io/copilot-install -o "$installer"
-PATH="$HOME/.local/bin:$PATH" PREFIX="$HOME/.local" VERSION=latest bash "$installer"
+source "$(dirname "${BASH_SOURCE[0]}")/../../libexec/lib/artifacts.sh"
+PATH="$HOME/.local/bin:$PATH" PREFIX="$HOME/.local" VERSION=latest \
+  run_remote_installer https://gh.io/copilot-install bash
 test -x "$HOME/.local/bin/copilot"
