@@ -109,10 +109,10 @@ AGENTS.md for report locations; absent a rule, keep handoffs in the project fold
   lane's plan file. Don't infer scope from a PR number.
 - Next number: the highest `W<n>` in `lanes/` or STATE.md, plus one. One file per lane
   from [lane-template.md](references/lane-template.md). Hand the user one line in a code
-  block: `Read <absolute path> and follow it.` For Pi, also provide the UI command
-  `/name <project-slug>-<lane-number>` (e.g. `/name double-holo-12`) for the new lane;
-  never run `/name` in Bash. Default new workspace labels, Pi names and live Herdr
-  aliases to this same short name. Keep full W12/task identity in lane files and
+  block: `Read <absolute path> and follow it.` That line is the whole handoff: the
+  user names the session themselves, so don't add a `/name` or `--name` instruction.
+  Default new workspace labels, Pi names and live Herdr aliases to
+  `<project-slug>-<lane-number>` (e.g. `double-holo-12`). Keep full W12/task identity in lane files and
   STATE.md; preserve filenames/numbering and all existing names. Honor explicit
   naming overrides that satisfy Herdr's alias constraints; reject invalid names
   or collisions, never truncate or invent suffixes.
@@ -160,7 +160,7 @@ Manual creation remains the default, including when the coordinator runs in a
 Claude app session. Preparing a prompt does not launch it. An explicit request
 such as "start W12" may create a named Herdr space and start Pi **only** with
 shell/tool access inside the intended Herdr session (`HERDR_ENV=1`). Otherwise
-return the manual handoff and Pi naming instruction without claiming a launch.
+return the manual handoff without claiming a launch.
 
 When an approved prompt already exists and the user says "start W12", use the
 mechanical helper in [herdr-launch.md](references/herdr-launch.md) immediately after

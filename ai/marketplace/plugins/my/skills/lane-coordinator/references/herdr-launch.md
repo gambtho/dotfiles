@@ -128,15 +128,12 @@ Re-run the **same invocation** only to reconcile; it does not mean "try again".
 
 ## Manual Pi handoff
 
-Name the new conversation in the Pi UI, then paste the instruction:
+Hand the user the instruction alone; they name the conversation themselves:
 
 ```text
-/name double-holo-12
 Read /absolute/project-local/lanes/W12-approved-task.md and follow it.
 ```
 
-Alternatively launch `pi --name 'double-holo-12'`, then paste the instruction.
-`/name` is a human UI command, not Bash and not a claim that the coordinator renamed
-another session. Record **Manual** until an actual launch is reported or verified.
+Do not add a `/name` or `--name` step, and never run `/name` in Bash. Record **Manual** until an actual launch is reported or verified.
 Manual sessions are not automatically monitored; the user can say "W12 ready" and
 point to the consolidated shared report.
