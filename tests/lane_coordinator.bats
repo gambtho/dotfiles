@@ -37,6 +37,14 @@ PY
   [ "$status" -eq 0 ]
 }
 
+@test "lane review uses friction evidence to promote repeated local rules" {
+  local prompt="$REPO_ROOT/tools/automations/prompts/lane-review.md"
+  grep -Fq 'reports/SKILL-FRICTION.md' "$prompt"
+  grep -Fq 'rules repeated across projects' "$prompt"
+  grep -Fq 'belong in the skill' "$prompt"
+  grep -Fq 'clauses projects keep restating' "$prompt"
+}
+
 @test "coordinator checks bundled skills without replacing required lane tools" {
   run python3 - "$SKILL_DIR" <<'PY'
 from pathlib import Path
