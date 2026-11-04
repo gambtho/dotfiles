@@ -309,3 +309,77 @@ assert "remaining budget as the stop/resume line" in harness
 PY
   [ "$status" -eq 0 ]
 }
+
+@test "pr text is registered and discoverable with a bounded skill entry" {
+  run python3 - "$PACKAGE_DIR" "$REPO_ROOT" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+package, repo = map(Path, sys.argv[1:])
+entry = package / "skills/pr-text/SKILL.md"
+assert entry.is_file(), "Missing pr-text skill"
+text = entry.read_text()
+assert text.startswith("---\nname: pr-text\ndescription: Use when ")
+assert len(text.splitlines()) < 150, "Keep the skill below 150 lines"
+assert "./skills/pr-text/SKILL.md" in json.loads((package / "package.json").read_text())["pi"]["skills"]
+for inventory in (repo / "AGENTS.md", package / "README.md"):
+    assert "`pr-text`" in inventory.read_text(), str(inventory)
+PY
+  [ "$status" -eq 0 ] || {
+    echo "$output"
+    false
+  }
+  run bash "$REPO_ROOT/libexec/validate-ai" --verbose
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"OK:    pr-text/SKILL.md"* ]]
+}
+
+@test "writing consumers load pr text without weakening existing contracts" {
+  run python3 - "$PACKAGE_DIR" <<'PY'
+from pathlib import Path
+import sys
+
+package = Path(sys.argv[1])
+closeout = (package / "skills/pr-closeout/SKILL.md").read_text()
+references = package / "skills/lane-coordinator/references"
+common = (references / "common-rules-template.md").read_text()
+writing = (references / "writing-rules.md").read_text()
+text = (package / "skills/pr-text/SKILL.md").read_text()
+assert "[pr-text](../pr-text/SKILL.md)" in closeout
+assert "[pr-text](../../pr-text/SKILL.md)" in writing
+# Projected common rules live outside the package: name the skill, not a relative link.
+assert "Load the `pr-text` skill" in common
+assert "PR bodies, review comments/replies and issues" in common
+assert "pr-text/SKILL.md" not in common
+assert "under ~10 lines" not in common
+assert "## PR body shape" not in writing and "Verification:" not in writing
+assert 'stacked on #N — review after it lands' in closeout
+assert "stay draft until the parent merges" in closeout
+assert "9. **P1 record before merge.**" in closeout
+assert "posting permission is not permission to resolve" in closeout
+for heading in ("## Publishing", "## Privacy", "## Chat and commit voice"):
+    assert heading in writing, heading
+assert "Changed text or destination needs a new OK" in writing
+assert "Implementation approval" in writing
+assert "Keep bot-generated blocks" in text
+assert "Required disposition records" in text and "labels, hashes" in text
+assert "grants no permission" in text
+assert "DCO" in text and "AI disclosure" in text and "co-author" in text
+assert "never open with" in text and "I added" in text
+assert "Picking this up." in text and "Refs" in text and "Fixes" in text
+assert "exact versions" in text and "Pin source links" in text
+assert "three to six short paragraphs" in text
+# Existing-PR replies can enter the loop without the new-PR body checklist.
+loop = closeout.split("## Workflow\n", 1)[1]
+assert "[pr-text](../pr-text/SKILL.md)" in loop.split("4. **CI failures.**", 1)[0]
+harness = (references / "harness-notes.md").read_text()
+bundled = harness.split("## Bundled", 1)[1].split("## Shell pitfalls", 1)[0]
+assert "`pr-text`" in bundled
+assert "PR titles" in text and "No emoji" in text and "shortest draft" in text
+PY
+  [ "$status" -eq 0 ] || {
+    echo "$output"
+    false
+  }
+}

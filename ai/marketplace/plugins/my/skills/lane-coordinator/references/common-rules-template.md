@@ -41,7 +41,7 @@ Read `<resolved harness-notes path>` for invocation outside Pi; resolve it to th
 - You own your PR end to end: keep it current with its base, answer its review threads, and keep CI green.
 - Small PRs, one theme each. Follow `pr-closeout` for scoped review/finalization, preserving publication approval
   and reusing valid review evidence.
-- Write a short PR body yourself: what it does, what it doesn't, how verified; under ~10 lines.
+- Load the `pr-text` skill when writing PR bodies, review comments/replies and issues.
 - PR publication, replies and other public text follow the authority table in COORDINATION.md. Without permission
   there, draft exact text for the human. Production/provider approvals are unchanged.
 - Follow the repo's changelog mechanism; never edit a shared file that every PR touches.
