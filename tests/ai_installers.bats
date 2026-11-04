@@ -221,6 +221,9 @@ SCRIPT
 @test "normal make ai removes ignored graceTurns without changing subagent budgets" {
   export PI_VERSION PI_AI_REFRESH_PREFERENCES=0
   stub_existing_pi
+  # This fixture owns Pi migration, not the separate CLI bootstrap.
+  mkdir -p "$HOME/.local/bin"
+  cp /bin/true "$HOME/.local/bin/copilot"
   local subagents="$HOME/.pi/agent/subagents.json" before
   jq '.defaultMaxTurns = 55 | .graceTurns = 5 | del(.wrapUpTurns) | .custom = {"graceTurns":9}' \
     "$REPO_ROOT/ai/pi/config/subagents.json" >"$subagents"
