@@ -48,7 +48,7 @@ The radar reads text written by strangers, and this machine's `gh` token can del
 
 ## Private lane data
 
-`lane-review` copies a limited snapshot rather than mounting the project folders: each project's rule and state files, plus the start of recently changed lane records. `PEOPLE.md` is excluded. The report goes only to a repository the runner has confirmed is private on that same run, and the prompt keeps it at the level of process. Two projects have no Git remote, so this report is the one place a summary of their process leaves the machine. Skill changes it proposes must be copied by hand into a dotfiles PR.
+`lane-review` copies a limited snapshot rather than mounting the project folders: each project's rule and state files, plus the start of recently changed lane records, including `reports/SKILL-FRICTION.md` where it falls within the snapshot limits. `PEOPLE.md` is excluded. The report goes only to a repository the runner has confirmed is private on that same run, and the prompt keeps it at the level of process. Two projects have no Git remote, so this report is the one place a summary of their process leaves the machine. Skill changes it proposes must be copied by hand into a dotfiles PR.
 
 ## Rejecting findings
 

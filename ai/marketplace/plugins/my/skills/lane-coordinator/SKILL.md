@@ -337,7 +337,11 @@ reviews and chat messages.
 - Before pushing anything yourself, check the author (`git log -1 --format='%an <%ae>'`);
   never commit with a placeholder identity, even in a scratch merge.
 - No secrets in logs, output or command-line arguments.
-- Say plainly when you got something wrong, and fix the record.
+- Say plainly when you got something wrong, and fix the record. To keep process
+  corrections from disappearing in chat, append one dated line to the project's
+  `reports/SKILL-FRICTION.md` when the human corrects the coordinator on process:
+  what the skill said, what the human wanted, and the PR if one follows. Read it
+  during the weekly pass and retire lines once the corresponding skill change lands.
 
 ## Harness notes
 
