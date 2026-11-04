@@ -1,6 +1,8 @@
 # Pi configuration
 
-This directory contains the repository-managed configuration for Pi, the sole coding-agent harness installed by these dotfiles.
+This directory contains the repository-managed configuration for Pi and the standalone Copilot CLI bootstrap.
+
+`make ai` and the full install bootstrap Copilot CLI to `~/.local/bin/copilot` with the official installer only when missing, on Linux and macOS. Later upgrades belong to the CLI (`copilot update`), not mise or VS Code; Pi authenticates independently.
 
 ## Provider and models
 
