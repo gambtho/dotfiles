@@ -50,7 +50,7 @@ Before a PR exists, perform this review phase and local verification only; do no
    Use the project's COORDINATION.md to identify internal repos; otherwise treat
    the repo as external. Flag excess size (don't silently ship); suggest a split
    along ownership boundaries.
-4. **Body.** Concise: what changed, compatibility/breaking notes, verification actually run (including any live run and its limits). Stacked PRs say "stacked on #N — review after it lands" and stay draft until the parent merges.
+4. **Body.** Load [pr-text](../pr-text/SKILL.md) when writing PR bodies, review comments/replies and issues. Stacked PRs say "stacked on #N — review after it lands" and stay draft until the parent merges.
 
 ## Snapshot helper
 
@@ -68,7 +68,7 @@ It reports local branch/head, PR metadata, unresolved review threads (bodies omi
 
 1. **Target.** Use the given PR, else the current branch's. Fetch the PR's actual base. Confirm the checkout is on `headRefName` at `headRefOid`; if not, check it out or stop and say why. Dirty unrelated changes: stop and ask. A branch you can't push (someone else's fork): report before editing.
 2. **Merge conflicts first.** Merge the base, resolve narrowly preserving both sides' intent, run focused verification for the conflicted areas.
-3. **Review threads.** Use thread-aware data (`reviewThreads`, `isResolved`, `isOutdated`, path/line). Cluster related threads into one fix. If the answer is an explanation, not code, reply (bots) or draft (humans) with evidence. Outdated-because-already-fixed: point at the commit. Conflicting or product/design-level comments: surface the tradeoff, don't guess.
+3. **Review threads.** Load [pr-text](../pr-text/SKILL.md) before drafting replies. Use thread-aware data (`reviewThreads`, `isResolved`, `isOutdated`, path/line). Cluster related threads into one fix. If the answer is an explanation, not code, reply (bots) or draft (humans) with evidence. Outdated-because-already-fixed: point at the commit. Conflicting or product/design-level comments: surface the tradeoff, don't guess.
 4. **CI failures.** Read the failing job's logs before editing; never infer from the check name. Smallest fix tied to the observed failure and this PR's diff.
    - **Possibly flaky or unrelated:** check whether the same test fails on the base branch's recent runs. If it isn't this PR's fault, say so with evidence; at most one rerun of that job, and only if authorized. Never raise timeouts or retries to make a check pass. If the suite is broadly flaky, report the failure rate rather than chasing it.
    - **Bot review skipped** (rate limit, size): at most one re-trigger per head (e.g. `@coderabbitai review`), only where that bot is already installed.

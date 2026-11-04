@@ -28,6 +28,7 @@ Personal prompt templates and skills loaded directly from this dotfiles reposito
 - `overnight-improve` — iterative improvement loop using Pi Ralph tooling.
 - `pr-closeout` — drive a PR to merge-ready in any repo: conflicts, CI (with flake discipline), review threads (bots answered, human replies follow project authority), project review profiles, size check.
 - `polish-core` — shared diff review, maintainer checklist, project profiles, and conservative auto-fix engine.
+- `pr-text` — plain-language PR bodies, review comments/replies and issues.
 - `product-owner` — project-specific product strategy conversation and outcome-focused feature briefs.
 - `second-opinion-core` — independent cross-model spec and plan review, backing `/second-opinion`.
 

@@ -25,9 +25,10 @@ Background reviewers are read-only helpers, not lanes: say so in their prompt (n
 commits, pushes or posts) and spot-check what they find.
 Codex CLI reviewers wait on "Reading additional input from stdin" unless stdin is closed (`</dev/null`).
 
-## Bundled review tools
+## Bundled review and writing tools
 
-The package includes `pr-closeout`, `polish-core`, `second-opinion-core` and `adversarial-review`.
+The package includes `pr-closeout`, `polish-core`, `second-opinion-core`, `adversarial-review`
+and `pr-text` (PR bodies, review comments/replies and issues).
 
 - **Pi:** the package loads these skills and the `/second-opinion` and
   `/adversarial-review` prompt wrappers.
