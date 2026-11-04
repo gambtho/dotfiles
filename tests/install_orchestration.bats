@@ -274,20 +274,24 @@ SCRIPT
   [[ "$output" == *"WARNING: fonts"* ]]
 }
 
-@test "make ai runs only the Pi installer and propagates failures" {
+@test "make ai runs both AI installers and propagates failures" {
   local fixture="$TEST_ROOT/make-ai"
-  mkdir -p "$fixture/ai/pi"
+  mkdir -p "$fixture/ai/pi" "$fixture/ai/copilot"
   cp "$REPO_ROOT/Makefile" "$fixture/Makefile"
   printf '#!/usr/bin/env bash\ntouch "%s/pi-ran"\nexit 1\n' "$fixture" >"$fixture/ai/pi/install.sh"
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >"%s/copilot-args"\n' "$fixture" >"$fixture/ai/copilot/install.sh"
 
   run make -C "$fixture" ai
   [ "$status" -ne 0 ]
   [[ "$output" == *"ai/pi/install.sh"* ]]
   [ -f "$fixture/pi-ran" ]
+  [ -f "$fixture/copilot-args" ]
+  [ -z "$(<"$fixture/copilot-args")" ]
 
   run make -C "$fixture" ai-check
   [ "$status" -ne 0 ]
   [[ "$output" == *"ai/pi/install.sh"* ]]
+  [ "$(<"$fixture/copilot-args")" = --check ]
 }
 
 @test "remote installer is denied without explicit consent" {

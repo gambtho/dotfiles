@@ -221,6 +221,7 @@ setup_ai() {
   log_info "Setting up Pi..."
   run_phase optional ai-pi bash "$DOTFILES_ROOT/ai/pi/install.sh"
   log_success "Pi setup complete."
+  run_phase optional ai-copilot bash "$DOTFILES_ROOT/ai/copilot/install.sh"
 }
 
 # ── Main ──────────────────────────────────────────────────────────────────────

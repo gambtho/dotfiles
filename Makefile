@@ -43,15 +43,15 @@ agent-knowledge-sync: ## Explicit stopped-Pi fast-forward and verified pending p
 # Failures are aggregated rather than aborting the loop: one broken installer
 # must not block the rest, but it must still fail the target — a plain loop
 # reports only the last installer's status and hides every earlier failure.
-ai: ## Reconcile Pi configuration and update extensions through native Pi
-	@failed=""; for installer in ai/pi/install.sh; do \
+ai: ## Reconcile Pi configuration and bootstrap Copilot CLI
+	@failed=""; for installer in ai/pi/install.sh ai/copilot/install.sh; do \
 		echo "Running $$installer..."; \
 		bash "$$installer" || failed="$$failed $$installer"; \
 	done; \
 	if [ -n "$$failed" ]; then echo "make ai: failed:$$failed" >&2; exit 1; fi
 
-ai-check: ## Dry-run: show what the Pi install would do
-	@failed=""; for installer in ai/pi/install.sh; do \
+ai-check: ## Dry-run: show what the AI installers would do
+	@failed=""; for installer in ai/pi/install.sh ai/copilot/install.sh; do \
 		echo "Checking $$installer..."; \
 		bash "$$installer" --check || failed="$$failed $$installer"; \
 	done; \
