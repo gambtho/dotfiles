@@ -326,7 +326,10 @@ assert "./skills/pr-text/SKILL.md" in json.loads((package / "package.json").read
 for inventory in (repo / "AGENTS.md", package / "README.md"):
     assert "`pr-text`" in inventory.read_text(), str(inventory)
 PY
-  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$status" -eq 0 ] || {
+    echo "$output"
+    false
+  }
   run bash "$REPO_ROOT/libexec/validate-ai" --verbose
   [ "$status" -eq 0 ]
   [[ "$output" == *"OK:    pr-text/SKILL.md"* ]]
@@ -375,5 +378,8 @@ bundled = harness.split("## Bundled", 1)[1].split("## Shell pitfalls", 1)[0]
 assert "`pr-text`" in bundled
 assert "PR titles" in text and "No emoji" in text and "shortest draft" in text
 PY
-  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$status" -eq 0 ] || {
+    echo "$output"
+    false
+  }
 }
