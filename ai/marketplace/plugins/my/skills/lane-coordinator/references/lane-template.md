@@ -13,10 +13,7 @@ New workspace label, Pi name and live Herdr alias: `<project-slug>-<lane-number>
 (e.g. `double-holo-12` for W12), unless the user explicitly overrides with a valid,
 unique name. Full lane/task identity stays in this file and STATE.md; filenames and
 numbering are unchanged. Never rename existing sessions/workspaces/aliases.
-In Pi, launch with `--name` or have its user run `/name double-holo-12` in the Pi UI
-before submitting this prompt.
-Do not execute `/name` in Bash. Other harnesses use their own naming mechanism.
-Keep this identity out of public branch names, commits, PRs and comments.
+The user names the session; never run `/name` in Bash. Keep this identity out of public branch names, commits, PRs and comments.
 
 ## Context
 
