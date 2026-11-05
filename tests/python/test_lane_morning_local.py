@@ -28,7 +28,7 @@ class LocalObservationsTests(unittest.TestCase):
         self.case = fixtures.MorningTests()
         self.case.setUp()
         self.addCleanup(self.case.doCleanups)
-        self.m, self.root = self.case.m, self.case.root
+        self.m, self.root = self.case.m, self.case.root.resolve()
         self.responses, self.log = self.root / 'local-responses.json', self.root / 'local-log.jsonl'
         self.rows = {}
         self.responses.write_text('{}')
@@ -39,7 +39,7 @@ class LocalObservationsTests(unittest.TestCase):
         self.env = patch.dict(os.environ, LOCAL_LOG=str(self.log), LOCAL_RESPONSES=str(self.responses))
         self.env.start()
         self.addCleanup(self.env.stop)
-        self.checkout = self.root / 'checkout with spaces'
+        self.checkout = (self.root / 'checkout with spaces').resolve()
         self.checkout.mkdir()
         self.tool(['git', '-C', str(self.root), 'rev-parse', 'HEAD'], SHA+'\n')
 
