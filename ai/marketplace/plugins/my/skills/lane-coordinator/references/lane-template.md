@@ -87,8 +87,10 @@ real blocker. Start with the exact PR/head, ready or blocked, the next person's 
 and any unverified risk. Keep this decision summary to at most ten lines at the top;
 put evidence below. Include delivery mode (LOCAL/PR), worktree/branch/head, changed
 paths, exact checks/results/limits, PR number and CI for that head when applicable,
-and remaining decisions. Before calling a PR ready, local HEAD, remote PR head,
-tested revision and CI revision must all match. Include reusable review evidence
+and remaining decisions.
+List bulky outputs: path, size, safe to delete when; say none or mark unknowns.
+Before calling a PR ready, local HEAD, remote PR head, tested revision and CI revision
+must all match. Include reusable review evidence
 (base, head provenance, scope, content identity, profile identity, model and dispositions)
 so the coordinator can check freshness, blockers and the delta without redoing review.
 For a PR, include closeout's bot-opportunity evidence from its final report.

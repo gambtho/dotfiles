@@ -90,6 +90,11 @@ For every coherent update:
    the project authorizes versioning them. Do not silently add workflow artifacts to Git.
 5. **Closing a lane** moves its row to the project's archive (for example
    `CLOSED-<month>.md`) in the same update. Replace it with nothing or one done-list line.
+   In that update, propose an exact deletion list with sizes for bulky outputs now
+   safe to delete, using the lane report/handoff; link pending cleanup from the
+   archive and keep its decision under **Needs the human** until decided. Delete
+   only after the human approves that exact list; project authority still applies.
+   Unknown safety or size is not deletion-ready.
 6. **A decision** is one line of about 25 words or fewer, plus a pointer to its full record
    (session file, lane report or archive). Decisions that are done, superseded or now in
    the project's rule files leave STATE in the same update. Keep about 10 at most;
@@ -275,6 +280,12 @@ budgets such as elapsed time or query limits. Existing authority still applies: 
 command entry grants no new permissions. For absent commands, use the manual steps
 below and the per-PR sweep in Start or resume. Record failed checks or exhausted
 budgets as **unknown**, then continue with that uncertainty visible; never invent results.
+
+**Disk, at end of day and weekly:** use the project's Routines disk check to report
+free disk and the five largest lane folders with sizes, in private reports only.
+Below its free-space threshold, add a **Needs the human** item; missing thresholds
+or failed measurements are unknown, not healthy. Propose cleanup; never infer
+deletion approval from a disk warning.
 
 **End of day:** run the project's drift check and fix STATE against observed facts.
 If no checker exists, compare open PR state/head/checks and lane waits with GitHub

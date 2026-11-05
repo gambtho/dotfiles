@@ -139,11 +139,34 @@ assert start.index("pick-up test") < start.index("drift report") < start.index("
 assert "Don't run it unasked" in start
 assert "--json state,headRefOid,statusCheckRollup" in start
 assert "manual" in maintenance and "budgets" in maintenance
+assert "**Disk, at end of day and weekly:**" in maintenance, "Missing disk routine"
+disk = " ".join(maintenance.split("**Disk, at end of day and weekly:**", 1)[1].split("**End of day:**", 1)[0].split())
+for phrase in ("five largest lane folders with sizes", "private reports only", "free-space threshold",
+               "**Needs the human**", "unknown, not healthy", "never infer deletion approval from a disk warning"):
+    assert phrase in disk, phrase
 coordination = (skill / "references/coordination-template.md").read_text()
-for phrase in ("## Routines", "Drift check", "Morning sweep", "Budget", "report"):
+for phrase in ("## Routines", "Drift check", "Morning sweep", "Budget", "report",
+               "Disk check (end of day + weekly)", "minimum free GiB", "explicit roots"):
     assert phrase in coordination, phrase
 for stamp in ("Last end of day: <date time>", "Last weekly pass: <date>"):
     assert stamp in maintenance and stamp in (skill / "references/state-template.md").read_text(), stamp
+PY
+  [ "$status" -eq 0 ]
+}
+
+@test "lane reports and handoffs declare bulky output disposal conditions" {
+  run python3 - "$SKILL_DIR" <<'PY'
+from pathlib import Path
+import sys
+
+skill = Path(sys.argv[1])
+for name, anchor in (("handoff-template.md", "- Bulky outputs:"),
+                     ("lane-template.md", "List bulky outputs:")):
+    text = (skill / "references" / name).read_text()
+    declaration = next((line for line in text.splitlines() if line.startswith(anchor)), "")
+    assert declaration, f"Missing bulky output declaration: {name}"
+    for phrase in ("path", "size", "safe to delete when", "none", "unknown"):
+        assert phrase in declaration, (name, phrase)
 PY
   [ "$status" -eq 0 ]
 }
@@ -203,6 +226,11 @@ updates = text.split("For every coherent update:", 1)[1].split("If something too
 for phrase in ("Closing a lane", "same update", "CLOSED-<month>.md", "25 words", "full record",
                "done, superseded", "rule files", "oldest", "archive", "Replace, don't add", "one home"):
     assert phrase in updates, phrase
+closing = " ".join(updates.split("5. **Closing a lane**", 1)[1].split("6. **A decision**", 1)[0].split())
+for phrase in ("exact deletion list with sizes", "lane report/handoff", "archive",
+               "**Needs the human** until decided", "only after the human approves that exact list",
+               "project authority still applies", "Unknown safety or size is not deletion-ready"):
+    assert phrase in closing, phrase
 eod = text.split("**End of day:**", 1)[1].split("**Next morning:**", 1)[0]
 for phrase in ("Routines", "budget", "inspection", "lane reports", "archive", "current fact",
                "by section", "where", "human", "weekly pass"):

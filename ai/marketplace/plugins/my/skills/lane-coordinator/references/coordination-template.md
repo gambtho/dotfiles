@@ -38,6 +38,7 @@ An unfilled command uses the skill's manual fallback; entries do not expand auth
 |---|---|---|---|
 | Drift check | <project drift-check command> | <time/query limit> | <local drift report path; observation time and unknowns> |
 | Morning sweep | <project sweep command> | <time/query limit> | <current PR/lane observations and unknowns> |
+| Disk check (end of day + weekly) | <filesystem free-space command; five largest lane folders with sizes; explicit roots> | <time limit; minimum free GiB, e.g. 100> | <private report path; observation time; below minimum: Needs the human; failures: unknown> |
 
 Record failed checks or exhausted budgets as unknown, not clean results.
 
