@@ -274,7 +274,7 @@ class MorningTests(unittest.TestCase):
         item['pull_request'] = {}
         merge = {'body': {'title':'Merge', 'body':'Refs '+ ' '.join('#'+str(n) for n in range(1,28)),
                          'merged_at':'2026-01-02T00:00:00Z', 'merged_by':{'login':'merger-user','type':'User'}}}
-        issues = [{'body':{**self.issue_item(n),'state':'open'}} for n in range(1,26)]
+        issues: list[dict[str, object]] = [{'body':{**self.issue_item(n),'state':'open'}} for n in range(1,26)]
         if fail_first:
             issues[0] = {'exit':1,'stderr':'gh: Not Found (HTTP 404)'}
         self.log.write_text('')

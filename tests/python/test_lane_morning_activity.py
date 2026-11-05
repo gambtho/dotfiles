@@ -453,14 +453,14 @@ class TrackedSeriesTests(unittest.TestCase):
 
     def run_sweep(self, items=(), fail=False):
         class Client(SweepClient):
-            def gh(client, *args, host=None):
+            def gh(client, *args, host=None, budget_optional=False):
                 if "repos/example/sessions/issues" in args:
                     client.calls.append(args)
                     if fail:
                         client.fail("series issues", "offline")
                         return None
                     return [list(items)]
-                return super().gh(*args, host=host)
+                return super().gh(*args, host=host, budget_optional=budget_optional)
 
         client = Client()
         text = morning.sweep(client, SINCE, "example-user")
