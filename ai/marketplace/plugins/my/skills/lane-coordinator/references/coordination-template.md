@@ -40,6 +40,8 @@ An unfilled command uses the skill's manual fallback; entries do not expand auth
 | Morning sweep | <project sweep command> | <time/query limit> | <current PR/lane observations and unknowns> |
 | Disk check (end of day + weekly) | <filesystem free-space command; five largest lane folders with sizes; explicit roots> | <time limit; minimum free GiB, e.g. 100> | <private report path; observation time; below minimum: Needs the human; failures: unknown> |
 
+For the shared checker command/config, see [morning.md](morning.md); adopting it is project-owned.
+
 Record failed checks or exhausted budgets as unknown, not clean results.
 
 ## Project facts

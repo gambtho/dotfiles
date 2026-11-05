@@ -274,6 +274,8 @@ One phrase selects each routine: `coordinate <project>` starts/resumes the sessi
 `end of day <project>` runs end of day; `weekly <project>` runs the weekly pass.
 When there's only one project folder, the project name is optional (see Start or resume).
 
+A shared configured checker is available in [morning.md](references/morning.md); projects opt in through their Routines command.
+
 Read commands and budgets from the project's `Routines` row or section in COORDINATION.md,
 not from this skill. It supplies drift check, report location and morning sweep, with
 budgets such as elapsed time or query limits. Existing authority still applies: a
