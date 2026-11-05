@@ -46,6 +46,13 @@ class ObservationError(ValueError):
     """A requested read is incomplete, not an empty healthy observation."""
 
 
+class BudgetExhausted(ObservationError):
+    """No read started; optional reference enrichment may list it as not checked."""
+
+
+NOT_CHECKED = object()
+
+
 def read_text(path):
     with pathlib.Path(path).open('rb') as stream:
         data = stream.read(MAX_TEXT + 1)
@@ -187,10 +194,36 @@ class Budget:
         return True
 
 
+def command_failure(stderr, fallback, forced=None):
+    """Keep one bounded reason, never URLs, credential assignments or token strings."""
+    lines = stderr.decode('utf-8', errors='replace').splitlines()
+    text = lines[0] if lines else ''
+    text = re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', text)
+    text = re.sub(r'[\x00-\x1f\x7f-\x9f]', ' ', text)
+    text = re.sub(r'(?i)\b(?:https?|ssh)://\S+', '[URL omitted]', text)
+    text = re.sub(r'(?i)\b(?:bearer|basic)\s+\S+', '[credential redacted]', text)
+    keys = r'(?:[\w-]*(?:token|api[ _-]?key|password|passwd|secret|credential|cookie|session|signature)[\w-]*|authorization)'
+    credential = re.search(r'''(?i)\b''' + keys + r'''\b[\\"']*\s*[:=]''', text)
+    if credential:
+        # Fail closed on quoted/escaped/multivalue credentials: omit the whole tail.
+        text = text[:credential.start()] + '[credential values omitted]'
+    text = re.sub(r'\b(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]+', '[token redacted]', text)
+    text = re.sub(r'\b[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}(?:\.[A-Za-z0-9_-]*)?\b|\b[A-Za-z0-9_-]{32,}\b', '[token redacted]', text)
+    text = re.sub(r'\S+:\S+@\S+', '[credentials redacted]', text)
+    lower = text.lower()
+    kind = forced or ('rate limit' if re.search(r'rate.?limit|too many requests|\b429\b', lower) else
+                      'authentication' if re.search(r'authenticat|bad credentials|keyring|\b40[13]\b', lower) else
+                      'not found' if re.search(r'not found|no such file|\b404\b', lower) else
+                      'timeout' if re.search(r'time.?out|timed out|deadline exceeded', lower) else 'command failure')
+    if re.fullmatch(r'[\w.-]{12,}', text):
+        text = '[opaque stderr omitted]'
+    return f'{kind}: {(text or fallback)[:240]}; coverage unknown'
+
+
 def run_read(argv, *, timeout, budget, environment=None):
     timeout = min(timeout, budget.remaining())
     if timeout <= 0:
-        raise ObservationError('time budget exhausted; coverage unknown')
+        raise BudgetExhausted('time budget exhausted; coverage unknown')
     env = os.environ.copy()
     env.update(GH_NO_UPDATE_NOTIFIER='1', GIT_OPTIONAL_LOCKS='0')
     if environment:
@@ -204,13 +237,13 @@ def run_read(argv, *, timeout, budget, environment=None):
     streams = selectors.DefaultSelector()
     streams.register(stdout, selectors.EVENT_READ, 'stdout')
     streams.register(stderr, selectors.EVENT_READ, 'stderr')
-    output, total = [], 0
+    output, total, error_bytes = [], 0, bytearray()
     deadline = time.monotonic() + timeout
     try:
         while streams.get_map():
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise ObservationError('read timed out; coverage unknown')
+                raise ObservationError(command_failure(error_bytes, 'read timed out', 'timeout'))
             for key, _ in streams.select(remaining):
                 chunk = os.read(key.fd, 65536)
                 if not chunk:
@@ -221,12 +254,16 @@ def run_read(argv, *, timeout, budget, environment=None):
                     raise ObservationError('read output exceeds 16 MiB; coverage unknown; narrow --since')
                 if key.data == 'stdout':
                     output.append(chunk)
+                elif len(error_bytes) < 4096 and b'\n' not in error_bytes:
+                    error_bytes.extend(chunk[:4096-len(error_bytes)])
         process.wait(timeout=max(.001, deadline - time.monotonic()))
         if process.returncode:
-            raise ObservationError(f'read command exited {process.returncode}; coverage unknown')
+            raise ObservationError(command_failure(error_bytes, f'read command exited {process.returncode}'))
         return b''.join(output).decode('utf-8')
-    except (subprocess.TimeoutExpired, UnicodeError) as error:
-        raise ObservationError('read timed out or returned invalid UTF-8; coverage unknown') from error
+    except subprocess.TimeoutExpired as error:
+        raise ObservationError(command_failure(error_bytes, 'read timed out', 'timeout')) from error
+    except UnicodeError as error:
+        raise ObservationError('read returned invalid UTF-8; coverage unknown') from error
     finally:
         # Also terminate descendants retaining pipe handles after the parent exits.
         try:
@@ -311,9 +348,17 @@ def referenced_open_issues(activity, merged, limit=25):
             source = (repo, number)
             if source not in sources or kind == "Closes" or (kind == "Refs" and sources[source] == "mention"):
                 sources[source] = kind
-    # Separate issue budget: preserve activity's cap without letting it starve this section.
-    for (target, issue), sources in list(refs.items())[:limit]:
-        item = activity.client.gh("api", f"repos/{target}/issues/{issue}")
+    # Reference enrichment may defer named items; real reads still fail normally.
+    skipped = []
+    for index, ((target, issue), sources) in enumerate(refs.items()):
+        budget = activity.client.budget
+        if index >= limit or budget.request_count >= budget.queries or budget.remaining() <= 0:
+            skipped.append(f'{target}#{issue}')
+            continue
+        item = activity.client.gh("api", f"repos/{target}/issues/{issue}", budget_optional=True)
+        if item is NOT_CHECKED:
+            skipped.append(f'{target}#{issue}')
+            continue
         labels = []
         for (repo, number), kind in sources.items():
             source = f"PR #{number}" + (f" ({repo})" if target.lower() != repo.lower() else "")
@@ -324,9 +369,9 @@ def referenced_open_issues(activity, merged, limit=25):
             lines.append(f"- {label}: unknown (query failed) — {source}")
         elif item["state"] == "open" and "pull_request" not in item:
             lines.append(f"- {label} {safe_text(item['title'])} — {source}")
-    if len(refs) > limit:
-        lines.append(f"- {len(refs) - limit} references not checked (lookup budget)")
-        activity.client.fail("referenced issues", "lookup budget exhausted; coverage unknown")
+    activity.referenced_not_checked = len(skipped)
+    if skipped:
+        lines.append(f"- {len(skipped)} references not checked (lookup budget): " + ', '.join(skipped))
     return lines
 
 
@@ -457,7 +502,7 @@ class GitHub:
 
     def _read(self, args, host=None, *, include=False):
         if not self.budget.request():
-            raise ObservationError('request/time budget exhausted; coverage unknown; narrow --since')
+            raise BudgetExhausted('request/time budget exhausted; coverage unknown; narrow --since')
         environment = {'GH_HOST': host} if host else None
         raw = run_read(['gh', 'api', *args, *(['--include'] if include else [])],
                        timeout=30, budget=self.budget, environment=environment)
@@ -480,11 +525,16 @@ class GitHub:
             raise ObservationError('GitHub returned errors; coverage unknown')
         return data, headers
 
-    def gh(self, *args, host=None):
+    def gh(self, *args, host=None, budget_optional=False):
         try:
             if not args or args[0] != 'api':
                 raise ObservationError('unsupported non-API read')
             return self._read(list(args[1:]), host)[0]
+        except BudgetExhausted as error:
+            if budget_optional:
+                return NOT_CHECKED
+            self.fail('GitHub read', error)
+            return None
         except (OSError, ValueError, TypeError) as error:
             self.fail('GitHub read', error)
             return None
@@ -660,12 +710,14 @@ def failure_section(failures):
 class Activity:
     """Extra actor lookups: at most 100 items, up to four paginated endpoints each.
 
-    Existing section reads keep their coverage. Skips are unknown and retain the old
-    stamp, like failed queries; use --since to narrow an over-budget recovery window.
+    Existing activity skips retain the old stamp, like failed queries. Only bounded
+    referenced-issue enrichment may defer explicitly listed references without holding
+    the stamp; actual read failures there still retain it. Use --since for recovery.
     """
     def __init__(self, client, since, me):
         self.client, self.since, self.me = client, since, me.lower()
         self.lookups, self.events, self.items = {}, {}, set()
+        self.referenced_not_checked = 0
 
     def lookup(self, endpoint, paged=True, **params):
         key = (endpoint, paged, tuple(sorted(params.items())))
@@ -854,7 +906,9 @@ def sweep(client, since, me):
     if upstream is None or any(count == "unknown" for title, count in counts
                                if title in {"Merged", "Your upstream merges"}):
         lines.append("- unknown: merged-PR search failed; issue references may be missing.")
-    add_section("Open issues referenced by PRs merged since the last run", lines, len(lines))
+    count = (f'{len(lines)-1} reported; {activity.referenced_not_checked} not checked'
+             if activity.referenced_not_checked else len(lines))
+    add_section("Open issues referenced by PRs merged since the last run", lines, count)
     lines = []
     # The fixed watchlist has its own budget: exactly one issue read per watched item.
     for repo, number in WATCH:
@@ -942,6 +996,7 @@ def old_folders(state, now, budget):
 
 def drift(client, state, now, me):
     """Compact receipt: every qualified reference remains visible, even offline."""
+    checkout_text = checkout_observations(client)
     try:
         sha = run_read(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'],
                        timeout=10, budget=client.budget).strip()
@@ -1030,8 +1085,9 @@ def drift(client, state, now, me):
         folders = None
         client.fail('old folders', 'folder coverage unknown', activity=False)
     folder_text = ('\n'.join(f'{name}\t{size} bytes' for name, size in folders) + '\n') if folders is not None else 'unknown: folder coverage incomplete\n'
+    disk_text = disk_observations(client)
     lines = ["# STATE drift", f"Observed UTC: {now.isoformat()}; local: {now.astimezone().isoformat()}.",
-             f"STATE commit: {sha}"]
+             f"STATE commit: {sha}", checkout_text]
     lines.append(failure_section(client.failures) if client.failures else "Failed queries: none.")
     lines += ["## STATE PR claims vs GitHub", "\n".join(claims),
               f"{issue_count} issue references omitted (not PRs).",
@@ -1046,15 +1102,217 @@ def drift(client, state, now, me):
               "## Budgets", " ".join(budget_text),
               "Words/upper-limit; ! flags excess. STATE uses the 1,600-word inspection threshold. Lane prompts shown only above 800 words.",
               "## Old folders", (f"{len(folders)} folders; {sum(s for _, s in folders) / 2**20:.1f} MiB; full list: STATE-DRIFT-folders.txt." if folders is not None else "unknown: folder coverage incomplete."),
-              "## Next actions", "Coordinator reconciles stale waits, heads and owners; checks unknown queries before treating this receipt as current. "
+              disk_text, "## Next actions", "Coordinator reconciles stale waits, heads and owners; checks unknown queries before treating this receipt as current. "
               "Budget flags invite trimming receipts, not deleting unresolved decisions. This check is advisory and does not edit STATE or its last-run stamp."]
     receipt = "\n\n".join(lines) + "\n"
     return receipt, folder_text
 
 
-def reserved_sections():
-    return '\n'.join(section(title, ['- not checked: ' + ('reserved for collector update.' if key in CHECK_SETTINGS
-                        else 'not configured.')]) for key, title in (('checkouts', 'Checkout/worktrees'), ('disk', 'Disk')))
+def configured_path(value):
+    try:
+        return (ROOT / pathlib.Path(value).expanduser()).resolve()
+    except RuntimeError as error:
+        raise ObservationError('configured path cannot be resolved') from error
+
+
+def local_unknown(client, lines, label, error):
+    client.fail(label, error, activity=False)
+    lines.append(f'- {safe_text(label)}: unknown ({safe_text(error)}).')
+
+
+def checkout_observations(client):
+    """Observe primary checkouts and bounded same-repository PR candidates; never prune."""
+    lines, inventories = [], {}
+    mapping = GitHub(client.budget)
+    query = '''query($owner:String!,$name:String!){repository(owner:$owner,name:$name){
+      open:pullRequests(first:100,states:[OPEN],orderBy:{field:UPDATED_AT,direction:DESC}){
+        pageInfo{hasNextPage} nodes{number state headRefName headRefOid headRepository{nameWithOwner} url}}
+      closed:pullRequests(first:100,states:[CLOSED,MERGED],orderBy:{field:UPDATED_AT,direction:DESC}){
+        pageInfo{hasNextPage} nodes{number state headRefName headRefOid headRepository{nameWithOwner} url}}}}'''
+
+    def inventory(repo):
+        if repo not in inventories:
+            owner, name = repo.split('/')
+            data = mapping.gh('api', 'graphql', '-f', 'query='+query, '-f', 'owner='+owner, '-f', 'name='+name)
+            if data is None:
+                raise ObservationError('PR inventory unavailable')
+            connections = data['data']['repository']
+            for key, states in (('open', {'OPEN'}), ('closed', {'CLOSED', 'MERGED'})):
+                connection = connections[key]
+                if (not isinstance(connection['nodes'], list) or len(connection['nodes']) > 100
+                        or type(connection['pageInfo']['hasNextPage']) is not bool):
+                    raise ObservationError('malformed PR inventory')
+                for pr in connection['nodes']:
+                    if (type(pr['number']) is not int or pr['number'] <= 0 or pr['state'] not in states
+                            or not isinstance(pr['headRefName'], str)
+                            or not re.fullmatch(r'[0-9a-f]{40}', pr['headRefOid'])
+                            or pr['headRepository'] is not None and not isinstance(pr['headRepository']['nameWithOwner'], str)):
+                        raise ObservationError('malformed PR identity')
+            inventories[repo] = connections
+        return inventories[repo]
+
+    def match(repo, branch):
+        connections = inventory(repo)
+        incomplete = {key: connection['pageInfo']['hasNextPage'] or any(p['headRepository'] is None for p in connection['nodes'])
+                      for key, connection in connections.items()}
+        matches = [[p for p in connections[key]['nodes'] if p['headRepository'] is not None
+                    and p['headRepository']['nameWithOwner'].casefold() == repo.casefold()
+                    and p['headRefName'] == branch] for key in ('open', 'closed')]
+        candidates = matches[0] or matches[1]
+        if incomplete['open'] or not matches[0] and incomplete['closed']:
+            return 'unknown: partial PR inventory; observed ' + ', '.join(f"{p['state']} #{p['number']}" for p in candidates)
+        if len(candidates) > 1:
+            return 'unknown: ambiguous PR matches'
+        if not candidates:
+            return 'unknown: no open/recent closed match; not proof of merge/deletion'
+        pr = candidates[0]
+        return f"{pr['state']} [#{pr['number']}]({safe_url(pr['url'])}) head={pr['headRefOid'][:12]} (observed, not a cleanup decision)"
+
+    for checkout in CHECK_SETTINGS.get('checkouts', []):
+        repo = checkout['repo']
+        try:
+            path = configured_path(checkout['path'])
+            status = run_read(['git', '-C', str(path), 'status', '--porcelain=v2', '--branch', '-z'], timeout=10, budget=client.budget)
+            if not status.endswith('\0'):
+                raise ObservationError('incomplete status output')
+            fields = status.rstrip('\0').split('\0')
+            headers = {}
+            for field in fields:
+                if not field.startswith('# '):
+                    break  # Rename-source paths are data, even if they look like headers.
+                key, value = field[2:].split(' ', 1)
+                headers[key] = value
+            head, branch = headers['branch.oid'], headers['branch.head']
+            if head != '(initial)' and not re.fullmatch(r'[0-9a-f]{40}', head):
+                raise ObservationError('unknown primary HEAD')
+            tracking = headers.get('branch.upstream', 'not configured') + ' ' + headers.get('branch.ab', 'unknown')
+            dirty = any(not field.startswith('# ') for field in fields)
+            lines.append(f'- {safe_text(repo)} primary {safe_text(path)}: {safe_text(branch)} HEAD={head[:12]} '
+                         f"{'dirty' if dirty else 'clean'}; tracking {safe_text(tracking)} (local ref only; no fetch).")
+            raw = run_read(['git', '-C', str(path), 'worktree', 'list', '--porcelain', '-z'], timeout=10, budget=client.budget)
+            if not raw.endswith('\0\0'):
+                raise ObservationError('incomplete worktree list')
+            records = raw[:-2].split('\0\0')
+            if len(records) > 100:
+                raise ObservationError('worktree list truncated at 100 candidates')
+            for record in records:
+                entry = {part.partition(' ')[0]: part.partition(' ')[2] for part in record.split('\0')}
+                location = pathlib.Path(entry['worktree'])
+                flags = [name for name in ('detached', 'bare', 'prunable', 'locked') if name in entry]
+                if not location.is_dir():
+                    flags.append('missing')
+                if flags:
+                    detail = 'unknown/not mapped: ' + ', '.join(flags)
+                else:
+                    ref, oid = entry['branch'], entry['HEAD']
+                    if not ref.startswith('refs/heads/') or not re.fullmatch(r'[0-9a-f]{40}', oid):
+                        raise ObservationError('malformed worktree identity')
+                    detail = safe_text(ref[11:]) + ' local-head=' + oid[:12] + ': ' + match(repo, ref[11:])
+                lines.append(f'- Worktree {safe_text(location)}: {detail}')
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
+            local_unknown(client, lines, repo, error)
+    client.failures.extend(mapping.failures)
+    return section('Checkout/worktrees', lines or ['- not checked: not configured.'])
+
+
+def disk_observations(client):
+    """Measure only configured resources; inspection completion is not cache health."""
+    disk = CHECK_SETTINGS.get('disk', {})
+    if not disk:
+        return section('Disk', ['- not checked: not configured.'])
+    budget = Budget(seconds=min(120, client.budget.remaining()) + 5, queries=0, clock=client.budget.clock)
+    lines = []
+
+    def read(argv, timeout):
+        return run_read(argv, timeout=timeout, budget=budget, environment={'LC_ALL': 'C'})
+
+    def size(path):
+        raw = read(['du', '-sk', str(path)], 20)
+        match = re.match(r'^(\d+)\s', raw)
+        if match is None:
+            raise ObservationError('malformed du measurement')
+        return int(match[1])
+
+    if 'filesystem' in disk:
+        try:
+            path = configured_path(disk['filesystem'])
+            rows = read(['df', '-Pk', str(path)], 10).splitlines()
+            row = re.fullmatch(r'.+?\s+(\d+)\s+(-?\d+)\s+(-?\d+)\s+\d+%\s+.+', rows[1]) if len(rows) == 2 else None
+            if row is None:
+                raise ObservationError('malformed df measurement')
+            available, floor = int(row[3]), disk.get('minimum_free_gib', 50)
+            lines.append(f'- Filesystem {safe_text(path)}: available={available} KiB ({available / 1024**2:.2f} GiB); floor={floor} GiB.'
+                         + (' Needs the human: below free-space floor.' if available < floor * 1024**2 else ''))
+        except (OSError, ValueError, TypeError) as error:
+            local_unknown(client, lines, 'filesystem', error)
+    else:
+        lines.append('- Filesystem: not checked (not configured).')
+    roots, candidates, sizes = disk.get('output_roots', []), set(), []
+    partial = False
+    for value in dict.fromkeys(roots):
+        try:
+            with os.scandir(configured_path(value)) as entries:
+                for entry in entries:
+                    if budget.remaining() <= 0:
+                        raise ObservationError('disk time budget exhausted')
+                    if entry.is_dir(follow_symlinks=False):
+                        candidates.add(pathlib.Path(entry.path))
+                        if len(candidates) > 100:
+                            raise ObservationError('output candidates exceed 100; coverage partial')
+        except (OSError, ValueError) as error:
+            partial = True
+            local_unknown(client, lines, 'output root', error)
+            if len(candidates) > 100:
+                break
+    # Keep outer candidates, not nested duplicate totals from overlapping roots.
+    candidates = {p for p in candidates if not any(parent in candidates for parent in p.parents)}
+    for path in sorted(candidates)[:100]:
+        try:
+            sizes.append((size(path), path))
+        except (OSError, ValueError) as error:
+            partial = True
+            local_unknown(client, lines, 'output folder', error)
+    lines.append('- Output folders: ' + ('partial ranking; omissions/failed measurements unknown.' if partial else
+                                       'five largest measured immediate directories.' if roots else 'not checked (not configured).'))
+    lines += [f'- {safe_text(path)}: {kib} KiB' for kib, path in sorted(sizes, key=lambda x: (-x[0], str(x[1])))[:5]]
+    for name in ('go', 'uv', 'npm'):
+        if name not in disk.get('caches', {}):
+            lines.append(f'- {name} cache: not checked (not configured).')
+            continue
+        try:
+            path = configured_path(disk['caches'][name])
+            path.stat()  # exists() suppresses permission errors on newer Python versions.
+            if not path.is_dir():
+                raise ObservationError('cache path is not a directory')
+            lines.append(f'- {name} cache {safe_text(path)}: {size(path)} KiB')
+        except FileNotFoundError:
+            lines.append(f'- {name} cache: absent (not measured zero).')
+        except (OSError, ValueError) as error:
+            local_unknown(client, lines, name+' cache', error)
+    if 'cache_check_checkout' in disk:
+        try:
+            output = read(['make', '-s', '--no-print-directory', '-C', str(configured_path(disk['cache_check_checkout'])), 'cache-maintenance-check'], 20)
+            if len(output) > MAX_TEXT:
+                raise ObservationError('cache inspection output exceeds text bound')
+            if 'cache-maintenance: not installed;' in output:
+                result = 'not installed (not healthy)'
+            elif 'cache-maintenance: service has never run' in output:
+                result = 'never run (not healthy)'
+            else:
+                properties = dict(line.split('=', 1) for line in output.splitlines()
+                                  if line.startswith(('Result=', 'ExecMainStatus=', 'ExecMainStartTimestamp=')))
+                known = {'success', 'resources', 'timeout', 'exit-code', 'signal', 'core-dump', 'watchdog', 'start-limit-hit', 'oom-kill', 'protocol', 'exec-condition'}
+                if (properties.get('Result') not in known or not properties.get('ExecMainStatus', '').isdigit()
+                        or not properties.get('ExecMainStartTimestamp')):
+                    raise ObservationError('unrecognized cache inspection; health unknown')
+                result = 'last run successful; timer health not inferred' if properties['Result'] == 'success' and properties['ExecMainStatus'] == '0' else 'last run failed'
+            lines.append('- Cache maintenance: '+result+'.')
+            lines += ['  '+safe_text(line) for line in output.splitlines()]
+        except (OSError, ValueError) as error:
+            local_unknown(client, lines, 'cache maintenance', error)
+    else:
+        lines.append('- Cache maintenance: not checked (not configured).')
+    return section('Disk', lines)
 
 
 def main(argv=None):
@@ -1097,13 +1355,13 @@ def main(argv=None):
             client.fail('identity', 'authenticated identity unknown; dependent activity not checked')
             if not args.check:
                 print('# Morning observation\n\nActivity unknown: identity lookup failed.\n' + failure_section(client.failures))
+                print(disk_observations(client))
                 return 0
             # Non-author-specific STATE claims can still be recorded honestly.
             me = None
     try:
         if args.check:
             receipt, folders = drift(client, state, now, me)
-            receipt += '\n' + reserved_sections()
             print(receipt)
             try:
                 atomic_write(ROOT / 'STATE-DRIFT-folders.txt', folders)
@@ -1119,9 +1377,11 @@ def main(argv=None):
     except (KeyError, TypeError, IndexError, ValueError, OSError, AttributeError) as error:
         client.fail('observation', f'incomplete input/result: {type(error).__name__}')
         print('# Morning observation\n\nActivity unknown.\n' + failure_section(client.failures))
+        print(section('Disk', ['- unknown: observation aborted before local checks.'] if CHECK_SETTINGS.get('disk') else ['- not checked: not configured.']))
         return 1 if args.check else 0
     print(report)
-    print(reserved_sections())
+    print(section('Checkout/worktrees', ['- not checked: use --check.'] if CHECK_SETTINGS.get('checkouts') else ['- not checked: not configured.']))
+    print(disk_observations(client))
     print(f'\nObserved UTC: {now.isoformat()}; queries: {client.budget.request_count}/{client.budget.queries}.')
     if client.activity_failures:
         print('Last-run stamp unchanged: activity incomplete; repair unknown queries or narrow --since for recovery.')

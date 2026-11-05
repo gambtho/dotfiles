@@ -70,10 +70,10 @@ class StateParsingTests(unittest.TestCase):
 
     def test_completed_reference_is_not_a_waiting_claim(self):
         for text, number, expected in [
-            ("PR1 core#702, PR2 core#704 and PR3 core#707 MERGED 10-23. Next: PR4", 702, False),
-            ("PR1 core#702, PR2 core#704 and PR3 core#707 MERGED 10-23. Next: PR4", 704, False),
-            ("PR1 core#702, PR2 core#704 and PR3 core#707 MERGED 10-23. Next: PR4", 707, False),
-            ("| W567 | PR1 core#702, PR2 #704, PR3 #707 merged 10-23; PR4 next | lane: PR4 |", 702, False),
+            ("PR1 core#31, PR2 core#34 and PR3 core#38 MERGED 10-23. Next: PR4", 31, False),
+            ("PR1 core#31, PR2 core#34 and PR3 core#38 MERGED 10-23. Next: PR4", 34, False),
+            ("PR1 core#31, PR2 core#34 and PR3 core#38 MERGED 10-23. Next: PR4", 38, False),
+            ("| W23 | PR1 core#31, PR2 #34, PR3 #38 merged 10-23; PR4 next | lane: PR4 |", 31, False),
             ("core#7 closed; next: follow-up", 7, False),
             ("Merged core#7; next: follow-up", 7, False),
             ("core#7 merged; core#8 open, awaiting review", 8, True),
@@ -190,7 +190,7 @@ class SweepClient(morning.GitHub):
             self.page_cache[key] = [row for page in pages for row in page] if pages is not None else None
         return self.page_cache[key]
 
-    def gh(self, *args, host=None):
+    def gh(self, *args, host=None, budget_optional=False):
         self.calls.append(args)
         endpoint = args[args.index("GET") + 1] if "GET" in args else args[-1]
         if self.failure and self.failure in endpoint:
@@ -216,7 +216,7 @@ class SweepTests(unittest.TestCase):
 
     def test_merged_references_list_only_open_issues_and_report_unknown(self):
         class IssueClient(SweepClient):
-            def gh(self, *args, host=None):
+            def gh(self, *args, host=None, budget_optional=False):
                 endpoint = args[-1]
                 if endpoint.endswith("/pulls/216"):
                     return dict(merged_at=NOW, merged_by=dict(login="merger-user", type="User"),
@@ -247,7 +247,7 @@ class SweepTests(unittest.TestCase):
                 self.queries.append(query)
                 return []
 
-            def gh(self, *args, host=None):
+            def gh(self, *args, host=None, budget_optional=False):
                 if args[-1] == "repos/upstream/engine/issues/2595":
                     self.calls.append(args)
                     if self.watched is None:
@@ -275,7 +275,7 @@ class SweepTests(unittest.TestCase):
 
     def test_bot_merged_pr_references_are_skipped(self):
         class BotClient(SweepClient):
-            def gh(self, *args, host=None):
+            def gh(self, *args, host=None, budget_optional=False):
                 if args[-1].endswith("/pulls/216"):
                     return dict(title="Refs #1", body="", merged_at=NOW,
                                 merged_by=dict(login="merger-user", type="User"))
@@ -295,7 +295,7 @@ class SweepTests(unittest.TestCase):
 
     def test_issue_budget_is_independent_and_skips_are_collapsed(self):
         class IssueClient(SweepClient):
-            def gh(self, *args, host=None):
+            def gh(self, *args, host=None, budget_optional=False):
                 self.calls.append(args)
                 return dict(state="open", title="Open issue")
 
@@ -307,13 +307,13 @@ class SweepTests(unittest.TestCase):
         lines = morning.referenced_open_issues(activity, merged, limit=2)
         self.assertIn('sessions#1 Open issue — PR #216 "Refs"', lines[0])
         self.assertIn("sessions#2 Open issue — PR #216 mention", lines[1])
-        self.assertEqual(lines[2:], ["- 2 references not checked (lookup budget)"])
+        self.assertEqual(lines[2:], ["- 2 references not checked (lookup budget): example/sessions#3, example/sessions#4"])
         self.assertEqual(len(client.calls), 2)
-        self.assertTrue(client.activity_failures)
+        self.assertFalse(client.activity_failures)
 
     def test_issue_deduplication_keeps_all_source_prs_and_one_lookup(self):
         class IssueClient(SweepClient):
-            def gh(self, *args, host=None):
+            def gh(self, *args, host=None, budget_optional=False):
                 self.calls.append(args)
                 return dict(state="open", title="Open issue")
 
@@ -405,7 +405,7 @@ class SweepTests(unittest.TestCase):
                     return [item]
                 return []
 
-            def gh(self, *args, host=None):
+            def gh(self, *args, host=None, budget_optional=False):
                 if args == ("api", "user"):
                     return dict(login="internal-user")
                 return super().gh(*args, host=host)
@@ -585,7 +585,7 @@ class RequestAccountingTests(unittest.TestCase):
                 self.count += 1
                 return 0
 
-            def gh(self, *args, host=None):
+            def gh(self, *args, host=None, budget_optional=False):
                 endpoint = args[-1]
                 self.count += self.comment_pages if endpoint.endswith('/comments') else (3 if self.activity else 1) if endpoint == 'notifications' else 1
                 if endpoint == 'notifications':
