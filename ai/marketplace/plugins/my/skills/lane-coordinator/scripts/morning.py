@@ -562,7 +562,7 @@ class GitHub:
             commits(last:1) { nodes { commit { oid statusCheckRollup {
               contexts(first:100) { pageInfo { hasNextPage } nodes {
                 __typename
-                ... on CheckRun { name status conclusion completedAt createdAt checkSuite { commit { oid } } }
+                ... on CheckRun { name status conclusion completedAt checkSuite { commit { oid } } }
                 ... on StatusContext { context state createdAt commit { oid } }
               } }
             } } } }

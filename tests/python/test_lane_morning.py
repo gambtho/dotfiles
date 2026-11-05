@@ -269,6 +269,14 @@ class MorningTests(unittest.TestCase):
             self.assertIsNone(client.pr('example/project', 1))
             self.assertTrue(client.activity_failures)
 
+    def test_checkrun_query_uses_supported_graphql_fields(self):
+        self.reply(self.pr_reply())
+        self.assertIsNotNone(self.m.GitHub().pr('example/project', 1))
+        query = next(arg for arg in self.calls()[0]['args'] if arg.startswith('query='))
+        fragment = query.split('... on CheckRun {', 1)[1].split('... on StatusContext', 1)[0]
+        self.assertIn('completedAt', fragment)
+        self.assertNotIn('createdAt', fragment)
+
     def test_receipt_publication_failure_is_nonzero(self):
         with patch.object(self.m, 'atomic_write', side_effect=OSError('failure')):
             self.assertEqual(self.main('--check')[0], 1)
