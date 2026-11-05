@@ -14,6 +14,16 @@ update: ## Update packages, runtimes, neovim plugins
 relink: ## Remove dead symlinks and re-create from current layout
 	bash libexec/relink
 
+# ── Opt-in host cache maintenance ─────────────────────────────────────────────
+
+.PHONY: cache-maintenance cache-maintenance-check
+
+cache-maintenance: ## Install and enable weekly native cache pruning on this machine
+	bash tools/cache-maintenance/install.sh --apply
+
+cache-maintenance-check: ## Inspect cache timer and last service result without cleanup
+	bash tools/cache-maintenance/install.sh --check
+
 # ── Linux credential keyring ───────────────────────────────────────────────────
 
 .PHONY: keyring-check keyring-unlock
