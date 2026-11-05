@@ -142,7 +142,10 @@ assert "manual" in maintenance and "budgets" in maintenance
 assert "**Disk, at end of day and weekly:**" in maintenance, "Missing disk routine"
 disk = " ".join(maintenance.split("**Disk, at end of day and weekly:**", 1)[1].split("**End of day:**", 1)[0].split())
 for phrase in ("five largest lane folders with sizes", "private reports only", "free-space threshold",
-               "**Needs the human**", "unknown, not healthy", "never infer deletion approval from a disk warning"):
+               "**Needs the human**", "unknown, not healthy", "never infer deletion approval from a disk warning",
+               "If no disk-check command exists", "inspect only configured roots manually",
+               "observation time", "missing commands, roots or measurements unknown",
+               "Cleanup follows **Keep STATE.md current**, step 5's exact-list approval rules"):
     assert phrase in disk, phrase
 coordination = (skill / "references/coordination-template.md").read_text()
 for phrase in ("## Routines", "Drift check", "Morning sweep", "Budget", "report",

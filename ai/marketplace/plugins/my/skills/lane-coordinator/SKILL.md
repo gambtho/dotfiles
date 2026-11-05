@@ -283,9 +283,12 @@ budgets as **unknown**, then continue with that uncertainty visible; never inven
 
 **Disk, at end of day and weekly:** use the project's Routines disk check to report
 free disk and the five largest lane folders with sizes, in private reports only.
+If no disk-check command exists, inspect only configured roots manually; record
+observation time and mark missing commands, roots or measurements unknown.
 Below its free-space threshold, add a **Needs the human** item; missing thresholds
-or failed measurements are unknown, not healthy. Propose cleanup; never infer
-deletion approval from a disk warning.
+or failed measurements are unknown, not healthy. Cleanup follows **Keep STATE.md
+current**, step 5's exact-list approval rules; never infer deletion approval from a
+disk warning.
 
 **End of day:** run the project's drift check and fix STATE against observed facts.
 If no checker exists, compare open PR state/head/checks and lane waits with GitHub
