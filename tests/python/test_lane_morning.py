@@ -353,6 +353,22 @@ class MorningTests(unittest.TestCase):
         self.assertTrue(client.activity_failures)
         self.assertIn('comments unknown', report)
 
+    def test_plain_files_do_not_consume_old_folder_candidate_cap(self):
+        self.m.configure(self.root)
+        folder = self.root / 'w1-output'
+        folder.mkdir()
+        os.utime(folder, (time.time() - 15 * 86400,) * 2)
+        files = [self.root / f'workflow-{n}.md' for n in range(101)]
+        for path in files:
+            path.touch()
+        # Emulate Python 3.10's trailing-separator glob behavior.
+        with patch.object(pathlib.Path, 'glob', return_value=iter(files + [folder])):
+            try:
+                rows = self.m.old_folders('', self.m.dt.datetime.now(self.m.dt.timezone.utc), self.m.Budget())
+            except self.m.ObservationError:
+                self.fail('plain files consumed the directory-only candidate cap')
+        self.assertEqual([name for name, _ in rows], ['w1-output'])
+
     def test_old_folder_walk_failure_is_unknown(self):
         self.m.configure(self.root)
         folder = self.root / 'w1-output'

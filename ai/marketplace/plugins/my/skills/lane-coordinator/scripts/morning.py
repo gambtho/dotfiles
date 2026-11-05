@@ -909,7 +909,7 @@ def red_age(checks, now):
 
 def old_folders(state, now, budget):
     folders = []
-    candidates = list(itertools.islice(ROOT.glob('w*/'), 101))
+    candidates = list(itertools.islice((path for path in ROOT.glob('w*') if path.is_dir()), 101))
     if len(candidates) > 100:
         raise ObservationError('folder candidates truncated')
     visited = 0
