@@ -13,6 +13,7 @@ Written by the lane before it closes or pauses for long, under the project folde
 - PRs: <number, state, head SHA, CI on that head>
 - Done: <what landed or is ready>
 - Not done: <remaining scope, uncommitted or unpushed work and where it is>
+- Bulky outputs: <path, size, safe to delete when; or none; unknowns explicit>
 - Decisions and approvals so far: <what the user approved, with dates>
 - Next step: <the first thing a resumed lane should do>
 - Gotchas: <hooks, flaky checks, files other PRs touch, anything surprising>
