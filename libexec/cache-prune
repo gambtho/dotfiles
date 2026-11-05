@@ -1,0 +1,210 @@
+#!/usr/bin/env bash
+# Only conventional native caches are owned here; custom tool configuration is ignored.
+set -euo pipefail
+
+usage() { echo 'Usage: cache-prune [--help]'; }
+if (($#)); then
+  if [[ $# == 1 && $1 == --help ]]; then
+    usage
+    exit 0
+  fi
+  usage >&2
+  exit 2
+fi
+export MISE_AUTO_INSTALL=false LC_ALL=C
+umask 077
+failed=0
+error() {
+  echo "$tool|error: $*" >&2
+  failed=1
+}
+tool=setup
+
+# Reject lexical traversal and every symlink component, including dangling links.
+# These checks are not OS containment against same-user filesystem replacement races.
+safe_path() {
+  local path=$1 component current='' rest
+  [[ $path == /* && /$path/ != */../* && /$path/ != */./* ]] || return 1
+  rest=${path#/}
+  while [[ -n $rest ]]; do
+    component=${rest%%/*}
+    current+=/$component
+    [[ ! -L $current ]] || return 1
+    if [[ $rest != */* ]]; then break; fi
+    rest=${rest#*/}
+  done
+}
+
+[[ ${HOME:-} == /* && $HOME != / ]] || {
+  error 'HOME must be absolute and not /'
+  exit 1
+}
+HOME=$(cd -- "$HOME" && pwd -P) || {
+  error 'cannot resolve HOME'
+  exit 1
+}
+[[ $HOME != / ]] || {
+  error 'HOME must not resolve to /'
+  exit 1
+}
+export HOME
+cd -- "$HOME"
+cache=${XDG_CACHE_HOME:-$HOME/.cache}
+state=${XDG_STATE_HOME:-$HOME/.local/state}/dotfiles-cache-maintenance
+if ! safe_path "$state"; then
+  error 'unsafe state path (absolute, no traversal or symlinks)'
+  exit 1
+fi
+if ! mkdir -p -- "$state" || ! chmod 700 -- "$state" || ! safe_path "$state/lock"; then
+  error 'cannot prepare private state directory/lock'
+  exit 1
+fi
+if ! exec 9>"$state/lock"; then
+  error 'cannot open lock'
+  exit 1
+fi
+if ! chmod 600 -- "$state/lock"; then
+  error 'cannot secure lock'
+  exit 1
+fi
+if flock -n -E 75 9; then :; else
+  lock_status=$?
+  if [[ $lock_status == 75 ]]; then
+    echo 'cache-prune|already running; skip'
+    exit 0
+  fi
+  error "flock failed ($lock_status)"
+  exit 1
+fi
+shopt -s nullglob
+
+# Rebuilt at measurement and immediately before cleanup, never a recursive link scan.
+cache_targets() {
+  local target
+  targets=()
+  if ! safe_path "$root" || [[ $root != "$HOME/"* ]] || [[ -e $root && ! -d $root ]]; then
+    echo "$tool|skip: unsafe cache root: $root"
+    return 1
+  fi
+  case $tool in
+    go)
+      for target in "$root"/[0-9a-f][0-9a-f]; do targets+=("$target"); done
+      [[ ! -e $root/log.txt && ! -L $root/log.txt ]] || targets+=("$root/log.txt")
+      ;;
+    uv) targets=("$root") ;;
+    npm)
+      if [[ -e $root/_cacache || -L $root/_cacache ]]; then targets=("$root/_cacache"); fi
+      ;;
+  esac
+  for target in "${targets[@]}"; do
+    if ! safe_path "$target"; then
+      echo "$tool|skip: unsafe cache target: $target"
+      return 1
+    fi
+  done
+}
+
+measure() {
+  local measured last
+  cache_targets || return 1
+  size=0
+  [[ -d $root ]] || return 0
+  ((${#targets[@]})) || return 0
+  if ! measured=$(timeout 60s du -skc -- "${targets[@]}"); then
+    error 'allocated KiB measurement failed'
+    return 1
+  fi
+  last=${measured##*$'\n'}
+  # Keep untrusted output out of arithmetic; 15 digits exceeds any practical cache.
+  if [[ ! $last =~ ^([0-9]{1,15})[[:space:]]+total$ ]]; then
+    error 'invalid allocated KiB measurement'
+    return 1
+  fi
+  size=$((10#${BASH_REMATCH[1]}))
+}
+
+native() {
+  if [[ $tool == go ]]; then
+    (
+      unset GOFLAGS
+      export GOENV=off GOTOOLCHAIN=local GOCACHE="$root"
+      timeout "$@"
+    )
+  elif [[ $tool == npm ]]; then
+    # npm rotates logs during startup independently of its cache-clean handler.
+    timeout "$@" --cache "$root" --logs-dir "$root/_cacache"
+  else
+    timeout "$@"
+  fi
+}
+
+idle() {
+  local processes name
+  if ! processes=$(ps -u "$UID" -o comm=); then
+    echo "$tool|skip: process inspection failed"
+    return 1
+  fi
+  # Snapshot only: a build can start after this check. Never kill or wait for it.
+  while IFS= read -r name; do
+    # ps pads comm output on some platforms.
+    name="${name#"${name%%[![:space:]]*}"}"
+    case $tool:$name in
+      go:go | go:compile | go:link | go:asm | go:cgo | go:vet)
+        echo "$tool|skip: busy build process ($name)"
+        return 1
+        ;;
+      npm:'npm install' | npm:'npm install '* | npm:'npm i' | npm:'npm i '* | npm:'npm ci' | npm:'npm ci '* | npm:'npm update' | npm:'npm update '* | npm:'npm add' | npm:'npm add '*)
+        echo "$tool|skip: busy fetching process ($name)"
+        return 1
+        ;;
+    esac
+  done <<<"$processes"
+}
+
+for tool in go uv npm; do
+  case $tool in
+    go)
+      root=$cache/go-build
+      limit=20971520
+      probe=version
+      ;;
+    uv)
+      root=$cache/uv
+      limit=5242880
+      probe=--version
+      ;;
+    npm)
+      root=$HOME/.npm
+      limit=5242880
+      probe=--version
+      ;;
+  esac
+  if ! cache_targets; then continue; fi
+  if [[ ! -d $root ]]; then
+    echo "$tool|skip: cache absent ($root)"
+    continue
+  fi
+  if ! command -v "$tool" >/dev/null || ! native 10s "$tool" "$probe"; then
+    echo "$tool|skip: tool missing or version unresolved"
+    continue
+  fi
+  if ! measure; then continue; fi
+  echo "$tool|allocated=$size KiB threshold=$limit KiB"
+  if ((size < limit)); then
+    echo "$tool|skip: below threshold"
+    continue
+  fi
+  if [[ $tool != uv ]] && ! idle; then continue; fi
+  if ! cache_targets; then continue; fi
+  case $tool in
+    go) args=(go clean -cache) ;;
+    uv) args=(uv cache clean --cache-dir "$root") ;;
+    npm) args=(npm cache clean --force) ;;
+  esac
+  if ! native --kill-after=5s 2m "${args[@]}"; then
+    error 'native cleanup failed (including timeout); no retry'
+    continue
+  fi
+  if measure; then echo "$tool|residual=$size KiB"; fi
+done
+exit "$failed"
