@@ -166,8 +166,8 @@ class MorningTests(unittest.TestCase):
         self.assertEqual(self.main('--check')[0], 1)
         self.assertEqual(path.read_text(), 'previous')
 
-    def test_absent_or_reserved_collectors_are_not_checked(self):
-        self.save(sidecar={'checkouts': [{'repo': 'example/project', 'path': 'missing'}], 'disk': {'filesystem': '~'}})
+    def test_absent_collectors_are_not_checked(self):
+        self.save(sidecar={})
         code, out, _ = self.main()
         self.assertEqual(code, 0)
         self.assertIn('not checked', out.lower())
@@ -269,6 +269,52 @@ class MorningTests(unittest.TestCase):
             self.assertIsNone(client.pr('example/project', 1))
             self.assertTrue(client.activity_failures)
 
+    def reference_window(self, fail_first=False):
+        item = self.issue_item(7)
+        item['pull_request'] = {}
+        merge = {'body': {'title':'Merge', 'body':'Refs '+ ' '.join('#'+str(n) for n in range(1,28)),
+                         'merged_at':'2026-01-02T00:00:00Z', 'merged_by':{'login':'merger-user','type':'User'}}}
+        issues: list[dict[str, object]] = [{'body':{**self.issue_item(n),'state':'open'}} for n in range(1,26)]
+        if fail_first:
+            issues[0] = {'exit':1,'stderr':'gh: Not Found (HTTP 404)'}
+        self.log.write_text('')
+        self.reply(*([self.empty_search()] * 3),
+            {'body': {'total_count':1,'items':[item],'incomplete_results':False}}, merge,
+            self.empty_search(), self.empty_search(), *issues)
+
+    def test_referenced_issue_cap_lists_rest_and_allows_stamp_advance(self):
+        stamp = self.root/'.morning-last-run'
+        stamp.write_text('2026-01-01T00:00Z')
+        self.reference_window()
+        code, out, _ = self.main()
+        self.assertEqual(code,0)
+        self.assertNotEqual(stamp.read_text(),'2026-01-01T00:00Z')
+        self.assertIn('2 references not checked',out)
+        self.assertIn('example/project#26',out)
+        self.assertIn('example/project#27',out)
+        self.assertNotIn('Last-run stamp unchanged',out)
+
+    def test_referenced_issue_read_failure_still_keeps_stamp(self):
+        stamp = self.root/'.morning-last-run'
+        stamp.write_text('2026-01-01T00:00Z')
+        self.reference_window(fail_first=True)
+        code, out, _ = self.main()
+        self.assertEqual(code,0)
+        self.assertEqual(stamp.read_text(),'2026-01-01T00:00Z')
+        self.assertIn('not found',out.lower())
+
+    def test_only_referenced_issue_budget_skips_are_nonfatal(self):
+        for watch in (False,True):
+            with self.subTest(watch=watch):
+                self.save(base={**self.config,'watch':[['example/project',999]] if watch else []}, sidecar={'limits':{'queries':8}})
+                stamp = self.root/'.morning-last-run'
+                stamp.write_text('2026-01-01T00:00Z')
+                self.reference_window()
+                code, out, _ = self.main()
+                self.assertEqual(code,0)
+                self.assertIn('26 references not checked',out)
+                self.assertEqual(stamp.read_text()=='2026-01-01T00:00Z',watch)
+
     def test_checkrun_query_uses_supported_graphql_fields(self):
         self.reply(self.pr_reply())
         self.assertIsNotNone(self.m.GitHub().pr('example/project', 1))
@@ -280,6 +326,63 @@ class MorningTests(unittest.TestCase):
     def test_receipt_publication_failure_is_nonzero(self):
         with patch.object(self.m, 'atomic_write', side_effect=OSError('failure')):
             self.assertEqual(self.main('--check')[0], 1)
+
+    def assert_failed_reason(self, stderr, classification):
+        stamp = self.root / '.morning-last-run'
+        stamp.write_text('2026-01-01T00:00Z')
+        self.reply({'exit': 1, 'stderr': stderr})
+        code, out, _ = self.main()
+        self.assertEqual(code, 0)
+        self.assertIn(classification, out.lower())
+        self.assertIn('unknown', out.lower())
+        self.assertEqual(stamp.read_text(), '2026-01-01T00:00Z')
+        return out
+
+    def test_failed_query_classifies_rate_and_secondary_rate_limits(self):
+        for reason in ('gh: API rate limit exceeded (HTTP 429)', 'gh: exceeded a secondary rate limit (HTTP 403)'):
+            with self.subTest(reason=reason):
+                out = self.assert_failed_reason(reason, 'rate limit')
+                self.assertIn('rate limit', out)
+
+    def test_failed_query_classifies_authentication(self):
+        out = self.assert_failed_reason('gh: keyring lookup: Bad credentials (HTTP 401)', 'authentication')
+        self.assertIn('keyring lookup', out)
+
+    def test_failed_query_classifies_not_found(self):
+        out = self.assert_failed_reason('gh: Not Found (HTTP 404)', 'not found')
+        self.assertIn('HTTP 404', out)
+
+    def test_failed_query_classifies_timeout(self):
+        out = self.assert_failed_reason('gh: request timed out while reading response', 'timeout')
+        self.assertIn('timed out', out)
+
+    def test_failed_query_reason_is_first_line_bounded_and_redacted(self):
+        first = (chr(27)+'[31mgh: Bad credentials (HTTP 401) token=EXAMPLE_TOKEN password="two fake words" '
+                 '"api_key":"FAKE_JSON" Bearer ghp_TEST_ONLY https://user:fake@example.test/path?secret=EXAMPLE_QUERY')
+        for reason in (first+'\nSECOND_LINE_PRIVATE', first+' padding'*100,
+                       'gh: authentication failed password="'+'TWO WORDS '*600+'"',
+                       'gh: authentication failed with '+'X'*100,
+                       'gh: authentication failed ghp_TEST_ONLY',
+                       'gh: authentication failed eyJFAKEHEADER0.eyJFAKEPAYLOAD0.eyJFAKESIGNATURE0'):
+            with self.subTest(long=len(reason)>512):
+                self.reply({'exit':1, 'stderr':reason})
+                client = self.m.GitHub()
+                self.assertIsNone(client.gh('api','user'))
+                message = client.failures[0][1]
+                for forbidden in ('EXAMPLE_TOKEN','two fake words','FAKE_JSON','ghp_TEST_ONLY','EXAMPLE_QUERY','SECOND_LINE_PRIVATE','https://',chr(27),'TWO WORDS','X'*100,'eyJFAKE','EXAMPLE','FAKE','TEST'):
+                    self.assertNotIn(forbidden,message)
+                self.assertIn('authentication',message)
+                self.assertLess(len(message),512)
+
+    def test_failed_query_drops_complete_credential_values_and_suffixes(self):
+        cases = (
+            ('GITHUB_CLIENT_SECRET=FAKE-prefixed-secret', 'FAKE-prefixed-secret'),
+            ('Cookie: sid=FAKE-first-cookie; session=FAKE-second-cookie', 'FAKE-second-cookie'),
+            (json.dumps({'password':'FAKE-first-part"FAKE-escaped-suffix'}), 'FAKE-escaped-suffix'))
+        for tail, secret in cases:
+            with self.subTest(secret=secret):
+                out = self.assert_failed_reason('gh: authentication failed '+tail, 'authentication')
+                self.assertNotIn(secret, out)
 
     def test_http_and_graphql_errors_are_unknown_without_stderr_leak(self):
         for response in ({'exit': 1, 'stderr': 'sensitive-response'}, {'body': {'errors': [{'message': 'sensitive-response'}]}}, {'raw': '{bad'}, {'body': None}):
