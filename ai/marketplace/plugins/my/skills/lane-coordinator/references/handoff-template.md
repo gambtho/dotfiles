@@ -14,8 +14,9 @@ Written by the lane before it closes or pauses for long, under the project folde
 - Done: <what landed or is ready>
 - Not done: <remaining scope, uncommitted or unpushed work and where it is>
 - Bulky outputs: <path, size, safe to delete when; or none; unknowns explicit>
-- Decisions and approvals so far: <what the user approved, with dates>
-- Next step: <the first thing a resumed lane should do>
+- Delivered inputs: <what was delivered and verified; delivery does not grant authority to run>
+- Decisions and approvals so far: <what the user approved, with dates; execution authority's scope/source or approval still needed>
+- Next step: <first resume action; if parked, all current resume conditions and who decides (a person, or none if automatic)>
 - Gotchas: <hooks, flaky checks, files other PRs touch, anything surprising>
 
 On resume, re-check git and GitHub state before trusting any of this.

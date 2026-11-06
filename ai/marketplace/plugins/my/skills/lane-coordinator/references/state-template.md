@@ -23,13 +23,14 @@ Links only, each with an owner and a one-word state.
 1. <step link> — <owner lane or person> — <state>
 2. <step link> — **unowned** — <state> ← raise this first
 
-Recheck this chain whenever a lane reports or something merges. A link without an owner
-is the most important thing to surface.
+Recheck this chain whenever a lane reports or something merges, respecting each decision's
+scope; do not make route-specific dependencies global. A link without an owner is the
+most important thing to surface.
 
 ## Open lanes
 
 Status, PR numbers without heads or CI, next actor and action, and report path live here.
-For a parked lane, include its stop/resume condition in its row.
+For a parked lane, include all current resume conditions and who decides (a person, or none if automatic) in its row.
 
 | Lane | What / report | State | Next actor and action | Launch |
 |---|---|---|---|---|
@@ -58,7 +59,7 @@ Only waits not already a lane row's next actor.
 
 ## Decisions still in force
 
-Keep at most about 10, only those not already in the project's rule files.
+Keep at most about 10, only those not already in the project's rule files; name each decision's scope.
 
 - <date>: Keep deployment manual until rollback checks pass; the release owner confirms readiness before each rollout. Full record: `reports/decision.md`.
 

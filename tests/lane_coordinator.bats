@@ -211,6 +211,51 @@ PY
   [ "$status" -eq 0 ]
 }
 
+@test "coordinator checks live state and phase readiness before action" {
+  run python3 - "$SKILL_DIR" <<'PY'
+from pathlib import Path
+import sys
+
+text = (Path(sys.argv[1]) / "SKILL.md").read_text()
+prompt = " ".join(text.split("## Write a lane prompt\n", 1)[1].split("\n## Start a lane", 1)[0].split())
+for phrase in ("Before advising action or sending an instruction",
+               "refresh live PR/head/CI and session state the advice relies on",
+               "An open lane is not a running session", "current runtime/user observation or say unknown",
+               "existing tool already covers it", "sibling projects' Routines and tools"):
+    assert phrase in prompt, phrase
+assert "approved tasks required for that phase" not in prompt
+merged = " ".join(text.split("## When something merges\n", 1)[1].split("\n## Maintenance", 1)[0].split())
+for phrase in ("approved tasks required for that phase with shipped implementation",
+               "merged prerequisites alone do not complete its own tasks", "Mark unverified completion unknown",
+               "every lane #N unblocks or conflicts with", "Respect each decision's scope",
+               "do not make route-specific dependencies global"):
+    assert phrase in merged, phrase
+PY
+  [ "$status" -eq 0 ]
+}
+
+@test "coordinator templates retain scoped conditions and authority" {
+  run python3 - "$SKILL_DIR" <<'PY'
+from pathlib import Path
+import sys
+
+skill = Path(sys.argv[1])
+texts = {name: " ".join((skill / name).read_text().split()) for name in
+         ("SKILL.md", "references/state-template.md", "references/handoff-template.md", "references/lane-template.md")}
+condition = "all current resume conditions and who decides (a person, or none if automatic)"
+for name, text in texts.items():
+    assert condition in text, name
+assert "**A decision** names its scope" in texts["SKILL.md"]
+for phrase in ("name each decision's scope", "respecting each decision's scope",
+               "do not make route-specific dependencies global"):
+    assert phrase in texts["references/state-template.md"], phrase
+for phrase in ("- Delivered inputs:", "delivery does not grant authority to run",
+               "execution authority's scope/source or approval still needed"):
+    assert phrase in texts["references/handoff-template.md"], phrase
+PY
+  [ "$status" -eq 0 ]
+}
+
 @test "STATE stays small at write time and daily maintenance enforces its budget" {
   run python3 - "$SKILL_DIR" <<'PY'
 from pathlib import Path
@@ -222,7 +267,7 @@ for phrase in ("One home per fact", "one-word state", "PR numbers without heads 
                "next actor and action", "report path", "## Needs the human", "ordered one-liners",
                "## Waiting on others", "not already a lane row's next actor", "at most about 10",
                "not already in the project's rule files", "dated or triggered items", "not already in a lane row",
-               "Parked: <links to paused lane rows", "stop/resume condition in its row"):
+               "Parked: <links to paused lane rows", "all current resume conditions and who decides"):
     assert phrase in state, phrase
 text = (skill / "SKILL.md").read_text()
 updates = text.split("For every coherent update:", 1)[1].split("If something took digging", 1)[0]
