@@ -844,6 +844,99 @@ be_default() {
   [ "$output" -eq 0 ]
 }
 
+setup_primary_gitconfig() {
+  export PRIMARY_ROOT="$TEST_ROOT/primary"
+  export WINDOWS_GIT_ROOT="$TEST_ROOT/Program Files/Git"
+  export PRIMARY_CONFIG="$PRIMARY_ROOT/core/git/gitconfig.local.symlink"
+  mkdir -p "$PRIMARY_ROOT/core/git" "$WINDOWS_GIT_ROOT"
+  cp "$REPO_ROOT/core/git/gitconfig.local.symlink.example" "$PRIMARY_ROOT/core/git/"
+}
+
+run_primary_gitconfig() {
+  run bash -c '
+    export BOOTSTRAP_SOURCE_ONLY=1
+    source "$1/libexec/bootstrap"
+    DOTFILES_ROOT="$PRIMARY_ROOT"
+    NON_INTERACTIVE=true
+    BOOTSTRAP_GIT_NAME="Fixture User"
+    BOOTSTRAP_GIT_EMAIL="fixture@example.invalid"
+    OS="${2:-WSL}"
+    setup_gitconfig "$WINDOWS_GIT_ROOT"
+  ' _ "$REPO_ROOT" "${1:-WSL}"
+}
+
+install_fixture_gcm() {
+  local helper="$WINDOWS_GIT_ROOT/$1/bin/git-credential-manager.exe"
+  mkdir -p "$(dirname "$helper")"
+  printf '#!/bin/sh\nprintf "%%s\\n" "%s"\n' "$1" >"$helper"
+  chmod +x "$helper"
+}
+
+assert_primary_gcm() {
+  local layout="$1" helper
+  helper="$(git config --file "$PRIMARY_CONFIG" --get credential.helper)"
+  run sh -c "$helper --version"
+  [ "$status" -eq 0 ]
+  [ "$output" = "$layout" ]
+  [ "$(git config --file "$PRIMARY_CONFIG" --get user.name)" = 'Fixture User' ]
+  [ "$(git config --file "$PRIMARY_CONFIG" --get credential.https://dev.azure.com.useHttpPath)" = true ]
+}
+
+@test "primary gitconfig selects an installed ucrt64 GCM with a spaced path" {
+  setup_primary_gitconfig
+  install_fixture_gcm ucrt64
+  run_primary_gitconfig
+  [ "$status" -eq 0 ]
+  assert_primary_gcm ucrt64
+}
+
+@test "primary gitconfig selects an installed mingw64 GCM with a spaced path" {
+  setup_primary_gitconfig
+  install_fixture_gcm mingw64
+  run_primary_gitconfig
+  [ "$status" -eq 0 ]
+  assert_primary_gcm mingw64
+}
+
+@test "primary gitconfig prefers ucrt64 when both GCM layouts exist" {
+  setup_primary_gitconfig
+  install_fixture_gcm ucrt64
+  install_fixture_gcm mingw64
+  run_primary_gitconfig
+  [ "$status" -eq 0 ]
+  assert_primary_gcm ucrt64
+}
+
+@test "primary gitconfig warns and omits the helper when Windows GCM is missing" {
+  setup_primary_gitconfig
+  run_primary_gitconfig
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Git Credential Manager not found"* ]]
+  run git config --file "$PRIMARY_CONFIG" --get credential.helper
+  [ "$status" -eq 1 ]
+}
+
+@test "primary gitconfig does not add a Windows helper outside WSL" {
+  setup_primary_gitconfig
+  install_fixture_gcm ucrt64
+  for os in Ubuntu macOS; do
+    rm -f "$PRIMARY_CONFIG"
+    run_primary_gitconfig "$os"
+    [ "$status" -eq 0 ]
+    run git config --file "$PRIMARY_CONFIG" --get credential.helper
+    [ "$status" -eq 1 ]
+  done
+}
+
+@test "primary gitconfig preserves an existing local credential helper" {
+  setup_primary_gitconfig
+  install_fixture_gcm ucrt64
+  printf '[credential]\n\thelper = custom-helper\n' >"$PRIMARY_CONFIG"
+  run_primary_gitconfig
+  [ "$status" -eq 0 ]
+  [ "$(git config --file "$PRIMARY_CONFIG" --get credential.helper)" = custom-helper ]
+}
+
 @test "secondary identity provisioning rejects a relative signing key path" {
   setup_sec_boot old56 'guarzo default\ngambtho gambtho\n'
   run_sec_setup 'y\nName\nuser@example.invalid\nrelative/key.pub\n'

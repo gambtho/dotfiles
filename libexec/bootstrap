@@ -87,6 +87,24 @@ setup_gitconfig() {
       -e "s|AUTHOREMAIL|$git_authoremail|g" \
       "$DOTFILES_ROOT/core/git/gitconfig.local.symlink.example" >"$DOTFILES_ROOT/core/git/gitconfig.local.symlink"
 
+    if [[ "${OS:-}" == WSL ]]; then
+      local windows_git_root="$1"
+      local git_helper found_helper=false
+      for git_helper in "$windows_git_root"/{ucrt64,mingw64}/bin/git-credential-manager.exe; do
+        [[ -f "$git_helper" ]] || continue
+        # Escape spaces for Git's helper shell, then backslashes for its config parser.
+        git_helper=${git_helper// /\\ }
+        git_helper=${git_helper//\\/\\\\}
+        printf '\n[credential]\n\thelper = %s\n' "$git_helper" \
+          >>"$DOTFILES_ROOT/core/git/gitconfig.local.symlink"
+        found_helper=true
+        break
+      done
+      if [[ "$found_helper" == false ]]; then
+        log_warning "Windows Git Credential Manager not found; configure credential.helper manually."
+      fi
+    fi
+
     log_success "Gitconfig setup completed"
   else
     log_info "Gitconfig already set up"
@@ -456,7 +474,7 @@ main() {
       ;;
   esac
 
-  setup_gitconfig
+  setup_gitconfig "/mnt/c/Program Files/Git"
   setup_secondary_identity
   setup_identity_map
   render_identity_routes
