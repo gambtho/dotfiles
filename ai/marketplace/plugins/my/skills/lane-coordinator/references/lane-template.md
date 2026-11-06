@@ -99,4 +99,4 @@ sessions are not automatically monitored. Escalate only genuinely new material
 scope/data/security/product choices, shared/destructive operations or actions outside
 authority. Exact public text/publication and production/provider approvals still apply.
 Before closing or pausing for long, write `<lanes>/W<n>-HANDOFF.md` from the handoff template.
-A parked lane has a stop/resume line: wait condition, first resume action and report path.
+A parked lane has a stop/resume line: all current resume conditions and who decides (a person, or none if automatic), first resume action and report path.

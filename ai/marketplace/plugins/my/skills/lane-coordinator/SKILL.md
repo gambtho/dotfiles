@@ -78,8 +78,9 @@ decision from STATE**. Archive closed history rather than burying current action
 
 For every coherent update:
 1. Reconcile changed prompts and STATE together; mark superseded instructions explicitly.
-2. Give every parked lane a stop/resume line: what it waits on, its first resume action
-   and its report location.
+2. Give every parked lane a stop/resume line: all current resume conditions and who decides
+   (a person, or none if automatic), its first resume action and report location;
+   one completed condition does not satisfy the rest.
 3. Refuse to overwrite a file changed since it was read. Write a same-directory temp
    file, check it is nonempty and STATE has unique lane rows, recheck the original,
    then rename into place. On a mismatch, re-read and reconcile instead of overwriting.
@@ -95,8 +96,8 @@ For every coherent update:
    archive and keep its decision under **Needs the human** until decided. Delete
    only after the human approves that exact list; project authority still applies.
    Unknown safety or size is not deletion-ready.
-6. **A decision** is one line of about 25 words or fewer, plus a pointer to its full record
-   (session file, lane report or archive). Decisions that are done, superseded or now in
+6. **A decision** names its scope in one line of about 25 words or fewer, plus a pointer
+   to its full record (session file, lane report or archive). Decisions that are done, superseded or now in
    the project's rule files leave STATE in the same update. Keep about 10 at most;
    adding one past 10 moves the oldest to the archive.
 7. **Replace, don't add.** When a fact changes, edit its one home and delete the old
@@ -108,8 +109,8 @@ AGENTS.md for report locations; absent a rule, keep handoffs in the project fold
 
 ## Write a lane prompt
 
-- Check first whether an open lane, PR or issue already covers it. Extending one beats
-  starting another.
+- Check first whether an open lane, PR, issue or existing tool already covers it, including
+  sibling projects' Routines and tools. Reuse or extend what fits before starting another.
 - Before telling a lane what another lane will deliver ("PR6 adds lift"), read that
   lane's plan file. Don't infer scope from a PR number.
 - Next number: the highest `W<n>` in `lanes/` or STATE.md, plus one. One file per lane
@@ -139,9 +140,11 @@ AGENTS.md for report locations; absent a rule, keep handoffs in the project fold
   ancestry (`gh api repos/<o>/<r>/compare/<base>...<head>`). Don't guess commit ranges.
 - Don't treat our own issue or plan text as requirements the user set. When the user's
   decision and our earlier wording disagree, the user wins; fix the wording.
-- Before sending an instruction, check its lane, PR and current owner against the latest
-  report. After a rule or ownership change, reconcile affected prompts and STATE.md in
-  the same approved update; mark old instructions superseded, without rewriting history.
+- Before advising action or sending an instruction, check its lane, PR and current owner
+  against the latest report; refresh live PR/head/CI and session state the advice relies on.
+  An open lane is not a running session; use a current runtime/user observation or say unknown.
+  After a rule or ownership change, reconcile affected prompts and STATE.md in the same
+  approved update; mark old instructions superseded, without rewriting history.
 - Non-trivial work: audit or design first, stop for the user's OK, then one PR at a time.
   For new product work, use the shared workflow's design-before-plan sequence,
   independent design/paired-plan reviews and required adversarial readiness evidence.
@@ -264,9 +267,13 @@ reports. Keep profiles concise and evidence-linked.
 
 ## When something merges
 
-When the user says "merged #N", verify it, then list every lane it unblocks or conflicts
-with, each with its paste-ready next instruction, and update STATE.md. Do the same when
-a lane closes: what it frees up, and whether the critical path changed.
+When the user says "merged #N", verify it. Before calling a lane ready for its next
+phase, compare approved tasks required for that phase with shipped implementation; merged
+prerequisites alone do not complete its own tasks. Mark unverified completion unknown.
+Then list every lane #N unblocks or conflicts with, each with its paste-ready next instruction,
+and update STATE.md. Do the same when a lane closes: what it frees up, and whether the
+critical path changed. Respect each decision's scope when rebuilding the critical path;
+do not make route-specific dependencies global.
 
 ## Maintenance
 
