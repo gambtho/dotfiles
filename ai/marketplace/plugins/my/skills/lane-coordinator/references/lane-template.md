@@ -9,7 +9,8 @@ public text for the human. State any deliberate publication hold explicitly.
 
 ## Session identity (private)
 
-New workspace label, Pi name and live Herdr alias: `<project-slug>-<lane-number>`
+Project workspace label: `<project-slug>`.
+New lane tab label, Pi name and live Herdr alias: `<project-slug>-<lane-number>`
 (e.g. `double-holo-12` for W12), unless the user explicitly overrides with a valid,
 unique name. Full lane/task identity stays in this file and STATE.md; filenames and
 numbering are unchanged. Never rename existing sessions/workspaces/aliases.

@@ -117,8 +117,9 @@ AGENTS.md for report locations; absent a rule, keep handoffs in the project fold
   from [lane-template.md](references/lane-template.md). Hand the user one line in a code
   block: `Read <absolute path> and follow it.` That line is the whole handoff: the
   user names the session themselves, so don't add a `/name` or `--name` instruction.
-  Default new workspace labels, Pi names and live Herdr aliases to
-  `<project-slug>-<lane-number>` (e.g. `double-holo-12`). Keep full W12/task identity in lane files and
+  Label the project workspace with its full project slug (e.g. `double-holo`). Default
+  new lane tab labels, Pi names and live Herdr aliases to `<project-slug>-<lane-number>`
+  (e.g. `double-holo-12`). Keep full W12/task identity in lane files and
   STATE.md; preserve filenames/numbering and all existing names. Honor explicit
   naming overrides that satisfy Herdr's alias constraints; reject invalid names
   or collisions, never truncate or invent suffixes.
@@ -173,10 +174,15 @@ return the manual handoff without claiming a launch.
 When an approved prompt already exists and the user says "start W12", use the
 mechanical helper in [herdr-launch.md](references/herdr-launch.md) immediately after
 context/prompt/source verification, not another planning round or a manual handoff
-when eligible access exists. It reconciles live identity, creates one `--no-focus`
-space, starts named Pi on the exact returned root pane, and submits once without
-waiting for task completion. Its receipt is authoritative; uncertain delivery is
-inspect-only, never an automatic resend/replacement workspace. Never approve dialogs,
+when eligible access exists. New invocations pass `--project-root` separately from
+`--repo`: reconcile inherited-daemon identity, adopt the caller's matching project
+workspace only when its current cwd equals the root (or use validated v3 creation
+provenance), create a missing project workspace and one `--no-focus` lane tab,
+then start named Pi on that tab's exact returned pane and submit once without
+waiting for task completion. The initial shell stays for the coordinator; the helper
+never starts/moves/names one. The operator names new coordinators `project-coord`;
+existing names are preserved and may stay unmarked. Its receipt is authoritative;
+uncertain delivery is inspect-only, never an automatic resend/replacement workspace. Never approve dialogs,
 control another client's focused pane, or infer implementation approval from launch
 permission. A Herdr workspace is not an isolated Git worktree.
 
