@@ -15,8 +15,9 @@ report a capability blocker rather than silently skipping or replacing them.
 
 For explicit Herdr launches and manual Pi conversation naming, follow
 [herdr-launch.md](herdr-launch.md), including its deterministic helper when an
-approved prompt already exists. New names default to `project-slug-number` across
-workspace/Pi/alias (e.g. `double-holo-12`); existing names remain untouched.
+approved prompt already exists. New project workspace labels use the full project
+slug; lane tab/Pi/alias names use `project-slug-number` (e.g. `double-holo-12`). Pass `--project-root` for new
+project-tab launches; existing names and standalone running workspaces stay untouched.
 This depends on actual tools and the inherited
 Herdr session, not whether the coordinator is Pi or Claude Code. Claude app
 sessions without terminal tools use the manual handoff.

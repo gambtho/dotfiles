@@ -51,6 +51,11 @@ def save():
 def reply(kind, **data):
     print(json.dumps({'id': 'fixture', 'result': {'type': kind, **data}}))
 if a == ['api', 'snapshot']:
+    if mode == 'snapshot-refuses':
+        s['snapshots'] = s.get('snapshots', 0) + 1
+        save()
+        if s['snapshots'] == 2:
+            sys.exit(1)
     boundary, _, shape = mode.partition('-')
     if boundary in ('envelope', 'result', 'snapshot') and shape in ('null', 'list', 'string', 'missing'):
         value = {'null': None, 'list': [], 'string': 'invalid', 'missing': None}[shape]
@@ -71,10 +76,18 @@ if a == ['api', 'snapshot']:
     if mode == 'snapshot-workspace-list':
         s['workspaces'] = [[]]
     reply('session_snapshot', snapshot=s)
+    if mode in ('caller-change', 'alias-appears') and not s.get('changed'):
+        s['changed'] = True
+        if mode == 'caller-change':
+            s['panes'][0]['cwd'] = '/another-root'
+        else:
+            s['agents'].append({'name': 'double-holo-12', 'pane_id': 'other'})
+        save()
 elif a[:2] == ['workspace', 'create']:
-    assert a == ['workspace', 'create', '--cwd', os.environ['FAKE_REPO'],
-                 '--label', os.environ.get('FAKE_NAME', 'double-holo-12'), '--no-focus',
-                 '--env', 'DOTFILES_KEYRING_PROMPT=0']
+    project_root = os.environ.get('FAKE_PROJECT_ROOT')
+    assert a == ['workspace', 'create', '--cwd', project_root or os.environ['FAKE_REPO'],
+                 '--label', 'double-holo' if project_root else os.environ.get('FAKE_NAME', 'double-holo-12'),
+                 '--no-focus', '--env', 'DOTFILES_KEYRING_PROMPT=0']
     w = dict(workspace_id='opaque-workspace', label=a[5])
     p = dict(pane_id='opaque-root', terminal_id='terminal-new', workspace_id=w['workspace_id'],
              cwd=a[3], tab_id='opaque-tab', focused=False, agent_status='unknown', revision=1)
@@ -90,44 +103,90 @@ elif a[:2] == ['workspace', 'create']:
             p['workspace_id'] = 'unexpected-workspace'
         elif mode == 'create-cwd-mismatch':
             p['cwd'] = '/unexpected/cwd'
-        reply('workspace_created', workspace=[] if mode == 'create-workspace-list' else w,
-              root_pane=[] if mode == 'create-pane-list' else p, tab={'tab_id': 'opaque-tab'})
+        payload = dict(workspace=[] if mode == 'create-workspace-list' else w,
+                       root_pane=[] if mode == 'create-pane-list' else p,
+                       tab={'tab_id': 'opaque-tab', 'workspace_id': w['workspace_id']})
+        if mode == 'create-no-pane':
+            del payload['root_pane']
+        reply('workspace_created', **payload)
+        if mode == 'workspace-changed':
+            s['workspaces'][-1]['label'] = 'changed-project'
+            save()
+elif a[:2] == ['tab', 'create']:
+    assert a == ['tab', 'create', '--workspace', os.environ.get('FAKE_WORKSPACE', 'caller-workspace'),
+                 '--cwd', os.environ['FAKE_PROJECT_ROOT'], '--label', os.environ.get('FAKE_NAME', 'double-holo-12'),
+                 '--no-focus', '--env', 'DOTFILES_KEYRING_PROMPT=0']
+    receipt = json.loads((root / 'W12-launch.json').read_text())
+    assert receipt['stage'] == 'Creating' and receipt['creation_step'] == 'tab'
+    t = dict(tab_id='lane-tab', workspace_id=a[3], label=a[7])
+    p = dict(pane_id='lane-pane', terminal_id='lane-terminal', workspace_id=a[3], tab_id='lane-tab',
+             cwd=a[5], focused=False, agent_status='unknown', revision=1)
+    s['tabs'].append(t)
+    s['panes'].append(p)
+    save()
+    if mode == 'tab-malformed':
+        print('{}')
+    else:
+        payload = dict(tab=t, root_pane=p)
+        if mode == 'tab-no-pane':
+            del payload['root_pane']
+        elif mode == 'tab-label-mismatch':
+            t['label'] = 'wrong-lane'
+        elif mode == 'tab-workspace-mismatch':
+            t['workspace_id'] = 'foreign-workspace'
+        elif mode == 'tab-cwd-mismatch':
+            p['cwd'] = '/unexpected/cwd'
+        reply('tab_created', **payload)
+        if mode == 'pane-changed':
+            s['panes'][-1]['terminal_id'] = 'replacement-terminal'
+            save()
+elif a[:2] == ['tab', 'get']:
+    reply('tab_info', tab=next(t for t in s['tabs'] if t['tab_id'] == a[2]))
 elif a[:2] == ['workspace', 'get']:
     reply('workspace_info', workspace=next(w for w in s['workspaces'] if w['workspace_id'] == a[2]))
 elif a[:2] == ['agent', 'start']:
     assert a == ['agent', 'start', os.environ.get('FAKE_NAME', 'double-holo-12'),
-                 '--kind', 'pi', '--pane', 'opaque-root', '--', '--name',
+                 '--kind', 'pi', '--pane', os.environ.get('FAKE_PANE', 'opaque-root'), '--', '--name',
                  os.environ.get('FAKE_NAME', 'double-holo-12')]
     if mode == 'start-fail':
         sys.exit(1)
-    p = next(p for p in s['panes'] if p['pane_id'] == 'opaque-root')
+    p = next(p for p in s['panes'] if p['pane_id'] == os.environ.get('FAKE_PANE', 'opaque-root'))
     agent = dict(p, agent='pi', name=a[2], agent_status='done', interactive_ready=True,
-                 agent_session={'agent':'pi','source':'herdr:pi','kind':'path','value':'session-new'})
+                 agent_session={'agent':'pi','source':'herdr:pi','kind':'path',
+                                'value':'/home/example/.pi/agent/sessions/session-new.jsonl'
+                                if os.environ.get('FAKE_PROJECT_ROOT') else 'session-new'})
     if mode == 'agent-status-list':
         agent['agent_status'] = []
     s['agents'] = [agent]
     save()
     reply('agent_started', agent=[] if mode == 'start-agent-list' else agent,
           argv=['pi', '--name', a[2]])
+    if mode == 'caller-after-start':
+        s['panes'][0]['cwd'] = '/elsewhere'
+        save()
 elif a[:2] == ['agent', 'get']:
-    assert a[2] == 'opaque-root'
+    assert a[2] == os.environ.get('FAKE_PANE', 'opaque-root')
     if not s['agents']:
         sys.exit(1)
     agent = dict(s['agents'][0])
     if mode in ('welcome', 'dialog', 'welcome-dialog', 'read-list', 'read-text-list') and not s.get('read'):
         agent.update(agent_status='blocked', interactive_ready=False)
     reply('agent_info', agent=agent)
+    if mode == 'ready-agent-missing':
+        s['agents'] = []
+        save()
 elif a[:2] == ['agent', 'read']:
-    assert a == ['agent', 'read', 'opaque-root', '--source', 'visible', '--lines', '80']
+    assert a == ['agent', 'read', os.environ.get('FAKE_PANE', 'opaque-root'), '--source', 'visible', '--lines', '80']
     s['read'] = True
     save()
     text = 'Welcome back!\nPress any key to continue (1s)' if mode == 'welcome' else 'Trust this project? Allow?'
     if mode == 'welcome-dialog':
         text += '\nWelcome back!\nPress any key to continue (1s)'
     reply('pane_read', read=[] if mode == 'read-list' else {
-        'pane_id':'opaque-root','text':[] if mode == 'read-text-list' else text})
+        'pane_id':os.environ.get('FAKE_PANE', 'opaque-root'),'text':[] if mode == 'read-text-list' else text})
 elif a[:2] == ['agent', 'prompt']:
-    assert a == ['agent', 'prompt', 'opaque-root', 'Read ' + os.environ['FAKE_PROMPT'] + ' and follow it.']
+    assert a == ['agent', 'prompt', os.environ.get('FAKE_PANE', 'opaque-root'),
+                 'Read ' + os.environ['FAKE_PROMPT'] + ' and follow it.']
     receipt = json.loads((root / 'W12-launch.json').read_text())
     assert receipt['stage'] == 'Submitting', 'intent must be durable before delivery'
     s['delivered'] = s.get('delivered', 0) + 1
@@ -179,6 +238,7 @@ class LaunchFixture:
 
     def tearDown(self):
         allowed = {('api','snapshot'), ('workspace','create'), ('workspace','get'),
+                   ('tab','create'), ('tab','get'),
                    ('agent','start'), ('agent','get'), ('agent','read'), ('agent','prompt')}
         for argv in self.calls():
             self.assertIn(tuple(argv[:2]), allowed, 'focus/approval/kill/close operations are forbidden')
@@ -271,7 +331,8 @@ class LaunchTests(LaunchFixture, unittest.TestCase):
                 self.assertIn('Creation returned unexpected', result.stderr)
                 record = json.loads(self.receipt.read_text())
                 self.assertEqual(record.get('created_response'), {
-                    'workspace': 'opaque-workspace', 'pane': 'opaque-root', 'terminal': 'terminal-new'})
+                    'workspace': 'opaque-workspace', 'tab': 'opaque-tab',
+                    'pane': 'opaque-root', 'terminal': 'terminal-new'})
                 self.assertEqual(record['stage'], 'Creating')
                 self.assertNotIn('Created', record['checkpoints'])
                 self.assertEqual(self.mutations(['agent','start']), [])
@@ -310,7 +371,8 @@ class LaunchTests(LaunchFixture, unittest.TestCase):
                     self.assertEqual(record['stage'], stage)
                     self.assertIn(reason, record['error'])
                     if mode == 'create-pane-list':
-                        self.assertNotIn('created_response', record)
+                        self.assertEqual(record['created_response'], {
+                            'workspace': 'opaque-workspace', 'tab': 'opaque-tab'})
                         self.assertNotIn('Created', record['checkpoints'])
                         self.assertEqual(self.mutations(['agent', 'start']), [])
                     self.assertIn('inspect receipt', self.state.read_text())
@@ -327,6 +389,14 @@ class LaunchTests(LaunchFixture, unittest.TestCase):
         self.assertNotIn('Traceback', result.stderr)
         self.assertEqual(self.receipt.read_text(), '[]')
         self.assertEqual(self.mutations(['workspace','create']), [])
+
+    def test_workspace_response_without_root_pane_keeps_independent_ids(self):
+        self.assert_stopped(self.run_launch('create-no-pane'))
+        record = json.loads(self.receipt.read_text())
+        self.assertEqual(record.get('created_response'), {'workspace': 'opaque-workspace', 'tab': 'opaque-tab'})
+        self.assertEqual(record['stage'], 'Creating')
+        self.assert_stopped(self.run_launch())
+        self.assertEqual(len(self.mutations(['workspace', 'create'])), 1)
 
     def test_malformed_create_never_duplicates(self):
         self.assertNotEqual(self.run_launch('create-malformed').returncode, 0)
@@ -588,6 +658,296 @@ class ProtocolPolicyTests(LaunchFixture, unittest.TestCase):
                         self.assertEqual(self.receipt.read_bytes(), receipt)
                         self.assertEqual(self.state.read_bytes(), state)
                         self.assertEqual(self.calls(), [['api', 'snapshot']])
+
+
+class ProjectTabLaunchTests(LaunchFixture, unittest.TestCase):
+    PROFILE = (22, '0.9.5')
+
+    def setUp(self):
+        super().setUp()
+        self.project_root = self.root / 'double-holo-local'
+        self.project_root.mkdir()
+        self.state = self.project_root / 'STATE.md'
+        self.state.write_bytes(self.initial_state)
+        self.env.update(FAKE_PROJECT_ROOT=str(self.project_root), FAKE_PANE='lane-pane')
+        live = json.loads(self.initial_live)
+        live['workspaces'] = [{'workspace_id': 'caller-workspace', 'label': 'double-holo'}]
+        live['panes'][0]['cwd'] = str(self.project_root)
+        live['panes'][0]['tab_id'] = 'coordinator-tab'
+        live['tabs'] = [{'tab_id': 'coordinator-tab', 'workspace_id': 'caller-workspace', 'label': 'coord'}]
+        self.initial_live = json.dumps(live)
+        self.live.write_text(self.initial_live)
+
+    def run_launch(self, mode='', extra=(), env=None):
+        return super().run_launch(mode, ('--project-root', str(self.project_root), *extra), env)
+
+    def test_caller_workspace_adoption_creates_only_lane_tab_and_reconciles(self):
+        result = self.run_launch()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        record = json.loads(self.receipt.read_text())
+        self.assertEqual((record['version'], record['workspace'], record['tab'], record['pane']),
+                         (3, 'caller-workspace', 'lane-tab', 'lane-pane'))
+        self.assertEqual(record['project_root'], str(self.project_root))
+        self.assertFalse(record['workspace_created'])
+        self.assertEqual(self.mutations(['workspace', 'create']), [])
+        self.assertEqual(self.run_launch().returncode, 0)
+        for verb in (['tab', 'create'], ['agent', 'start'], ['agent', 'prompt']):
+            self.assertEqual(len(self.mutations(verb)), 1)
+        self.assertEqual(json.loads(self.live.read_text())['panes'][0]['pane_id'], 'caller-pane')
+
+    def test_missing_project_workspace_leaves_initial_shell_and_creates_lane_tab(self):
+        live = json.loads(self.initial_live)
+        live['workspaces'][0]['label'] = 'scratch'
+        self.live.write_text(json.dumps(live))
+        result = self.run_launch(env={'FAKE_WORKSPACE': 'opaque-workspace'})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        record = json.loads(self.receipt.read_text())
+        self.assertTrue(record['workspace_created'])
+        self.assertEqual(record['workspace'], 'opaque-workspace')
+        self.assertEqual(len(self.mutations(['workspace', 'create'])), 1)
+        self.assertEqual(len(self.mutations(['tab', 'create'])), 1)
+        self.assertEqual([p['pane_id'] for p in json.loads(self.live.read_text())['panes']],
+                         ['caller-pane', 'opaque-root', 'lane-pane'])
+        self.assertEqual(self.mutations(['agent', 'start'])[0][6], 'lane-pane')
+
+    def test_null_absent_wrong_or_foreground_only_caller_cwd_refuses_adoption(self):
+        for value in (None, 'missing', '/another-root'):
+            with self.subTest(value=value):
+                live = json.loads(self.initial_live)
+                live['panes'][0]['cwd'] = value
+                live['panes'][0]['foreground_cwd'] = str(self.project_root)
+                if value == 'missing':
+                    del live['panes'][0]['cwd']
+                self.reset_fixture(live)
+                result = self.run_launch()
+                self.assert_stopped(result, 'Project workspace lacks creation provenance or caller-root adoption')
+                self.assertEqual(self.mutations(['tab', 'create']), [])
+                self.assertEqual(self.mutations(['workspace', 'create']), [])
+                self.assertFalse(self.receipt.exists())
+
+    def test_worker_pane_or_other_workspace_without_creation_provenance_is_not_adopted(self):
+        live = json.loads(self.initial_live)
+        live['workspaces'] = [{'workspace_id': 'caller-workspace', 'label': 'scratch'},
+                              {'workspace_id': 'other', 'label': 'double-holo'}]
+        live['panes'].append({'pane_id': 'worker', 'workspace_id': 'other',
+                              'terminal_id': 'other-terminal', 'cwd': str(self.project_root)})
+        self.live.write_text(json.dumps(live))
+        self.assert_stopped(self.run_launch(), 'Project workspace lacks creation provenance')
+        self.assertEqual(self.mutations(['workspace', 'create']), [])
+        self.assertEqual(self.mutations(['tab', 'create']), [])
+
+    def test_retained_v3_creation_provenance_allows_another_workspace(self):
+        live = json.loads(self.initial_live)
+        live['workspaces'][0]['label'] = 'scratch'
+        self.live.write_text(json.dumps(live))
+        env = {'FAKE_WORKSPACE': 'opaque-workspace'}
+        self.assertEqual(self.run_launch(env=env).returncode, 0)
+        self.receipt.rename(self.root / 'W13-launch.json')
+        live = json.loads(self.live.read_text())
+        live['agents'] = []
+        live['panes'] = [p for p in live['panes'] if p['pane_id'] != 'lane-pane']
+        live['tabs'] = [t for t in live['tabs'] if t['tab_id'] != 'lane-tab']
+        self.live.write_text(json.dumps(live))
+        self.state.write_bytes(self.initial_state)
+        self.assertEqual(self.run_launch(env=env).returncode, 0)
+        self.assertEqual(len(self.mutations(['workspace', 'create'])), 1)
+        self.assertEqual(len(self.mutations(['tab', 'create'])), 2)
+
+    def test_adoption_only_or_restarted_daemon_receipt_is_not_creation_provenance(self):
+        self.assertEqual(self.run_launch().returncode, 0)
+        original = json.loads(self.receipt.read_text())
+        for changed in ({'workspace_created': False}, {'context': dict(original['context'], socket_inode=0)}):
+            with self.subTest(changed=changed):
+                self.receipt.unlink(missing_ok=True)
+                record = {**original, 'workspace_created': True, **changed}
+                (self.root / 'W13-launch.json').write_text(json.dumps(record))
+                live = json.loads(self.initial_live)
+                live['workspaces'][0]['workspace_id'] = 'other'
+                live['workspaces'].append({'workspace_id': 'caller-workspace', 'label': 'scratch'})
+                record['workspace'] = 'other'
+                (self.root / 'W13-launch.json').write_text(json.dumps(record))
+                self.reset_fixture(live)
+                self.assert_stopped(self.run_launch(), 'Project workspace lacks creation provenance')
+                self.assertEqual(self.mutations(['tab', 'create']), [])
+                self.assertEqual(self.mutations(['workspace', 'create']), [])
+
+    def test_own_receipt_from_restarted_daemon_stops_without_mutation(self):
+        self.assertEqual(self.run_launch().returncode, 0)
+        record = json.loads(self.receipt.read_text())
+        record['context']['socket_inode'] = 0
+        self.receipt.write_text(json.dumps(record))
+        (self.root / 'calls.jsonl').write_text('')
+        self.assert_stopped(self.run_launch(), 'Receipt identity/context/prompt differs')
+        self.assertEqual(self.calls(), [['api', 'snapshot']])
+
+    def test_creation_without_root_pane_preserves_workspace_ids_and_never_recreates(self):
+        live = json.loads(self.initial_live)
+        live['workspaces'][0]['label'] = 'scratch'
+        self.live.write_text(json.dumps(live))
+        result = self.run_launch('create-no-pane')
+        self.assert_stopped(result)
+        self.assertTrue(self.receipt.exists(), 'creation intent/returned IDs must survive failure')
+        record = json.loads(self.receipt.read_text())
+        self.assertEqual(record['workspace_response']['workspace'], 'opaque-workspace')
+        self.assertEqual(record['workspace_response']['tab'], 'opaque-tab')
+        self.assertEqual(record['stage'], 'Creating')
+        self.assert_stopped(self.run_launch())
+        self.assertEqual(len(self.mutations(['workspace', 'create'])), 1)
+        self.assertEqual(self.mutations(['tab', 'create']), [])
+
+    def test_creation_without_root_pane_preserves_tab_id_and_never_recreates(self):
+        self.assert_stopped(self.run_launch('tab-no-pane'))
+        self.assertTrue(self.receipt.exists(), 'creation intent/returned tab ID must survive failure')
+        record = json.loads(self.receipt.read_text())
+        self.assertEqual(record['tab_response']['tab'], 'lane-tab')
+        self.assertEqual(record['tab_response'].get('workspace'), 'caller-workspace')
+        self.assertEqual(record['stage'], 'Creating')
+        self.assert_stopped(self.run_launch())
+        self.assertEqual(len(self.mutations(['tab', 'create'])), 1)
+        self.assertEqual(self.mutations(['agent', 'start']), [])
+
+    def test_bad_or_lost_tab_creation_ack_never_retries_or_starts_pi(self):
+        for mode in ('tab-malformed', 'tab-label-mismatch', 'tab-workspace-mismatch', 'tab-cwd-mismatch'):
+            with self.subTest(mode=mode):
+                self.reset_fixture(json.loads(self.initial_live))
+                self.assert_stopped(self.run_launch(mode))
+                self.assertEqual(json.loads(self.receipt.read_text())['stage'], 'Creating')
+                self.assert_stopped(self.run_launch())
+                self.assertEqual(len(self.mutations(['tab', 'create'])), 1)
+                self.assertEqual(self.mutations(['agent', 'start']), [])
+
+    def test_duplicate_project_label_lane_tab_or_legacy_workspace_stops_before_create(self):
+        for field, value in (
+                ('workspaces', {'workspace_id': 'duplicate', 'label': 'double-holo'}),
+                ('workspaces', {'workspace_id': 'legacy', 'label': 'double-holo-12'}),
+                ('tabs', {'workspace_id': 'caller-workspace', 'tab_id': 'existing', 'label': 'double-holo-12'}),
+                ('agents', {'workspace_id': 'legacy', 'pane_id': 'legacy-pane', 'name': 'double-holo-12'})):
+            with self.subTest(field=field):
+                live = json.loads(self.initial_live)
+                live[field].append(value)
+                self.reset_fixture(live)
+                self.assert_stopped(self.run_launch())
+                self.assertEqual(self.mutations(['tab', 'create']), [])
+                self.assertEqual(self.mutations(['workspace', 'create']), [])
+
+    def test_project_root_state_mismatch_and_protocol19_have_no_launch_effects(self):
+        bad_root = self.root / 'other-local'
+        bad_root.mkdir()
+        result = super().run_launch(extra=('--project-root', str(bad_root)))
+        self.assert_stopped(result, 'Project root')
+        self.assertEqual(self.calls(), [])
+        live = json.loads(self.initial_live)
+        live.update(protocol=19, version='0.8.0')
+        self.live.write_text(json.dumps(live))
+        result = self.run_launch()
+        self.assertEqual(result.returncode, 2)
+        self.assertIn('Project tabs require Herdr', result.stderr)
+        self.assertFalse(self.receipt.exists())
+
+    def test_caller_cwd_or_alias_change_before_tab_creation_prevents_mutation(self):
+        for mode in ('caller-change', 'alias-appears'):
+            with self.subTest(mode=mode):
+                self.reset_fixture(json.loads(self.initial_live))
+                self.assert_stopped(self.run_launch(mode))
+                self.assertEqual(self.mutations(['workspace', 'create']), [])
+                self.assertEqual(self.mutations(['tab', 'create']), [])
+
+    def test_read_only_refusal_before_first_creation_leaves_no_uncertain_receipt(self):
+        for missing_workspace in (False, True):
+            for mode in ('alias-appears', 'snapshot-refuses'):
+                with self.subTest(missing_workspace=missing_workspace, mode=mode):
+                    live = json.loads(self.initial_live)
+                    if missing_workspace:
+                        live['workspaces'][0]['label'] = 'scratch'
+                    self.reset_fixture(live)
+                    env = {'FAKE_WORKSPACE': 'opaque-workspace'} if missing_workspace else {}
+                    self.assert_stopped(self.run_launch(mode, env=env))
+                    self.assertEqual(self.mutations(['workspace', 'create']), [])
+                    self.assertEqual(self.mutations(['tab', 'create']), [])
+                    self.assertFalse(self.receipt.exists(), 'read-only refusal is not uncertain creation')
+                    self.assertEqual(self.state.read_bytes(), self.initial_state)
+                    self.live.write_text(json.dumps(live))
+                    self.assertEqual(self.run_launch(env=env).returncode, 0)
+
+    def test_lane_override_equal_to_project_is_rejected_before_creating_workspace(self):
+        live = json.loads(self.initial_live)
+        live['workspaces'][0]['label'] = 'scratch'
+        self.live.write_text(json.dumps(live))
+        result = self.run_launch(extra=('--name', 'double-holo'), env={'FAKE_NAME': 'double-holo'})
+        self.assert_stopped(result, 'Lane name conflicts with project workspace label')
+        self.assertEqual(self.mutations(['workspace', 'create']), [])
+        self.assertEqual(self.mutations(['tab', 'create']), [])
+        self.assertFalse(self.receipt.exists())
+
+    def test_caller_chdir_after_validated_tab_does_not_block_start_or_prompt(self):
+        result = self.run_launch('caller-after-start')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(self.live.read_text())['panes'][0]['cwd'], '/elsewhere')
+        self.assertEqual(len(self.mutations(['agent', 'start'])), 1)
+        self.assertEqual(len(self.mutations(['agent', 'prompt'])), 1)
+
+    def test_refreshed_workspace_pane_and_ready_agent_changes_stop_at_exact_boundary(self):
+        for mode, reason, starts in (('workspace-changed', 'Project workspace identity changed', 0),
+                                    ('pane-changed', 'Lane pane identity changed', 0),
+                                    ('ready-agent-missing', 'Ready agent missing', 1)):
+            with self.subTest(mode=mode):
+                live = json.loads(self.initial_live)
+                live['workspaces'][0]['label'] = 'scratch'
+                self.reset_fixture(live)
+                self.assert_stopped(self.run_launch(mode, env={'FAKE_WORKSPACE': 'opaque-workspace'}), reason)
+                self.assertEqual(len(self.mutations(['agent', 'start'])), starts)
+                self.assertEqual(self.mutations(['agent', 'prompt']), [])
+
+    def test_uncertain_workspace_creation_blocks_a_distinct_lane_even_if_snapshot_is_empty(self):
+        for retain_workspace in (False, True):
+            with self.subTest(retain_workspace=retain_workspace):
+                live = json.loads(self.initial_live)
+                live['workspaces'][0]['label'] = 'scratch'
+                self.reset_fixture(live)
+                self.assert_stopped(self.run_launch('create-malformed'))
+                if not retain_workspace:
+                    self.live.write_text(json.dumps(live))
+                self.state.write_text(self.state.read_text() + '| W13 | task | Active | — | Manual |\n')
+                result = self.run_launch(extra=('--lane', 'W13'), env={'FAKE_NAME': 'double-holo-13'})
+                self.assert_stopped(result, 'Project workspace creation uncertain')
+                self.assertEqual(len(self.mutations(['workspace', 'create'])), 1)
+                self.assertEqual(self.mutations(['tab', 'create']), [])
+                self.assertFalse((self.root / 'W13-launch.json').exists())
+
+    def test_missing_retained_workspace_never_creates_replacement_for_next_lane(self):
+        live = json.loads(self.initial_live)
+        live['workspaces'][0]['label'] = 'scratch'
+        self.live.write_text(json.dumps(live))
+        self.assertEqual(self.run_launch(env={'FAKE_WORKSPACE': 'opaque-workspace'}).returncode, 0)
+        self.live.write_text(json.dumps(live))
+        self.state.write_text(self.state.read_text() + '| W13 | task | Active | — | Manual |\n')
+        result = self.run_launch(extra=('--lane', 'W13'), env={'FAKE_NAME': 'double-holo-13'})
+        self.assert_stopped(result, 'Recorded project workspace is missing')
+        self.assertEqual(len(self.mutations(['workspace', 'create'])), 1)
+        self.assertEqual(len(self.mutations(['tab', 'create'])), 1)
+
+    def test_v3_agent_session_or_tab_identity_mismatch_refuses_submission(self):
+        self.assertEqual(self.run_launch().returncode, 0)
+        original = json.loads(self.live.read_text())
+        for field, value in (('tab_id', 'foreign-tab'), ('agent_session', {
+                'agent': 'pi', 'source': 'herdr:pi', 'kind': 'path', 'value': 'relative-session'})):
+            with self.subTest(field=field):
+                live = json.loads(json.dumps(original))
+                live['agents'][0][field] = value
+                self.live.write_text(json.dumps(live))
+                self.assert_stopped(self.run_launch())
+                self.assertEqual(len(self.mutations(['agent', 'prompt'])), 1)
+
+    def test_v3_start_or_prompt_uncertainty_uses_existing_lane_and_never_resends(self):
+        for mode, stage in (('start-fail', 'Starting'), ('prompt-malformed', 'Submitting')):
+            with self.subTest(mode=mode):
+                self.reset_fixture(json.loads(self.initial_live))
+                self.assert_stopped(self.run_launch(mode))
+                self.assertEqual(json.loads(self.receipt.read_text())['stage'], stage)
+                self.assert_stopped(self.run_launch(mode))
+                self.assertEqual(len(self.mutations(['tab', 'create'])), 1)
+                self.assertEqual(len(self.mutations(['agent', 'start'])), 1)
+                self.assertLessEqual(len(self.mutations(['agent', 'prompt'])), 1)
 
 
 if __name__ == '__main__':
