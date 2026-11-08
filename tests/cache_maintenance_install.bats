@@ -26,7 +26,7 @@ case "$*" in
 esac'
   stub_command loginctl 'printf "loginctl %s\n" "$*" >>"$CALLS"; echo no'
   local tool
-  for tool in go uv npm; do
+  for tool in go uv npm docker; do
     stub_command "$tool" 'echo unexpected-optional-tool >>"$CALLS"; exit 99'
   done
 }

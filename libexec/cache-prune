@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Only conventional native caches are owned here; custom tool configuration is ignored.
+# Home caches use conventional paths; Docker uses its native daemon/builder selection.
 set -euo pipefail
 
 usage() { echo 'Usage: cache-prune [--help]'; }
@@ -207,4 +207,73 @@ for tool in go uv npm; do
   fi
   if measure; then echo "$tool|residual=$size KiB"; fi
 done
+
+# Docker owns data outside home cache paths, so use native pruning, never path deletion.
+docker_idle() {
+  local processes name args
+  if ! processes=$(ps -ww -u "$UID" -o comm=,args=); then
+    echo 'docker|skip: process inspection failed'
+    return 1
+  fi
+  # Snapshot only, immediately before deletion. Other users/remote builds are invisible.
+  while read -r name args; do
+    case $name in
+      docker-buildx | docker-compose | buildx)
+        echo "docker|skip: busy build/compose process ($name)"
+        return 1
+        ;;
+      docker)
+        # Include global CLI options; conservative word matching can also skip exec/run.
+        if [[ $args =~ (^|[[:space:]])(build|buildx|compose)([[:space:]]|$) ]]; then
+          echo 'docker|skip: busy build/compose process (docker)'
+          return 1
+        fi
+        ;;
+    esac
+  done <<<"$processes"
+}
+
+docker_output() {
+  local phase=$1 output status=0 line
+  shift
+  if output=$(timeout --kill-after=5s "$@" 2>&1); then :; else status=$?; fi
+  if [[ -n $output ]]; then
+    while IFS= read -r line; do
+      printf 'docker|%s: %s\n' "$phase" "$line"
+    done <<<"$output"
+  fi
+  return "$status"
+}
+
+prune_docker() {
+  if ! command -v docker >/dev/null; then
+    echo 'docker|skip: tool missing'
+    return
+  fi
+  if ! timeout --kill-after=5s 10s docker info >/dev/null 2>&1; then
+    echo 'docker|skip: daemon unavailable or probe timed out'
+    return
+  fi
+  if ! docker_output before 60s docker system df; then
+    error 'before usage measurement failed (including timeout); no cleanup'
+    return
+  fi
+  if ! docker_idle; then return; fi
+  if ! docker_output 'system prune' 2m docker system prune -a -f; then
+    error 'system prune failed (including timeout); no retry'
+  fi
+  # Remove stopped containers first so their now-unreferenced volumes are eligible.
+  if ! docker_output 'volume prune' 2m docker volume prune -a -f; then
+    error 'volume prune failed (including timeout); no retry'
+  fi
+  if ! docker_output 'buildx prune' 2m docker buildx prune -a -f; then
+    error 'buildx prune failed (including timeout); no retry'
+  fi
+  if ! docker_output after 60s docker system df; then
+    error 'after usage measurement failed (including timeout)'
+  fi
+}
+
+tool=docker
+prune_docker
 exit "$failed"
