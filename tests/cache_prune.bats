@@ -10,7 +10,9 @@ setup() {
   HELPER="$REPO_ROOT/libexec/cache-prune"
   export CALLS="$TEST_ROOT/calls" DU_CALLS="$TEST_ROOT/du-calls" ENVS="$TEST_ROOT/envs"
   export TIMEOUTS="$TEST_ROOT/timeouts" PS_CALLS="$TEST_ROOT/ps-calls"
-  touch "$CALLS" "$DU_CALLS" "$ENVS" "$TIMEOUTS" "$PS_CALLS"
+  export DOCKER_CALLS="$TEST_ROOT/docker-calls"
+  touch "$CALLS" "$DU_CALLS" "$ENVS" "$TIMEOUTS" "$PS_CALLS" "$DOCKER_CALLS"
+  unset DOCKER_READY DOCKER_FAIL PS_DOCKER
   export GO_SIZE=20971520 UV_SIZE=5242880 NPM_SIZE=5242880
   export GOENV="$HOME/go-env" GOFLAGS=-modcache GOTOOLCHAIN=auto
   export GOCACHE="$HOME/custom-go" UV_CACHE_DIR="$HOME/custom-uv" npm_config_cache="$HOME/custom-npm"
@@ -34,6 +36,23 @@ else
   [[ "${DROP_ROOT-}" != uv || "$tool" != uv ]] || rmdir "$XDG_CACHE_HOME/uv"
 fi'
   done
+  # Never let the host Docker CLI/daemon escape the fixture.
+  stub_command docker '
+printf "%s" "$1" >>"$DOCKER_CALLS"
+for arg in "${@:2}"; do printf "|%s" "$arg" >>"$DOCKER_CALLS"; done
+printf "\n" >>"$DOCKER_CALLS"
+[[ "${DOCKER_READY-}" == yes ]] || exit 124
+case "$*" in
+  "info") echo server ;;
+  "system df")
+    count=$(grep -c "^system|df$" "$DOCKER_CALLS")
+    [[ "${DOCKER_FAIL-}" != "df$count" ]] || { echo "measurement failed" >&2; exit 124; }
+    printf "TYPE TOTAL ACTIVE SIZE RECLAIMABLE\nImages 2 1 10MB 5MB\n" ;;
+  "system prune -a -f" | "volume prune -a -f" | "buildx prune -a -f")
+    [[ "${DOCKER_FAIL-}" != "$1" ]] || { echo "prune failed" >&2; exit 124; }
+    printf "Deleted unused data\nTotal reclaimed space: 5MB\n" ;;
+  *) echo "unexpected docker arguments" >&2; exit 99 ;;
+esac'
   stub_command timeout '
 printf "%s|" "$@" >>"$TIMEOUTS"; printf "\n" >>"$TIMEOUTS"
 [[ "$1" != --kill-after=5s ]] || shift
@@ -42,7 +61,11 @@ exec "$@"'
   stub_command ps '
 printf "%s|" "$@" >>"$PS_CALLS"; printf "\n" >>"$PS_CALLS"
 [[ "${PS_FAIL-}" != yes ]] || exit 1
-printf "%s\n" "${PS_NAMES-}"'
+if [[ "$*" == *comm=,args=* ]]; then
+  printf "%s\n" "${PS_DOCKER-}"
+else
+  printf "%s\n" "${PS_NAMES-}"
+fi'
   stub_command du '
 printf "%s|" "$@" >>"$DU_CALLS"; printf "\n" >>"$DU_CALLS"
 case "$*" in
@@ -156,6 +179,7 @@ clean_count() {
   [ "$status" -eq 2 ]
   [ ! -e "$XDG_STATE_HOME" ]
   [ ! -s "$CALLS" ]
+  [ ! -s "$DOCKER_CALLS" ]
 }
 
 @test "absent caches are expected skips without native probes or recreation" {
@@ -185,6 +209,7 @@ clean_count() {
   HOME=/ run bash "$HELPER"
   [ "$status" -eq 1 ]
   [ ! -s "$CALLS" ]
+  [ ! -s "$DOCKER_CALLS" ]
 }
 
 @test "symlinked cache ancestor and state directory are rejected" {
@@ -339,6 +364,7 @@ clean_count() {
   [ "$status" -eq 1 ]
   [ ! -s "$CALLS" ]
   [ "$(stat -c %a "$HOME/untouched")" = 644 ]
+  [ ! -s "$DOCKER_CALLS" ]
 }
 
 @test "state setup failure is an error not already-running status" {
@@ -346,4 +372,132 @@ clean_count() {
   XDG_STATE_HOME="$HOME/not-a-directory/state" run bash "$HELPER"
   [ "$status" -eq 1 ]
   [[ "$output" != *"already running"* ]]
+  [ ! -s "$DOCKER_CALLS" ]
+}
+
+@test "Docker prunes exact unused scopes between summary measurements with bounded calls" {
+  export DOCKER_READY=yes
+  run bash "$HELPER"
+  [ "$status" -eq 0 ]
+  [ "$(<"$DOCKER_CALLS")" = $'info\nsystem|df\nsystem|prune|-a|-f\nvolume|prune|-a|-f\nbuildx|prune|-a|-f\nsystem|df' ]
+  [[ "$output" == *'docker|before: TYPE TOTAL ACTIVE SIZE RECLAIMABLE'* ]]
+  [[ "$output" == *'docker|after: Images 2 1 10MB 5MB'* ]]
+  [[ "$output" == *'docker|system prune: Total reclaimed space: 5MB'* ]]
+  [[ "$output" == *'docker|volume prune: Deleted unused data'* ]]
+  [[ "$output" == *'docker|buildx prune: Deleted unused data'* ]]
+  [ "$(clean_count go)$(clean_count uv)$(clean_count npm)" = 111 ]
+  grep -Fx -- '--kill-after=5s|10s|docker|info|' "$TIMEOUTS"
+  [ "$(grep -Fxc -- '--kill-after=5s|60s|docker|system|df|' "$TIMEOUTS")" -eq 2 ]
+  [ "$(grep -c '^--kill-after=5s|2m|docker|' "$TIMEOUTS")" -eq 3 ]
+  grep -Fx -- '--kill-after=5s|2m|docker|volume|prune|-a|-f|' "$TIMEOUTS"
+  if grep -Eq '^TYPE|^Images|^Deleted|^Total' <<<"$output"; then return 1; fi
+}
+
+@test "Docker unavailable or timed out daemon skips successfully without deletion" {
+  run bash "$HELPER"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'docker|skip: daemon unavailable'* ]]
+  [ "$(<"$DOCKER_CALLS")" = info ]
+  [ "$(clean_count go)$(clean_count uv)$(clean_count npm)" = 111 ]
+}
+
+@test "missing Docker CLI skips without invoking a daemon" {
+  mkdir "$TEST_ROOT/minbin"
+  local tool
+  for tool in bash mkdir chmod flock; do
+    ln -s "$(command -v "$tool")" "$TEST_ROOT/minbin/$tool"
+  done
+  for tool in go uv npm du ps timeout; do
+    ln -s "$STUB_BIN/$tool" "$TEST_ROOT/minbin/$tool"
+  done
+  PATH="$TEST_ROOT/minbin" run /bin/bash "$HELPER"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'docker|skip: tool missing'* ]]
+  [ ! -s "$DOCKER_CALLS" ]
+}
+
+@test "Docker build compose and buildx clients skip deletion after summary" {
+  export DOCKER_READY=yes
+  local process
+  for process in 'docker docker build .' 'docker /usr/bin/docker --context dev buildx bake' \
+    'docker docker compose up' 'docker-buildx /plugins/docker-buildx build .' \
+    'docker-compose docker-compose up' 'buildx buildx bake'; do
+    export PS_DOCKER="$process"
+    : >"$DOCKER_CALLS"
+    run bash "$HELPER"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'docker|skip: busy'* ]]
+    [ "$(<"$DOCKER_CALLS")" = $'info\nsystem|df' ]
+  done
+  [ "$(clean_count go)$(clean_count uv)$(clean_count npm)" = 666 ]
+}
+
+@test "unrelated processes and Docker inspection do not block pruning" {
+  export DOCKER_READY=yes PS_DOCKER=$'node node script build\ndocker docker ps\ndockerd dockerd'
+  run bash "$HELPER"
+  [ "$status" -eq 0 ]
+  grep -Fx 'system|prune|-a|-f' "$DOCKER_CALLS"
+}
+
+@test "Docker process inspection failure skips deletion but allows uv" {
+  export DOCKER_READY=yes PS_FAIL=yes
+  run bash "$HELPER"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'docker|skip: process inspection failed'* ]]
+  [ "$(<"$DOCKER_CALLS")" = $'info\nsystem|df' ]
+  [ "$(clean_count go)$(clean_count uv)$(clean_count npm)" = 010 ]
+}
+
+@test "Docker before measurement failure prevents all pruning" {
+  export DOCKER_READY=yes DOCKER_FAIL=df1
+  run bash "$HELPER"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *'docker|before: measurement failed'* ]]
+  [ "$(<"$DOCKER_CALLS")" = $'info\nsystem|df' ]
+}
+
+@test "Docker cleanup failure does not retry or omit remaining cleanup and after summary" {
+  export DOCKER_READY=yes
+  local step
+  for step in system volume buildx; do
+    export DOCKER_FAIL="$step"
+    : >"$DOCKER_CALLS"
+    run bash "$HELPER"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"docker|$step prune: prune failed"* ]]
+    [[ "$output" == *'docker|error:'* ]]
+    [[ "$output" == *'docker|after:'* ]]
+    [ "$(<"$DOCKER_CALLS")" = $'info\nsystem|df\nsystem|prune|-a|-f\nvolume|prune|-a|-f\nbuildx|prune|-a|-f\nsystem|df' ]
+  done
+}
+
+@test "Docker after measurement timeout fails even after successful pruning" {
+  export DOCKER_READY=yes DOCKER_FAIL=df2
+  run bash "$HELPER"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *'docker|after: measurement failed'* ]]
+  [[ "$output" == *'docker|error:'* ]]
+  grep -Fx 'buildx|prune|-a|-f' "$DOCKER_CALLS"
+}
+
+@test "earlier cache failure still runs Docker and keeps failure status" {
+  export DOCKER_READY=yes FAIL_TOOL=go
+  run bash "$HELPER"
+  [ "$status" -eq 1 ]
+  grep -Fx 'buildx|prune|-a|-f' "$DOCKER_CALLS"
+  [[ "$output" == *'docker|after:'* ]]
+}
+
+@test "helper lock contention prevents even Docker probes" {
+  export DOCKER_READY=yes
+  local state="$XDG_STATE_HOME/dotfiles-cache-maintenance"
+  mkdir -p "$state"
+  exec 8>"$state/lock"
+  flock -n 8
+  run bash "$HELPER"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'already running'* ]]
+  [ ! -s "$DOCKER_CALLS" ]
+  flock -u 8
+  exec 8>&-
 }
