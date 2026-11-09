@@ -282,7 +282,7 @@ storage. Never commit auth, sessions, raw logs or Superpowers workflow artifacts
 
 ## Worktree policy
 
-Use the `using-git-worktrees` skill to create or reuse linked worktrees before repository writes. The custom guard blocks direct `write`, `edit`, and mutating `lsp_fix` calls whose effective target belongs to a primary checkout. It resolves `lsp_fix.root + lsp_fix.path` using pi-lsp semantics, so changing `root` cannot bypass the guard.
+Use the `using-git-worktrees` skill to create or reuse linked worktrees before repository writes. The custom guard blocks direct `write` and `edit` calls targeting a primary checkout and checks mutating `lsp_fix` paths. Its LSP resolver uses the process working directory; installed pi-lsp 0.49.12's changelog records that default and relative roots resolve against the active session working directory (0.49.10). Do not assume these bases remain equivalent after a session/worktree switch. Explicit absolute LSP roots avoid that particular ambiguity, but relative-root enforcement and the registered permission extractor need current-runtime verification before relying on them.
 
 The guard cannot classify arbitrary extension-internal execution. Do not bypass it through shell redirection, generators, `/code run`, or another mutating extension. Repositories listed in `~/.pi/worktree-guard-allow` and the explicit `PI_WORKTREE_GUARD=off` switch are deliberate operator exceptions.
 
