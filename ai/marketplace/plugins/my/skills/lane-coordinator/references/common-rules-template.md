@@ -27,8 +27,9 @@ Read `<resolved harness-notes path>` for invocation outside Pi; resolve it to th
   mechanism it extends (or why none fits), and what new packages, rules or refusals it adds.
 - Run `/second-opinion` on the design alone, revise, and stop for the human's approval. Then write the plan and run
   `/second-opinion --with-spec` on the plan with its design. A plan reviewed without its design doesn't count.
-- Before reporting a PR ready, run `/adversarial-review` on it and put its verdict in the report. Also complete
-  `pr-closeout`'s bounded bot opportunity and final thread and review-body read, and put that evidence in the report.
+- Before reporting a PR ready, follow `pr-closeout`'s one independent review phase; add
+  specialists only for a named uncovered risk or explicit request. Repository-required reviews remain.
+  Complete its bounded bot opportunity and final thread and review-body read; report coverage and evidence.
 - Work the human already approved continues under its approved design; don't re-gate it. Audit-only work stops at
   its assigned approval gate.
 - Optional: for risky state transitions, consider the owning lane's bounded, human-approved check in
@@ -47,8 +48,9 @@ Read `<resolved harness-notes path>` for invocation outside Pi; resolve it to th
 - Follow the repo's changelog mechanism; never edit a shared file that every PR touches.
 - Prefer sequential PRs over stacks: open the next PR only after the previous one merges, from a freshly fetched
   default branch. Never push branches to someone else's repo to make stacking work.
-- Resolve conflicts the way the repo's own AGENTS or CONTRIBUTING says. Never force-push anyone else's branch.
-  Without project or repo Git rules, never push to a default branch or merge a PR, never rewrite someone else's branch,
+- Resolve Git policy from project AGENTS.md, the COORDINATION.md repo row and repo rules; ask on conflict.
+  A method grants no push authority. Never force-push anyone else's branch.
+  Without project or repo Git policy, never push to a default branch or merge a PR, never rewrite someone else's branch,
   and resolve conflicts by merging the base branch into yours.
 - No timeout increases as a fix.
 - No tag, release note or note to users until a person has walked the path the release claims to support, without

@@ -29,6 +29,7 @@ STAMP = ROOT / '.morning-last-run'
 ME = None
 NOTIFICATIONS = INTERNAL_TRACKER = False
 DECISION_PREFIX, LANE_PREFIX = 'D', 'W'
+LEGACY_LANE_PREFIXES = ()
 RECORD_FILES = ()
 SHARED_ROOT = ROOT
 TRACKED_SERIES = []
@@ -37,7 +38,8 @@ INTERNAL_SOURCE = None
 LIMITS = {'seconds': 300, 'queries': 600}
 BAD_CHECKS = {'FAILURE', 'ERROR', 'TIMED_OUT', 'ACTION_REQUIRED', 'CANCELLED', 'STARTUP_FAILURE'}
 BASE_KEYS = {'repos', 'watch', 'own_only', 'ours', 'aliases', 'notifications', 'internal_tracker',
-             'me', 'record_files', 'shared_root', 'decision_prefix', 'lane_prefix', 'tracked_series'}
+             'me', 'record_files', 'shared_root', 'decision_prefix', 'lane_prefix',
+             'legacy_lane_prefixes', 'tracked_series'}
 MAX_TEXT = 1024 * 1024
 MAX_CAPTURE = 16 * 1024 * 1024
 
@@ -87,7 +89,7 @@ def configure(root):
     """Validate base and optional supplemental settings before publishing globals."""
     global ROOT, STAMP, REPOS, WATCH, OWN_ONLY, OURS, ALIASES, NOTIFICATIONS, INTERNAL_TRACKER
     global ME, RECORD_FILES, SHARED_ROOT, DECISION_PREFIX, LANE_PREFIX, TRACKED_SERIES
-    global CHECK_SETTINGS, INTERNAL_SOURCE, LIMITS
+    global CHECK_SETTINGS, INTERNAL_SOURCE, LIMITS, LEGACY_LANE_PREFIXES
     config = json.loads(read_text(root / 'coordination.json'))
     repo_name = lambda x: isinstance(x, str) and re.fullmatch(r'[\w.-]+/[\w.-]+', x)
     path_name = lambda x: isinstance(x, str) and bool(x.strip())
@@ -119,6 +121,10 @@ def configure(root):
     prefix = config.get('lane_prefix', 'W')
     if not isinstance(prefix, str) or not re.fullmatch(r'W|[a-z]+-w', prefix):
         raise ValueError('lane_prefix must be W or lowercase letters followed by -w')
+    legacy_prefixes = config.get('legacy_lane_prefixes', [])
+    if not isinstance(legacy_prefixes, list) or not all(
+            isinstance(p, str) and re.fullmatch(r'W|[a-z]+-w', p) for p in legacy_prefixes):
+        raise ValueError('legacy_lane_prefixes must be a list of valid lane prefixes')
     series = config.get('tracked_series', [])
     if not isinstance(series, list) or not all(isinstance(s, dict) and set(s) == {'repo', 'title', 'tracker'}
             and repo_name(s['repo']) and all(path_name(s[k]) for k in ('title', 'tracker')) for s in series):
@@ -175,6 +181,7 @@ def configure(root):
     NOTIFICATIONS, INTERNAL_TRACKER = config.get('notifications', False), config.get('internal_tracker', False)
     ME, RECORD_FILES, SHARED_ROOT = me, tuple(resolve(p) for p in files), shared
     DECISION_PREFIX, LANE_PREFIX = config.get('decision_prefix', 'D'), prefix
+    LEGACY_LANE_PREFIXES = tuple(dict.fromkeys(legacy_prefixes))
     TRACKED_SERIES, CHECK_SETTINGS, INTERNAL_SOURCE = series, settings, source
     LIMITS = {'seconds': limits.get('seconds', 300), 'queries': limits.get('queries', 600)}
 
@@ -290,9 +297,12 @@ def atomic_write(path, text):
 
 
 def lane_pattern(legacy=True):
-    """Tracking includes imported W IDs; allocation uses only the project's prefix."""
-    prefixes = ("W|" if legacy and LANE_PREFIX != "W" else "") + re.escape(LANE_PREFIX)
-    return rf"(?:{prefixes})\d+"
+    """Tracking includes imported IDs; active-only matching uses the project's prefix."""
+    prefixes = [LANE_PREFIX]
+    if legacy:
+        prefixes.extend(('W', *LEGACY_LANE_PREFIXES))
+    alternatives = '|'.join(re.escape(p) for p in dict.fromkeys(prefixes))
+    return rf"(?:{alternatives})\d+"
 
 
 def lane_number(lane):

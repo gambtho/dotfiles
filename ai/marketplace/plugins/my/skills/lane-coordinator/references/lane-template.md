@@ -22,7 +22,8 @@ open PRs to stay off (or the shared rules file).>
 
 ## Scope
 
-<Concrete outcome. What's in, what's explicitly out.>
+<What the human will see or be able to do in the human's current workflow, or plainly
+infrastructure-only. What's in, what's explicitly out.>
 
 ## Steps
 
@@ -44,9 +45,9 @@ The requirements below are unchanged.
 3. Run the repo's checks: <exact commands from the repo>. Race/focused tests on touched
    packages where the repo has them.
 4. Use `pr-closeout` for the one review/finalization phase, reusing valid review
-   evidence and retaining required specialist reviews, including the shared workflow's
-   `/adversarial-review` before a PR is reported ready. Put its verdict in the report.
-   Complete closeout's bounded bot opportunity and final thread and review-body read
+   evidence and retaining repository-required reviews. Add specialists only for a
+   named uncovered risk or explicit request; record their focus and verdict. Complete
+   closeout's bounded bot opportunity and final thread and review-body read
    before reporting a PR ready.
    Open the PR with a short body per COORDINATION.md's authority table (unless this
    prompt says to stop first). For an approved PR, report CI/threads/readiness at the
@@ -63,9 +64,9 @@ The requirements below are unchanged.
   check for unrelated edits before restoring formatting/reordering, and verify the
   original hash afterward. No repeated relays for these authorized steps; no arbitrary
   resource/config changes, test bypasses or edits in another lane's area.
-- Use the project's AGENTS.md, shared workflow and repo rules for Git/conflicts,
-  PR size/sequencing, review replies, privacy, tests and report locations. Don't copy
-  their baseline rules into this prompt.
+- Resolve Git policy from project AGENTS.md, the COORDINATION.md repo row and repo rules;
+  ask on conflict. A method grants no push authority. Use the shared workflow and those
+  rules for PR size/sequencing, replies, privacy, tests and reports; don't copy them here.
   If no project or repo Git policy exists: keep one small PR current end to end, never push
   to a default branch or merge a PR, never rewrite someone else's branch, and resolve
   conflicts by merging the base branch into yours.
@@ -87,7 +88,9 @@ real blocker. Start with the exact PR/head, ready or blocked, the next person's 
 and any unverified risk. Keep this decision summary to at most ten lines at the top;
 put evidence below. Include delivery mode (LOCAL/PR), worktree/branch/head, changed
 paths, exact checks/results/limits, PR number and CI for that head when applicable,
-and remaining decisions.
+and remaining decisions. Confirm the approved outcome in the human's current workflow:
+what the change gives the human and why existing mechanisms do not already cover it.
+State infrastructure-only delivery and unverified outcomes plainly; no mandatory demo gate.
 List bulky outputs: path, size, safe to delete when; say none or mark unknowns.
 Before calling a PR ready, local HEAD, remote PR head, tested revision and CI revision
 must all match. Include reusable review evidence
