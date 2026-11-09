@@ -262,6 +262,8 @@ try {
   assert.equal(readFileSync(join(primary, "edit.txt"), "utf8"), "original\n");
   assert.match(await parentScript(`return await tools.lsp_fix({root: ${JSON.stringify(primary)}, path: "fix.ts", write: true});`), /primary checkout/);
   assert.equal(readFileSync(join(primary, "fix.ts"), "utf8"), "original\n");
+  assert.match(await parentScript(`return await tools.lsp_fix({root: ${JSON.stringify(primary)}, path: "fix.ts", write: "true"});`), /primary checkout/);
+  assert.equal(readFileSync(join(primary, "fix.ts"), "utf8"), "original\n");
   assert.match(await parentScript('return await tools.write({path: "allowed.txt", content: "linked-write"});'), /Script completed/);
   assert.equal(readFileSync(join(linked, "allowed.txt"), "utf8"), "linked-write");
   for (const command of ["printenv PI_PROVIDER PI_MODEL PI_REASONING_LEVEL", ...metadataCommands]) {

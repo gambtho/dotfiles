@@ -8,7 +8,7 @@ install: ## Run full install (packages, runtimes, shell, git, neovim, fonts, ai)
 bootstrap: ## First-time setup (prereqs, gitconfig, profile, symlinks)
 	bash libexec/bootstrap
 
-update: ## Update packages, runtimes, neovim plugins
+update: ## Update packages/runtimes; restore Neovim plugins to the tracked lockfile.
 	bash bin/dot-update
 
 relink: ## Remove dead symlinks and re-create from current layout

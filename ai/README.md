@@ -446,6 +446,23 @@ libexec/validate-pi-security-runtime \
 
 For the normal installed roots, putting the intended `pi` first on `PATH` and setting `PI_CODING_AGENT_DIR` selects the same two dependencies implicitly.
 
+### Live permission-policy smoke checklist
+
+Status: **not yet recorded as run**. After the operator provisions authentication outside
+agent-issued commands, use canonical Pi with the selected packages and real main/named-agent
+sessions, without YOLO. Confirm these routine calls complete without approval:
+
+- [ ] Main: run a referenced skill script with `node`.
+- [ ] Main: read Pi metadata with `jq`.
+- [ ] Main: run `git diff` against an external runtime file.
+- [ ] `deep`: inspect a file with `nl`.
+- [ ] `deep`: run `make ai-check`.
+- [ ] `deep`: run `bash libexec/validate-ai`.
+- [ ] Main: make an ordinary `curl` GET.
+- [ ] Confirm the [permission-policy tripwire matrix](pi/permissive-permission-policy-design.md#full-gate-pipeline-tests)
+  still produces its expected prompts/denials; decline approvals and avoid real destructive effects.
+- [ ] Record results and the deciding surface/rule for unexpected prompts; investigate before adding exceptions.
+
 ## Configuration backups
 
 Stop Pi before restoring configuration. Preserve failure output and the private per-file backups printed by the installer. Restore only the matching owned configuration and, for Astra retirement, the matching migration receipt. Keep the real extensions directory and unrelated user files intact. Repair packages separately using Pi's supported install commands, then validate the installed policy/schema/evaluator and relevant runtime behavior before starting a fresh session.

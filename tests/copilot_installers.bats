@@ -23,6 +23,48 @@ setup() {
   [ ! -e "$TEST_ROOT/downloads" ]
 }
 
+@test "Copilot rejects unsupported arguments before checking installation or causing side effects" {
+  export ALLOW_REMOTE_INSTALLERS=1
+  printf 'touch "$TEST_ROOT/executed"\n' >"$TEST_ROOT/installer"
+  local state args
+  for state in missing installed; do
+    if [[ "$state" == installed ]]; then
+      mkdir -p "$HOME/.local/bin"
+      printf '#!/bin/sh\nexit 99\n' >"$HOME/.local/bin/copilot"
+      chmod +x "$HOME/.local/bin/copilot"
+    fi
+    for args in --help --chekc --check-extra ''; do
+      run bash "$REPO_ROOT/ai/copilot/install.sh" "$args"
+      [ "$status" -eq 2 ]
+      [[ "$output" == *"Usage:"* ]]
+    done
+    run bash "$REPO_ROOT/ai/copilot/install.sh" --check extra
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"Usage:"* ]]
+    [ ! -e "$TEST_ROOT/downloads" ]
+    [ ! -e "$TEST_ROOT/executed" ]
+    [ -z "$(ls -A "$TMPDIR")" ]
+    if [[ "$state" == missing ]]; then
+      [ ! -e "$HOME/.local" ]
+    fi
+  done
+}
+
+@test "exact Copilot check is nonmutating with or without an installation" {
+  run bash "$REPO_ROOT/ai/copilot/install.sh" --check
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"[dry-run]"* ]]
+  [ ! -e "$HOME/.local" ]
+  mkdir -p "$HOME/.local/bin"
+  printf '#!/bin/sh\nexit 99\n' >"$HOME/.local/bin/copilot"
+  chmod +x "$HOME/.local/bin/copilot"
+  run bash "$REPO_ROOT/ai/copilot/install.sh" --check
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"already installed"* ]]
+  [ ! -e "$TEST_ROOT/downloads" ]
+  [ -z "$(ls -A "$TMPDIR")" ]
+}
+
 @test "missing Copilot uses the official installer at the user prefix" {
   printf 'test "$PREFIX" = "$HOME/.local" && test "$VERSION" = latest || exit 92\nmkdir -p "$PREFIX/bin"\nprintf "#!/bin/sh\\nexit 0\\n" >"$PREFIX/bin/copilot"\nchmod +x "$PREFIX/bin/copilot"\n' >"$TEST_ROOT/installer"
   run bash "$REPO_ROOT/ai/copilot/install.sh"
