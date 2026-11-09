@@ -8,6 +8,7 @@ This repository manages Pi as the coding-agent harness under `ai/`:
 
 ```text
 ai/
+  copilot/install.sh          # Bootstrap standalone Copilot CLI when missing
   pi/
     settings.json             # First-install/reset baseline; package inventory is authoritative
     keybindings.json          # Global Pi shortcuts
@@ -30,7 +31,7 @@ ai/
     package.json              # Pi resource manifest
 ```
 
-Stop Pi before changing resources. `make ai` or `bash ai/pi/install.sh` converges configuration and runs native `pi update --extensions --no-approve`; packages may advance and native reconciliation may replace cached files. Host self-update remains operator-owned through `pi update`. See `ai/README.md` for installed compatibility gates, selective refresh and per-file configuration backups. Do not deploy from an implementation worktree.
+Stop Pi before changing resources. `make ai` converges Pi configuration and also bootstraps the standalone Copilot CLI when missing; first CLI installation requires reviewed remote-installer consent. `bash ai/pi/install.sh` handles Pi only. Pi convergence runs native `pi update --extensions --no-approve`; packages may advance and native reconciliation may replace cached files. Host self-update remains operator-owned through `pi update`. See `ai/README.md` for installed compatibility gates, selective refresh and per-file configuration backups. Do not deploy from an implementation worktree.
 
 The installer links immutable authored resources, publishes runtime-mutated settings and security configuration as regular machine-local files, and leaves authentication, sessions, trust decisions, package caches, user plans, logs, and generated model catalogs machine-local. Tracked mutable baselines such as `ai/pi/config/modes.json`, `ai/pi/config/subagents.json`, `ai/pi/config/file-context.json`, and `ai/pi/config/web-search.json` remain first-install/reset inputs whose runtime drift is preserved, except removal of the ignored top-level `graceTurns` key, exact owned child-exclusion normalization, and explicit selective preference refresh. `ai/pi/config/permission-system.json` is different: its repository-owned permission map and stable fields are republished on `make ai` while valid runtime `yoloMode`, `debugLog`, and `permissionReviewLog` controls are preserved; active YOLO blocks normal publication.
 
@@ -64,7 +65,7 @@ Pi authenticates directly to the GitHub Copilot subscription through `/login`. S
 - `polish-core` — shared engine behind `/polish`, including per-language idiom rules.
 - `blindspot-pass` — pre-implementation risk surface.
 - `implementation-plan` — evidence-based implementation plan.
-- `lane-coordinator` — coordinate lanes across harnesses: manual handoffs by default, explicit Herdr launching and Pi naming, STATE.md, verified reports, and approval-gated publication.
+- `lane-coordinator` — coordinate lanes across harnesses: manual handoffs with user-owned session naming by default, explicit named Herdr launches only on request, STATE.md, verified reports, and approval-gated publication.
 - `change-explainer` — reviewer-facing completed-change write-up.
 - `pr-closeout` — drive a PR to merge-ready in any repository (project review profiles, bot vs human thread rules, flake discipline, size check).
 - `pr-text` — plain-language PR bodies, review comments/replies and issues.
