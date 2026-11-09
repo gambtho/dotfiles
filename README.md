@@ -564,6 +564,7 @@ Pi is the only repository-managed coding-agent harness:
 
 ```text
 ai/
+  copilot/install.sh      # standalone Copilot CLI bootstrap; upgrades via copilot update
   pi/                     # settings, global guidance, keybindings, extensions, installer
   marketplace/plugins/my/ # local Pi package containing prompts and skills
 ```
@@ -571,17 +572,17 @@ ai/
 ### Setup
 
 ```bash
-make ai                  # converge configuration and update extensions through native Pi
+make ai                  # converge Pi/update extensions and bootstrap missing Copilot CLI
 make ai-check            # dry-run without changing the machine
 pi update --extensions   # independently update extension packages (stop Pi sessions first)
 pi update                # update the managed Pi release independently of make ai
 ```
 
-On first use, `make ai` runs Pi's official managed installer, which installs the latest release with locked dependencies and migrates a user-local npm Pi installation if present. Later runs reuse that managed installation without downgrading or updating Pi itself. The full installer also runs Pi setup during Phase 9. Authentication remains machine-local: start `pi`, run `/login`, and choose **GitHub Copilot**. Use `/model` to select any Copilot model enabled for the subscription and Ctrl+S to save the highlighted model as the default.
+On first use, `make ai` runs Pi's official managed installer, which installs the latest release with locked dependencies and migrates a user-local npm Pi installation if present. Later runs reuse that managed installation without downgrading or updating Pi itself. The full installer also runs Pi setup during Phase 9. Both `make ai` and the full installer bootstrap standalone Copilot CLI when missing; that first installation requires reviewed remote-installer consent (`ALLOW_REMOTE_INSTALLERS=1`). Later CLI upgrades use `copilot update`; Pi authenticates independently. Authentication remains machine-local: start `pi`, run `/login`, and choose **GitHub Copilot**. Use `/model` to select any Copilot model enabled for the subscription and Ctrl+S to save the highlighted model as the default.
 
 GPT-6 Astra now uses Pi's native Copilot transport. The installer retires only the obsolete Astra override with a private backup and migration receipt, preserving unrelated custom models and provider settings. Ordinary `make ai` delegates extension reconciliation to `pi update --extensions --no-approve`; packages may advance and cached files may be replaced. Installed permission schema/evaluator checks precede policy publication. Stop Pi sessions before applying. See [AI setup documentation](ai/README.md) for mutable ownership, native updates, and configuration backups.
 
-The installer links the authored extension directory, and `ai/pi/settings.json` loads the local `my` package. The guard blocks Pi's direct file-write tools in primary checkouts; use a linked worktree, or place an intentional exception in `~/.pi/worktree-guard-allow`.
+The installer keeps a real machine-local extensions directory and links the three authored extension files individually; `ai/pi/settings.json` loads the local `my` package. The guard blocks Pi's direct file-write tools in primary checkouts; use a linked worktree, or place an intentional exception in `~/.pi/worktree-guard-allow`.
 
 The personal package provides review, planning, document-understanding, and lane-coordination workflows. See the [package inventory](ai/marketplace/plugins/my/README.md) for all prompt templates and skills, and `AGENTS.md` for repository conventions.
 
