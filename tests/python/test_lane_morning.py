@@ -5,6 +5,7 @@ import io
 import json
 import os
 import pathlib
+import re
 import sys
 import tempfile
 import time
@@ -113,6 +114,67 @@ class MorningTests(unittest.TestCase):
         self.assertIsNone(self.m.ME)
         self.assertEqual(self.m.REPOS, ())
         self.assertFalse(hasattr(self.m, 'reserve_lane'))
+
+    def test_legacy_prefixes_observe_full_ids_but_not_allocate_them(self):
+        self.save(base={**self.config, 'lane_prefix': 'current-w',
+                        'legacy_lane_prefixes': ['old-w', 'W', 'current-w', 'old-w']})
+        self.m.configure(self.root)
+        state = ('## Open lanes\n| old-w12 | example/project#1 | old-w12: retry |\n'
+                 '| current-w12 | example/project#2 | current-w12: retry |\n'
+                 '| W12 | example/project#3 | W12: retry |\n'
+                 '| foreign-w12 | example/project#4 | foreign-w12: retry |\n')
+        for number, owner in ((1, 'old-w12'), (2, 'current-w12'), (3, 'W12'), (4, 'unknown-owner')):
+            with self.subTest(number=number):
+                self.assertEqual(self.m.lane_for_ref(state, 'example/project', number), owner)
+        archive = ('| old-w12 | done; old-w13 will continue |\n'
+                   '| current-w12 | done |\n| W12 | done |\n')
+        state += '- owner: old-w13\n'
+        self.assertEqual([row[1] for row in self.m.closed_lane_owners(state, archive)],
+                         ['old-w12', 'current-w12', 'W12'])
+        for lane, observed, active in (('old-w12', True, False), ('W12', True, False),
+                                      ('current-w12', True, True), ('foreign-w12', False, False),
+                                      ('old-w12x', False, False)):
+            with self.subTest(lane=lane):
+                self.assertEqual(bool(re.fullmatch(self.m.lane_pattern(), lane)), observed)
+                self.assertEqual(bool(re.fullmatch(self.m.lane_pattern(legacy=False), lane)), active)
+
+    def test_legacy_prefix_config_resets_and_deduplicates(self):
+        for extra in ({'lane_prefix': 'W', 'legacy_lane_prefixes': ['W', 'old-w', 'old-w']},
+                      {'lane_prefix': 'current-w', 'legacy_lane_prefixes': []},
+                      {'lane_prefix': 'current-w'}, {}):
+            self.save(base={**self.config, **extra})
+            self.m.configure(self.root)
+            expected = ('W', 'old-w') if extra.get('legacy_lane_prefixes') else ()
+            self.assertEqual(self.m.LEGACY_LANE_PREFIXES, expected)
+            self.assertEqual(bool(re.fullmatch(self.m.lane_pattern(), 'old-w12')), bool(expected))
+            self.assertTrue(re.fullmatch(self.m.lane_pattern(), 'W12'))
+
+    def test_invalid_legacy_prefix_config_preserves_published_settings(self):
+        self.save(base={**self.config, 'legacy_lane_prefixes': ['old-w']})
+        self.m.configure(self.root)
+        pattern = self.m.lane_pattern()
+        for value in (None, 'old-w', {}, [None], [1], [''], ['OLD-w'], ['old'], ['old-w12'], ['../old-w']):
+            with self.subTest(value=value):
+                self.save(base={**self.config, 'lane_prefix': 'next-w', 'legacy_lane_prefixes': value})
+                with self.assertRaisesRegex(ValueError, 'legacy_lane_prefixes'):
+                    self.m.configure(self.root)
+                self.assertEqual(self.m.lane_pattern(), pattern)
+        self.assertFalse(self.calls())
+
+    def test_check_collects_imported_lane_prompts(self):
+        self.save(base={**self.config, 'lane_prefix': 'current-w', 'legacy_lane_prefixes': ['old-w']})
+        (self.root / 'STATE.md').write_text('## Open lanes\n| old-w12 | open |\n| current-w12 | open |\n| W12 | open |\n| foreign-w12 | open |\n')
+        lanes = self.root / 'lanes'
+        lanes.mkdir()
+        for owner in ('old-w12', 'current-w12', 'W12', 'foreign-w12'):
+            (lanes / (owner + '-task.md')).write_text('word ' * 801)
+        self.reply({'body': {'total_count': 0, 'items': [], 'incomplete_results': False}})
+        code, out, _ = self.main('--check', '--no-save')
+        self.assertEqual(code, 0)
+        for owner in ('old-w12', 'current-w12', 'W12'):
+            self.assertIn(owner + '=801/800!', out)
+        self.assertNotIn('foreign-w12=801/800!', out)
+        self.assertFalse((self.root / '.morning-last-run').exists())
 
     def test_alias_first_configured(self):
         self.save(base={**self.config, 'aliases': {'first': 'example/project', 'short': 'example/project'}})
@@ -415,9 +477,10 @@ class MorningTests(unittest.TestCase):
         if proc.exists():
             self.assertIn(proc.read_text().split()[2], ('Z', 'X'))
 
-    def test_original_base_key_vocabulary_is_unchanged(self):
+    def test_base_key_vocabulary_includes_legacy_observation_extension(self):
         self.assertEqual(self.m.BASE_KEYS, {'repos', 'ours', 'own_only', 'watch', 'aliases', 'notifications',
-            'internal_tracker', 'me', 'record_files', 'shared_root', 'decision_prefix', 'lane_prefix', 'tracked_series'})
+            'internal_tracker', 'me', 'record_files', 'shared_root', 'decision_prefix', 'lane_prefix',
+            'legacy_lane_prefixes', 'tracked_series'})
 
     def test_activity_window_and_no_save_are_compatible(self):
         stamp = self.root / '.morning-last-run'

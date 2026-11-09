@@ -15,7 +15,7 @@ edits STATE, reserves lane numbers, deletes files, or runs cleanup.
 
 The selected root must contain `coordination.json`; there is no fallback project,
 repository inventory, or personal login. Existing configured projects keep their
-base file's vocabulary. A minimal base file is:
+base settings, with the optional imported-prefix extension below. A minimal base file is:
 
 ```json
 {"repos":["example/project"],"me":"example-user"}
@@ -23,7 +23,11 @@ base file's vocabulary. A minimal base file is:
 
 Existing keys remain accepted: `repos`, `ours`, `own_only`, `watch`, `aliases`,
 `notifications`, `internal_tracker`, `me`, `record_files`, `shared_root`,
-`decision_prefix`, `lane_prefix`, and `tracked_series`. Unknown keys are errors.
+`decision_prefix`, `lane_prefix`, `legacy_lane_prefixes`, and `tracked_series`. Unknown keys are errors.
+`legacy_lane_prefixes` is a list of `W` or lowercase letters followed by `-w`, for example
+`["old-w"]`. Imported prefixes affect observation only, never allocation; the active
+`lane_prefix` remains unchanged. Omitted or empty lists retain legacy `W` observation;
+repeated prefixes are deduplicated.
 Groups are subsets of repos; watch entries are `["owner/repo", 12]`; aliases map
 shorthand to repositories. Relative paths resolve against the selected root;
 `~` expands, shell expressions do not. Local text inputs are capped at 1 MiB.
@@ -34,8 +38,8 @@ Summary labels use the first configured alias for a repo, else its basename.
 Notifications and the internal tracker default **off** in a configured project.
 When externalizing former defaults, explicitly retain intended flags and aliases.
 
-New settings belong only in the optional `coordination-checks.json`, not in the
-base file (other tools may use its original strict allowlist):
+Other supplemental settings belong in optional `coordination-checks.json`, not in
+`coordination.json`; other consumers must support its imported-prefix extension before use:
 
 ```json
 {"limits":{"seconds":300,"queries":10}}

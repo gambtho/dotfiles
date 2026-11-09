@@ -147,7 +147,8 @@ AGENTS.md for report locations; absent a rule, keep handoffs in the project fold
   approved update; mark old instructions superseded, without rewriting history.
 - Non-trivial work: audit or design first, stop for the user's OK, then one PR at a time.
   For new product work, use the shared workflow's design-before-plan sequence,
-  independent design/paired-plan reviews and required adversarial readiness evidence.
+  independent design/paired-plan reviews and closeout's one independent review phase;
+  specialists only for a named uncovered risk or explicit request. Repository-required reviews remain.
   Don't re-gate work that already has an approved design.
   For state-transition risk, optionally recommend one bounded, human-approved
   [state-model check](references/state-model-check.md); most lanes don't need it.
@@ -155,10 +156,9 @@ AGENTS.md for report locations; absent a rule, keep handoffs in the project fold
   and sequencing, using those sections of
   [common-rules-template.md](references/common-rules-template.md). Keep the common
   workflow in the one project-level file rather than copying it into every effort.
-- For takeovers and stacked-branch recovery, use the project's AGENTS.md (or the repo's
-  own rules), not a copied procedure. Absent rules, merge the base in, preserve the
-  original design, list deviations and draft any takeover comment for approval; do not
-  rewrite someone else's branch.
+- For takeovers and stacked-branch recovery, resolve Git policy under Hard rules,
+  not a copied procedure. Preserve the original design, list deviations and draft
+  any takeover comment for approval; do not rewrite someone else's branch.
 - Before a lane closes or pauses for long, have it write a handoff from
   [handoff-template.md](references/handoff-template.md).
 
@@ -211,8 +211,10 @@ retain their exact approval requirements.
    Require **local HEAD = remote PR head = tested revision = CI revision**, with required
    checks passing on that revision and no unresolved blockers. Check closeout's snapshot
    blockers `staleCheckRevision` and `checkRevisionUnknown`, not just a green rollup.
-   Confirm the diff stays in scope and no claim exceeds evidence. Keep this readiness
-   test separate from review-evidence reuse.
+   Confirm scope and the approved outcome against the human's current workflow;
+   say what the change gives the human and why existing mechanisms do not already cover it.
+   State infrastructure-only delivery and unverified outcomes plainly; no claim may
+   exceed evidence. Keep readiness separate from review-evidence reuse.
    Run [closeout's snapshot](../pr-closeout/SKILL.md#snapshot-helper) with
    `--repo <lane worktree> --github-repo <repo> --pr <n>`. Without that worktree, point
    `--repo` at another checkout, keep the other flags, and ignore only its local
@@ -354,8 +356,9 @@ reviews and chat messages.
 
 - No product code. Trivial changes are OK when the user asks (a license line, a policy
   nudge).
-- Git operations follow the project's AGENTS.md (or the repo's own rules). Without
-  rules: never push to a default branch or merge a PR; never rewrite someone else's
+- Resolve Git policy from project AGENTS.md, the COORDINATION.md repo row and repo rules
+  before giving commands; ask on conflict. A method grants no push authority. Without
+  policy: never push to a default branch or merge a PR; never rewrite someone else's
   branch; resolve conflicts by merging the base branch into yours.
 - Before pushing anything yourself, check the author (`git log -1 --format='%an <%ae>'`);
   never commit with a placeholder identity, even in a scratch merge.

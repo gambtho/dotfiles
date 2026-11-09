@@ -8,7 +8,7 @@ setup() {
   SKILL_DIR="$PACKAGE_DIR/skills/lane-coordinator"
 }
 
-@test "shared workflow projection retains nested rules and unchanged review commands" {
+@test "shared workflow projection retains nested rules and scoped review commands" {
   run python3 - "$SKILL_DIR" <<'PY'
 from pathlib import Path
 import re
@@ -22,17 +22,43 @@ workflow = match.group(1)
 for title in ("Design, then plan", "Worktrees and pull requests", "Scope and evidence",
               "Private information and writing"):
     assert f"### {title}\n" in workflow, f"Rules escaped shared section: {title}"
-for phrase in ("/second-opinion`", "/second-opinion --with-spec", "/adversarial-review",
+for phrase in ("/second-opinion`", "/second-opinion --with-spec", "one independent review phase",
+               "specialists only for a named uncovered risk or explicit request",
                "No timeout increases as a fix", "Never edit another lane's worktree",
                "only after the previous one merges", "No secrets in files"):
     assert phrase in workflow, phrase
 assert "equivalent review" not in workflow
+assert "run `/adversarial-review`" not in workflow
 conflict_rule = "If instructions conflict, stop and ask the coordinator."
 assert conflict_rule in " ".join(workflow.split()), "Projection omits conflict stop rule"
 effort = text.split("## Rules for every lane\n", 1)[1].split("\n## Sequencing", 1)[0]
 assert conflict_rule in " ".join(effort.split()), "Effort rules omit conflict stop rule"
 for name in ("SKILL.md", "references/lane-template.md"):
     assert "lanes/COMMON-RULES.md" in (skill / name).read_text(), name
+PY
+  [ "$status" -eq 0 ]
+}
+
+@test "lane guidance checks real outcomes and resolves project Git policy" {
+  run python3 - "$SKILL_DIR" <<'PY'
+from pathlib import Path
+import sys
+
+skill = Path(sys.argv[1])
+coordinator = " ".join((skill / "SKILL.md").read_text().split())
+lane = " ".join((skill / "references/lane-template.md").read_text().split())
+closeout = " ".join((skill.parent / "pr-closeout/SKILL.md").read_text().split())
+for text in (coordinator, lane):
+    for phrase in ("human's current workflow", "infrastructure-only", "unverified",
+                   "what the change gives the human", "why existing mechanisms do not already cover it"):
+        assert phrase in text, phrase
+for text in (coordinator, lane, closeout):
+    for phrase in ("COORDINATION.md", "repo rules", "ask on conflict", "method", "authority"):
+        assert phrase in text, phrase
+assert "Merge the base, resolve" not in closeout
+assert "required adversarial readiness evidence" not in coordinator
+assert "`/adversarial-review` before a PR" not in lane
+assert "named uncovered risk or explicit request" in lane
 PY
   [ "$status" -eq 0 ]
 }
