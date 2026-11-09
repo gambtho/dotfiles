@@ -60,8 +60,7 @@ setup() {
 }
 
 @test "active AI guidance no longer invokes the Amp permissions command" {
-  run rg -n '/permissions(`|[[:space:]])' "$REPO_ROOT/ai" \
-    --glob '!**/plugin-security-stack-design.md'
+  run rg -n '/permissions(`|[[:space:]])' "$REPO_ROOT/ai"
   [ "$status" -eq 1 ]
 }
 

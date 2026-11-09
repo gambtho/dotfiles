@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if (($# > 1)) || { (($# == 1)) && [[ "$1" != --check ]]; }; then
+  echo "Usage: ${0##*/} [--check]" >&2
+  exit 2
+fi
+
 if [[ -x "$HOME/.local/bin/copilot" ]]; then
   echo "Copilot CLI already installed; use copilot update to upgrade it."
   exit 0
