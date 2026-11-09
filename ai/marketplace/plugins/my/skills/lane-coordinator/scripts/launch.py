@@ -149,8 +149,6 @@ class Launch:
         a = mapping(a, 'agent')
         expected = {'pane_id': self.record['pane'], 'workspace_id': self.record['workspace'],
                     'terminal_id': self.record['terminal'], 'name': self.record['name'], 'agent': 'pi'}
-        if self.record['version'] == 3:
-            expected['tab_id'] = self.record['tab']
         if any(a.get(k) != v for k, v in expected.items()):
             raise LaunchError('Live agent identity differs from receipt; do not reuse')
         session = a.get('agent_session')
@@ -158,10 +156,6 @@ class Launch:
             raise LaunchError('Pi session identity is not available yet; no shell-only readiness')
         for key in ('source', 'kind', 'value'):
             string(session, key)
-        if self.record['version'] == 3 and (
-                session['source'] != 'herdr:pi' or session['kind'] != 'path'
-                or not Path(session['value']).is_absolute()):
-            raise LaunchError('Invalid exact Pi session reference')
         if self.record.get('agent_session', session) != session:
             raise LaunchError('Pi session changed since receipt; do not reuse')
         if 'agent_session' not in self.record:
@@ -192,167 +186,26 @@ class Launch:
                 raise LaunchError('Startup blocked/unknown: user intervention or inspection required')
             time.sleep(1)
 
-    def project_provenance(self):
-        """Only a validated creation receipt on this daemon can authorize another workspace."""
-        records = []
-        for path in self.path.parent.glob('W*-launch.json'):
-            if path == self.path:
-                continue
-            try:
-                candidate = json.loads(path.read_text())
-            except (OSError, ValueError):
-                continue  # Unreadable/invalid data is never authority.
-            if not isinstance(candidate, dict) or candidate.get('version') != 3:
-                continue
-            context = candidate.get('context')
-            if (candidate.get('project') != self.args.project
-                    or candidate.get('project_root') != str(self.args.project_root)
-                    or not isinstance(context, dict)
-                    or any(context.get(k) != self.context[k] for k in (
-                        'session', 'socket', 'socket_device', 'socket_inode'))):
-                continue
-            if (candidate.get('stage') == 'Creating' and candidate.get('creation_step') == 'workspace'
-                    and candidate.get('workspace_created') is not True):
-                raise LaunchError('Project workspace creation uncertain; inspect receipt, never create again')
-            if candidate.get('workspace_created') is True:
-                records.append(string(candidate, 'workspace'))
-        return records
-
-    def project_workspace(self, live):
-        proven = self.project_provenance()
-        matches = [w for w in live['workspaces'] if w.get('label') == self.args.project]
-        if len(matches) > 1:
-            raise LaunchError('Ambiguous project workspace label; inspect without creating')
-        if not matches:
-            # A retained creation cannot silently become a new container if its ID disappeared.
-            if proven:
-                raise LaunchError('Recorded project workspace is missing; inspect without recreating')
-            return None
-        workspace = string(matches[0], 'workspace_id')
-        caller = next(p for p in live['panes'] if p.get('pane_id') == self.context['caller'])
-        if workspace not in proven and not (
-                workspace == self.context['workspace'] and caller.get('cwd') == str(self.args.project_root)):
-            raise LaunchError('Project workspace lacks creation provenance or caller-root adoption')
-        return workspace
-
-    def guard(self):
-        if self.record.get('version') != 3:
-            return
-        # Best effort: Herdr CLI connects separately, so stat cannot close the replacement race.
-        context = inherited_context(self.args.session)
-        live = snapshot(context)
-        if context != self.context:
-            raise LaunchError('Inherited socket/caller changed; inspect without mutation')
-        object_list(live.get('tabs'), 'tabs')
-        name = self.record['name']
-        if (any(w.get('label') == name for w in live['workspaces'])
-                or any(t.get('label') == name and t.get('tab_id') != self.record.get('tab') for t in live['tabs'])
-                or any(a.get('name') == name and a.get('pane_id') != self.record.get('pane') for a in live['agents'])):
-            raise LaunchError('Lane name collision appeared; inspect without mutation')
-        workspace = self.record.get('workspace')
-        matches = [w for w in live['workspaces'] if w.get('label') == self.args.project]
-        if workspace:
-            if len(matches) != 1 or matches[0].get('workspace_id') != workspace:
-                raise LaunchError('Project workspace identity changed; inspect without mutation')
-            if not self.record.get('workspace_created') and not self.record.get('pane'):
-                self.project_workspace(live)
-        elif matches:
-            raise LaunchError('Project workspace appeared during creation; inspect without creating')
-        if self.record.get('pane'):
-            panes = [p for p in live['panes'] if p.get('pane_id') == self.record['pane']]
-            if len(panes) != 1 or any(panes[0].get(k) != self.record[v] for k, v in (
-                    ('workspace_id', 'workspace'), ('tab_id', 'tab'), ('terminal_id', 'terminal'))):
-                raise LaunchError('Lane pane identity changed; inspect without mutation')
-            if self.record.get('stage') == 'Ready':
-                agents = [a for a in live['agents'] if a.get('pane_id') == self.record['pane']]
-                if len(agents) != 1:
-                    raise LaunchError('Ready agent missing from current snapshot')
-                self.agent(agents[0])
-        self.live = live
-
-    def observe_creation(self, result, field):
-        observed = {}
-        for part, key, label in (('workspace', 'workspace_id', 'workspace'), ('tab', 'workspace_id', 'workspace'),
-                                 ('tab', 'tab_id', 'tab'), ('root_pane', 'pane_id', 'pane'),
-                                 ('root_pane', 'terminal_id', 'terminal')):
-            obj = result.get(part)
-            if isinstance(obj, dict):
-                try:
-                    observed.setdefault(label, string(obj, key))
-                except LaunchError:
-                    pass  # Save the other independently valid IDs before refusing this response.
-        if observed:
-            self.checkpoint(**{field: observed})
-
-    def create_project_tab(self, workspace):
-        self.record.update(workspace_created=False)
-        if workspace is None:
-            self.guard()
-            self.checkpoint('Creating', creation_step='workspace')
-            result = call('workspace', 'create', '--cwd', str(self.args.project_root),
-                          '--label', self.args.project, '--no-focus', '--env', 'DOTFILES_KEYRING_PROMPT=0',
-                          kind='workspace_created')
-            self.observe_creation(result, 'workspace_response')
-            w = mapping(result.get('workspace'), 'workspace')
-            t = mapping(result.get('tab'), 'tab')
-            p = mapping(result.get('root_pane'), 'root_pane')
-            workspace = string(w, 'workspace_id')
-            if (w.get('label') != self.args.project or t.get('workspace_id') != workspace
-                    or p.get('workspace_id') != workspace or p.get('tab_id') != string(t, 'tab_id')
-                    or p.get('cwd') != str(self.args.project_root)):
-                raise LaunchError('Creation returned unexpected project workspace/root pane/cwd')
-            string(p, 'pane_id')
-            string(p, 'terminal_id')
-            self.record.update(workspace=workspace, workspace_created=True)
-        else:
-            self.record['workspace'] = workspace
-        self.guard()
-        self.checkpoint('Creating', creation_step='tab', workspace=workspace)
-        result = call('tab', 'create', '--workspace', workspace, '--cwd', str(self.args.project_root),
-                      '--label', self.record['name'], '--no-focus', '--env', 'DOTFILES_KEYRING_PROMPT=0',
-                      kind='tab_created')
-        self.observe_creation(result, 'tab_response')
-        t = mapping(result.get('tab'), 'tab')
-        p = mapping(result.get('root_pane'), 'root_pane')
-        tab, pane, terminal = string(t, 'tab_id'), string(p, 'pane_id'), string(p, 'terminal_id')
-        if (t.get('label') != self.record['name'] or t.get('workspace_id') != workspace
-                or p.get('workspace_id') != workspace or p.get('tab_id') != tab
-                or p.get('cwd') != str(self.args.project_root)):
-            raise LaunchError('Creation returned unexpected lane tab/root pane/cwd')
-        self.checkpoint('Created', tab=tab, pane=pane, terminal=terminal)
-
     def execute(self):
         args = self.args
         identity = {'project': args.project, 'lane': args.lane,
                     'name': lane_name(args.project, args.lane, args.name),
                     'prompt': str(args.prompt), 'prompt_sha256': digest(args.prompt),
                     'repo': str(args.repo), 'state': str(args.state), 'context': self.context}
-        version = 3 if args.project_root is not None else 1
-        if version == 3:
-            identity['project_root'] = str(args.project_root)
-            if self.live['protocol'] != 22:
-                raise LaunchError('Project tabs require Herdr 0.9.5/protocol 22')
-            object_list(self.live.get('tabs'), 'tabs')
         if self.path.exists():
-            candidate = mapping(json.loads(self.path.read_text()), 'receipt')
-            if candidate.get('version') != version or any(candidate.get(k) != v for k, v in identity.items()):
+            candidate = json.loads(self.path.read_text())
+            if candidate.get('version') != 1 or any(candidate.get(k) != v for k, v in identity.items()):
                 raise LaunchError('Receipt identity/context/prompt differs; inspect without adopting or renaming')
             self.record = candidate
             if self.record['stage'] == 'Creating':
                 raise LaunchError('Creation uncertain; inspect live workspace list, never create again automatically')
             w = mapping(call('workspace', 'get', self.record['workspace'],
                              kind='workspace_info').get('workspace'), 'workspace')
-            label = args.project if version == 3 else identity['name']
-            if w.get('workspace_id') != self.record['workspace'] or w.get('label') != label:
+            if w.get('workspace_id') != self.record['workspace'] or w.get('label') != identity['name']:
                 raise LaunchError('Workspace identity differs from receipt')
-            if version == 3:
-                t = mapping(call('tab', 'get', self.record['tab'], kind='tab_info').get('tab'), 'tab')
-                if (t.get('tab_id') != self.record['tab'] or t.get('workspace_id') != self.record['workspace']
-                        or t.get('label') != identity['name']):
-                    raise LaunchError('Tab identity differs from receipt')
             panes = [p for p in self.live['panes'] if p['pane_id'] == self.record['pane']
                      and p['workspace_id'] == self.record['workspace'] and p['terminal_id'] == self.record['terminal']]
-            if len(panes) != 1 or (version == 3 and panes[0].get('tab_id') != self.record['tab']):
+            if len(panes) != 1:
                 raise LaunchError('Root pane identity differs from receipt')
             if self.record['stage'] in ('Submitting', 'Submitted'):
                 a = self.agent()
@@ -368,28 +221,20 @@ class Launch:
             if any(w.get('label') == identity['name'] for w in self.live['workspaces']) or any(
                     a.get('name') == identity['name'] for a in self.live['agents']):
                 raise LaunchError('Name collision or existing unrecorded launch; inspect, never adopt implicitly')
-            if version == 3:
-                if any(t.get('label') == identity['name'] for t in self.live['tabs']):
-                    raise LaunchError('Lane tab name collision; inspect without adopting')
-                # Complete adoption/provenance checks before writing intent or creating anything.
-                workspace = self.project_workspace(self.live)
-            self.record = dict(version=version, **identity)
-            if version == 3:
-                self.create_project_tab(workspace)
-            else:
-                self.checkpoint('Creating')
-                result = call('workspace', 'create', '--cwd', str(args.repo), '--label', identity['name'],
-                              '--no-focus', '--env', 'DOTFILES_KEYRING_PROMPT=0', kind='workspace_created')
-                self.observe_creation(result, 'created_response')
-                w = mapping(result.get('workspace'), 'workspace')
-                p = mapping(result.get('root_pane'), 'root_pane')
-                workspace, pane, terminal = string(w, 'workspace_id'), string(p, 'pane_id'), string(p, 'terminal_id')
-                if w.get('label') != identity['name'] or p.get('workspace_id') != workspace or p.get('cwd') != str(args.repo):
-                    raise LaunchError('Creation returned unexpected workspace/root pane/cwd')
-                self.checkpoint('Created', workspace=workspace, pane=pane, terminal=terminal)
+            self.record = dict(version=1, **identity)
+            self.checkpoint('Creating')
+            result = call('workspace', 'create', '--cwd', str(args.repo), '--label', identity['name'],
+                          '--no-focus', '--env', 'DOTFILES_KEYRING_PROMPT=0', kind='workspace_created')
+            w = mapping(result.get('workspace'), 'workspace')
+            p = mapping(result.get('root_pane'), 'root_pane')
+            workspace, pane, terminal = string(w, 'workspace_id'), string(p, 'pane_id'), string(p, 'terminal_id')
+            # Preserve observed IDs for inspection without certifying a valid creation.
+            self.checkpoint(created_response={'workspace': workspace, 'pane': pane, 'terminal': terminal})
+            if w.get('label') != identity['name'] or p.get('workspace_id') != workspace or p.get('cwd') != str(args.repo):
+                raise LaunchError('Creation returned unexpected workspace/root pane/cwd')
+            self.checkpoint('Created', workspace=workspace, pane=pane, terminal=terminal)
         if self.record['stage'] == 'Created':
             # A Created receipt certifies agent start has not yet been attempted.
-            self.guard()
             self.checkpoint('Starting')
             try:
                 started = call('agent', 'start', identity['name'], '--kind', 'pi', '--pane', self.record['pane'],
@@ -405,7 +250,6 @@ class Launch:
         self.ready()
         if digest(args.prompt) != identity['prompt_sha256']:
             raise LaunchError('Prompt changed during startup; do not submit')
-        self.guard()
         self.checkpoint('Submitting')
         result = call('agent', 'prompt', self.record['pane'], f'Read {args.prompt} and follow it.', kind='agent_prompted')
         self.agent(result['agent'])
@@ -439,26 +283,17 @@ def main():
     for flag in ('project', 'lane', 'prompt', 'repo', 'state', 'session'):
         parser.add_argument(f'--{flag}', required=True)
     parser.add_argument('--name', help='Explicit name override, subject to live alias constraints')
-    parser.add_argument('--project-root', help='Canonical project-local root; launch v3 project tabs instead of legacy v1 workspaces')
     args = parser.parse_args()
     launch = None
     try:
         if not args.requested:
             raise LaunchError('Explicit launch request required; preparing a prompt is not permission')
-        name = lane_name(args.project, args.lane, args.name)
-        if args.project_root is not None and name == args.project:
-            raise LaunchError('Lane name conflicts with project workspace label')
+        lane_name(args.project, args.lane, args.name)
         context = inherited_context(args.session)
         for key in ('prompt', 'repo', 'state'):
             setattr(args, key, Path(getattr(args, key)).resolve(strict=True))
         if not args.repo.is_dir() or not args.prompt.is_file() or not args.prompt.read_text().strip():
             raise LaunchError('Source directory and nonempty approved prompt required')
-        if args.project_root is not None:
-            root = Path(args.project_root)
-            if (not root.is_absolute() or root != root.resolve(strict=True) or not root.is_dir()
-                    or root.name != f'{args.project}-local' or args.state.parent != root):
-                raise LaunchError('Project root must be the canonical project-local directory containing STATE')
-            args.project_root = root
         state_row(args.state.read_text(), args.lane)
         # Serialize launches sharing a lanes directory, then take a fresh live snapshot.
         lock_path = args.prompt.parent / '.launch.lock'
@@ -469,11 +304,11 @@ def main():
             try:
                 launch.execute()
             except (LaunchError, OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
-                if 'stage' in launch.record:
+                if launch.record:
                     launch.checkpoint(error=str(exc))
                 raise
             finally:
-                if 'stage' in launch.record:
+                if launch.record:
                     # Capture before entering the handler, where exc_info becomes the STATE error.
                     primary_error = sys.exc_info()[1]
                     try:
