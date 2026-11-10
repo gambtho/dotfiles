@@ -499,7 +499,8 @@ JS
     [ "$status" -eq 1 ]
   done
 
-  run grep -F 'subagent_type: inspector' "$REPO_ROOT/ai/marketplace/plugins/my/skills/polish-core/SKILL.md"
+  run grep -F 'Choose a read-only review role' \
+    "$REPO_ROOT/ai/marketplace/plugins/my/skills/pr-closeout/references/project-review-contract.md"
   [ "$status" -eq 0 ]
   run rg -n 'subagent_type: deep' \
     "$REPO_ROOT/ai/marketplace/plugins/my/skills/improve/references/platforms.md"

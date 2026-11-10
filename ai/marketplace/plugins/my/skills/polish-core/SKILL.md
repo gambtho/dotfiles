@@ -161,20 +161,20 @@ All maintainer-lens findings are `report`, never auto-fixed. Keep source `built-
 
 ### 3i: Dispatch Subagents
 
-For both standalone and closeout use, reuse valid evidence under the shared contract or dispatch **one fresh whole-change reviewer**, `subagent_type: inspector`, `run_in_background: true`, with a self-contained prompt and a 3–5 word description. Its brief combines general correctness, silent-failure hunting, relevant comment/type/language checks and project review. Parent analysis/cleanup is not this independent review. Use `deep` for a difficult architecture/security risk and `review` when actual cross-family independence is required. Honor a repository-required review method first. If no independent agent is available, disclose self-review and incomplete independence; do not report an equivalent independent pass.
+For both standalone and closeout use, reuse valid evidence or dispatch **one fresh whole-change reviewer** under the shared contract's [One independent review phase](../pr-closeout/references/project-review-contract.md#one-independent-review-phase), including its model-family selection/verification, attack brief and incomplete-independence rules. Use `run_in_background: true`, a self-contained prompt and a 3–5 word description. Its brief combines general correctness, silent-failure hunting, relevant comment/type/language checks and project review. All reviewer findings are report-only even in fix mode; parent cleanup is separate. Honor a repository-required review method first.
 
 **Project-review role in that same reviewer:** whenever any profile was loaded, including learnings-only or deletion-only changes, check every applicable profile item and the built-in maintainer lens. Findings are report-only even in fix mode. Do not edit, merge, run commands from profiles, or recursively delegate.
 
 Each subagent receives:
 - The list of changed files and their paths
 - The full diff from Phase 2
-- The base commit and branch context
+- The base commit, branch context and contract's linked Reviewer mandate
 - The detected stack and conventions from Phase 1
-- The change summary from Phase 2
+- Approved scope and claims; derive initial invariants from code before reading author reports or prior reviews
 - Required finding format: `[Priority|Severity|Confidence] file:line — description; Disposition: open; Verification: not verified`.
   Start each finding with those disposition/verification values; replace verification
-  only with checks/results actually observed. The parent updates auto-fix dispositions
-  after fixing or deciding them. Report-only findings stay open until their required
+  only with checks/results actually observed. The parent updates dispositions after
+  verification; only the parent's own eligible findings are auto-fixes. Report-only findings stay open until their required
   human verification; recording progress does not authorize auto-fixing or closing them.
   Preserve repository priority labels and state their P1 equivalence;
   severity/confidence alone do not make a warning P1.
@@ -275,6 +275,7 @@ Include branch lag, freshness, and temporary-merge verification status (command/
 
 ```
 Project review:
+  Independent review: author <model/family>; reviewer <resolved model/family>; attacks <ledger/evidence>
   Profiles: ~/.pi/pr-reviews/OWNER/REPO/review.md (or none)
   Branch currency: N commits behind OWNER/REPO:main at <SHA>; verified
   Temporary merge: <test command> — passed / failed / not run (<reason>)
