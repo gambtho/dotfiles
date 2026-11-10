@@ -32,13 +32,17 @@ incomplete coverage. Do not silently drop a source or call incomplete coverage c
 
 ### One independent review phase
 
-Use one fresh whole-change reviewer for ordinary nontrivial work, covering correctness,
-silent failures, relevant language/type checks, plan rulings, the built-in maintainer
-lens and all loaded profile items. Parent cleanup is not independent review.
-Preserve report-only findings and repository-required checks/reviews. Use `inspector`
-for ordinary analysis, `deep` for difficult diagnosis and `review` for cross-family
-independence; verify the resolved model. A specialist requires a named risk uncovered
-by that review, or an explicit request. Record the reason; do not add automatic fan-out.
+Use one fresh whole-change reviewer: correctness, silent failures, relevant language/type
+checks, plan rulings, the built-in maintainer lens and profiles. Choose a read-only review role
+whose configured model is a different family from the author's, then verify the resolved model;
+record both identities/families. Replace mismatches; report incomplete independence if
+an eligible reviewer or author identity is unavailable.
+Follow the [Reviewer mandate](../../adversarial-review/SKILL.md#reviewer-mandate): report-only,
+falsify claims, challenge unneeded code, supply reproductions or complete file:line arguments,
+log attempted/disproved attacks. Import the mandate, not its two-reviewer dispatch.
+Parent cleanup is not independent review; repository-required checks/reviews remain.
+Specialists need a named uncovered risk or explicit request; record why, no automatic fan-out.
+Reuse requires evidence of this method/independence and the identities below.
 
 ### Identities and reuse
 

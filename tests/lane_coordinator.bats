@@ -63,6 +63,46 @@ PY
   [ "$status" -eq 0 ]
 }
 
+@test "closeout shares one cross-family report-only attack review with polish" {
+  run python3 - "$PACKAGE_DIR/skills" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+skills = Path(sys.argv[1])
+contract = skills / "pr-closeout/references/project-review-contract.md"
+phase = contract.read_text().split("### One independent review phase\n", 1)[1].split("\n### ", 1)[0]
+phase = " ".join(phase.split())
+for phrase in ("one fresh whole-change reviewer", "configured model", "different family from the author's",
+               "verify the resolved model", "both identities/families", "incomplete independence",
+               "report-only", "falsify claims", "unneeded code", "reproductions",
+               "complete file:line arguments", "attempted/disproved attacks",
+               "not its two-reviewer dispatch", "no automatic fan-out",
+               "evidence of this method/independence"):
+    assert phrase in phase, phrase
+mandate = re.search(r"\[Reviewer mandate\]\(([^)#]+)#reviewer-mandate\)", phase)
+assert mandate, "Missing section-only mandate link"
+assert "## Reviewer mandate\n" in (contract.parent / mandate.group(1)).read_text()
+polish = (skills / "polish-core/SKILL.md").read_text()
+dispatch = polish.split("### 3i: Dispatch Subagents\n", 1)[1].split("\nEach subagent receives:", 1)[0]
+assert "one fresh whole-change reviewer" in dispatch
+assert "project-review-contract.md#one-independent-review-phase" in dispatch
+assert "report-only even in fix mode" in dispatch
+assert "contract's linked Reviewer mandate" in polish
+assert "Independent review: author <model/family>; reviewer <resolved model/family>; attacks <ledger/evidence>" in polish
+report = polish.split("## Phase 5: Report\n", 1)[1].split("\n### ", 1)[0]
+assert "Recompute final content identity after Phase 4" in report
+assert "review affected scope under the shared contract or mark independent coverage incomplete" in report
+assert "only the parent's own eligible findings are auto-fixes" in polish
+assert "derive initial invariants from code before reading author reports or prior reviews" in polish
+assert "subagent_type:" not in dispatch, "Roles must be chosen by configured/resolved family"
+assert "Reviewer mandate" not in dispatch, "Keep the mandate summary in the contract"
+closeout = (skills / "pr-closeout/SKILL.md").read_text()
+assert "do not add a second automatic review" in closeout
+PY
+  [ "$status" -eq 0 ]
+}
+
 @test "lane review uses friction evidence to promote repeated local rules" {
   local prompt="$REPO_ROOT/tools/automations/prompts/lane-review.md"
   grep -Fq 'reports/SKILL-FRICTION.md' "$prompt"
