@@ -90,6 +90,9 @@ assert "project-review-contract.md#one-independent-review-phase" in dispatch
 assert "report-only even in fix mode" in dispatch
 assert "contract's linked Reviewer mandate" in polish
 assert "Independent review: author <model/family>; reviewer <resolved model/family>; attacks <ledger/evidence>" in polish
+report = polish.split("## Phase 5: Report\n", 1)[1].split("\n### ", 1)[0]
+assert "Recompute final content identity after Phase 4" in report
+assert "review affected scope under the shared contract or mark independent coverage incomplete" in report
 assert "only the parent's own eligible findings are auto-fixes" in polish
 assert "derive initial invariants from code before reading author reports or prior reviews" in polish
 assert "subagent_type:" not in dispatch, "Roles must be chosen by configured/resolved family"

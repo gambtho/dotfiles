@@ -227,7 +227,7 @@ Fixing: src/utils.go:1 — Removing orphaned import `fmt`
 
 ## Phase 5: Report
 
-Generate the final report. Always include a standalone **Project review** section in both modes, even with no profile or no project findings. Format depends on mode:
+Recompute final content identity after Phase 4; if it differs from reviewed content, review affected scope under the shared contract or mark independent coverage incomplete. Generate the report with a standalone **Project review** section in both modes, even with no profile or findings. Format depends on mode:
 
 ### Fix mode (after fixes applied):
 
