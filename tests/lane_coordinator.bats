@@ -525,3 +525,76 @@ PY
     false
   }
 }
+
+@test "lane templates have a host binding without changing the local default" {
+  run python3 - "$SKILL_DIR" <<'PY'
+from pathlib import Path
+import sys
+
+refs = Path(sys.argv[1]) / "references"
+lane = (refs / "lane-template.md").read_text()
+assert "Host: local (default)" in lane, "Lane template omits the local-default host binding"
+coordination = (refs / "coordination-template.md").read_text()
+assert "## Hosts\n" in coordination, "Missing host bindings table"
+assert "Project root" in coordination and "Worktree root" in coordination
+PY
+  [ "$status" -eq 0 ] || {
+    echo "$output"
+    false
+  }
+}
+
+@test "remote rsync example passes user at host without an unsupported login flag" {
+  command -v rsync >/dev/null || skip "rsync unavailable for transport example"
+  run python3 - "$SKILL_DIR/references/remote-lanes.md" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+path = Path(sys.argv[1])
+assert path.is_file(), "Missing remote-lane reference"
+assignment = re.search(r"^remote_shell=.*$", path.read_text(), re.M)
+assert assignment, "Missing runnable remote-shell example"
+print(assignment.group())
+PY
+  [ "$status" -eq 0 ] || {
+    echo "$output"
+    false
+  }
+  eval "$output"
+  stub_command tailscale 'printf "%s\n" "$@" >"$TEST_ROOT/transport-argv"; exit 1'
+  printf 'lane prompt\n' >"$TEST_ROOT/prompt.md"
+  run rsync -a -e "$remote_shell" "$TEST_ROOT/prompt.md" build-host:/home/example/project-local/lanes/task.md
+  [ "$status" -ne 0 ] # The transport observer deliberately is not an rsync server.
+  run python3 - "$TEST_ROOT/transport-argv" <<'PY'
+from pathlib import Path
+import sys
+
+args = Path(sys.argv[1]).read_text().splitlines()
+assert args[:3] == ["ssh", "example@build-host", "rsync"], args
+assert "-l" not in args, args
+assert args[-1] == "/home/example/project-local/lanes/task.md", args
+PY
+  [ "$status" -eq 0 ] || {
+    echo "$output"
+    false
+  }
+}
+
+@test "remote fetch example fails when only supplementary evidence exists" {
+  python3 - "$SKILL_DIR/references/remote-lanes.md" "$TEST_ROOT/fetch.sh" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+blocks = re.findall(r"```sh\n(.*?)\n```", Path(sys.argv[1]).read_text(), re.S)
+Path(sys.argv[2]).write_text(blocks[-1])
+PY
+  # External transfer boundary: required report absent, matching evidence present.
+  stub_command rsync 'case "${@: -2:1}" in *task-report.md) exit 23 ;; *task-\**) exit 0 ;; *) exit 99 ;; esac'
+  run bash "$TEST_ROOT/fetch.sh"
+  [ "$status" -eq 23 ] || {
+    echo "Expected missing-report exit 23; got $status"
+    false
+  }
+}
