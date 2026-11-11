@@ -144,6 +144,20 @@ class GnomeKeyring:
     def assert_absent(self):
         if self.call(SECRETS, "ReadAlias", "(s)", ("login",))[0] != "/":
             raise KeyringError("Login keyring already exists; no keyring will be created or changed.")
+        home = pathlib.Path.home()
+        data = pathlib.Path(os.environ.get("XDG_DATA_HOME") or home / ".local/share")
+        if not data.is_absolute():
+            raise KeyringError("Cannot establish keyring absence: XDG_DATA_HOME must be absolute.")
+        # An unloadable file is invisible to ReadAlias. Check metadata only,
+        # including legacy storage and dangling links; never read keyring bytes.
+        for directory in (data / "keyrings", home / ".gnome2/keyrings"):
+            try:
+                (directory / "login.keyring").lstat()
+            except FileNotFoundError:
+                continue
+            except OSError as error:
+                raise KeyringError("Cannot establish login keyring file absence; initialization refused.") from error
+            raise KeyringError("Existing login keyring file detected; initialization refused without changes.")
 
     def locked(self):
         value = self.call(

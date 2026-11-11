@@ -41,7 +41,7 @@ def isolated_test():
             code = helper.run(action, helper.GnomeKeyring(transport), lambda: password)
         return code, output.getvalue()
 
-    def initialize_in_terminal():
+    def initialize_in_terminal(expected=0):
         child, terminal = pty.fork()
         if child == 0:
             os.execv(sys.executable, [sys.executable, str(HELPER), "init"])
@@ -63,8 +63,11 @@ def isolated_test():
                 pid, status = os.waitpid(child, os.WNOHANG)
                 if pid:
                     reaped = True
-                    assert os.waitstatus_to_exitcode(status) == 0, output
-                    assert sent == 2 and b"test-password" not in output, output
+                    assert os.waitstatus_to_exitcode(status) == expected, output
+                    assert sent == (2 if expected == 0 else 0), output
+                    assert b"test-password" not in output, output
+                    if expected:
+                        assert b"Existing login keyring file" in output, output
                     return
             raise AssertionError(f"initialization stalled: {output!r}")
         finally:
@@ -103,6 +106,11 @@ def isolated_test():
     wrapped_gh(6)
     assert command("check")[0] == 1
     assert owner(helper.PROVIDER) is None, "check must not autoactivate a daemon"
+    storage = root / "data" / "keyrings"
+    storage.mkdir(exist_ok=True)
+    invalid = storage / "login.keyring"
+    invalid.write_bytes(b"not a valid keyring")
+    before = invalid.stat()
     daemon = subprocess.Popen(
         [
             "gnome-keyring-daemon",
@@ -137,6 +145,10 @@ def isolated_test():
         assert pid == daemon.pid, "test bus must belong to the owned daemon"
         assert transport.call(current, helper.SERVICE, helper.SECRETS,
                               "ReadAlias", "(s)", ("login",)) == ("/",)
+        initialize_in_terminal(expected=1)
+        assert invalid.stat() == before, "unloadable disposable fixture must be unchanged"
+        assert list(storage.glob("login*")) == [invalid], "no duplicate keyring may be created"
+        invalid.unlink()  # Only the invalid fixture this smoke test just wrote.
         initialize_in_terminal()
         assert command("check")[0] == 0
         collection = transport.call(current, helper.SERVICE, helper.SECRETS,
@@ -188,7 +200,7 @@ def isolated_test():
         finally:
             os.close(terminal)
         startup_elapsed = time.monotonic() - start
-        print("PASS: isolated init (hidden confirmed password, login/default aliases), inactive/locked gh guard, unlock, unlocked foreground startup")
+        print("PASS: isolated init (unloadable-file refusal, hidden confirmed password, login/default aliases), inactive/locked gh guard, unlock, unlocked foreground startup")
         print(f"Latency: unlocked startup {startup_elapsed * 1000:.0f}ms; guarded gh {gh_elapsed * 1000:.0f}ms")
     finally:
         if daemon.poll() is None:

@@ -322,6 +322,13 @@ class InitTests(unittest.TestCase):
         self.provider = self.module.GnomeKeyring(self.bus)
         self.output = io.StringIO()
         self.bus.collection = "/"
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.home = pathlib.Path(temporary.name)
+        environment = mock.patch.dict(os.environ, HOME=str(self.home),
+                                      XDG_DATA_HOME=str(self.home / "data"))
+        environment.start()
+        self.addCleanup(environment.stop)
         terminal = mock.patch.object(self.module, "foreground_terminal", return_value=True)
         terminal.start()
         self.addCleanup(terminal.stop)
@@ -345,6 +352,27 @@ class InitTests(unittest.TestCase):
         self.assertNotIn("OpenSession", self.methods())
         self.assertNotIn("CreateWithMasterPassword", self.methods())
         self.assertNotIn("SetAlias", self.methods())
+
+    def test_init_refuses_unloaded_login_file_without_reading_or_writing_it(self):
+        for directory in (self.home / "data/keyrings", self.home / ".gnome2/keyrings"):
+            with self.subTest(directory=directory):
+                directory.mkdir(parents=True)
+                existing = directory / "login.keyring"
+                existing.write_bytes(b"not a valid keyring")
+                before = existing.stat()
+                self.assertEqual(self.run_command("init", prompt=mock.Mock(side_effect=AssertionError)), 1)
+                self.assertIn("existing login keyring", self.output.getvalue().lower())
+                self.assertEqual(existing.stat(), before)
+                self.assertNotIn("OpenSession", self.methods())
+                self.assertNotIn("CreateWithMasterPassword", self.methods())
+                existing.unlink()  # Remove only this test's invalid disposable fixture.
+
+    def test_init_refuses_dangling_login_symlink(self):
+        directory = self.home / "data/keyrings"
+        directory.mkdir(parents=True)
+        (directory / "login.keyring").symlink_to(directory / "missing")
+        self.assertEqual(self.run_command("init", prompt=mock.Mock(side_effect=AssertionError)), 1)
+        self.assertNotIn("OpenSession", self.methods())
 
     def test_init_requires_confirmation_and_aborts_mismatch(self):
         for answers in (("test-password", "different"), ("",), (KeyboardInterrupt,)):
