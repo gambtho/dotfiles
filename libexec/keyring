@@ -141,16 +141,42 @@ class GnomeKeyring:
             )
         return self.locked()
 
+    def daemon_environment(self):
+        if sys.platform != "linux":
+            raise KeyringError("Daemon storage inspection requires Linux; initialization refused.")
+        self.assert_owner()
+        try:
+            pid = self.bus_call("GetConnectionUnixProcessID", "(s)", (self.owner,))[0]
+            uid = self.bus_call("GetConnectionUnixUser", "(s)", (self.owner,))[0]
+            if type(pid) is not int or pid <= 0 or uid != os.getuid():
+                raise ValueError
+            with open(f"/proc/{pid}/environ", "rb") as source:
+                if os.fstat(source.fileno()).st_uid != os.getuid():
+                    raise ValueError
+                # The raw environment exists only during this parse; retain
+                # neither unselected variables nor their decoded values.
+                selected = dict(entry.split(b"=", 1) for entry in source.read().split(b"\0")
+                                if entry.startswith((b"HOME=", b"XDG_DATA_HOME=")))
+        except (OSError, ValueError) as error:
+            raise KeyringError("Cannot establish same-user daemon storage from its PID/environment; initialization refused.") from error
+        self.assert_owner()
+        return selected
+
     def assert_absent(self):
         if self.call(SECRETS, "ReadAlias", "(s)", ("login",))[0] != "/":
             raise KeyringError("Login keyring already exists; no keyring will be created or changed.")
-        home = pathlib.Path.home()
-        data = pathlib.Path(os.environ.get("XDG_DATA_HOME") or home / ".local/share")
-        if not data.is_absolute():
-            raise KeyringError("Cannot establish keyring absence: XDG_DATA_HOME must be absolute.")
+        daemon = self.daemon_environment()
+        directories = []
+        for home, data in ((str(pathlib.Path.home()), os.environ.get("XDG_DATA_HOME")),
+                           (os.fsdecode(daemon.get(b"HOME", b"")), os.fsdecode(daemon.get(b"XDG_DATA_HOME", b"")))):
+            home = pathlib.Path(home)
+            data = pathlib.Path(data or home / ".local/share")
+            if not home.is_absolute() or not data.is_absolute():
+                raise KeyringError("Cannot establish helper/daemon storage: HOME and XDG_DATA_HOME must resolve to absolute paths.")
+            directories.extend((data / "keyrings", home / ".gnome2/keyrings"))
         # An unloadable file is invisible to ReadAlias. Check metadata only,
         # including legacy storage and dangling links; never read keyring bytes.
-        for directory in (data / "keyrings", home / ".gnome2/keyrings"):
+        for directory in directories:
             try:
                 (directory / "login.keyring").lstat()
             except FileNotFoundError:

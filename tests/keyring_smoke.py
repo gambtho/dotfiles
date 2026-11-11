@@ -41,9 +41,11 @@ def isolated_test():
             code = helper.run(action, helper.GnomeKeyring(transport), lambda: password)
         return code, output.getvalue()
 
-    def initialize_in_terminal(expected=0):
+    def initialize_in_terminal(expected=0, data_home=None):
         child, terminal = pty.fork()
         if child == 0:
+            if data_home is not None:
+                os.environ["XDG_DATA_HOME"] = str(data_home)
             os.execv(sys.executable, [sys.executable, str(HELPER), "init"])
         output = b""
         sent = 0
@@ -145,6 +147,7 @@ def isolated_test():
         assert pid == daemon.pid, "test bus must belong to the owned daemon"
         assert transport.call(current, helper.SERVICE, helper.SECRETS,
                               "ReadAlias", "(s)", ("login",)) == ("/",)
+        initialize_in_terminal(expected=1, data_home=root / "different-helper-data")
         initialize_in_terminal(expected=1)
         assert invalid.stat() == before, "unloadable disposable fixture must be unchanged"
         assert list(storage.glob("login*")) == [invalid], "no duplicate keyring may be created"
@@ -200,7 +203,7 @@ def isolated_test():
         finally:
             os.close(terminal)
         startup_elapsed = time.monotonic() - start
-        print("PASS: isolated init (unloadable-file refusal, hidden confirmed password, login/default aliases), inactive/locked gh guard, unlock, unlocked foreground startup")
+        print("PASS: isolated init (daemon-storage mismatch and unloadable-file refusal, hidden confirmed password, login/default aliases), inactive/locked gh guard, unlock, unlocked foreground startup")
         print(f"Latency: unlocked startup {startup_elapsed * 1000:.0f}ms; guarded gh {gh_elapsed * 1000:.0f}ms")
     finally:
         if daemon.poll() is None:
