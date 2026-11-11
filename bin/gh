@@ -88,6 +88,8 @@ exec_real_gh() {
     if ! /usr/bin/python3 "$helper" gh-check -- "$@" </dev/null; then
       printf 'gh: credential keyring locked or unavailable; unlock in a human terminal:\n' >&2
       printf '  make -C %q keyring-unlock\n' "$IDENTITY_DOTFILES_ROOT" >&2
+      printf 'gh: if the login keyring is absent, initialize it first:\n' >&2
+      printf '  make -C %q keyring-init\n' "$IDENTITY_DOTFILES_ROOT" >&2
       exit 6
     fi
   fi

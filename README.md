@@ -350,11 +350,26 @@ does not establish a bus in an already-running shell. The helper uses
 mise-managed Python. Main-checkout shell, wrapper and skill resources are linked
 live: stop Pi before integrating this change there; do not deploy from a worktree.
 
-These commands do **not** create missing keyrings, reset passwords, switch Secret
-Service providers, or migrate tokens. Fresh-host keyring initialization is a
-separate enrollment step. The headless unlock uses a GNOME-specific internal API;
-an incompatible provider/version produces an error, with no unsafe fallback to
-`gnome-keyring-daemon --unlock`.
+On a fresh Linux host, after installing dependencies and establishing the user
+session bus, create the missing GNOME login keyring in a foreground human terminal:
+
+```bash
+make keyring-init
+```
+
+Type a nonempty new keyring password twice at the hidden prompts. Initialization
+leaves the login keyring unlocked and sets it as the default collection. It refuses
+an existing login keyring without changing it, nonterminal input, an unusable bus,
+and other Secret Service providers. Passwords cannot be supplied as arguments or
+environment variables. A mismatch or cancellation at either password prompt aborts
+without creating a keyring. A failure or interruption once creation is requested
+may leave a keyring behind; run `make keyring-check` and inspect the reported state
+before further action. Initialization never retries, resets or deletes partial state.
+
+`keyring-check` and `keyring-unlock` still never create a missing keyring. No command
+resets passwords, replaces or deletes keyrings, switches providers, or migrates
+tokens. Creation and headless unlock use GNOME-specific internal APIs; an incompatible
+provider/version produces an error, with no fallback to `gnome-keyring-daemon --unlock`.
 
 After unlocking, reauthenticate interactively for each GitHub identity that was
 using plaintext storage, from a repository routed to that identity (or with its

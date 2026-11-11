@@ -36,6 +36,10 @@ class FakeBus:
         self.locked = True
         self.collection = "/org/freedesktop/secrets/collection/login"
         self.methods = '<node><interface name="org.gnome.keyring.InternalUnsupportedGuiltRiddenInterface"><method name="UnlockWithMasterPassword"><arg direction="in" type="o"/><arg direction="in" type="(oayays)"/></method></interface></node>'
+        self.methods = self.methods.replace('</interface>', '<method name="CreateWithMasterPassword"><arg direction="in" type="a{sv}"/><arg direction="in" type="(oayays)"/><arg direction="out" type="o"/></method></interface>')
+        self.default = "/"
+        self.pid = 424242
+        self.uid = os.getuid()
         self.calls = []
         self.fail_unlock = False
         self.stay_locked = False
@@ -49,6 +53,9 @@ class FakeBus:
                 if args[0] == "org.freedesktop.secrets"
                 else self.gnome_owner,
             )
+        if method in ("GetConnectionUnixProcessID", "GetConnectionUnixUser"):
+            assert args == (self.owner,) and signature == "(s)"
+            return (self.pid if method == "GetConnectionUnixProcessID" else self.uid,)
         if method == "StartServiceByName":
             self.owner = self.gnome_owner = ":1.42"
             return (1,)
@@ -57,7 +64,19 @@ class FakeBus:
         if method == "Introspect":
             return (self.methods,)
         if method == "ReadAlias":
+            return (self.default if args[0] == "default" else self.collection,)
+        if method == "CreateWithMasterPassword":
+            assert self.collection == "/", "must not create over existing login"
+            assert signature == "(a{sv}(oayays))"
+            assert args[0] == {"org.freedesktop.Secret.Collection.Label": "login"}
+            assert args[1][2] == list(b"test-password")
+            self.collection = "/org/freedesktop/secrets/collection/login"
+            self.locked = self.stay_locked
             return (self.collection,)
+        if method == "SetAlias":
+            assert signature == "(so)" and args == ("default", self.collection)
+            self.default = args[1]
+            return ()
         if method == "Get":
             return (self.locked,)
         if method == "OpenSession":
@@ -93,6 +112,23 @@ class KeyringTests(unittest.TestCase):
 
     def methods(self):
         return [call[3] for call in self.bus.calls]
+
+    def test_existing_commands_preserve_ignored_extra_arguments(self):
+        self.bus.locked = False
+        with (
+            mock.patch.object(self.module.sys, "platform", "linux"),
+            mock.patch.object(self.module, "GnomeKeyring", return_value=self.provider),
+            contextlib.redirect_stdout(self.output),
+            contextlib.redirect_stderr(self.output),
+        ):
+            self.assertEqual(self.module.main(["check", "unused"]), 0)
+
+    def test_unlock_preserves_input_only_capability_check(self):
+        self.bus.methods = self.bus.methods.replace(
+            '<arg direction="in" type="o"/>',
+            '<arg direction="in" type="o"/><arg direction="out" type="b"/>',
+        )
+        self.assertEqual(self.run_command("unlock"), 0)
 
     def test_check_locked_never_activates_or_opens_secret_session(self):
         self.assertEqual(self.run_command("check"), 1)
@@ -279,6 +315,227 @@ class KeyringTests(unittest.TestCase):
         ):
             self.assertEqual(self.module.main(["check"]), 1)
             self.assertEqual(self.module.main(["unlock"]), 1)
+
+
+class InitTests(unittest.TestCase):
+    run_command = KeyringTests.run_command
+    methods = KeyringTests.methods
+
+    def setUp(self):
+        self.module = load_helper()
+        self.bus = FakeBus(self.module)
+        self.provider = self.module.GnomeKeyring(self.bus)
+        self.output = io.StringIO()
+        self.bus.collection = "/"
+        platform = mock.patch.object(self.module.sys, "platform", "linux")
+        platform.start()
+        self.addCleanup(platform.stop)
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.home = pathlib.Path(temporary.name)
+        self.daemon_home = self.home / "daemon-home"
+        self.daemon_data = self.home / "daemon-data"
+        self.environ = self.home / "daemon.environ"
+        self.environ.write_bytes(b"HOME=" + os.fsencode(self.daemon_home) + b"\0XDG_DATA_HOME=" +
+                                 os.fsencode(self.daemon_data) + b"\0OTHER_SECRET=never-retain-me\0")
+        self.environ_unreadable = False
+        self.environ_reads = 0
+        original_open = open
+
+        def open_fixture(path, *args, **kwargs):
+            if str(path).startswith("/proc/"):
+                self.assertEqual(str(path), "/proc/424242/environ")
+                self.environ_reads += 1
+                if self.environ_unreadable:
+                    raise PermissionError("fixture access denied")
+                return original_open(self.environ, *args, **kwargs)
+            return original_open(path, *args, **kwargs)
+
+        proc = mock.patch("builtins.open", side_effect=open_fixture)
+        proc.start()
+        self.addCleanup(proc.stop)
+        environment = mock.patch.dict(os.environ, HOME=str(self.home),
+                                      XDG_DATA_HOME=str(self.home / "data"))
+        environment.start()
+        self.addCleanup(environment.stop)
+        terminal = mock.patch.object(self.module, "foreground_terminal", return_value=True)
+        terminal.start()
+        self.addCleanup(terminal.stop)
+
+    # These tests catch sending a create request before every refusal guard,
+    # missing confirmation/default setup, and leaking or accepting secret argv.
+    def test_init_creates_login_unlocked_and_default(self):
+        self.assertEqual(self.run_command("init"), 0, self.output.getvalue())
+        self.assertEqual(self.bus.collection, "/org/freedesktop/secrets/collection/login")
+        self.assertEqual(self.bus.default, self.bus.collection)
+        self.assertFalse(self.bus.locked)
+        self.assertIn("CreateWithMasterPassword", self.methods())
+        self.assertIn("Close", self.methods())
+        self.assertNotIn("test-password", self.output.getvalue())
+
+    def test_init_refuses_existing_login_without_write_or_prompt(self):
+        self.bus.collection = "/org/freedesktop/secrets/collection/login"
+        for locked in (True, False):
+            self.bus.locked = locked
+            self.assertEqual(self.run_command("init", prompt=mock.Mock(side_effect=AssertionError)), 1)
+        self.assertNotIn("OpenSession", self.methods())
+        self.assertNotIn("CreateWithMasterPassword", self.methods())
+        self.assertNotIn("SetAlias", self.methods())
+
+    def test_init_refuses_unloaded_login_file_without_reading_or_writing_it(self):
+        for directory in (self.home / "data/keyrings", self.home / ".gnome2/keyrings"):
+            with self.subTest(directory=directory):
+                directory.mkdir(parents=True)
+                existing = directory / "login.keyring"
+                existing.write_bytes(b"not a valid keyring")
+                before = existing.stat()
+                self.assertEqual(self.run_command("init", prompt=mock.Mock(side_effect=AssertionError)), 1)
+                self.assertIn("existing login keyring", self.output.getvalue().lower())
+                self.assertEqual(existing.stat(), before)
+                self.assertNotIn("OpenSession", self.methods())
+                self.assertNotIn("CreateWithMasterPassword", self.methods())
+                existing.unlink()  # Remove only this test's invalid disposable fixture.
+
+    def test_init_refuses_dangling_login_symlink(self):
+        directory = self.home / "data/keyrings"
+        directory.mkdir(parents=True)
+        (directory / "login.keyring").symlink_to(directory / "missing")
+        self.assertEqual(self.run_command("init", prompt=mock.Mock(side_effect=AssertionError)), 1)
+        self.assertNotIn("OpenSession", self.methods())
+
+    def test_init_refuses_login_in_different_daemon_storage(self):
+        for directory in (self.daemon_data / "keyrings", self.daemon_home / ".gnome2/keyrings"):
+            with self.subTest(directory=directory):
+                directory.mkdir(parents=True)
+                existing = directory / "login.keyring"
+                existing.write_bytes(b"unloadable fixture")
+                before = existing.stat()
+                self.assertEqual(self.run_command("init", prompt=mock.Mock(side_effect=AssertionError)), 1)
+                self.assertIn("existing login keyring", self.output.getvalue().lower())
+                self.assertEqual(existing.stat(), before)
+                self.assertNotIn("OpenSession", self.methods())
+                self.assertNotIn("CreateWithMasterPassword", self.methods())
+                existing.unlink()
+
+    def test_init_unreadable_daemon_environ_fails_before_prompt_or_create(self):
+        self.environ_unreadable = True
+        self.assertEqual(self.run_command("init", prompt=mock.Mock(side_effect=AssertionError)), 1)
+        self.assertIn("daemon", self.output.getvalue().lower())
+        self.assertNotIn("OpenSession", self.methods())
+        self.assertNotIn("CreateWithMasterPassword", self.methods())
+
+    def test_init_daemon_uid_mismatch_does_not_read_environment(self):
+        self.bus.uid = os.getuid() + 1
+        self.assertEqual(self.run_command("init", prompt=mock.Mock(side_effect=AssertionError)), 1)
+        self.assertEqual(self.environ_reads, 0)
+        self.assertIn("daemon", self.output.getvalue().lower())
+        self.assertNotIn("OpenSession", self.methods())
+
+    def test_init_invalid_pid_or_storage_paths_fail_closed(self):
+        for pid in (None, 0, "424242"):
+            with self.subTest(pid=pid):
+                self.bus.pid = pid
+                self.assertEqual(self.run_command("init", prompt=mock.Mock(side_effect=AssertionError)), 1)
+                self.assertEqual(self.environ_reads, 0)
+        self.bus.pid = 424242
+        for content in (b"", b"HOME=relative\0", b"HOME=/fixture\0XDG_DATA_HOME=relative\0"):
+            with self.subTest(content=content):
+                self.environ.write_bytes(content)
+                self.assertEqual(self.run_command("init", prompt=mock.Mock(side_effect=AssertionError)), 1)
+        self.assertNotIn("OpenSession", self.methods())
+
+    def test_init_non_linux_refuses_without_reading_daemon_environment(self):
+        with mock.patch.object(self.module.sys, "platform", "darwin"):
+            self.assertEqual(self.run_command("init", prompt=mock.Mock(side_effect=AssertionError)), 1)
+        self.assertEqual(self.environ_reads, 0)
+        self.assertIn("Linux", self.output.getvalue())
+        self.assertNotIn("OpenSession", self.methods())
+
+    def test_daemon_environment_keeps_only_allowed_variables(self):
+        self.provider.inspect(initialize=True)
+        self.assertEqual(self.provider.daemon_environment(),
+                         {b"HOME": os.fsencode(self.daemon_home),
+                          b"XDG_DATA_HOME": os.fsencode(self.daemon_data)})
+        self.assertNotIn("never-retain-me", self.output.getvalue())
+
+    def test_init_requires_confirmation_and_aborts_mismatch(self):
+        for answers in (("test-password", "different"), ("",), (KeyboardInterrupt,)):
+            with self.subTest(answers=answers):
+                self.assertEqual(self.run_command("init", prompt=mock.Mock(side_effect=answers)), 1)
+                self.assertNotIn("OpenSession", self.methods())
+                self.assertNotIn("test-password", self.output.getvalue())
+                self.assertNotIn("different", self.output.getvalue())
+
+    def test_init_refuses_nonterminal_before_bus_access(self):
+        with (
+            mock.patch.object(self.module, "foreground_terminal", return_value=False),
+            mock.patch.object(self.module, "GnomeKeyring", side_effect=AssertionError("no bus")),
+            contextlib.redirect_stderr(self.output),
+        ):
+            self.assertEqual(self.module.main(["init"]), 1)
+        self.assertIn("terminal", self.output.getvalue())
+        self.assertEqual(self.bus.calls, [])
+
+    def test_init_rejects_changed_create_signature_before_prompt(self):
+        original = self.bus.methods
+        for xml in ("<node/>", original.replace('type="a{sv}"', 'type="s"'),
+                    original.replace('direction="out" type="o"', 'direction="out" type="s"')):
+            self.bus.methods = xml
+            self.assertEqual(self.run_command("init", prompt=mock.Mock(side_effect=AssertionError)), 1)
+        self.assertNotIn("OpenSession", self.methods())
+
+    def test_init_rechecks_absence_and_owner_after_confirmation(self):
+        def existing():
+            self.bus.collection = "/org/freedesktop/secrets/collection/login"
+            return "test-password"
+
+        self.assertEqual(self.run_command("init", prompt=existing), 1)
+        self.assertNotIn("OpenSession", self.methods())
+        self.bus.collection = "/"
+        self.assertEqual(self.run_command("init", prompt=lambda: self.change_owner()), 1)
+        self.assertNotIn("OpenSession", self.methods())
+
+    def change_owner(self):
+        self.bus.owner = self.bus.gnome_owner = ":1.99"
+        return "test-password"
+
+    def test_init_unsupported_provider_and_bus_failure_do_not_prompt(self):
+        self.bus.gnome_owner = ":1.99"
+        self.assertEqual(self.run_command("init", prompt=mock.Mock(side_effect=AssertionError)), 1)
+        self.assertNotIn("OpenSession", self.methods())
+        self.bus.call = mock.Mock(side_effect=self.module.KeyringError("bus unavailable"))
+        self.assertEqual(self.run_command("init", prompt=mock.Mock(side_effect=AssertionError)), 1)
+
+    def test_init_checks_unlocked_state_before_default_alias(self):
+        self.bus.stay_locked = True
+        self.assertEqual(self.run_command("init"), 1)
+        self.assertNotIn("SetAlias", self.methods())
+        self.assertIn("Close", self.methods())
+
+    def test_init_failure_after_create_reports_possible_partial_state_without_reset(self):
+        call = self.bus.call
+
+        def fail_alias(destination, path, interface, method, signature, args):
+            if method == "SetAlias":
+                raise self.module.KeyringError("SetAlias failed")
+            return call(destination, path, interface, method, signature, args)
+
+        self.bus.call = fail_alias
+        self.assertEqual(self.run_command("init"), 1)
+        self.assertEqual(self.bus.collection, "/org/freedesktop/secrets/collection/login")
+        self.assertIn("may have been created", self.output.getvalue())
+        self.assertIn("make keyring-check", self.output.getvalue())
+        self.assertEqual(self.methods().count("CreateWithMasterPassword"), 1)
+        self.assertNotIn("Delete", self.methods())
+        self.assertIn("Close", self.methods())
+        self.assertNotIn("test-password", self.output.getvalue())
+
+    def test_init_extra_argv_rejected_without_printing_secret_or_using_bus(self):
+        result = subprocess.run([sys.executable, str(ROOT / "libexec/keyring"), "init", "test-password"],
+                                capture_output=True, check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn(b"test-password", result.stdout + result.stderr)
+        self.assertNotIn(b"invalid choice", result.stderr)
 
 
 class StartupTests(unittest.TestCase):

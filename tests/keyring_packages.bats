@@ -6,6 +6,12 @@ setup() {
   setup_dotfiles_test
 }
 
+@test "keyring-init target invokes system Python without password arguments" {
+  run make -s -n -C "$REPO_ROOT" keyring-init
+  [ "$status" -eq 0 ]
+  [ "$output" = '/usr/bin/python3 libexec/keyring init' ]
+}
+
 @test "all Linux profiles account for the separate keyring dependency set" {
   local os profile
   for os in Ubuntu WSL; do
