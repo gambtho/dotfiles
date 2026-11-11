@@ -81,7 +81,7 @@ custom units. The installer never performs that migration for you.
   tools/          # Tool configs: docker, kubernetes
   platforms/      # OS-specific: linux/, macos/, windows/
   work/           # Work context: only sourced when work profile is active
-  ai/             # Pi configuration and personal prompt/skill package
+  ai/             # Pi configuration, personal prompts/skills, standalone Copilot CLI bootstrap
   profiles/       # Machine profiles: personal.zsh, work.zsh
   config/         # XDG config files, symlinked to ~/.config/<name>
   docs/guides/    # Long-form guides for the tooling in bin/
@@ -575,7 +575,7 @@ PATH. Shell-loading tests verify both system `install` and the `gh` override.
 
 ## AI Coding Agent
 
-Pi is the only repository-managed coding-agent harness:
+This repository configures Pi and bootstraps the standalone GitHub Copilot CLI. Pi is the only repository-managed coding-agent harness; the standalone CLI does not share Pi's configuration or authentication:
 
 ```text
 ai/
