@@ -111,6 +111,7 @@ class KeyringTests(unittest.TestCase):
     def test_existing_commands_preserve_ignored_extra_arguments(self):
         self.bus.locked = False
         with (
+            mock.patch.object(self.module.sys, "platform", "linux"),
             mock.patch.object(self.module, "GnomeKeyring", return_value=self.provider),
             contextlib.redirect_stdout(self.output),
             contextlib.redirect_stderr(self.output),
