@@ -7,6 +7,11 @@ and contribution guide, and any effort rules named below; follow them. Publicati
 follows COORDINATION.md's authority table; without permission there, draft exact
 public text for the human. State any deliberate publication hold explicitly.
 
+Host: local (default). Coordinator: for a remote lane, replace this entire paragraph
+with its host alias, verified OS hostname/user, project/checkout/worktree roots and
+report source/return command. Use [remote lanes](remote-lanes.md) to put the host/user
+guard first and resolve paths and authority/profile references before delivery.
+
 ## Session identity (private)
 
 New workspace label, Pi name and live Herdr alias: `<project-slug>-<lane-number>`

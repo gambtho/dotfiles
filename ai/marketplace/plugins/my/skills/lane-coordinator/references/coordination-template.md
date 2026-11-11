@@ -14,6 +14,17 @@ Last reviewed: <date>.
 Keep executable plan/task IDs and current review evidence in lane prompts/reports,
 not the stable repo table. Verify repository identity before assigning a profile.
 
+## Hosts
+
+Local is the default. For remote lanes, record verified bindings and use
+[remote lanes](remote-lanes.md) for delivery/report return. This table grants no setup
+or launch authority; STATE keeps its single coordinator writer. Host checks record
+tools/access only, not lane or PR readiness.
+
+| Host alias / SSH user / OS hostname | Project root | Checkout / Worktree root | Manual startup / copy / fetch | Host check (time / tools / access) |
+|---|---|---|---|---|
+| <host bindings> | <absolute host path> | <host-local paths> | <commands and report source> | <time; tools/access ready or unknown and why> |
+
 ## Authority table
 
 Record confirmed authority, including the actor and source. Unfilled rows grant

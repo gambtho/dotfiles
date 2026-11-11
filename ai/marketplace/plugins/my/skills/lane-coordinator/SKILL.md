@@ -113,6 +113,9 @@ AGENTS.md for report locations; absent a rule, keep handoffs in the project fold
   sibling projects' Routines and tools. Reuse or extend what fits before starting another.
 - Before telling a lane what another lane will deliver ("PR6 adds lift"), read that
   lane's plan file. Don't infer scope from a PR number.
+- Choose the lane's `Host:` from COORDINATION.md's host table; default local. For another
+  host, follow [remote lanes](references/remote-lanes.md) to resolve paths, deliver inputs
+  and fetch reports; the coordinator remains the single STATE writer.
 - Next number: the highest `W<n>` in `lanes/` or STATE.md, plus one. One file per lane
   from [lane-template.md](references/lane-template.md). Hand the user one line in a code
   block: `Read <absolute path> and follow it.` That line is the whole handoff: the
@@ -168,10 +171,11 @@ Manual creation remains the default, including when the coordinator runs in a
 Claude app session. Preparing a prompt does not launch it. An explicit request
 such as "start W12" may create a named Herdr space and start Pi **only** with
 shell/tool access inside the intended Herdr session (`HERDR_ENV=1`). Otherwise
-return the manual handoff without claiming a launch.
+return the manual handoff without claiming a launch. Remote lanes start manually on
+their declared host; this local helper does not launch them.
 
-When an approved prompt already exists and the user says "start W12", use the
-mechanical helper in [herdr-launch.md](references/herdr-launch.md) immediately after
+For a local lane, when an approved prompt exists and the user says "start W12", use
+the mechanical helper in [herdr-launch.md](references/herdr-launch.md) immediately after
 context/prompt/source verification, not another planning round or a manual handoff
 when eligible access exists. It reconciles live identity, creates one `--no-focus`
 space, starts named Pi on the exact returned root pane, and submits once without
@@ -185,8 +189,9 @@ permission. A Herdr workspace is not an isolated Git worktree.
 A lane returns one consolidated readiness report or ONE batched real blocker.
 The user's "W12 ready" asks for attention, not a claim of completion. Read the report,
 establish whether the lane finished, is blocked, failed or is waiting, and give its
-next action without copy/paste relays. Manual sessions are not automatically monitored.
-Sometimes a report is repeated or its owner unclear; STATE.md answers that.
+next action without copy/paste relays. Fetch a remote lane's named reports first;
+failed/offline fetch means unknown, not ready. Manual sessions are not automatically
+monitored. STATE.md answers repeated-report or ownership questions.
 
 Approved LOCAL delivery includes authorized setup/verification, safe in-scope
 corrections, and exact restoration of tool-generated temporary changes. For
