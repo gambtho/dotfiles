@@ -48,7 +48,17 @@ The radar reads text written by strangers, and this machine's `gh` token can del
 
 ## Private lane data
 
-`lane-review` copies a limited snapshot rather than mounting the project folders: each project's rule and state files, plus the start of recently changed lane records, including `reports/SKILL-FRICTION.md` where it falls within the snapshot limits. `PEOPLE.md` is excluded. The report goes only to a repository the runner has confirmed is private on that same run, and the prompt keeps it at the level of process. Two projects have no Git remote, so this report is the one place a summary of their process leaves the machine. Skill changes it proposes must be copied by hand into a dotfiles PR.
+`lane-review` copies a limited snapshot rather than mounting project folders:
+
+- Rule/state files and `reports/SKILL-FRICTION.md` whenever present (up to 600 lines each, regardless of age or newer reports).
+- The first 80 lines of up to 15 lane records/reports changed in the last seven days.
+- Each discovered folder's Claude `~/.claude/projects/<encoded-absolute-path>/memory/*.md` notes (up to 600 lines each, also capped by the evidence writer's 200,000-character limit). Missing memory is fine. No transcripts, credential files or `PEOPLE.md`; Markdown leaf symlinks are skipped, and memory-directory aliases must resolve to another project's `memory/` inside Claude's projects root.
+
+Physical folder aliases share one snapshot, but retain distinct memory from each alias. Memory directories resolving to the same location are copied once; `project-groups.md` links each folder to its memory evidence. It records the grouping rule: resolved folder identity, or an explicit `Frozen: coordinated from <path>` line (optionally dated `Frozen YYYY-MM-DD:`) in STATE/COORDINATION naming a discovered independent owner. Archive snapshots remain historical evidence. Ordinary cross-project references, ambiguous owners and owner chains/cycles do not establish grouping.
+
+The review covers template drift, unshared lessons and a short draft note per coordinator. The owning coordinator proposes promotion during its weekly pass; a human confirms rule changes. Nothing is promoted automatically.
+
+Memory notes now leave the machine: evidence goes to the model provider, and process summaries/citations from those notes may reach the private GitHub report (raw snapshots are not committed). The runner verifies that repository is private on every run. The prompt forbids product details, names and credentials in the report. Skill changes it proposes must be copied by hand into a public dotfiles PR with generic wording.
 
 ## Rejecting findings
 
