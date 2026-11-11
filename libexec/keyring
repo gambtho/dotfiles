@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Inspect and unlock an existing GNOME Login keyring."""
+"""Inspect, initialize or unlock a GNOME Login keyring."""
 
 import argparse
 import contextlib
@@ -52,6 +52,8 @@ class SessionBus:
     def call(self, destination, path, interface, method, signature, args):
         if method == "OpenSession":
             args = ("plain", self.glib.Variant("s", ""))
+        elif method == "CreateWithMasterPassword":
+            args = ({key: self.glib.Variant("s", value) for key, value in args[0].items()}, args[1])
         try:
             result = self.bus.call_sync(
                 destination,
@@ -95,7 +97,7 @@ class GnomeKeyring:
                     "GNOME keyring provider changed; no password will be retried."
                 )
 
-    def inspect(self, activate=False):
+    def inspect(self, activate=False, initialize=False):
         self.owner = self.bus_call("GetNameOwner", "(s)", (PROVIDER,))[0]
         if self.owner is None and activate:
             self.bus_call("StartServiceByName", "(su)", (PROVIDER, 0))
@@ -118,21 +120,30 @@ class GnomeKeyring:
             root = ET.fromstring(xml)
         except ET.ParseError as error:
             raise KeyringError("Invalid GNOME keyring capability response.") from error
-        method = root.find(
-            f"./interface[@name='{INTERNAL}']/method[@name='UnlockWithMasterPassword']"
-        )
+        name = "CreateWithMasterPassword" if initialize else "UnlockWithMasterPassword"
+        method = root.find(f"./interface[@name='{INTERNAL}']/method[@name='{name}']")
+        inputs = ["a{sv}", "(oayays)"] if initialize else ["o", "(oayays)"]
         if method is None or [
             arg.get("type") for arg in method if arg.get("direction", "in") == "in"
-        ] != ["o", "(oayays)"]:
+        ] != inputs or (initialize and [
+            arg.get("type") for arg in method if arg.get("direction") == "out"
+        ] != ["o"]):
             raise KeyringError(
-                "Unsupported GNOME keyring private unlock API; no fallback will be attempted."
+                f"Unsupported GNOME keyring private {name} API; no fallback will be attempted."
             )
+        if initialize:
+            self.assert_absent()
+            return True
         self.collection = self.call(SECRETS, "ReadAlias", "(s)", ("login",))[0]
         if self.collection == "/":
             raise KeyringError(
-                "Login keyring absent; initialization is separate and no keyring will be created or reset."
+                "Login keyring absent; run make keyring-init in a human terminal. No keyring was created or reset."
             )
         return self.locked()
+
+    def assert_absent(self):
+        if self.call(SECRETS, "ReadAlias", "(s)", ("login",))[0] != "/":
+            raise KeyringError("Login keyring already exists; no keyring will be created or changed.")
 
     def locked(self):
         value = self.call(
@@ -146,25 +157,37 @@ class GnomeKeyring:
             raise KeyringError("Invalid keyring locked-state response.")
         return value
 
-    def unlock(self, password):
+    def unlock(self, password, initialize=False):
         self.assert_owner()
+        if initialize:
+            self.assert_absent()
         _, session = self.call(SECRETS, "OpenSession", "(sv)", ("plain", ""))
         try:
             self.assert_owner()
-            self.call(
-                INTERNAL,
-                "UnlockWithMasterPassword",
-                "(o(oayays))",
-                (
-                    self.collection,
-                    (session, [], list(password.encode()), "text/plain; charset=utf8"),
-                ),
-            )
+            secret = (session, [], list(password.encode()), "text/plain; charset=utf8")
+            if initialize:
+                self.assert_absent()
+                # GNOME derives the intrinsic login identifier from this label;
+                # SetAlias only supports 'default', not 'login'.
+                self.collection = self.call(
+                    INTERNAL, "CreateWithMasterPassword", "(a{sv}(oayays))",
+                    ({"org.freedesktop.Secret.Collection.Label": "login"}, secret),
+                )[0]
+                self.assert_owner()
+                if (self.collection == "/" or
+                        self.call(SECRETS, "ReadAlias", "(s)", ("login",))[0] != self.collection):
+                    raise KeyringError("Created collection is not the login keyring; no retry or reset attempted.")
+            else:
+                self.call(INTERNAL, "UnlockWithMasterPassword", "(o(oayays))",
+                          (self.collection, secret))
             self.assert_owner()
             if self.locked():
-                raise KeyringError(
-                    "Login keyring is still locked after the unlock request."
-                )
+                raise KeyringError("Login keyring is still locked after the request.")
+            if initialize:
+                self.assert_owner()
+                self.call(SECRETS, "SetAlias", "(so)", ("default", self.collection))
+                if self.call(SECRETS, "ReadAlias", "(s)", ("default",))[0] != self.collection:
+                    raise KeyringError("Login keyring created, but default alias verification failed.")
         finally:
             try:
                 self.call(
@@ -342,8 +365,12 @@ def gh_check(args, provider_factory=None):
 
 
 def run(command, provider, prompt=read_password):
+    initialization_requested = False
     try:
-        if not provider.inspect(activate=command == "unlock"):
+        initialize = command == "init"
+        if initialize and not foreground_terminal():
+            raise KeyringError("Initialization requires a foreground human terminal.")
+        if not provider.inspect(activate=command in ("unlock", "init"), initialize=initialize):
             print("Login keyring unlocked.")
             return 0
         if command == "check":
@@ -352,8 +379,17 @@ def run(command, provider, prompt=read_password):
         password = prompt()
         if not password:
             raise KeyringError("Password must not be empty.")
-        provider.unlock(password)
-        print("Login keyring unlocked.")
+        if initialize:
+            print("Confirm new keyring password:", file=sys.stderr)
+            if prompt() != password:
+                raise KeyringError("Passwords do not match; no keyring was created.")
+            initialization_requested = True
+            provider.unlock(password, initialize=True)
+            initialization_requested = False
+            print("Login keyring created, unlocked and set as default.")
+        else:
+            provider.unlock(password)
+            print("Login keyring unlocked.")
         return 0
     except KeyringError as error:
         print(f"keyring: {error}", file=sys.stderr)
@@ -361,13 +397,21 @@ def run(command, provider, prompt=read_password):
     except (EOFError, KeyboardInterrupt):
         print("\nkeyring: Cancelled.", file=sys.stderr)
         return 1
+    finally:
+        if initialization_requested:
+            print("keyring: A keyring may have been created; run make keyring-check before further action. No retry or reset was attempted.", file=sys.stderr)
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("check", "unlock", "startup", "gh-check"))
+    parser.add_argument("command", choices=("check", "init", "unlock", "startup", "gh-check"))
     parser.add_argument("gh_args", nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
+    if args.command == "init" and args.gh_args:
+        parser.error("This command accepts no extra arguments; passwords require hidden terminal input.")
+    if args.command == "init" and not foreground_terminal():
+        print("keyring: Initialization requires a foreground human terminal.", file=sys.stderr)
+        return 1
     if sys.platform != "linux":
         print(
             "keyring: Linux GNOME keyring only; native macOS Keychain is unchanged.",

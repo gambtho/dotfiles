@@ -8,6 +8,7 @@ import io
 import os
 import pathlib
 import pty
+import select
 import shutil
 import subprocess
 import sys
@@ -39,6 +40,38 @@ def isolated_test():
         with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
             code = helper.run(action, helper.GnomeKeyring(transport), lambda: password)
         return code, output.getvalue()
+
+    def initialize_in_terminal():
+        child, terminal = pty.fork()
+        if child == 0:
+            os.execv(sys.executable, [sys.executable, str(HELPER), "init"])
+        output = b""
+        sent = 0
+        reaped = False
+        try:
+            until = time.monotonic() + 6
+            while time.monotonic() < until:
+                if select.select([terminal], [], [], 0.05)[0]:
+                    try:
+                        chunk = os.read(terminal, 4096)
+                    except OSError:
+                        chunk = b""
+                    output += chunk
+                if output.count(b"Keyring password:") > sent:
+                    os.write(terminal, b"test-password\n")
+                    sent += 1
+                pid, status = os.waitpid(child, os.WNOHANG)
+                if pid:
+                    reaped = True
+                    assert os.waitstatus_to_exitcode(status) == 0, output
+                    assert sent == 2 and b"test-password" not in output, output
+                    return
+            raise AssertionError(f"initialization stalled: {output!r}")
+        finally:
+            if not reaped:
+                os.kill(child, 9)
+                os.waitpid(child, 0)
+            os.close(terminal)
 
     config_dir = root / "config" / "gh"
     config_dir.mkdir()
@@ -74,30 +107,22 @@ def isolated_test():
         [
             "gnome-keyring-daemon",
             "--foreground",
-            "--unlock",
             "--components=secrets",
             "--control-directory=" + str(root / "run" / "keyring"),
         ],
-        stdin=subprocess.PIPE,
+        stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
     try:
-        # Approved test-only initialization: dummy password, fresh isolated bus,
-        # one owned foreground process. The production helper never does this.
-        assert daemon.stdin is not None
-        daemon.stdin.write(b"test-password")
-        daemon.stdin.close()
+        # Start an empty provider; only the real init command creates the
+        # disposable login keyring, using hidden input on a foreground PTY.
         for _ in range(100):
             if daemon.poll() is not None:
                 raise AssertionError("disposable daemon exited during startup")
             current = owner(helper.PROVIDER)
             if current is not None and owner("org.gnome.keyring") == current:
-                try:
-                    if command("check")[0] == 0:
-                        break
-                except helper.KeyringError:
-                    pass
+                break
             time.sleep(0.05)
         else:
             raise AssertionError("disposable daemon did not become ready")
@@ -110,6 +135,15 @@ def isolated_test():
             (current,),
         )[0]
         assert pid == daemon.pid, "test bus must belong to the owned daemon"
+        assert transport.call(current, helper.SERVICE, helper.SECRETS,
+                              "ReadAlias", "(s)", ("login",)) == ("/",)
+        initialize_in_terminal()
+        assert command("check")[0] == 0
+        collection = transport.call(current, helper.SERVICE, helper.SECRETS,
+                                    "ReadAlias", "(s)", ("login",))[0]
+        assert collection == "/org/freedesktop/secrets/collection/login"
+        assert transport.call(current, helper.SERVICE, helper.SECRETS,
+                              "ReadAlias", "(s)", ("default",)) == (collection,)
         keyring = root / "data" / "keyrings" / "login.keyring"
         assert keyring.is_file(), (
             "test initialization must create only disposable keyring state"
@@ -154,7 +188,7 @@ def isolated_test():
         finally:
             os.close(terminal)
         startup_elapsed = time.monotonic() - start
-        print("PASS: isolated inactive/locked gh guard, unlock, unlocked foreground startup")
+        print("PASS: isolated init (hidden confirmed password, login/default aliases), inactive/locked gh guard, unlock, unlocked foreground startup")
         print(f"Latency: unlocked startup {startup_elapsed * 1000:.0f}ms; guarded gh {gh_elapsed * 1000:.0f}ms")
     finally:
         if daemon.poll() is None:

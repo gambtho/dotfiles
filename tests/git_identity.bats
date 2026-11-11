@@ -1568,6 +1568,7 @@ EOF
   [ "$status" -eq 6 ]
   [ ! -s "$TEST_ROOT/out" ]
   grep -q 'keyring-unlock' "$TEST_ROOT/err"
+  grep -q 'keyring-init' "$TEST_ROOT/err"
   grep -Fq 'dot\ files' "$TEST_ROOT/err"
 }
 
