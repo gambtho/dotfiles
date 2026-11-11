@@ -539,6 +539,13 @@ class LaneEvidenceTests(unittest.TestCase):
                 self.assertIn(f'{name} | {name} | {name} | independent', index)
         self.assertIn('archive-local | archive-local | owner-local | frozen declaration', index)
 
+    def test_frozen_owner_path_may_end_with_a_colon_before_handoff_text(self):
+        owner = self.project('owner-local')
+        self.project('archive-local', f'Frozen: coordinated from {owner}: see handoff.\n')
+        evidence = self.gather()
+        index = (evidence / 'project-groups.md').read_text()
+        self.assertIn('archive-local | archive-local | owner-local | frozen declaration', index)
+
     def test_only_coordination_folders_are_selected(self):
         (self.home / 'alpha-local').mkdir()
         (self.home / 'alpha-local/STATE.md').write_text('state')

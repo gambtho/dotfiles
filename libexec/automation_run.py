@@ -522,7 +522,7 @@ def gather_lane_review(evidence: Path, repo: Path) -> None:
                                  if (folder / name).is_file() and not (folder / name).is_symlink())
         targets = re.findall(r"(?im)^Frozen(?:\s+\d{4}-\d{2}-\d{2})?:\s*coordinated from\s+`?([~/][^\s`;]+)",
                              declarations)
-        candidates = {Path(target.rstrip(".,").replace("~/", str(HOME) + "/", 1)) for target in targets}
+        candidates = {Path(target.rstrip(".,:").replace("~/", str(HOME) + "/", 1)) for target in targets}
         if len(candidates) == 1 and next(iter(candidates)) in canonical:
             owners[folder] = canonical[next(iter(candidates))]
     groups = ["# Project groups", "", "Folder | Evidence project | Coordinator owner | Rule | Memory evidence",
