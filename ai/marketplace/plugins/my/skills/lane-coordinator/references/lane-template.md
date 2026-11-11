@@ -97,8 +97,9 @@ must all match. Include reusable review evidence
 (base, head provenance, scope, content identity, profile identity, model and dispositions)
 so the coordinator can check freshness, blockers and the delta without redoing review.
 For a PR, include closeout's bot-opportunity evidence from its final report.
-The user may say "W<n> ready"; the coordinator reads the report directly. Manual
-sessions are not automatically monitored. Escalate only genuinely new material
+The user's "W<n> ready" asks for attention, not a claim of completion. The coordinator
+reads the report, establishes finished/blocked/failed/waiting and gives the next action.
+Manual sessions are not automatically monitored. Escalate only genuinely new material
 scope/data/security/product choices, shared/destructive operations or actions outside
 authority. Exact public text/publication and production/provider approvals still apply.
 Before closing or pausing for long, write `<lanes>/W<n>-HANDOFF.md` from the handoff template.

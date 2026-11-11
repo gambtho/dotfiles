@@ -408,6 +408,137 @@ class LaneEvidenceTests(unittest.TestCase):
         self.addCleanup(temp.cleanup)
         self.home = Path(temp.name)
 
+    def gather(self):
+        evidence = self.home / 'evidence'
+        with mock.patch.object(automation, 'HOME', self.home), \
+             mock.patch.object(automation, 'lane_folders', return_value=automation.lane_folders(self.home)), \
+             mock.patch.object(automation, 'survey_lane_folder', return_value='survey'):
+            automation.gather_lane_review(evidence, ROOT)
+        return evidence
+
+    def project(self, name='alpha-local', state='state'):
+        folder = self.home / name
+        folder.mkdir()
+        (folder / 'STATE.md').write_text(state)
+        return folder
+
+    def test_old_friction_survives_more_than_fifteen_newer_reports(self):
+        import os
+        folder = self.project()
+        reports = folder / 'reports'
+        reports.mkdir()
+        friction = reports / 'SKILL-FRICTION.md'
+        friction.write_text('old correction\n' * 100)
+        os.utime(friction, (1, 1))
+        for index in range(20):
+            (reports / f'new-{index}.md').write_text('recent report')
+        evidence = self.gather()
+        self.assertTrue((evidence / 'projects/alpha-local/reports/SKILL-FRICTION.md').is_file())
+        self.assertEqual((evidence / 'projects/alpha-local/reports/SKILL-FRICTION.md').read_text(),
+                         'old correction\n' * 100)
+        self.assertEqual(len(list((evidence / 'projects/alpha-local/recent-activity/reports').glob('*.md'))), 15)
+
+    def test_memory_is_bounded_and_transcripts_and_people_stay_out(self):
+        folder = self.project()
+        self.project('empty-local')
+        encoded = str(folder).replace('/', '-').replace('_', '-')
+        claude_project = self.home / '.claude/projects' / encoded
+        memory = claude_project / 'memory'
+        memory.mkdir(parents=True)
+        (memory / 'correction.md').write_text('lesson\n' * 700)
+        (memory / 'PEOPLE.md').write_text('private people')
+        (claude_project / 'session.jsonl').write_text('private transcript')
+        (memory / 'auth.json').write_text('credential')
+        (memory / 'link.md').symlink_to(claude_project / 'session.jsonl')
+        evidence = self.gather()
+        copied = evidence / 'projects/alpha-local/memory/alpha-local/correction.md'
+        self.assertTrue(copied.is_file())
+        self.assertEqual(copied.read_text(), 'lesson\n' * 600)
+        self.assertEqual(sorted(p.name for p in (evidence / 'projects').rglob('*') if p.is_file()),
+                         ['STATE.md', 'STATE.md', 'correction.md'])
+
+    def test_aliases_share_evidence_and_archives_name_their_owner(self):
+        owner = self.project('beta-local')
+        alias = self.home / 'alias-local'
+        alias.symlink_to(owner, target_is_directory=True)
+        self.project('archive-local', f'Frozen 2026-01-01: coordinated from {owner}; see handoff.\n')
+        self.project('unrelated-local', f'Uses {owner} as a reference, not an owner.\n')
+        encoded = str(alias).replace('/', '-').replace('_', '-')
+        memory = self.home / '.claude/projects' / encoded / 'memory'
+        memory.mkdir(parents=True)
+        (memory / 'old-lesson.md').write_text('alias lesson')
+        evidence = self.gather()
+        self.assertTrue((evidence / 'project-groups.md').is_file())
+        index = (evidence / 'project-groups.md').read_text()
+        self.assertIn('alias-local | beta-local | beta-local | symlink', index)
+        self.assertIn('archive-local | archive-local | beta-local | frozen declaration', index)
+        self.assertIn('unrelated-local | unrelated-local | unrelated-local | independent', index)
+        self.assertFalse((evidence / 'projects/alias-local').exists())
+        self.assertTrue((evidence / 'projects/archive-local/STATE.md').is_file())
+        self.assertEqual((evidence / 'projects/beta-local/memory/alias-local/old-lesson.md').read_text(),
+                         'alias lesson')
+
+    def test_memory_directory_cannot_escape_claude_projects(self):
+        folder = self.project()
+        project = self.home / '.claude/projects' / str(folder).replace('/', '-').replace('_', '-')
+        project.mkdir(parents=True)
+        outside = self.home / 'outside'
+        outside.mkdir()
+        (outside / 'secret.md').write_text('not a memory note')
+        (project / 'memory').symlink_to(outside, target_is_directory=True)
+        evidence = self.gather()
+        self.assertFalse((evidence / 'projects/alpha-local/memory').exists())
+
+    def test_shared_memory_is_copied_once_and_each_alias_can_find_it(self):
+        owner = self.project('beta-local')
+        alias = self.home / 'alias-local'
+        alias.symlink_to(owner, target_is_directory=True)
+        projects = self.home / '.claude/projects'
+        memory = projects / str(owner).replace('/', '-').replace('_', '-') / 'memory'
+        memory.mkdir(parents=True)
+        (memory / 'lesson.md').write_text('one lesson')
+        alias_memory = projects / str(alias).replace('/', '-').replace('_', '-') / 'memory'
+        alias_memory.parent.mkdir()
+        alias_memory.symlink_to(memory, target_is_directory=True)
+        evidence = self.gather()
+        self.assertEqual(len(list((evidence / 'projects').rglob('lesson.md'))), 1)
+        index = (evidence / 'project-groups.md').read_text()
+        self.assertEqual(index.count('projects/beta-local/memory/alias-local'), 2)
+
+    def test_symlinked_home_does_not_make_an_alias_the_canonical_project(self):
+        actual = self.home / 'actual-home'
+        actual.mkdir()
+        linked = self.home / 'linked-home'
+        linked.symlink_to(actual, target_is_directory=True)
+        self.home = linked
+        owner = self.project('beta-local')
+        (self.home / 'alias-local').symlink_to(owner, target_is_directory=True)
+        evidence = self.gather()
+        index = (evidence / 'project-groups.md').read_text()
+        self.assertIn('alias-local | beta-local | beta-local | symlink', index)
+        self.assertIn('beta-local | beta-local | beta-local | independent', index)
+
+    def test_archive_ownership_requires_a_complete_path_and_unambiguous_direct_owner(self):
+        owner = self.project('owner-local')
+        other = self.project('other-local')
+        fixtures = {
+            'prefix-local': f'Frozen: coordinated from {owner}-archive/data',
+            'active-local': f'Frozen lanes: W3 coordinated from {owner}',
+            'ambiguous-local': f'Frozen: coordinated from {owner}\nFrozen: coordinated from {other}',
+            'chain-local': f'Frozen: coordinated from {self.home}/archive-local',
+            'archive-local': f'Frozen: coordinated from {owner}',
+            'cycle-a-local': f'Frozen: coordinated from {self.home}/cycle-b-local',
+            'cycle-b-local': f'Frozen: coordinated from {self.home}/cycle-a-local',
+        }
+        for name, state in fixtures.items():
+            self.project(name, state)
+        evidence = self.gather()
+        index = (evidence / 'project-groups.md').read_text()
+        for name in fixtures:
+            if name != 'archive-local':
+                self.assertIn(f'{name} | {name} | {name} | independent', index)
+        self.assertIn('archive-local | archive-local | owner-local | frozen declaration', index)
+
     def test_only_coordination_folders_are_selected(self):
         (self.home / 'alpha-local').mkdir()
         (self.home / 'alpha-local/STATE.md').write_text('state')

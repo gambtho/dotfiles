@@ -89,7 +89,7 @@ SECRET_PATTERNS = (
 LANE_SKILLS = ("lane-coordinator", "pr-closeout", "adversarial-review", "second-opinion-core", "polish-core")
 # PEOPLE.md stays out: reviewing process does not need notes about individuals,
 # and this report leaves the machine.
-LANE_FILES = ("AGENTS.md", "STATE.md", "COORDINATION.md", "lanes/COMMON-RULES.md")
+LANE_FILES = ("AGENTS.md", "STATE.md", "COORDINATION.md", "lanes/COMMON-RULES.md", "reports/SKILL-FRICTION.md")
 LANE_ACTIVITY_DIRS = ("lanes", "process-review", "reports", "agent-notes")
 LANE_ACTIVITY_DAYS = 7
 LANE_ACTIVITY_FILES = 15
@@ -510,13 +510,58 @@ def gather_lane_review(evidence: Path, repo: Path) -> None:
         )
     surveys = []
     now = dt.datetime.now().timestamp()
-    for folder in lane_folders():
+    folders = lane_folders()
+    # Prefer the non-alias member even when HOME itself is reached through a symlink.
+    physical = {}
+    for folder in sorted(folders, key=lambda p: (p.is_symlink(), p)):
+        physical.setdefault(folder.resolve(), folder)
+    canonical = {folder: physical[folder.resolve()] for folder in folders}
+    owners = {}
+    for folder in set(canonical.values()):
+        declarations = "\n".join(read_head(folder / name, 600) for name in ("STATE.md", "COORDINATION.md")
+                                 if (folder / name).is_file() and not (folder / name).is_symlink())
+        targets = re.findall(r"(?im)^Frozen(?:\s+\d{4}-\d{2}-\d{2})?:\s*coordinated from\s+`?([~/][^\s`;]+)",
+                             declarations)
+        candidates = {Path(target.rstrip(".,").replace("~/", str(HOME) + "/", 1)) for target in targets}
+        if len(candidates) == 1 and next(iter(candidates)) in canonical:
+            owners[folder] = canonical[next(iter(candidates))]
+    groups = ["# Project groups", "", "Folder | Evidence project | Coordinator owner | Rule | Memory evidence",
+              "--- | --- | --- | --- | ---"]
+    copied_memory = {}
+    for folder in folders:
+        project = canonical[folder]
+        # Only direct declarations to an independent owner count; no chains/cycles.
+        owner = owners.get(project, project)
+        if owner in owners:
+            owner = project
+        rule = "frozen declaration" if owner != project else "independent"
+        if folder != project:
+            rule = "symlink; " + rule
+        memory_evidence = "none"
+        claude_projects = HOME / ".claude" / "projects"
+        memory = claude_projects / re.sub(r"[^a-zA-Z0-9-]", "-", str(folder)) / "memory"
+        # Permit internal memory aliases, never redirection to transcripts or outside projects.
+        resolved = memory.resolve()
+        if (memory.is_dir() and resolved.name == "memory"
+                and resolved.parent.parent == claude_projects.resolve()):
+            if resolved not in copied_memory:
+                target = Path("projects") / project.name / "memory" / folder.name
+                copied_memory[resolved] = target.as_posix()
+                for path in sorted(memory.glob("*.md")):
+                    if path.is_file() and not path.is_symlink() and path.name.casefold() != "people.md":
+                        write_evidence(evidence / target / path.name, read_head(path, 600))
+            memory_evidence = copied_memory[resolved]
+        groups.append(f"{folder.name} | {project.name} | {owner.name} | {rule} | {memory_evidence}")
+    write_evidence(evidence / "project-groups.md", "\n".join(groups) + "\n")
+    for folder in sorted(set(canonical.values())):
         surveys.append(survey_lane_folder(folder))
         for relative in LANE_FILES:
             source = folder / relative
             if source.is_file() and not source.is_symlink():
                 write_evidence(evidence / "projects" / folder.name / relative, read_head(source, 600))
         for path in recent_activity(folder, now):
+            if path.relative_to(folder).as_posix() in LANE_FILES:
+                continue
             target = evidence / "projects" / folder.name / "recent-activity" / path.parent.name / path.name
             write_evidence(target, read_head(path, LANE_ACTIVITY_LINES))
     write_evidence(evidence / "survey.md", "\n\n".join(surveys))

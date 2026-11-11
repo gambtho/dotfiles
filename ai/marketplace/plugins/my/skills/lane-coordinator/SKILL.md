@@ -183,8 +183,9 @@ permission. A Herdr workspace is not an isolated Git worktree.
 ## Handle a lane report
 
 A lane returns one consolidated readiness report or ONE batched real blocker.
-The user can simply say "W12 ready": read the shared report directly instead of
-requiring copy/paste relays. Manual sessions are not automatically monitored.
+The user's "W12 ready" asks for attention, not a claim of completion. Read the report,
+establish whether the lane finished, is blocked, failed or is waiting, and give its
+next action without copy/paste relays. Manual sessions are not automatically monitored.
 Sometimes a report is repeated or its owner unclear; STATE.md answers that.
 
 Approved LOCAL delivery includes authorized setup/verification, safe in-scope
@@ -237,8 +238,9 @@ retain their exact approval requirements.
 6. **Reply in this order:** what's true, what's off (with file:line), your recommendation,
    then one batched next instruction only if needed. Read shared files directly; provide
    a paste-ready reply only when no authorized direct handoff is available.
-7. **Recommend; don't just list options.** Push back on over-engineering, timeout bumps,
-   scope creep, and process noise leaking into public text.
+7. **Recommend; don't just list options.** Before forwarding a finding as work, decide
+   in-scope repair or separate follow-up; give a bounded outcome and size, not an invented
+   mechanism. Push back on over-engineering, timeout bumps, scope creep and public process noise.
 8. When a lane asks to bypass something (a hook, a guard, a policy), find out why it
    failed and give the narrowest fix, as a full command the user can paste.
 9. Bound flake diagnosis: inspect failed logs and the base for the same failure, and
