@@ -36,8 +36,10 @@ rsync -a -e "$remote_shell" /home/example/project-local/lanes/task.md build-host
 ```
 
 The inline shell supplies `example@build-host`: rsync's usual `user@host:` spelling
-passes `-l`, which the Tailscale SSH wrapper may not accept. No helper file or extra
-transfer machinery. The human opens a workspace on that host and starts Pi there;
+passes `-l`, which the Tailscale SSH wrapper may not accept. Plain `-a` compares size
+and time, so success alone does not prove current bytes. Read back the delivered
+prompt, rules and profile before startup; unconfirmed currency is unknown. No helper
+file or extra transfer machinery. The human opens a workspace on that host and starts Pi there;
 the local Herdr launcher is not a remote launcher. Hand over only the resolved line:
 
 ```text
@@ -46,16 +48,20 @@ Read /home/example/project-local/lanes/task.md and follow it.
 
 ## Fetch before judging readiness
 
-The lane writes its report and evidence with the assigned prefix. Fetch them directly
-into coordinator reports; record the fetch observation time in the ordinary report:
+Name the required primary report explicitly (`task-report.md` here). Fetch it first,
+then the prefixed evidence, so evidence alone cannot hide a missing primary behind an
+old local report. Record the fetch observation time in the ordinary report:
 
 ```sh
 remote_shell='sh -c '\''exec tailscale ssh example@"$@"'\'' sh'
+rsync -a -e "$remote_shell" build-host:/home/example/project-local/reports/task-report.md /home/example/project-local/reports/ &&
 rsync -a -e "$remote_shell" 'build-host:/home/example/project-local/reports/task-*' /home/example/project-local/reports/
 ```
 
-A failed/offline fetch is **unknown** even if older local reports exist; a ready badge
-is not report delivery. No delete flag, manifest, validator, receipt or staging folder.
+Read the host's named primary against the fetched copy before judging its currency.
+A failed/offline fetch or unconfirmed currency is **unknown** even if older local
+reports exist; a ready badge is not delivery. No delete flag, manifest, validator,
+receipt or staging folder.
 Use [normal report verification](../SKILL.md#handle-a-lane-report): refresh GitHub at
 the exact PR head, match remote working/pushed/tested/CI revisions and read current
 threads/review bodies. Reuse matching review evidence; a transfer timestamp alone

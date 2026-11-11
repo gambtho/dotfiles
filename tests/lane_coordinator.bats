@@ -580,3 +580,21 @@ PY
     false
   }
 }
+
+@test "remote fetch example fails when only supplementary evidence exists" {
+  python3 - "$SKILL_DIR/references/remote-lanes.md" "$TEST_ROOT/fetch.sh" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+blocks = re.findall(r"```sh\n(.*?)\n```", Path(sys.argv[1]).read_text(), re.S)
+Path(sys.argv[2]).write_text(blocks[-1])
+PY
+  # External transfer boundary: required report absent, matching evidence present.
+  stub_command rsync 'case "${@: -2:1}" in *task-report.md) exit 23 ;; *task-\**) exit 0 ;; *) exit 99 ;; esac'
+  run bash "$TEST_ROOT/fetch.sh"
+  [ "$status" -eq 23 ] || {
+    echo "Expected missing-report exit 23; got $status"
+    false
+  }
+}
