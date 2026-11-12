@@ -49,8 +49,9 @@ Read /home/example/project-local/lanes/task.md and follow it.
 ## Fetch before judging readiness
 
 Name the required primary report explicitly (`task-report.md` here). Fetch it first,
-then the prefixed evidence, so evidence alone cannot hide a missing primary behind an
-old local report. Record the fetch observation time in the ordinary report:
+then the prefixed evidence, including the handoff kept alongside the report, so
+evidence alone cannot hide a missing primary behind an old local report. Record the
+fetch observation time in the ordinary report:
 
 ```sh
 remote_shell='sh -c '\''exec tailscale ssh example@"$@"'\'' sh'

@@ -240,6 +240,16 @@ PY
   [ "$status" -eq 0 ]
 }
 
+@test "lane handoffs share the project's report location" {
+  grep -Fq "same location as the lane's report" "$SKILL_DIR/references/lane-template.md"
+  grep -Fq 'AGENTS.md' "$SKILL_DIR/references/lane-template.md"
+  grep -Fq 'reports/W<n>-HANDOFF.md' "$SKILL_DIR/references/lane-template.md"
+  run grep -Fq '<lanes>/W<n>-HANDOFF.md' "$SKILL_DIR/references/lane-template.md"
+  [ "$status" -eq 1 ]
+  grep -Fq 'handoffs alongside reports' "$SKILL_DIR/SKILL.md"
+  grep -Fq 'including the handoff' "$SKILL_DIR/references/remote-lanes.md"
+}
+
 @test "routine prompt wrappers select the named routine with unchanged project arguments" {
   local name routine
   for name in eod weekly; do
