@@ -478,10 +478,13 @@ def gather_herdr_upstream(evidence: Path, repo: Path) -> None:
             comparison = json.loads(observe(['gh', 'api', f'{endpoint}&page={page}', '--jq', projection]))
             if comparison['total_commits'] != total:
                 raise ValueError('compare moved between requests')
+        commits = comparison['commits']
+        if not isinstance(commits, list) or len(commits) != total - (page - 1) * 50:
+            raise ValueError('incomplete compare page')
         comparison = {'base': tag, 'head': 'master', 'status': comparison['status'], 'total_commits': total,
                       'page': page, 'truncated': total > 50,
                       'commits': [{key: commit[key][:500] for key in ('sha', 'title', 'url')}
-                                  for commit in comparison['commits'][-50:]],
+                                  for commit in commits],
                       'coverage': 'Latest page only; omitted earlier commits UNKNOWN. Titles capped at 500 characters.'}
         text = json.dumps(comparison, ensure_ascii=True)
         if len(text) > MAX_EVIDENCE_FILE_BYTES:

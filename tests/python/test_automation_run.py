@@ -652,6 +652,15 @@ class HerdrUpstreamTests(unittest.TestCase):
         self.assertEqual(len(self.calls), 4)
         self.assertEqual(sum('page=3' in c[2] for c in self.calls), 1)
 
+    def test_incomplete_compare_page_is_unknown_but_zero_commits_is_valid(self):
+        for total in (1, 51, 100, 101):
+            self.compare = {'status': 'ahead', 'total_commits': total, 'commits': []}
+            self.gather()
+            self.assertTrue((self.evidence / 'herdr-commits.json').read_text().startswith('UNKNOWN'), total)
+        self.compare = {'status': 'identical', 'total_commits': 0, 'commits': []}
+        self.gather()
+        self.assertEqual(json.loads((self.evidence / 'herdr-commits.json').read_text())['commits'], [])
+
     def test_empty_and_oversized_unreleased_are_explicit_and_bounded(self):
         for section in ('', 'x' * 30000):
             self.changelog = '# Changelog\n## Unreleased\n' + section + '\n## [0.9.5]\nold'
