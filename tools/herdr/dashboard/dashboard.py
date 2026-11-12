@@ -150,9 +150,17 @@ def board(rows, states, width, headings=()):
     hosts = list(states)
     project_width = min(16, max([len(p) for p in {r['project'] for r in rows} | set(headings)] + [8]) + 2)
     project_width = max(4, min(project_width, width - 4 * len(hosts)))
-    cell = max(2, (width - project_width) // max(1, len(hosts)))
-    lines.append([(project_width + i * cell, clip(states[h]['label'] + (' ?' if states[h]['error'] else ''), cell - 1), None, 'muted')
-                  for i, h in enumerate(hosts)])
+    hidden = 0
+    if len(hosts) * 4 > width - project_width:
+        # Too many machines for 4-column cells: show what fits and count the rest.
+        keep = max(1, (width - project_width) // 4 - 1)
+        hidden, hosts = len(hosts) - keep, hosts[:keep]
+    cell = max(4, (width - project_width) // len(hosts)) if not hidden else 4
+    header = [(project_width + i * cell, clip(states[h]['label'] + (' ?' if states[h]['error'] else ''), cell - 1), None, 'muted')
+              for i, h in enumerate(hosts)]
+    if hidden:
+        header.append((project_width + len(hosts) * cell, f'+{hidden}', None, 'muted'))
+    lines.append(header)
     projects = sorted({r['project'] for r in rows} | set(headings), key=lambda p: (
         min([urgency(r) for r in rows if r['project'] == p] or [(True, 9)]), p))
     for project in projects:
@@ -164,16 +172,22 @@ def board(rows, states, width, headings=()):
             if not members:
                 line.append((x, '—', None, 'muted'))
                 continue
-            used = 0
+            room, used = cell - 1, 0
             for n, row in enumerate(members):
-                text = tag(row)
-                more = f'+{len(members) - n}'
-                last = n == len(members) - 1
-                if used + text_width(text) + (0 if last else len(more) + 1) > cell - 1:
-                    line.append((x + used, more, None, 'muted'))
-                    break
-                line.append((x + used, text, row['key'], row['state']))
-                used += text_width(text) + 1
+                text, rest = tag(row), len(members) - n - 1
+                fits = used + text_width(text) + (len(f'+{rest}') + 1 if rest else 0) <= room
+                if fits or (used == 0 and text_width(text) <= room):
+                    # The first lane always shows when it fits alone, so each cell stays actionable.
+                    line.append((x + used, text, row['key'], row['state']))
+                    used += text_width(text) + 1
+                    if fits:
+                        continue
+                    rest_text = f'+{rest}'
+                else:
+                    rest_text = f'+{rest + 1}'
+                if used < room:
+                    line.append((x + used, clip(rest_text, room - used), None, 'muted'))
+                break
         lines.append(line)
     return [bound(line, width) for line in lines]
 
