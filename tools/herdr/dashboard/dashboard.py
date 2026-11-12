@@ -72,6 +72,8 @@ def lines_for(rows, mode, headings=()):
         lines.append((title, None, 'heading'))
         for row in members:
             badge = '◆ coord' if row['lane'] == 'coord' else row['lane']
+            if mode == 'attention':
+                badge = row['project'] + ' ' + badge
             lines.append((f"  {badge:<8} {row['host']} · {row['section']}", row['key'], row['section']))
             lines.append((f"    {row['task'] or '(no task reported)'}", row['key'], 'detail'))
             status = ('cached ' if row['offline'] else 'live ') + row['status']
@@ -310,9 +312,17 @@ def main():
     try:
         if args.once:
             deadline = time.monotonic() + TIMEOUT + 2
+            discovered = False
             while time.monotonic() < deadline:
                 view.tick()
-                if not view.discovery_error and all(s['snapshot'] is not None or s['error'] != 'Loading' for s in view.states.values()):
+                if not discovered and not view.discovery_error:
+                    # Snapshot readers start only after discovery. Give that
+                    # initial batch its own bound, without repeated discovery
+                    # extending the diagnostic indefinitely.
+                    discovered = True
+                    view.next_discovery = float('inf')
+                    deadline = time.monotonic() + TIMEOUT + 2
+                if discovered and all(s['snapshot'] is not None or (s['pending'] is None and s['error'] != 'Loading') for s in view.states.values()):
                     break
                 time.sleep(.05)
             output = [host_summary(view.states)]

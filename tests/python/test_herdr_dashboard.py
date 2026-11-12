@@ -39,6 +39,13 @@ class ProjectionTests(unittest.TestCase):
         self.assertEqual([r['section'] for r in rows], ['Needs you', 'Working', 'Ready for review', 'Needs you'])
         self.assertEqual(len({r['key'] for r in rows}), 4)
 
+    def test_attention_headers_identify_projects_before_selection(self):
+        rows = dashboard.project_rows({'local': state([workspace('orchard-1', 'blocked'), workspace('banana-1', 'blocked', wid='w2')])})
+        headers = [text for text, key, style in dashboard.lines_for(rows, 'attention') if key and style == 'Needs you']
+        self.assertEqual(len(set(headers)), 2)
+        self.assertTrue(any('orchard' in text for text in headers))
+        self.assertTrue(any('banana' in text for text in headers))
+
     def test_offline_cached_rows_excluded_from_live_sections(self):
         states = {'remote': state([workspace('orchard-1', 'blocked')], error='Timed out', label='Other')}
         rows = dashboard.project_rows(states)
@@ -127,6 +134,19 @@ class ReaderTests(unittest.TestCase):
                             os.kill(pid, signal.SIGKILL)
                         except ProcessLookupError:
                             pass
+
+    def test_once_waits_for_slow_discovery_then_initial_snapshot(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fake = Path(directory) / 'herdr'
+            payload = json.dumps({'result': {'snapshot': {'workspaces': [workspace('orchard-3', task='late snapshot')]}}})
+            fake.write_text('#!/usr/bin/env python3\nimport sys,time\n'
+                            'if "machine" in sys.argv:\n time.sleep(5); print(\'[{"id":"abc","label":"Other","enabled":true}]\')\n'
+                            'else:\n if "--machine" in sys.argv: time.sleep(5)\n print(' + repr(payload) + ')\n')
+            fake.chmod(0o755)
+            result = subprocess.run([sys.executable, str(SCRIPT), '--once'], env=dict(os.environ, PATH=directory + os.pathsep + os.environ['PATH']), capture_output=True, text=True, timeout=16, check=False)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn('Other online', result.stdout)
+            self.assertNotIn('OFFLINE', result.stdout)
 
     def test_once_sanitizes_remote_control_characters(self):
         with tempfile.TemporaryDirectory() as directory:
