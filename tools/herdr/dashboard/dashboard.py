@@ -133,6 +133,11 @@ def summary(rows, states):
     return ' '.join(counts + ['·', machines]) if counts else machines
 
 
+def machine_label(state, width):
+    """Clip the name, never the offline mark."""
+    return clip(state['label'], width - 2) + ' ?' if state['error'] and width >= 3 else clip(state['label'], width)
+
+
 def board(rows, states, width, headings=()):
     """Lines of (x, text, key, style) segments: attention strip, then project × machine grid."""
     width = max(width, 20)
@@ -156,8 +161,7 @@ def board(rows, states, width, headings=()):
         keep = max(1, (width - project_width) // 4 - 1)
         hidden, hosts = len(hosts) - keep, hosts[:keep]
     cell = max(4, (width - project_width) // max(1, len(hosts))) if not hidden else 4
-    header = [(project_width + i * cell, clip(states[h]['label'] + (' ?' if states[h]['error'] else ''), cell - 1), None, 'muted')
-              for i, h in enumerate(hosts)]
+    header = [(project_width + i * cell, machine_label(states[h], cell - 1), None, 'muted') for i, h in enumerate(hosts)]
     if hidden:
         header.append((project_width + len(hosts) * cell, f'+{hidden}', None, 'muted'))
     lines.append(header)
@@ -436,12 +440,13 @@ def run(screen, view):
                 attr = styles.get(style, 0) | (curses.A_REVERSE if cursor and (full, x) == cursor[:2] else 0)
                 put(y, x, text, attr)
         row = next((r for r in rows if r['key'] == selected), None)
-        if view.discovery_error:
-            notice = 'Discovery failed: ' + view.discovery_error
-        elif row and row['offline']:
+        if row and row['offline']:
             notice = 'Offline: cached row only; navigation disabled'
         else:
             notice = message or (focus_hint(row) if row else '')
+        if view.discovery_error:
+            # Keep the lane's navigation hint; known machines are still polled.
+            notice = ' · '.join(filter(None, [notice, 'Discovery failed: ' + view.discovery_error]))
         put(height - 3, 0, detail(row) if row else 'No project lanes found', curses.A_BOLD)
         put(height - 2, 0, notice)
         put(height - 1, 0, 'arrows/hjkl move · 1-9 strip · Enter or click go · r refresh · q quit', curses.A_DIM)

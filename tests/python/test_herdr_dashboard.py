@@ -108,6 +108,8 @@ class ProjectionTests(unittest.TestCase):
         self.assertTrue(any(t.startswith('2 ? orchard-2') and t.endswith('Other?') for t in lines))
         self.assertTrue(any('Other ?' in t for t in lines))
         self.assertIn('Other OFFLINE', dashboard.host_summary(states))
+        narrow = dashboard.board(rows, dict(states, remote=dict(states['remote'], label='LongMachineName')), 30)
+        self.assertTrue(any(text.endswith(' ?') for line in narrow for _, text, key, _ in line if not key and text != '?'))
         self.assertIn('offline', dashboard.detail(rows[1]))
 
     def test_arrow_navigation_and_clicks_map_to_lanes(self):
