@@ -212,7 +212,12 @@ assert ui["prompt_new_workspace_name"] is False
 assert ui["agent_panel_sort"] == "priority"
 assert ui["hide_tab_bar_when_single_tab"] is True
 assert ui["toast"]["delivery"] == "herdr"
-assert ui["sidebar"]["spaces"]["rows"] == [["state_icon", "workspace"]]
+assert config["onboarding"] is False
+assert ui["sidebar"]["agents"]["rows"] == [["state_icon"]]
+spaces = ui["sidebar"]["spaces"]["rows"][0]
+assert spaces[:2] == ["state_icon", "workspace"]
+assert spaces[2]["token"] == "$needs"
+assert spaces[2]["rules"] == [{"equals": "0", "hide": True}]
 PY
   [ "$status" -eq 0 ]
 }
@@ -291,6 +296,110 @@ with open(sys.argv[1], "rb") as source:
 assert not any(command.get("command", "").startswith("devcontainer.")
                for command in config.get("keys", {}).get("command", []))
 PY
+  [ "$status" -eq 0 ]
+}
+
+@test "explicit config refresh backs up exact bytes without installing binary" {
+  mkdir -p "$TEST_ROOT/config/herdr"
+  printf '[theme]\nname = "kanagawa"\n' >"$TEST_ROOT/config/herdr/config.toml"
+  cp "$TEST_ROOT/config/herdr/config.toml" "$TEST_ROOT/original"
+  source_installer bash -c '
+    source "$1/tools/herdr/install.sh"
+    install_pinned_binary() { return 99; }
+    main --refresh-config
+    main --refresh-config
+  ' _ "$REPO_ROOT"
+  [ "$status" -eq 0 ]
+  cmp "$REPO_ROOT/tools/herdr/config.toml.template" "$TEST_ROOT/config/herdr/config.toml"
+  local -a backups=("$TEST_ROOT"/config/herdr/config.toml.backup.*)
+  [ "${#backups[@]}" -eq 1 ]
+  cmp "$TEST_ROOT/original" "${backups[0]}"
+  [ "$(stat -c %a "${backups[0]}")" = 600 ]
+  [ ! -e "$TEST_ROOT/bin/herdr" ]
+}
+
+@test "refresh publication failure preserves original config and backup" {
+  mkdir -p "$TEST_ROOT/config/herdr"
+  printf 'original\n' >"$TEST_ROOT/config/herdr/config.toml"
+  source_installer bash -c '
+    source "$1/tools/herdr/install.sh"
+    publish_file() { return 77; }
+    main --refresh-config
+  ' _ "$REPO_ROOT"
+  [ "$status" -ne 0 ]
+  [ "$(<"$TEST_ROOT/config/herdr/config.toml")" = original ]
+  local -a backups=("$TEST_ROOT"/config/herdr/config.toml.backup.*)
+  [ "$(<"${backups[0]}")" = original ]
+}
+
+@test "refresh backup failure leaves existing config untouched" {
+  mkdir -p "$TEST_ROOT/config/herdr"
+  printf 'original\n' >"$TEST_ROOT/config/herdr/config.toml"
+  source_installer bash -c '
+    source "$1/tools/herdr/install.sh"
+    mktemp() { case "$*" in *backup*) return 70;; *) command mktemp "$@";; esac; }
+    main --refresh-config
+  ' _ "$REPO_ROOT"
+  [ "$status" -ne 0 ]
+  [ "$(<"$TEST_ROOT/config/herdr/config.toml")" = original ]
+}
+
+@test "explicit refresh accepts a reviewed machine-local source" {
+  printf 'onboarding = false\n' >"$TEST_ROOT/reviewed.toml"
+  source_installer HERDR_CONFIG_TEMPLATE="$TEST_ROOT/reviewed.toml" bash -c '
+    source "$1/tools/herdr/install.sh"
+    main --refresh-config
+  ' _ "$REPO_ROOT"
+  [ "$status" -eq 0 ]
+  cmp "$TEST_ROOT/reviewed.toml" "$TEST_ROOT/config/herdr/config.toml"
+}
+
+@test "unknown and combined modes refuse before writing" {
+  for args in '--typo' '--check --refresh-config'; do
+    source_installer bash -c 'source "$1/tools/herdr/install.sh"; shift; main "$@"' _ "$REPO_ROOT" $args
+    [ "$status" -eq 2 ]
+    [ ! -e "$TEST_ROOT/config/herdr/config.toml" ]
+  done
+}
+
+@test "dashboard installs a stable copy and can be registered again" {
+  mkdir -p "$TEST_ROOT/bin"
+  cat >"$TEST_ROOT/bin/herdr" <<'SH'
+#!/bin/sh
+[ "$1 $2" = 'plugin link' ] || exit 80
+[ -x "$3/dashboard.py" ] && [ -f "$3/herdr-plugin.toml" ] || exit 81
+printf '%s\n' "$3" >>"$HOME/dashboard-links"
+SH
+  chmod +x "$TEST_ROOT/bin/herdr"
+  source_installer XDG_DATA_HOME="$TEST_ROOT/data with spaces" bash -c '
+    source "$1/tools/herdr/install.sh"
+    main --install-dashboard
+    main --install-dashboard
+  ' _ "$REPO_ROOT"
+  [ "$status" -eq 0 ]
+  local destination="$TEST_ROOT/data with spaces/dotfiles/herdr-dashboard"
+  [ -L "$destination" ]
+  cmp "$REPO_ROOT/tools/herdr/dashboard/dashboard.py" "$destination/dashboard.py"
+  [[ "$(readlink "$destination")" != *".dotfiles-worktrees"* ]]
+  [ "$(find "$TEST_ROOT/data with spaces/dotfiles" -maxdepth 1 -type d -name '.herdr-dashboard-*' | wc -l)" -eq 1 ]
+}
+
+@test "dashboard content update switches the copy while retaining the old version" {
+  mkdir -p "$TEST_ROOT/source/tools/herdr/dashboard" "$TEST_ROOT/bin"
+  cp "$REPO_ROOT"/tools/herdr/dashboard/{dashboard.py,herdr-plugin.toml} "$TEST_ROOT/source/tools/herdr/dashboard/"
+  printf '#!/bin/sh\nexit 0\n' >"$TEST_ROOT/bin/herdr"
+  chmod +x "$TEST_ROOT/bin/herdr"
+  source_installer XDG_DATA_HOME="$TEST_ROOT/data" bash -c '
+    source "$1/tools/herdr/install.sh"
+    DOTFILES_ROOT="$TEST_ROOT/source"
+    main --install-dashboard
+    before=$(readlink "$TEST_ROOT/data/dotfiles/herdr-dashboard")
+    printf "\n# refreshed\n" >>"$DOTFILES_ROOT/tools/herdr/dashboard/dashboard.py"
+    main --install-dashboard
+    after=$(readlink "$TEST_ROOT/data/dotfiles/herdr-dashboard")
+    [[ "$before" != "$after" && -f "$before/dashboard.py" ]]
+    cmp "$DOTFILES_ROOT/tools/herdr/dashboard/dashboard.py" "$after/dashboard.py"
+  ' _ "$REPO_ROOT"
   [ "$status" -eq 0 ]
 }
 

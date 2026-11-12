@@ -1,0 +1,12 @@
+id = "project-dashboard"
+name = "Project Dashboard"
+version = "0.1.0"
+min_herdr_version = "0.9.5"
+description = "Project-grouped visibility across enabled saved machines."
+platforms = ["linux", "macos"]
+
+[[panes]]
+id = "projects"
+title = "Projects"
+placement = "tab"
+command = ["./dashboard.py"]

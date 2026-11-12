@@ -37,6 +37,16 @@ keyring-init: ## Create an absent GNOME login keyring with a hidden, confirmed p
 keyring-unlock: ## Explicitly unlock the GNOME login keyring with hidden password input
 	/usr/bin/python3 libexec/keyring unlock
 
+# ── Explicit Herdr preferences and project dashboard ───────────────────────────
+
+.PHONY: herdr-config-refresh herdr-dashboard
+
+herdr-config-refresh: ## Back up and replace Herdr config with reviewed defaults (no reload)
+	bash tools/herdr/install.sh --refresh-config
+
+herdr-dashboard: ## Install and register an opt-in project dashboard pane (no pane opened)
+	bash tools/herdr/install.sh --install-dashboard
+
 # ── AI tools ──────────────────────────────────────────────────────────────────
 
 .PHONY: agent-knowledge agent-knowledge-check agent-knowledge-adopt agent-knowledge-sync
