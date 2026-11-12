@@ -115,17 +115,36 @@ class ProjectionTests(unittest.TestCase):
                   'remote': state([workspace('orchard-3', 'working', wid='c')], label='Other')}
         lines = dashboard.board(dashboard.project_rows(states), states, 60)
         a, b, c = ('local', 'a'), ('local', 'b'), ('remote', 'c')
-        self.assertEqual(dashboard.move(lines, a, 'up'), a)
-        grid_a = dashboard.move(lines, a, 'down')
-        self.assertEqual(grid_a, a)
-        y = next(y for y, _, key in dashboard.selectable(lines) if key == a and y > 2)
-        self.assertEqual(dashboard.move(lines, a, 'right'), a)
-        row = [key for line_y, _, key in dashboard.selectable(lines) if line_y == y]
-        self.assertEqual(row, [a, b, c])
-        x = next(x for line_y, x, key in dashboard.selectable(lines) if line_y == y and key == c)
-        self.assertEqual(dashboard.hit(lines, y, x), c)
+        cursor = dashboard.selection(None, dashboard.selectable(lines))
+        self.assertEqual((cursor[0], cursor[2]), (2, a))
+        self.assertEqual(dashboard.move(lines, cursor, 'up'), cursor)
+        # Down leaves the strip for the grid copy of the same lane, then Right reaches the others.
+        cursor = dashboard.move(lines, cursor, 'down')
+        self.assertEqual(cursor[2], a)
+        self.assertGreater(cursor[0], 2)
+        for expected in (b, c, c):
+            cursor = dashboard.move(lines, cursor, 'right')
+            self.assertEqual(cursor[2], expected)
+        self.assertEqual(dashboard.move(lines, cursor, 'down'), cursor)
+        self.assertEqual(dashboard.move(lines, cursor, 'up')[0], 2)
+        self.assertEqual(dashboard.hit(lines, cursor[0], cursor[1]), c)
         self.assertIsNone(dashboard.hit(lines, 0, 0))
-        self.assertEqual(dashboard.move([lines[0], lines[y]], c, 'left'), b)
+        # A refresh keeps the cursor on the grid copy rather than jumping back to the strip.
+        self.assertEqual(dashboard.selection(cursor, dashboard.selectable(lines)), cursor)
+
+    def test_review_regressions_width_identity_and_aliases(self):
+        hosts = {f'm{n}': state([workspace('orchard-1', 'working')], label=f'Machine{n}') for n in range(6)}
+        for width in (20, 30):
+            lines = dashboard.board(dashboard.project_rows(hosts), hosts, width)
+            self.assertTrue(all(x + dashboard.text_width(text) <= width for line in lines for x, text, _, _ in line))
+        long_host = {'local': state([workspace('orchard-1', 'blocked')], label='M' * 40)}
+        strip = flat(dashboard.board(dashboard.project_rows(long_host), long_host, 30))[2]
+        self.assertTrue(strip.startswith('1 ! orchard-1'), strip)
+        self.assertLessEqual(dashboard.text_width(strip), 30)
+        with self.assertRaises(ValueError):
+            dashboard.validate_snapshot(dict(workspaces=[], panes=[dict(agent='pi', workspace_id=[])]))
+        rows = dashboard.project_rows({'local': state([workspace('orchard-local-1', wid='w1'), workspace('orchard-local', wid='w2')])})
+        self.assertEqual([(r['project'], r['lane']) for r in rows], [('orchard-local', 'coord'), ('orchard-local', '1')])
 
     def test_focus_only_online_local_returned_id(self):
         rows = dashboard.project_rows({'local': state([workspace('orchard-1')]), 'remote': state([workspace('orchard-2')])})
@@ -142,8 +161,10 @@ class ProjectionTests(unittest.TestCase):
     def test_clipping_and_selection_survive_refresh(self):
         self.assertLessEqual(len(dashboard.clip('a\n\x1b' + '界' * 30, 20)), 20)
         self.assertNotIn('\x1b', dashboard.clip('x\x1by', 20))
-        self.assertEqual(dashboard.selection(('remote', 'w2'), [('local', 'w1'), ('remote', 'w2')]), ('remote', 'w2'))
-        self.assertEqual(dashboard.selection(('gone', 'w1'), [('local', 'w1')]), ('local', 'w1'))
+        items = [(2, 0, ('local', 'w1')), (5, 13, ('remote', 'w2'))]
+        self.assertEqual(dashboard.selection((5, 13, ('remote', 'w2')), items), items[1])
+        self.assertEqual(dashboard.selection((5, 13, ('gone', 'w1')), items), items[1])
+        self.assertIsNone(dashboard.selection(None, []))
 
 
 class ReaderTests(unittest.TestCase):

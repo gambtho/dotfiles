@@ -30,7 +30,8 @@ def validate_snapshot(snapshot):
         if not isinstance(tokens, dict) or any(not isinstance(v, str) for v in tokens.values()):
             raise ValueError('Invalid workspace tokens')
     panes = snapshot.get('panes', [])
-    if not isinstance(panes, list) or any(not isinstance(p, dict) for p in panes):
+    if not isinstance(panes, list) or any(not isinstance(p, dict) or not isinstance(p.get('workspace_id', ''), str)
+                                          or not isinstance(p.get('agent', ''), str) for p in panes):
         raise ValueError('Invalid pane list')
     return snapshot
 
@@ -78,7 +79,7 @@ def project_rows(states):
                 others.append(row)
     known = heading_projects(states) | {r['project'] for r in lanes}
     for row in others:
-        project = re.sub(r'-local$', '', row['label'])
+        project = row['label'] if row['label'] in known else re.sub(r'-local$', '', row['label'])
         if project in known:
             row.update(project=project, lane='coord')
             lanes.append(row)
@@ -141,14 +142,15 @@ def board(rows, states, width, headings=()):
     lines.append([(0, '─' * width, None, 'muted')])
     for number, row in enumerate(strip_rows(rows)):
         prefix = (STRIP_KEYS[number] if number < len(STRIP_KEYS) else ' ') + ' ' + icon(row) + ' ' + name(row) + '  '
-        host = ' ' + row['host'] + ('?' if row['offline'] else '')
+        host = ' ' + clip(row['host'], max(1, width // 3 - 2)) + ('?' if row['offline'] else '')
         task = row['task'] or WORDS[row['state']]
         body = pad(prefix + task, width - text_width(host))
         lines.append([(0, body, row['key'], row['state']), (text_width(body), host, None, 'muted')])
     lines.append([(0, '─' * width, None, 'muted')])
     hosts = list(states)
     project_width = min(16, max([len(p) for p in {r['project'] for r in rows} | set(headings)] + [8]) + 2)
-    cell = max(4, (width - project_width) // max(1, len(hosts)))
+    project_width = max(4, min(project_width, width - 4 * len(hosts)))
+    cell = max(2, (width - project_width) // max(1, len(hosts)))
     lines.append([(project_width + i * cell, clip(states[h]['label'] + (' ?' if states[h]['error'] else ''), cell - 1), None, 'muted')
                   for i, h in enumerate(hosts)])
     projects = sorted({r['project'] for r in rows} | set(headings), key=lambda p: (
@@ -173,28 +175,51 @@ def board(rows, states, width, headings=()):
                 line.append((x + used, text, row['key'], row['state']))
                 used += text_width(text) + 1
         lines.append(line)
-    return lines
+    return [bound(line, width) for line in lines]
+
+
+def bound(segments, width):
+    """Clip every segment to the board; drop segments (and their click targets) that don't fit."""
+    kept = []
+    for x, text, key, style in segments:
+        text = clip(text, width - x) if x < width else ''
+        if text.strip():
+            kept.append((x, text, key, style))
+    return kept
 
 
 def selectable(lines):
     return [(y, x, key) for y, line in enumerate(lines) for x, _, key, _ in line if key]
 
 
-def move(lines, selected, direction):
-    """Arrows: left/right within a line, up/down to the nearest item on the next line."""
-    items = selectable(lines)
+def selection(cursor, items):
+    """Keep the cursor on the same lane, at the occurrence nearest its last line;
+    a lane shows in both the strip and the grid."""
     if not items:
         return None
-    here = next((i for i in items if i[2] == selected), items[0])
+    if cursor is None:
+        return items[0]
+    same = [i for i in items if i[2] == cursor[2]]
+    if same:
+        return min(same, key=lambda i: (abs(i[0] - cursor[0]), abs(i[1] - cursor[1])))
+    return min(items, key=lambda i: (abs(i[0] - cursor[0]), i[1]))
+
+
+def move(lines, cursor, direction):
+    """Arrows: left/right within a line, up/down to the nearest item on the next line."""
+    items = selectable(lines)
+    here = selection(cursor, items)
+    if here is None:
+        return None
     if direction in ('left', 'right'):
         row = [i for i in items if i[0] == here[0]]
         index = row.index(here) + (1 if direction == 'right' else -1)
-        return row[max(0, min(len(row) - 1, index))][2]
+        return row[max(0, min(len(row) - 1, index))]
     step = 1 if direction == 'down' else -1
     targets = sorted({i[0] for i in items if (i[0] - here[0]) * step > 0}, key=lambda y: abs(y - here[0]))
     if not targets:
-        return here[2]
-    return min((i for i in items if i[0] == targets[0]), key=lambda i: abs(i[1] - here[1]))[2]
+        return here
+    return min((i for i in items if i[0] == targets[0]), key=lambda i: abs(i[1] - here[1]))
 
 
 def hit(lines, y, x):
@@ -211,10 +236,6 @@ def detail(row):
 
 def host_summary(states):
     return ' | '.join(state['label'] + (' OFFLINE: ' + state['error'] if state['error'] else ' online') for state in states.values())
-
-
-def selection(selected, order):
-    return selected if selected in order else next(iter(order), None)
 
 
 def clip(text, width):
@@ -369,17 +390,17 @@ def run(screen, view):
         for number, (state, color) in enumerate((('needs', curses.COLOR_RED), ('review', curses.COLOR_GREEN), ('working', curses.COLOR_BLUE)), 1):
             curses.init_pair(number, color, -1)
             styles[state] = curses.color_pair(number) | (curses.A_BOLD if state == 'needs' else 0)
-    selected, offset, message = None, 0, ''
+    cursor, offset, message = None, 0, ''
     while True:
         view.tick()
         rows = project_rows(view.states)
         height, width = screen.getmaxyx()
         lines = board(rows, view.states, width - 1, heading_projects(view.states))
-        order = [key for _, _, key in selectable(lines)]
-        updated = selection(selected, order)
-        if selected != updated:
+        updated = selection(cursor, selectable(lines))
+        if (cursor and cursor[2]) != (updated and updated[2]):
             message = ''
-        selected = updated
+        cursor = updated
+        selected = cursor[2] if cursor else None
         screen.erase()
 
         def put(y, x, text, attr=0, height=height, width=width):
@@ -392,7 +413,7 @@ def run(screen, view):
         # Title and rule stay fixed; strip and grid scroll beneath them.
         body = lines[2:]
         available = max(0, height - 5)
-        line = next((y for y, _, key in selectable(body) if key == selected), None)
+        line = cursor[0] - 2 if cursor and cursor[0] >= 2 else None
         if line is not None and available:
             if line < offset:
                 offset = line
@@ -402,7 +423,8 @@ def run(screen, view):
         shown = lines[:2] + body[offset:offset + available]
         for y, segments in enumerate(shown):
             for x, text, key, style in segments:
-                attr = styles.get(style, 0) | (curses.A_REVERSE if key and key == selected else 0)
+                full = y if y < 2 else y + offset
+                attr = styles.get(style, 0) | (curses.A_REVERSE if cursor and (full, x) == cursor[:2] else 0)
                 put(y, x, text, attr)
         row = next((r for r in rows if r['key'] == selected), None)
         if view.discovery_error:
@@ -426,19 +448,21 @@ def run(screen, view):
                 continue
             target = hit(shown, my, mx)
             if target:
-                selected, go = target, True
+                full = my if my < 2 else my + offset
+                cursor = next(i for i in selectable(lines) if i[0] == full and i[2] == target and i[1] <= mx)
+                go = True
         elif key == ord('r'):
             view.refresh()
         elif key in DIRECTIONS:
-            selected, message = move(lines, selected, DIRECTIONS[key]), ''
+            cursor, message = move(lines, cursor, DIRECTIONS[key]), ''
         elif 0 <= key < 256 and chr(key) in STRIP_KEYS:
             strip = strip_rows(rows)
             index = STRIP_KEYS.index(chr(key))
             if index < len(strip):
-                selected, message = strip[index]['key'], ''
+                cursor, message = next(i for i in selectable(lines) if i[2] == strip[index]['key']), ''
         elif key in (10, 13, curses.KEY_ENTER):
             go = True
-        row = next((r for r in rows if r['key'] == selected), None)
+        row = next((r for r in rows if cursor and r['key'] == cursor[2]), None)
         if go and row:
             message = focus(row, view.binary)
 
