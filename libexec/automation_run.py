@@ -406,6 +406,146 @@ def gather_package_changes(evidence: Path) -> None:
     write_evidence(evidence / "pi-packages.md", "\n".join(sections))
 
 
+# Six terms use GitHub search's five-OR limit; filter upstream, not after paging.
+HERDR_SEARCH_TERMS = '(metadata OR sidebar OR worktree OR machine OR plugin OR snapshot)'
+
+
+def herdr_thread_snapshot(node: dict) -> dict:
+    """Keep bounded excerpts and observed links, not an unbounded conversation."""
+    links: set[str] = set()
+    maintainer_dates = []
+
+    def excerpt(item: dict) -> dict:
+        body = item['body']
+        links.update(re.findall(r'https://github\.com/herdrdev/herdr/pull/[0-9]+', body))
+        if item.get('authorAssociation') in TRUSTED_COMMENT_AUTHORS:
+            maintainer_dates.append(item['createdAt'])
+        result = {key: item[key][:500] for key in ('authorAssociation', 'createdAt', 'updatedAt', 'url') if key in item}
+        result['body'] = body[:300]
+        if 'replies' in item:
+            result['replies'] = {'totalCount': item['replies']['totalCount'],
+                                 'nodes': [excerpt(reply) for reply in item['replies']['nodes'][-5:]]}
+        return result
+
+    result = {key: node[key] for key in ('number', 'closed', 'updatedAt')}
+    result.update(title=node['title'][:300], url=node['url'][:500], body=node['body'][:300])
+    links.update(re.findall(r'https://github\.com/herdrdev/herdr/pull/[0-9]+', node['body']))
+    result['comments'] = {'totalCount': node['comments']['totalCount'],
+                          'nodes': [excerpt(comment) for comment in node['comments']['nodes'][-10:]]}
+    timeline = node.get('timelineItems', {})
+    for event in timeline.get('nodes', [])[-10:]:
+        source = event.get('source') or {}
+        # Cross-references can name private repositories visible to the gh token.
+        if re.fullmatch(r'https://github\.com/herdrdev/herdr/pull/[0-9]+', source.get('url', '')):
+            links.add(source['url'])
+    result['linkedPRs'] = sorted(links)[:30]
+    result['latestObservedMaintainerReplyAt'] = max(maintainer_dates, default=None)
+    result['coverage'] = ('Last 10 comments, last 5 replies each, 300-character excerpts; '
+                          'links: explicit PR URLs in fetched text, plus last 10 issue cross-references; '
+                          'at most 30 links. Omitted history/links UNKNOWN.')
+    return result
+
+
+def gather_herdr_upstream(evidence: Path, repo: Path) -> None:
+    """Three read-only requests, plus at most one latest-compare-page request."""
+    raw = observe(['gh', 'api', 'repos/herdrdev/herdr/contents/docs/next/CHANGELOG.md?ref=master',
+                   '-H', 'Accept: application/vnd.github.raw+json'])
+    section = re.search(r'^## Unreleased\s*\n(.*?)(?=^## |\Z)', raw, re.MULTILINE | re.DOTALL)
+    text = 'UNKNOWN: master changelog Unreleased section unavailable.\n'
+    if section and not raw.startswith('UNKNOWN'):
+        body = section[1].strip()
+        text = '# Herdr Unreleased (master docs/next/CHANGELOG.md)\n\n' + (body[:12000] or 'Unreleased: empty.')
+        if len(body) > 12000:
+            text += '\nTRUNCATED: remaining changelog UNKNOWN.\n'
+    write_evidence(evidence / 'herdr-unreleased.md', text)
+
+    try:
+        pins = (repo / 'config' / 'versions.env').read_text(encoding='utf-8')
+        match = re.search(r'^HERDR_VERSION=([A-Za-z0-9][A-Za-z0-9._-]*)$', pins, re.MULTILINE)
+        if not match:
+            raise ValueError('missing or invalid HERDR_VERSION')
+        tag = match[1]
+        if re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+', tag):
+            tag = 'v' + tag
+        endpoint = f'repos/herdrdev/herdr/compare/{tag}...master?per_page=50'
+        projection = '{status,total_commits,commits:[.commits[]|{sha,title:(.commit.message|split("\\n")[0]),url:.html_url}]}'
+        comparison = json.loads(observe(['gh', 'api', endpoint, '--jq', projection]))
+        total = comparison['total_commits']
+        if type(total) is not int or total < 0:
+            raise ValueError('invalid compare count')
+        page = max(1, (total + 49) // 50)
+        if page > 1:
+            comparison = json.loads(observe(['gh', 'api', f'{endpoint}&page={page}', '--jq', projection]))
+            if comparison['total_commits'] != total:
+                raise ValueError('compare moved between requests')
+        commits = comparison['commits']
+        if not isinstance(commits, list) or len(commits) != total - (page - 1) * 50:
+            raise ValueError('incomplete compare page')
+        comparison = {'base': tag, 'head': 'master', 'status': comparison['status'], 'total_commits': total,
+                      'page': page, 'truncated': total > 50,
+                      'commits': [{key: commit[key][:500] for key in ('sha', 'title', 'url')}
+                                  for commit in commits],
+                      'coverage': 'Latest page only; omitted earlier commits UNKNOWN. Titles capped at 500 characters.'}
+        text = json.dumps(comparison, ensure_ascii=True)
+        if len(text) > MAX_EVIDENCE_FILE_BYTES:
+            raise ValueError('compare evidence exceeds file limit')
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
+        text = f'UNKNOWN: Herdr pin/compare unavailable ({type(error).__name__}).\n'
+    write_evidence(evidence / 'herdr-commits.json', text)
+
+    try:
+        watch = json.loads((repo / 'tools' / 'automations' / 'herdr-watch.json').read_text(encoding='utf-8'))
+        if not isinstance(watch, list) or len(watch) > 5 or any(
+            not isinstance(item, dict) or item.get('type') not in ('issue', 'discussion')
+            or type(item.get('number')) is not int or item['number'] <= 0 for item in watch
+        ):
+            raise ValueError('invalid Herdr watch list')
+        since = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=8)).date().isoformat()
+        search = f'repo:herdrdev/herdr updated:>={since} sort:updated-desc {HERDR_SEARCH_TERMS}'
+        searches = []
+        for alias, kind, qualifier in (('issues', 'ISSUE', ' is:issue'), ('discussions', 'DISCUSSION', '')):
+            count_field = 'issueCount' if kind == 'ISSUE' else 'discussionCount'
+            searches.append(
+                f'{alias}:search(type:{kind},first:20,query:{json.dumps(search + qualifier)})'
+                '{' + count_field + ' pageInfo{hasNextPage} nodes{'
+                '... on Issue{number title state url} ... on Discussion{number title closed url}}}'
+            )
+        comment_fields = 'authorAssociation createdAt updatedAt url body'
+        tracked = []
+        for index, item in enumerate(watch):
+            replies = f'replies(last:5){{totalCount nodes{{{comment_fields}}}}}' if item['type'] == 'discussion' else ''
+            timeline = ('timelineItems(last:10,itemTypes:[CROSS_REFERENCED_EVENT])'
+                        '{nodes{... on CrossReferencedEvent{source{... on PullRequest{url}}}}}'
+                        if item['type'] == 'issue' else '')
+            tracked.append(
+                f'watch{index}:{item["type"]}(number:{item["number"]})'
+                '{number title url closed updatedAt body '
+                f'comments(last:10){{totalCount nodes{{{comment_fields} {replies}}}}} {timeline}' + '}'
+            )
+        query = '{' + ' '.join(searches) + ' repository(owner:"herdrdev",name:"herdr"){' + ' '.join(tracked) + '}}'
+        # gh exits nonzero on partial GraphQL errors. These files deliberately fail together.
+        payload = json.loads(observe(['gh', 'api', 'graphql', '-f', 'query=' + query]))
+        if payload.get('errors'):
+            raise ValueError('partial GraphQL errors')
+        data = payload['data']
+        activity = {'since': since, 'keywords': HERDR_SEARCH_TERMS,
+                    'coverage': 'First 20 matching issues/discussions; hasNextPage means omitted matches UNKNOWN.'}
+        for alias, count_field in (('issues', 'issueCount'), ('discussions', 'discussionCount')):
+            batch = data[alias]
+            activity[alias] = {count_field: batch[count_field], 'pageInfo': batch['pageInfo'],
+                               'nodes': [{key: value[:500] if isinstance(value, str) else value
+                                          for key, value in node.items()} for node in batch['nodes'][:20]]}
+        snapshots = [dict(herdr_thread_snapshot(data['repository'][f'watch{index}']), type=item['type'])
+                     for index, item in enumerate(watch)]
+        activity_text, tracked_text = json.dumps(activity), json.dumps(snapshots)
+        if max(len(activity_text), len(tracked_text)) > MAX_EVIDENCE_FILE_BYTES:
+            raise ValueError('GraphQL evidence exceeds file limit')
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
+        activity_text = tracked_text = f'UNKNOWN: Herdr activity and tracked threads unavailable ({type(error).__name__}).\n'
+    write_evidence(evidence / 'herdr-activity.json', activity_text)
+    write_evidence(evidence / 'herdr-tracked.json', tracked_text)
+
+
 def gather_tooling_radar(evidence: Path, repo: Path) -> None:
     pi_version = observe(["pi", "--version"]).strip()
     versions = f"pi {pi_version}\nregistry pi {observe(['npm', 'view', '@earendil-works/pi-coding-agent', 'version'], timeout=30)}"
@@ -425,6 +565,7 @@ def gather_tooling_radar(evidence: Path, repo: Path) -> None:
         evidence / "herdr-releases.json",
         observe(["gh", "api", "repos/herdrdev/herdr/releases?per_page=5", "--jq", "[.[]|{tag_name,published_at,body}]"]),
     )
+    gather_herdr_upstream(evidence, repo)
     write_evidence(evidence / "herdr-help.txt", observe(["herdr", "--help"]))
     herdr_config = HOME / ".config" / "herdr" / "config.toml"
     if herdr_config.exists():
