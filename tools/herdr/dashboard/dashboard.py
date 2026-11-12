@@ -180,7 +180,8 @@ def board(rows, states, width, headings=()):
                     used += text_width(text) + 1
                     continue
                 # The +N marker selects the most urgent lane it folds, so every cell stays actionable.
-                line.append((x + used, clip(f'+{rest + 1}', room - used), row['key'], 'muted'))
+                count = f'+{rest + 1}'
+                line.append((x + used, count if len(count) <= room - used else '+', row['key'], 'muted'))
                 break
         lines.append(line)
     return [bound(line, width) for line in lines]
