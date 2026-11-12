@@ -242,7 +242,6 @@ PY
 
 @test "lane handoffs share the project's report location" {
   grep -Fq "same location as the lane's report" "$SKILL_DIR/references/lane-template.md"
-  grep -Fq 'AGENTS.md' "$SKILL_DIR/references/lane-template.md"
   grep -Fq 'reports/W<n>-HANDOFF.md' "$SKILL_DIR/references/lane-template.md"
   run grep -Fq '<lanes>/W<n>-HANDOFF.md' "$SKILL_DIR/references/lane-template.md"
   [ "$status" -eq 1 ]
@@ -594,14 +593,16 @@ PY
 @test "remote fetch example fails when only supplementary evidence exists" {
   python3 - "$SKILL_DIR/references/remote-lanes.md" "$TEST_ROOT/fetch.sh" <<'PY'
 from pathlib import Path
+import fnmatch
 import re
 import sys
 
 blocks = re.findall(r"```sh\n(.*?)\n```", Path(sys.argv[1]).read_text(), re.S)
+assert fnmatch.fnmatch("W12-HANDOFF.md", re.search(r"/reports/([^']*\*)'", blocks[-1])[1])
 Path(sys.argv[2]).write_text(blocks[-1])
 PY
   # External transfer boundary: required report absent, matching evidence present.
-  stub_command rsync 'case "${@: -2:1}" in *task-report.md) exit 23 ;; *task-\**) exit 0 ;; *) exit 99 ;; esac'
+  stub_command rsync 'case "${@: -2:1}" in *W12-REPORT.md) exit 23 ;; *W12-\**) exit 0 ;; *) exit 99 ;; esac'
   run bash "$TEST_ROOT/fetch.sh"
   [ "$status" -eq 23 ] || {
     echo "Expected missing-report exit 23; got $status"

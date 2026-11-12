@@ -48,15 +48,15 @@ Read /home/example/project-local/lanes/task.md and follow it.
 
 ## Fetch before judging readiness
 
-Name the required primary report explicitly (`task-report.md` here). Fetch it first,
+Name the required primary report explicitly (`W12-REPORT.md` here). Fetch it first,
 then the prefixed evidence, including the handoff kept alongside the report, so
 evidence alone cannot hide a missing primary behind an old local report. Record the
 fetch observation time in the ordinary report:
 
 ```sh
 remote_shell='sh -c '\''exec tailscale ssh example@"$@"'\'' sh'
-rsync -a -e "$remote_shell" build-host:/home/example/project-local/reports/task-report.md /home/example/project-local/reports/ &&
-rsync -a -e "$remote_shell" 'build-host:/home/example/project-local/reports/task-*' /home/example/project-local/reports/
+rsync -a -e "$remote_shell" build-host:/home/example/project-local/reports/W12-REPORT.md /home/example/project-local/reports/ &&
+rsync -a -e "$remote_shell" 'build-host:/home/example/project-local/reports/W12-*' /home/example/project-local/reports/
 ```
 
 Read the host's named primary against the fetched copy before judging its currency.
