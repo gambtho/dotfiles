@@ -5,16 +5,19 @@ import curses
 import json
 import os
 import re
+import shutil
 import signal
 import subprocess
 import tempfile
 import time
 import unicodedata
-from collections import Counter
 
-SECTIONS = ('Needs you', 'Ready for review', 'Working', 'Idle', 'Offline (cached)')
 INTERVAL = 3
 TIMEOUT = 8
+ICONS = {'needs': '!', 'review': '✓', 'working': '●', 'idle': '○', 'shell': '·'}
+RANK = {'needs': 0, 'review': 1, 'working': 2, 'idle': 3, 'shell': 4}
+WORDS = {'needs': 'needs you', 'review': 'ready for review', 'working': 'working', 'idle': 'idle', 'shell': 'no agent'}
+STRIP_KEYS = '123456789'
 
 
 def validate_snapshot(snapshot):
@@ -26,31 +29,11 @@ def validate_snapshot(snapshot):
         tokens = row.get('tokens', {})
         if not isinstance(tokens, dict) or any(not isinstance(v, str) for v in tokens.values()):
             raise ValueError('Invalid workspace tokens')
+    panes = snapshot.get('panes', [])
+    if not isinstance(panes, list) or any(not isinstance(p, dict) or not isinstance(p.get('workspace_id', ''), str)
+                                          or not isinstance(p.get('agent', ''), str) for p in panes):
+        raise ValueError('Invalid pane list')
     return snapshot
-
-
-def project_rows(states):
-    rows: list[dict] = []
-    for endpoint, state in states.items():
-        for workspace in (state['snapshot'] or {}).get('workspaces', []):
-            if workspace['label'].startswith('◆ '):
-                continue
-            match = re.fullmatch(r'(.+)-(coord|[0-9]+)', workspace['label'])
-            if not match:
-                continue
-            project, lane = match.groups()
-            status = workspace['agent_status']
-            tokens = workspace.get('tokens', {})
-            phase = tokens.get('phase', '')
-            section = {'working': 'Working', 'blocked': 'Needs you', 'done': 'Ready for review'}.get(status, 'Idle')
-            if status == 'idle' and phase in ('needs-decision', 'ready'):
-                section = 'Needs you' if phase == 'needs-decision' else 'Ready for review'
-            offline = bool(state['error'])
-            rows.append(dict(key=(endpoint, workspace['workspace_id']), project=project, lane=lane,
-                             label=workspace['label'], host=state['label'], task=tokens.get('task', ''),
-                             phase=phase, status=status, offline=offline,
-                             section='Offline (cached)' if offline else section))
-    return sorted(rows, key=lambda row: (row['project'], -1 if row['lane'] == 'coord' else int(row['lane']), row['key']))
 
 
 def heading_projects(states):
@@ -59,35 +42,213 @@ def heading_projects(states):
             if w['label'].startswith('◆ ') and w['label'][2:].strip()}
 
 
-def lines_for(rows, mode, headings=()):
-    lines = []
-    groups = sorted(set(headings) | {r['project'] for r in rows}) if mode == 'projects' else SECTIONS
-    for group in groups:
-        members = [r for r in rows if r['project' if mode == 'projects' else 'section'] == group]
-        if mode == 'projects':
-            needs = sum(r['section'] == 'Needs you' for r in members)
-            title = f"{group} · {needs} needs you (known) · {sum(r['offline'] for r in members)} offline"
-        else:
-            title = f'{group} · {len(members)}'
-        lines.append((title, None, 'heading'))
-        for row in members:
-            badge = '◆ coord' if row['lane'] == 'coord' else row['lane']
-            if mode == 'attention':
-                badge = row['project'] + ' ' + badge
-            lines.append((f"  {badge:<8} {row['host']} · {row['section']}", row['key'], row['section']))
-            lines.append((f"    {row['task'] or '(no task reported)'}", row['key'], 'detail'))
-            status = ('cached ' if row['offline'] else 'live ') + row['status']
-            lines.append((f"    phase: {row['phase'] or '—'} · {status}", row['key'], 'detail'))
-        lines.append(('', None, 'detail'))
-    return lines
+def effective(status, phase, agent):
+    """One state per lane: live working/blocked beat a stale phase token."""
+    if status == 'blocked' or (status == 'idle' and phase == 'needs-decision'):
+        return 'needs'
+    if status == 'done' or (status == 'idle' and phase == 'ready'):
+        return 'review'
+    if status == 'working':
+        return 'working'
+    return 'idle' if agent else 'shell'
+
+
+def project_rows(states):
+    """Lanes are <project>-<n>; coordinators are <project>-coord, or <project> /
+    <project>-local when that project is already known from lanes or a heading."""
+    lanes, others = [], []
+    for endpoint, state in states.items():
+        snapshot = state['snapshot'] or {}
+        panes = snapshot.get('panes')
+        with_agent = None if panes is None else {p.get('workspace_id') for p in panes if p.get('agent')}
+        for workspace in snapshot.get('workspaces', []):
+            label = workspace['label']
+            if label.startswith('◆ '):
+                continue
+            status = workspace['agent_status']
+            tokens = workspace.get('tokens', {})
+            agent = status != 'unknown' if with_agent is None else workspace['workspace_id'] in with_agent
+            row = dict(key=(endpoint, workspace['workspace_id']), label=label, host=state['label'],
+                       task=tokens.get('task', ''), phase=tokens.get('phase', ''), status=status,
+                       offline=bool(state['error']), state=effective(status, tokens.get('phase', ''), agent))
+            match = re.fullmatch(r'(.+)-(coord|[0-9]+)', label)
+            if match:
+                row.update(project=match[1], lane=match[2])
+                lanes.append(row)
+            else:
+                others.append(row)
+    known = heading_projects(states) | {r['project'] for r in lanes}
+    for row in others:
+        project = row['label'] if row['label'] in known else re.sub(r'-local$', '', row['label'])
+        if project in known:
+            row.update(project=project, lane='coord')
+            lanes.append(row)
+    return sorted(lanes, key=lambda r: (r['project'], lane_order(r), r['key']))
+
+
+def lane_order(row):
+    return -1 if row['lane'] == 'coord' else int(row['lane'])
+
+
+def urgency(row):
+    return (row['offline'], RANK[row['state']])
+
+
+def icon(row):
+    return '?' if row['offline'] else ICONS[row['state']]
+
+
+def tag(row):
+    return icon(row) + ('◆' if row['lane'] == 'coord' else row['lane'])
+
+
+def name(row):
+    return row['project'] + '-' + row['lane']
+
+
+def strip_rows(rows):
+    """Attention strip: live lanes that need Tom, plus any lane reporting a task."""
+    chosen = [r for r in rows if r['state'] in ('needs', 'review') or r['task']]
+    return sorted(chosen, key=lambda r: (urgency(r), r['project'], lane_order(r), r['key']))
+
+
+def text_width(text):
+    return sum(0 if unicodedata.combining(c) else 2 if unicodedata.east_asian_width(c) in ('W', 'F') else 1 for c in text)
+
+
+def pad(text, width):
+    text = clip(text, width)
+    return text + ' ' * (width - text_width(text))
+
+
+def summary(rows, states):
+    live = [r for r in rows if not r['offline']]
+    counts = [f"{ICONS[k]}{n}" for k in ('needs', 'review', 'working')
+              if (n := sum(r['state'] == k for r in live))]
+    quiet = sum(r['state'] in ('idle', 'shell') for r in live)
+    if quiet:
+        counts.append(f'○{quiet}')
+    down = [s['label'] for s in states.values() if s['error']]
+    machines = f"{len(states) - len(down)}/{len(states)} up" + (' · ' + ', '.join(down) + ' offline' if down else '')
+    return ' '.join(counts + ['·', machines]) if counts else machines
+
+
+def machine_label(state, width):
+    """Clip the name, never the offline mark."""
+    return clip(state['label'], width - 2) + ' ?' if state['error'] and width >= 3 else clip(state['label'], width)
+
+
+def board(rows, states, width, headings=()):
+    """Lines of (x, text, key, style) segments: attention strip, then project × machine grid."""
+    width = max(width, 20)
+    lines = [[(0, 'PROJECTS', None, 'title')]]
+    right = clip(summary(rows, states), width - 9)
+    lines[0].append((max(9, width - text_width(right)), right, None, 'muted'))
+    lines.append([(0, '─' * width, None, 'muted')])
+    for number, row in enumerate(strip_rows(rows)):
+        prefix = (STRIP_KEYS[number] if number < len(STRIP_KEYS) else ' ') + ' ' + icon(row) + ' ' + name(row) + '  '
+        host = ' ' + clip(row['host'], max(1, width // 3 - 2)) + ('?' if row['offline'] else '')
+        task = row['task'] or WORDS[row['state']]
+        body = pad(prefix + task, width - text_width(host))
+        lines.append([(0, body, row['key'], row['state']), (text_width(body), host, None, 'muted')])
+    lines.append([(0, '─' * width, None, 'muted')])
+    hosts = list(states)
+    project_width = min(16, max([len(p) for p in {r['project'] for r in rows} | set(headings)] + [8]) + 2)
+    project_width = max(4, min(project_width, width - 4 * len(hosts)))
+    hidden = 0
+    if len(hosts) * 4 > width - project_width:
+        # Too many machines for 4-column cells: show what fits and count the rest.
+        keep = max(1, (width - project_width) // 4 - 1)
+        hidden, hosts = len(hosts) - keep, hosts[:keep]
+    cell = max(4, (width - project_width) // max(1, len(hosts))) if not hidden else 4
+    header = [(project_width + i * cell, machine_label(states[h], cell - 1), None, 'muted') for i, h in enumerate(hosts)]
+    if hidden:
+        header.append((project_width + len(hosts) * cell, f'+{hidden}', None, 'muted'))
+    lines.append(header)
+    projects = sorted({r['project'] for r in rows} | set(headings), key=lambda p: (
+        min([urgency(r) for r in rows if r['project'] == p] or [(True, 9)]), p))
+    for project in projects:
+        line = [(0, clip(project, project_width - 1), None, 'project')]
+        for i, host in enumerate(hosts):
+            x = project_width + i * cell
+            members = sorted((r for r in rows if r['project'] == project and r['key'][0] == host),
+                             key=lambda r: (urgency(r), lane_order(r) >= 0, lane_order(r)))
+            if not members:
+                line.append((x, '—', None, 'muted'))
+                continue
+            room, used = cell - 1, 0
+            for n, row in enumerate(members):
+                text, rest = tag(row), len(members) - n - 1
+                if used + text_width(text) + (len(f'+{rest}') + 1 if rest else 0) <= room:
+                    line.append((x + used, text, row['key'], row['state']))
+                    used += text_width(text) + 1
+                    continue
+                # The +N marker selects the most urgent lane it folds, so every cell stays actionable.
+                count = f'+{rest + 1}'
+                line.append((x + used, count if len(count) <= room - used else '+', row['key'], 'muted'))
+                break
+        lines.append(line)
+    return [bound(line, width) for line in lines]
+
+
+def bound(segments, width):
+    """Clip every segment to the board; drop segments (and their click targets) that don't fit."""
+    kept = []
+    for x, text, key, style in segments:
+        text = clip(text, width - x) if x < width else ''
+        if text.strip():
+            kept.append((x, text, key, style))
+    return kept
+
+
+def selectable(lines):
+    return [(y, x, key) for y, line in enumerate(lines) for x, _, key, _ in line if key]
+
+
+def selection(cursor, items):
+    """Keep the cursor on the same lane, at the occurrence nearest its last line;
+    a lane shows in both the strip and the grid."""
+    if not items:
+        return None
+    if cursor is None:
+        return items[0]
+    same = [i for i in items if i[2] == cursor[2]]
+    if same:
+        return min(same, key=lambda i: (abs(i[0] - cursor[0]), abs(i[1] - cursor[1])))
+    return min(items, key=lambda i: (abs(i[0] - cursor[0]), i[1]))
+
+
+def move(lines, cursor, direction):
+    """Arrows: left/right within a line, up/down to the nearest item on the next line."""
+    items = selectable(lines)
+    here = selection(cursor, items)
+    if here is None:
+        return None
+    if direction in ('left', 'right'):
+        row = [i for i in items if i[0] == here[0]]
+        index = row.index(here) + (1 if direction == 'right' else -1)
+        return row[max(0, min(len(row) - 1, index))]
+    step = 1 if direction == 'down' else -1
+    targets = sorted({i[0] for i in items if (i[0] - here[0]) * step > 0}, key=lambda y: abs(y - here[0]))
+    if not targets:
+        return here
+    return min((i for i in items if i[0] == targets[0]), key=lambda i: abs(i[1] - here[1]))
+
+
+def hit(lines, y, x):
+    for sx, text, key, _ in lines[y] if 0 <= y < len(lines) else []:
+        if key and sx <= x < sx + text_width(text):
+            return key
+    return None
+
+
+def detail(row):
+    words = 'offline (cached ' + WORDS[row['state']] + ')' if row['offline'] else WORDS[row['state']]
+    return ' · '.join(filter(None, [row['host'] + ' / ' + row['label'], words, row['task']]))
 
 
 def host_summary(states):
     return ' | '.join(state['label'] + (' OFFLINE: ' + state['error'] if state['error'] else ' online') for state in states.values())
-
-
-def selection(selected, order):
-    return selected if selected in order else next(iter(order), None)
 
 
 def clip(text, width):
@@ -235,65 +396,97 @@ def run(screen, view):
     curses.curs_set(0)
     screen.keypad(True)
     screen.timeout(100)
-    selected, offset, mode, message = None, 0, 'projects', ''
+    curses.mousemask(curses.BUTTON1_CLICKED | curses.BUTTON1_PRESSED)
+    styles = {'title': curses.A_BOLD, 'project': curses.A_BOLD, 'muted': curses.A_DIM, 'idle': curses.A_DIM, 'shell': curses.A_DIM}
+    if curses.has_colors():
+        curses.use_default_colors()
+        for number, (state, color) in enumerate((('needs', curses.COLOR_RED), ('review', curses.COLOR_GREEN), ('working', curses.COLOR_BLUE)), 1):
+            curses.init_pair(number, color, -1)
+            styles[state] = curses.color_pair(number) | (curses.A_BOLD if state == 'needs' else 0)
+    cursor, offset, message = None, 0, ''
     while True:
         view.tick()
         rows = project_rows(view.states)
-        counts = Counter(r['section'] for r in rows)
-        content = lines_for(rows, mode, heading_projects(view.states))
-        order = list(dict.fromkeys(line[1] for line in content if line[1]))
-        updated = selection(selected, order)
-        if selected != updated:
-            message = ''
-        selected = updated
-        screen.erase()
         height, width = screen.getmaxyx()
+        lines = board(rows, view.states, width - 1, heading_projects(view.states))
+        updated = selection(cursor, selectable(lines))
+        if (cursor and cursor[2]) != (updated and updated[2]):
+            message = ''
+        cursor = updated
+        selected = cursor[2] if cursor else None
+        screen.erase()
 
-        def put(y, text, attr=0, height=height, width=width):
-            if 0 <= y < height and width > 1:
+        def put(y, x, text, attr=0, height=height, width=width):
+            if 0 <= y < height and 0 <= x < width - 1:
                 try:
-                    screen.addstr(y, 0, clip(text, width - 1), attr)
+                    screen.addstr(y, x, clip(text, width - 1 - x), attr)
                 except curses.error:
                     pass
 
-        put(0, 'PROJECTS · ' + mode.upper(), curses.A_BOLD)
-        put(1, f"Needs you {counts['Needs you']} known · Review {counts['Ready for review']} · Working {counts['Working']} · Idle {counts['Idle']}")
-        put(2, host_summary(view.states))
-        available = max(0, height - 7)
-        positions = [i for i, line in enumerate(content) if selected and line[1] == selected]
-        if positions and available:
-            if positions[0] < offset:
-                offset = positions[0]
-            elif positions[-1] >= offset + available:
-                offset = max(0, positions[-1] - available + 1)
-        offset = min(offset, max(0, len(content) - available))
-        for y, (text, key, style) in enumerate(content[offset:offset + available], 3):
-            attr = curses.A_REVERSE if key and key == selected else 0
-            if style == 'heading':
-                attr |= curses.A_BOLD
-            elif style == 'detail':
-                attr |= curses.A_DIM
-            put(y, text, attr)
+        # Title and rule stay fixed; strip and grid scroll beneath them.
+        body = lines[2:]
+        available = max(0, height - 5)
+        line = cursor[0] - 2 if cursor and cursor[0] >= 2 else None
+        if line is not None and available:
+            if line < offset:
+                offset = line
+            elif line >= offset + available:
+                offset = line - available + 1
+        offset = max(0, min(offset, len(body) - available))
+        shown = lines[:2] + body[offset:offset + available]
+        for y, segments in enumerate(shown):
+            for x, text, key, style in segments:
+                full = y if y < 2 else y + offset
+                attr = styles.get(style, 0) | (curses.A_REVERSE if cursor and (full, x) == cursor[:2] else 0)
+                put(y, x, text, attr)
         row = next((r for r in rows if r['key'] == selected), None)
-        notice = 'Offline: cached row only; navigation disabled' if row and row['offline'] else message
-        put(height - 4, 'Discovery failed: ' + view.discovery_error if view.discovery_error else notice)
-        put(height - 3, 'Selected: ' + (row['host'] + ' / ' + row['label'] if row else 'No matching project lanes'))
-        put(height - 2, 'Local Enter focuses · Remote: Ctrl-B w, select workspace, Enter')
-        put(height - 1, '↑↓/jk select · p/a views · r refresh · Enter go/help · q exit', curses.A_DIM)
+        if row and row['offline']:
+            notice = 'Offline: cached row only; navigation disabled'
+        else:
+            notice = message or (focus_hint(row) if row else '')
+        if view.discovery_error:
+            # Keep the lane's navigation hint; known machines are still polled.
+            notice = ' · '.join(filter(None, [notice, 'Discovery failed: ' + view.discovery_error]))
+        put(height - 3, 0, detail(row) if row else 'No project lanes found', curses.A_BOLD)
+        put(height - 2, 0, notice)
+        put(height - 1, 0, 'arrows/hjkl move · 1-9 strip · Enter or click go · r refresh · q quit', curses.A_DIM)
         screen.refresh()
         key = screen.getch()
         if key in (ord('q'), 27):
             return
-        if key in (ord('p'), ord('a')):
-            mode, offset, message = ('projects' if key == ord('p') else 'attention'), 0, ''
+        go = False
+        if key == curses.KEY_MOUSE:
+            try:
+                _, mx, my, _, _ = curses.getmouse()
+            except curses.error:
+                continue
+            target = hit(shown, my, mx)
+            if target:
+                full = my if my < 2 else my + offset
+                cursor = next(i for i in selectable(lines) if i[0] == full and i[2] == target and i[1] <= mx)
+                go = True
         elif key == ord('r'):
             view.refresh()
-        elif key in (curses.KEY_DOWN, ord('j'), curses.KEY_UP, ord('k')) and order:
-            index = order.index(selected)
-            selected = order[max(0, min(len(order) - 1, index + (1 if key in (curses.KEY_DOWN, ord('j')) else -1)))]
-            message = ''
-        elif key in (10, 13, curses.KEY_ENTER) and row:
+        elif key in DIRECTIONS:
+            cursor, message = move(lines, cursor, DIRECTIONS[key]), ''
+        elif 0 <= key < 256 and chr(key) in STRIP_KEYS:
+            strip = strip_rows(rows)
+            index = STRIP_KEYS.index(chr(key))
+            if index < len(strip):
+                cursor, message = next(i for i in selectable(lines) if i[2] == strip[index]['key']), ''
+        elif key in (10, 13, curses.KEY_ENTER):
+            go = True
+        row = next((r for r in rows if cursor and r['key'] == cursor[2]), None)
+        if go and row:
             message = focus(row, view.binary)
+
+
+DIRECTIONS = {curses.KEY_UP: 'up', ord('k'): 'up', curses.KEY_DOWN: 'down', ord('j'): 'down',
+              curses.KEY_LEFT: 'left', ord('h'): 'left', curses.KEY_RIGHT: 'right', ord('l'): 'right'}
+
+
+def focus_hint(row):
+    return 'Enter focuses this lane' if row['key'][0] == 'local' else f"Ctrl-B w → {row['host']} → {row['label']} → Enter"
 
 
 def interrupted(signum, frame):
@@ -328,7 +521,12 @@ def main():
             output = [host_summary(view.states)]
             if view.discovery_error:
                 output.append('Discovery failed: ' + view.discovery_error)
-            output.extend(text for text, _, _ in lines_for(project_rows(view.states), 'projects', heading_projects(view.states)))
+            columns = shutil.get_terminal_size((120, 24)).columns
+            for segments in board(project_rows(view.states), view.states, columns - 1, heading_projects(view.states)):
+                text = ''
+                for x, part, _, _ in segments:
+                    text = pad(text, x) + part
+                output.append(text.rstrip())
             for text in output:
                 print(clip(text, len(text) * 2))
             return int(bool(view.discovery_error or any(s['error'] for s in view.states.values())))

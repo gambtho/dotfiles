@@ -64,17 +64,25 @@ herdr plugin pane open --plugin project-dashboard --entrypoint projects \
 ```
 
 The pane discovers **all enabled saved machines** from `herdr machine list --json`
-and the local calling session, then reads snapshots. It groups `<project>-coord`
-and `<project>-<number>` workspaces, coordinator first and lanes numerically.
-`◆ <project>` workspaces supply headings only; they are not lanes or focus targets.
-Nonmatching workspaces are excluded. Projects and attention views show task, phase,
-live status and host. Working/blocked wins over stale phase; unseen done is shown
-for review, while unknown is not called complete. No ages or history are inferred.
+and the local calling session, then reads snapshots. `<project>-<number>` workspaces
+are lanes. `<project>-coord` is a coordinator; so are `<project>` and
+`<project>-local` when that project already has lanes or a `◆ <project>` heading.
+`◆ <project>` workspaces are never rows. Other workspaces are excluded.
 
-Use arrows or j/k to select, p/a for views, r to refresh, q to exit. Local Enter
-focuses that returned workspace ID. For a remote lane, Enter shows the target;
-**Ctrl-B w**, select the machine/workspace, then Enter activates the actual terminal.
-The dashboard does not send input to lanes. Return using the same stock navigator.
+Each lane shows one state: `!` needs you (blocked or phase `needs-decision`),
+`✓` ready for review (done or phase `ready`), `●` working, `○` idle, `·` no agent.
+Live working/blocked wins over a stale phase; unknown is never called complete.
+
+The top strip lists lanes that need you or are ready for review, then any lane
+reporting a task, numbered 1–9. Below it, a grid has one row per project (most
+urgent first) and one column per machine; `◆` marks the coordinator and `+N` folds
+lanes that don't fit (selecting it goes to the most urgent of them). Machines that
+don't fit are counted as `+N` after the last column.
+
+Arrows or hjkl move, 1–9 jump to a strip row, Enter or a mouse click goes, r
+refreshes, q exits. Local lanes are focused by their returned workspace ID. For a
+remote lane the footer shows the path: **Ctrl-B w**, select the machine and
+workspace, then Enter. The dashboard does not send input to lanes.
 
 Failed or slow hosts are visibly offline/checking; their last successful rows stay
 **cached**, excluded from known-live attention totals. Cache lives only in memory.
