@@ -148,6 +148,11 @@ class ProjectionTests(unittest.TestCase):
             for line in lines:
                 ends = [(x, x + dashboard.text_width(text)) for x, text, _, _ in line]
                 self.assertTrue(all(a[1] <= b[0] for a, b in zip(ends, ends[1:])), line)
+        crowd = {f'm{n}': state([workspace(f'orchard-{k}', 'working', wid=f'w{k}') for k in range(1, 11)], label=f'M{n}') for n in range(6)}
+        lines = dashboard.board(dashboard.project_rows(crowd), crowd, 30)
+        grid = next(line for line in lines if line and line[0][3] == 'project' and 'orchard'.startswith(line[0][1]))
+        self.assertTrue(all(text.startswith('+') and key for _, text, key, _ in grid[1:]), grid)
+        self.assertEqual(len(dashboard.board([], {}, 30)), 4)
         long_host = {'local': state([workspace('orchard-1', 'blocked')], label='M' * 40)}
         strip = flat(dashboard.board(dashboard.project_rows(long_host), long_host, 30))[2]
         self.assertTrue(strip.startswith('1 ! orchard-1'), strip)

@@ -75,7 +75,9 @@ Live working/blocked wins over a stale phase; unknown is never called complete.
 
 The top strip lists lanes that need you, then any lane reporting a task, numbered
 1–9. Below it, a grid has one row per project (most urgent first) and one column
-per machine; `◆` marks the coordinator and `+N` folds lanes that don't fit.
+per machine; `◆` marks the coordinator and `+N` folds lanes that don't fit
+(selecting it goes to the most urgent of them). Machines that don't fit are counted
+as `+N` after the last column.
 
 Arrows or hjkl move, 1–9 jump to a strip row, Enter or a mouse click goes, r
 refreshes, q exits. Local lanes are focused by their returned workspace ID. For a

@@ -155,7 +155,7 @@ def board(rows, states, width, headings=()):
         # Too many machines for 4-column cells: show what fits and count the rest.
         keep = max(1, (width - project_width) // 4 - 1)
         hidden, hosts = len(hosts) - keep, hosts[:keep]
-    cell = max(4, (width - project_width) // len(hosts)) if not hidden else 4
+    cell = max(4, (width - project_width) // max(1, len(hosts))) if not hidden else 4
     header = [(project_width + i * cell, clip(states[h]['label'] + (' ?' if states[h]['error'] else ''), cell - 1), None, 'muted')
               for i, h in enumerate(hosts)]
     if hidden:
@@ -175,18 +175,12 @@ def board(rows, states, width, headings=()):
             room, used = cell - 1, 0
             for n, row in enumerate(members):
                 text, rest = tag(row), len(members) - n - 1
-                fits = used + text_width(text) + (len(f'+{rest}') + 1 if rest else 0) <= room
-                if fits or (used == 0 and text_width(text) <= room):
-                    # The first lane always shows when it fits alone, so each cell stays actionable.
+                if used + text_width(text) + (len(f'+{rest}') + 1 if rest else 0) <= room:
                     line.append((x + used, text, row['key'], row['state']))
                     used += text_width(text) + 1
-                    if fits:
-                        continue
-                    rest_text = f'+{rest}'
-                else:
-                    rest_text = f'+{rest + 1}'
-                if used < room:
-                    line.append((x + used, clip(rest_text, room - used), None, 'muted'))
+                    continue
+                # The +N marker selects the most urgent lane it folds, so every cell stays actionable.
+                line.append((x + used, clip(f'+{rest + 1}', room - used), row['key'], 'muted'))
                 break
         lines.append(line)
     return [bound(line, width) for line in lines]
