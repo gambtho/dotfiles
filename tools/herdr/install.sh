@@ -39,6 +39,7 @@ STAGED_MARKER=""
 STAGED_CONFIG=""
 DOWNLOAD_DIR=""
 STAGED_DASHBOARD=""
+STAGED_LANES=""
 STAGED_LINK=""
 
 cleanup() {
@@ -48,6 +49,7 @@ cleanup() {
   done
   [[ -n "$DOWNLOAD_DIR" ]] && rm -rf -- "$DOWNLOAD_DIR"
   [[ -n "$STAGED_DASHBOARD" ]] && rm -rf -- "$STAGED_DASHBOARD"
+  [[ -n "$STAGED_LANES" ]] && rm -rf -- "$STAGED_LANES"
   return 0
 }
 trap cleanup EXIT
@@ -267,6 +269,44 @@ install_dashboard() {
   log_success "Dashboard copy installed at $destination."
 }
 
+install_lanes() {
+  local source="$DOTFILES_ROOT/tools/herdr/lanes"
+  local root="${XDG_DATA_HOME:-$HOME/.local/share}/dotfiles" digest version destination path
+  local lane="$HERDR_INSTALL_DIR/lane"
+  destination="$root/herdr-lanes"
+  # Refuse both public-path conflicts before publishing either link.
+  for path in "$destination" "$lane"; do
+    if [[ -e "$path" && ! -L "$path" ]]; then
+      printf 'Refusing to replace non-symlink lanes path: %s\n' "$path" >&2
+      return 1
+    fi
+  done
+  digest=$(cd "$source" && sha256sum lane.py needs.py dashboard-open.py | sha256sum | cut -d ' ' -f 1)
+  prepare_destination_directory "$root"
+  prepare_destination_directory "$HERDR_INSTALL_DIR"
+  version="$root/.herdr-lanes-$digest"
+  # Copy one coherent runtime; keep older versions for already-running commands.
+  if [[ ! -d "$version" ]]; then
+    STAGED_LANES=$(mktemp -d "$root/.lanes.XXXXXX")
+    command cp "$source/lane.py" "$source/needs.py" "$source/dashboard-open.py" "$STAGED_LANES/"
+    chmod 0755 "$STAGED_LANES/lane.py"
+    chmod 0644 "$STAGED_LANES/needs.py" "$STAGED_LANES/dashboard-open.py"
+    command mv -T -- "$STAGED_LANES" "$version"
+    STAGED_LANES=""
+  fi
+  STAGED_LINK=$(mktemp "$root/.lanes-link.XXXXXX")
+  rm -f -- "$STAGED_LINK"
+  ln -s "$version" "$STAGED_LINK"
+  publish_staged_file "$STAGED_LINK" "$destination"
+  STAGED_LINK=""
+  STAGED_LINK=$(mktemp "$HERDR_INSTALL_DIR/.lane-link.XXXXXX")
+  rm -f -- "$STAGED_LINK"
+  ln -s "$destination/lane.py" "$STAGED_LINK"
+  publish_staged_file "$STAGED_LINK" "$lane"
+  STAGED_LINK=""
+  log_success "Lane runtime copy installed at $destination; command at $lane."
+}
+
 report_plan() {
   printf 'Herdr install plan:\n'
   printf '  version:    %s\n' "$HERDR_VERSION"
@@ -278,7 +318,7 @@ report_plan() {
 
 main() {
   if (($# > 1)); then
-    printf 'Usage: install.sh [--check|--refresh-config|--install-dashboard]\n' >&2
+    printf 'Usage: install.sh [--check|--refresh-config|--install-dashboard|--install-lanes]\n' >&2
     return 2
   fi
   case "${1:-}" in
@@ -293,6 +333,11 @@ main() {
     --install-dashboard)
       require_platform >/dev/null
       install_dashboard
+      return
+      ;;
+    --install-lanes)
+      require_platform >/dev/null
+      install_lanes
       return
       ;;
     '') ;;

@@ -37,3 +37,18 @@ rows = [["state_icon"]]
 [ui.sidebar.spaces]
 # Optional workspace metadata: project headings can report a needs-you count.
 rows = [["state_icon", "workspace", { token = "$needs", fg = "#f7768e", bold = true, rules = [{ equals = "0", hide = true }] }]]
+
+# Opt-in helpers: make herdr-lanes (and make herdr-dashboard for Projects).
+[[keys.command]]
+key = "prefix+shift+l"
+type = "popup"
+command = "test -x \"$HOME/.local/bin/lane\" || { printf 'Install first: make herdr-lanes\\n'; sleep 4; exit 1; }; printf 'Lane (<project>-<n>, or <n> in its local folder): '; read -r l; [ -n \"$l\" ] || exit 0; printf 'Prompt for pi (Enter for none): '; read -r p; \"$HOME/.local/bin/lane\" \"$l\" \"$p\" || sleep 4"
+description = "open lane under its project"
+width = 90
+height = 7
+
+[[keys.command]]
+key = "prefix+shift+o"
+type = "shell"
+command = "python3 \"${XDG_DATA_HOME:-$HOME/.local/share}/dotfiles/herdr-lanes/dashboard-open.py\" || herdr notification show 'Projects unavailable' --body 'Run make herdr-lanes and make herdr-dashboard; if installed, inspect shell startup.'"
+description = "focus or open Projects dashboard"

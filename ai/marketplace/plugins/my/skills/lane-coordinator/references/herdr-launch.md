@@ -53,6 +53,14 @@ root shell starts, so locked-keyring password input cannot consume the agent-sta
 command. Caller-created or existing panes need that opt-out at creation too;
 setting it after a password prompt is already active is too late.
 
+The helper deliberately keeps `workspace create`, even when project anchors exist.
+Herdr 0.9.5 `worktree open --cwd <anchor> --path <checkout>` groups the workspace,
+but `--cwd` resolves the repository: its root shell starts at the checkout, and
+there is no `--env` option. `workspace create` on that checkout supports env but
+does not attach worktree provenance; `agent start` has no cwd option. Keep the
+real repo cwd, pre-shell opt-out, no-focus and at-most-once launch guarantees rather
+than adding shell-input choreography. Manual `lane` below still groups.
+
 Historical Herdr 0.8.0 capability inspection informed this helper's protocol 19
 contract (`api snapshot`, `workspace create/get`, `agent start/get/read/prompt`).
 The snapshot acceptance policy is explicit:
@@ -128,7 +136,20 @@ Re-run the **same invocation** only to reconcile; it does not mean "try again".
 
 ## Manual Pi handoff
 
-Hand the user the instruction alone; they name the conversation themselves:
+For a local lane, use `lane` only when its resolved target is the installed
+dotfiles `herdr-lanes/lane.py`, not another same-named tool. Hand over:
+
+```sh
+lane double-holo-12 "Read /absolute/project-local/lanes/W12-approved-task.md and follow it."
+```
+
+Shell-quote the prompt so its absolute path is passed literally, without expansion.
+This opens under the project heading; an existing lane is only focused and never
+receives the prompt. If startup still owns the foreground (for example a keyring
+prompt), `lane` sends nothing: finish startup and start Pi manually. A failed or
+uncertain invocation is inspect-only, not an instruction to resend the prompt.
+
+Without installed `lane`, and always for remote lanes, use only:
 
 ```text
 Read /absolute/project-local/lanes/W12-approved-task.md and follow it.

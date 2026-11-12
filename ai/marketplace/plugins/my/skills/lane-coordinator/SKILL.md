@@ -118,9 +118,9 @@ use the project folder.
   host, follow [remote lanes](references/remote-lanes.md) to resolve paths, deliver inputs
   and fetch reports; the coordinator remains the single STATE writer.
 - Next number: the highest `W<n>` in `lanes/` or STATE.md, plus one. One file per lane
-  from [lane-template.md](references/lane-template.md). Hand the user one line in a code
-  block: `Read <absolute path> and follow it.` That line is the whole handoff: the
-  user names the session themselves, so don't add a `/name` or `--name` instruction.
+  from [lane-template.md](references/lane-template.md). Use the single-line
+  [manual handoff](references/herdr-launch.md#manual-pi-handoff): installed `lane` for
+  local lanes, plain Read otherwise. Don't add a `/name` or `--name` instruction.
   Default new workspace labels, Pi names and live Herdr aliases to
   `<project-slug>-<lane-number>` (e.g. `double-holo-12`). Keep full W12/task identity in lane files and
   STATE.md; preserve filenames/numbering and all existing names. Honor explicit
