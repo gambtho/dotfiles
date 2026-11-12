@@ -26,53 +26,106 @@ def state(rows, error='', label='Local'):
     return dict(label=label, snapshot=dict(workspaces=rows), error=error)
 
 
+def flat(lines):
+    out = []
+    for segments in lines:
+        text = ''
+        for x, part, _, _ in segments:
+            text = dashboard.pad(text, x) + part
+        out.append(text.rstrip())
+    return out
+
+
 class ProjectionTests(unittest.TestCase):
-    def test_group_order_endpoint_identity_and_phase_precedence(self):
+    def test_one_effective_state_with_live_status_over_stale_phase(self):
         states = {'local': state([
             workspace('orchard-12', phase='ready'),
             workspace('orchard-2', 'working', wid='w2', phase='ready'),
-            workspace('orchard-coord', wid='w3', phase='needs-decision'),
-            workspace('scratch', wid='w4'),
+            workspace('orchard-3', wid='w3', phase='needs-decision'),
+            workspace('orchard-4', 'done', wid='w4'),
+            workspace('orchard-5', 'unknown', wid='w5', phase='ready'),
         ]), 'remote': state([workspace('orchard-12', 'blocked', phase='ready')], label='Other')}
         rows = dashboard.project_rows(states)
-        self.assertEqual([r['lane'] for r in rows], ['coord', '2', '12', '12'])
-        self.assertEqual([r['section'] for r in rows], ['Needs you', 'Working', 'Ready for review', 'Needs you'])
-        self.assertEqual(len({r['key'] for r in rows}), 4)
+        self.assertEqual([(r['lane'], r['state']) for r in rows],
+                         [('2', 'working'), ('3', 'needs'), ('4', 'review'), ('5', 'shell'), ('12', 'review'), ('12', 'needs')])
+        self.assertEqual(len({r['key'] for r in rows}), 6)
 
-    def test_attention_headers_identify_projects_before_selection(self):
-        rows = dashboard.project_rows({'local': state([workspace('orchard-1', 'blocked'), workspace('banana-1', 'blocked', wid='w2')])})
-        headers = [text for text, key, style in dashboard.lines_for(rows, 'attention') if key and style == 'Needs you']
-        self.assertEqual(len(set(headers)), 2)
-        self.assertTrue(any('orchard' in text for text in headers))
-        self.assertTrue(any('banana' in text for text in headers))
-
-    def test_offline_cached_rows_excluded_from_live_sections(self):
-        states = {'remote': state([workspace('orchard-1', 'blocked')], error='Timed out', label='Other')}
+    def test_coordinators_are_recognized_only_for_known_projects(self):
+        states = {'local': state([
+            workspace('orchard-1', wid='w1'), workspace('orchard', wid='w2'), workspace('◆ banana', wid='w3'),
+            workspace('banana-local', wid='w4'), workspace('cherry-coord', wid='w5'),
+            workspace('scratch-local', wid='w6'), workspace('Projects', wid='w7'), workspace('~', wid='w8')])}
         rows = dashboard.project_rows(states)
-        self.assertEqual(rows[0]['section'], 'Offline (cached)')
-        self.assertIn('cached blocked', '\n'.join(t[0] for t in dashboard.lines_for(rows, 'attention')))
-        states['empty'] = dict(label='Empty', snapshot=None, error='Unavailable')
-        self.assertIn('Empty OFFLINE', dashboard.host_summary(states))
+        self.assertEqual(sorted((r['project'], r['lane']) for r in rows),
+                         [('banana', 'coord'), ('cherry', 'coord'), ('orchard', '1'), ('orchard', 'coord')])
+        self.assertNotIn(('local', 'w3'), {r['key'] for r in rows})
 
-    def test_heading_workspaces_are_groups_not_lane_rows_or_focus_targets(self):
-        states = {'local': state([workspace('◆ orchard'), workspace('◆ empty', wid='w2'), workspace('orchard-3', wid='w3')])}
+    def test_agent_presence_comes_from_panes(self):
+        snapshot = dict(workspaces=[workspace('orchard-1', 'unknown', wid='w1'), workspace('orchard-2', 'unknown', wid='w2')],
+                        panes=[dict(workspace_id='w1', agent='pi'), dict(workspace_id='w2')])
+        rows = dashboard.project_rows({'local': dict(label='Local', snapshot=snapshot, error='')})
+        self.assertEqual([r['state'] for r in rows], ['idle', 'shell'])
+        with self.assertRaises(ValueError):
+            dashboard.validate_snapshot(dict(workspaces=[], panes='nope'))
+
+    def test_strip_lists_attention_then_reported_tasks(self):
+        states = {'local': state([
+            workspace('orchard-1', 'working', wid='w1'), workspace('orchard-2', 'working', wid='w2', task='Build it'),
+            workspace('banana-7', 'blocked', wid='w3'), workspace('orchard-3', wid='w4', phase='ready'),
+            workspace('orchard-4', wid='w5')])}
         rows = dashboard.project_rows(states)
-        self.assertEqual([r['label'] for r in rows], ['orchard-3'])
-        lines = dashboard.lines_for(rows, 'projects', dashboard.heading_projects(states))
-        self.assertTrue(any(text.startswith('empty ·') and key is None for text, key, _ in lines))
-        self.assertTrue(any(text.startswith('orchard ·') and key is None for text, key, _ in lines))
-        self.assertEqual({key for _, key, _ in lines if key}, {('local', 'w3')})
+        self.assertEqual([dashboard.name(r) for r in dashboard.strip_rows(rows)], ['banana-7', 'orchard-3', 'orchard-2'])
+        text = flat(dashboard.board(rows, states, 60))
+        self.assertTrue(text[2].startswith('1 ! banana-7  needs you'))
+        self.assertTrue(text[3].startswith('2 ✓ orchard-3  ready for review'))
+        self.assertTrue(text[4].startswith('3 ● orchard-2  Build it'))
 
-    def test_done_visible_and_unknown_not_claimed_complete(self):
-        rows = dashboard.project_rows({'local': state([workspace('orchard-1', 'done'), workspace('orchard-2', 'unknown', wid='w2', phase='ready')])})
-        self.assertEqual([r['section'] for r in rows], ['Ready for review', 'Idle'])
-        self.assertIn('done', '\n'.join(t[0] for t in dashboard.lines_for(rows, 'attention')))
-        self.assertEqual(rows[1]['status'], 'unknown')
+    def test_grid_orders_cells_by_urgency_and_folds_overflow(self):
+        states = {'local': state([workspace(f'orchard-{n}', 'working', wid=f'w{n}') for n in range(1, 9)]
+                                 + [workspace('orchard', wid='c'), workspace('orchard-20', 'blocked', wid='b')]),
+                  'remote': state([workspace('banana-3', wid='r')], label='Other')}
+        rows = dashboard.project_rows(states)
+        wide = flat(dashboard.board(rows, states, 120, {'empty'}))
+        grid = wide[wide.index(next(t for t in wide if 'Local' in t and 'Other' in t)) + 1:]
+        self.assertTrue(grid[0].startswith('orchard'))
+        self.assertIn('!20 ●1 ●2', grid[0])
+        self.assertIn('○◆', grid[0])
+        self.assertTrue(grid[1].startswith('banana') and '○3' in grid[1])
+        self.assertTrue(grid[2].startswith('empty') and grid[2].count('—') == 2)
+        narrow = flat(dashboard.board(rows, states, 40))
+        self.assertTrue(any(t.startswith('orchard') and '+' in t for t in narrow))
 
-    def test_invalid_snapshot_is_rejected_not_silently_empty(self):
-        for value in ({}, {'workspaces': [{}]}, {'workspaces': [workspace('orchard-1', tokens=42)]}):
-            with self.subTest(value=value), self.assertRaises((ValueError, TypeError)):
-                dashboard.validate_snapshot(value)
+    def test_board_fits_width_and_marks_offline(self):
+        states = {'local': state([workspace('orchard-1', 'working', task='界' * 40)]),
+                  'remote': state([workspace('orchard-2', 'blocked', wid='w2')], error='Timed out', label='Other')}
+        rows = dashboard.project_rows(states)
+        for width in (30, 40, 60, 172):
+            with self.subTest(width=width):
+                lines = flat(dashboard.board(rows, states, width))
+                self.assertTrue(all(dashboard.text_width(t) <= width for t in lines), lines)
+        lines = flat(dashboard.board(rows, states, 80))
+        self.assertIn('●1 · 1/2 up · Other offline', lines[0])
+        self.assertTrue(any(t.startswith('2 ? orchard-2') and t.endswith('Other?') for t in lines))
+        self.assertTrue(any('Other ?' in t for t in lines))
+        self.assertIn('Other OFFLINE', dashboard.host_summary(states))
+        self.assertIn('offline', dashboard.detail(rows[1]))
+
+    def test_arrow_navigation_and_clicks_map_to_lanes(self):
+        states = {'local': state([workspace('orchard-1', 'blocked', wid='a'), workspace('orchard-2', 'working', wid='b')]),
+                  'remote': state([workspace('orchard-3', 'working', wid='c')], label='Other')}
+        lines = dashboard.board(dashboard.project_rows(states), states, 60)
+        a, b, c = ('local', 'a'), ('local', 'b'), ('remote', 'c')
+        self.assertEqual(dashboard.move(lines, a, 'up'), a)
+        grid_a = dashboard.move(lines, a, 'down')
+        self.assertEqual(grid_a, a)
+        y = next(y for y, _, key in dashboard.selectable(lines) if key == a and y > 2)
+        self.assertEqual(dashboard.move(lines, a, 'right'), a)
+        row = [key for line_y, _, key in dashboard.selectable(lines) if line_y == y]
+        self.assertEqual(row, [a, b, c])
+        x = next(x for line_y, x, key in dashboard.selectable(lines) if line_y == y and key == c)
+        self.assertEqual(dashboard.hit(lines, y, x), c)
+        self.assertIsNone(dashboard.hit(lines, 0, 0))
+        self.assertEqual(dashboard.move([lines[0], lines[y]], c, 'left'), b)
 
     def test_focus_only_online_local_returned_id(self):
         rows = dashboard.project_rows({'local': state([workspace('orchard-1')]), 'remote': state([workspace('orchard-2')])})
