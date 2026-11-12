@@ -107,5 +107,7 @@ reads the report, establishes finished/blocked/failed/waiting and gives the next
 Manual sessions are not automatically monitored. Escalate only genuinely new material
 scope/data/security/product choices, shared/destructive operations or actions outside
 authority. Exact public text/publication and production/provider approvals still apply.
-Before closing or pausing for long, write `<lanes>/W<n>-HANDOFF.md` from the handoff template.
+Before closing or pausing for long, write `W<n>-HANDOFF.md` from the handoff template
+in the same location as the lane's report, following the project's AGENTS.md
+(e.g. `reports/W<n>-HANDOFF.md`); absent a rule, use the project folder.
 A parked lane has a stop/resume line: all current resume conditions and who decides (a person, or none if automatic), first resume action and report path.

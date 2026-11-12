@@ -105,7 +105,8 @@ For every coherent update:
 
 If something took digging to find, put durable repo/process facts in COORDINATION.md
 and people facts in PEOPLE.md (or the existing people section). Follow the project's
-AGENTS.md for report locations; absent a rule, keep handoffs in the project folder.
+AGENTS.md for report locations and keep handoffs alongside reports; absent a rule,
+use the project folder.
 
 ## Write a lane prompt
 
