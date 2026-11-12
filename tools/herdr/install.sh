@@ -32,19 +32,22 @@ MARKER_FILE="$HERDR_STATE_ROOT/installed-version"
 # point the whole directory into the repo and herdr would write live sockets
 # and logs into a git checkout.
 HERDR_CONFIG_ROOT="${HERDR_CONFIG_ROOT:-${XDG_CONFIG_HOME:-$HOME/.config}/herdr}"
-CONFIG_TEMPLATE="$DOTFILES_ROOT/tools/herdr/config.toml.template"
+CONFIG_TEMPLATE="${HERDR_CONFIG_TEMPLATE:-$DOTFILES_ROOT/tools/herdr/config.toml.template}"
 
 STAGED_BIN=""
 STAGED_MARKER=""
 STAGED_CONFIG=""
 DOWNLOAD_DIR=""
+STAGED_DASHBOARD=""
+STAGED_LINK=""
 
 cleanup() {
   local path
-  for path in "$STAGED_BIN" "$STAGED_MARKER" "$STAGED_CONFIG"; do
+  for path in "$STAGED_BIN" "$STAGED_MARKER" "$STAGED_CONFIG" "$STAGED_LINK"; do
     [[ -n "$path" ]] && rm -f -- "$path"
   done
   [[ -n "$DOWNLOAD_DIR" ]] && rm -rf -- "$DOWNLOAD_DIR"
+  [[ -n "$STAGED_DASHBOARD" ]] && rm -rf -- "$STAGED_DASHBOARD"
   return 0
 }
 trap cleanup EXIT
@@ -209,6 +212,61 @@ install_config() {
   return 0
 }
 
+refresh_config() {
+  local config="$HERDR_CONFIG_ROOT/config.toml" backup
+  prepare_destination_directory "$HERDR_CONFIG_ROOT"
+  if [[ -L "$config" || (-e "$config" && ! -f "$config") ]]; then
+    printf 'Refusing to refresh non-regular config: %s\n' "$config" >&2
+    return 1
+  fi
+  if [[ -f "$config" ]] && cmp -s "$CONFIG_TEMPLATE" "$config"; then
+    log_info "Herdr config already matches $CONFIG_TEMPLATE."
+    return 0
+  fi
+  STAGED_CONFIG=$(mktemp "$HERDR_CONFIG_ROOT/.config.toml.XXXXXX")
+  command cp "$CONFIG_TEMPLATE" "$STAGED_CONFIG"
+  chmod 0644 "$STAGED_CONFIG"
+  if [[ -f "$config" ]]; then
+    backup=$(mktemp "$config.backup.XXXXXX")
+    command cp "$config" "$backup"
+    chmod 0600 "$backup"
+    log_info "Herdr config backup: $backup"
+  fi
+  publish_file "$STAGED_CONFIG" "$config"
+  STAGED_CONFIG=""
+  log_success "Refreshed Herdr config. Apply with: herdr server reload-config"
+}
+
+install_dashboard() {
+  local source="$DOTFILES_ROOT/tools/herdr/dashboard"
+  local root="${XDG_DATA_HOME:-$HOME/.local/share}/dotfiles" digest version destination
+  # Versioned copies keep the Python and manifest coherent across updates. The
+  # public link switches atomically; an open pane keeps its loaded version.
+  digest=$(cd "$source" && sha256sum dashboard.py herdr-plugin.toml | sha256sum | cut -d ' ' -f 1)
+  prepare_destination_directory "$root"
+  version="$root/.herdr-dashboard-$digest"
+  destination="$root/herdr-dashboard"
+  if [[ -e "$destination" && ! -L "$destination" ]]; then
+    printf 'Refusing to replace non-symlink dashboard path: %s\n' "$destination" >&2
+    return 1
+  fi
+  if [[ ! -d "$version" ]]; then
+    STAGED_DASHBOARD=$(mktemp -d "$root/.dashboard.XXXXXX")
+    command cp "$source/dashboard.py" "$source/herdr-plugin.toml" "$STAGED_DASHBOARD/"
+    chmod 0755 "$STAGED_DASHBOARD/dashboard.py"
+    chmod 0644 "$STAGED_DASHBOARD/herdr-plugin.toml"
+    command mv -T -- "$STAGED_DASHBOARD" "$version"
+    STAGED_DASHBOARD=""
+  fi
+  STAGED_LINK=$(mktemp "$root/.dashboard-link.XXXXXX")
+  rm -f -- "$STAGED_LINK"
+  ln -s "$version" "$STAGED_LINK"
+  publish_staged_file "$STAGED_LINK" "$destination"
+  STAGED_LINK=""
+  "$HERDR_BIN" plugin link "$destination" --enabled
+  log_success "Dashboard copy installed at $destination."
+}
+
 report_plan() {
   printf 'Herdr install plan:\n'
   printf '  version:    %s\n' "$HERDR_VERSION"
@@ -219,10 +277,30 @@ report_plan() {
 }
 
 main() {
-  if [[ "${1:-}" == "--check" ]]; then
-    report_plan
-    return 0
+  if (($# > 1)); then
+    printf 'Usage: install.sh [--check|--refresh-config|--install-dashboard]\n' >&2
+    return 2
   fi
+  case "${1:-}" in
+    --check)
+      report_plan
+      return 0
+      ;;
+    --refresh-config)
+      refresh_config
+      return
+      ;;
+    --install-dashboard)
+      require_platform >/dev/null
+      install_dashboard
+      return
+      ;;
+    '') ;;
+    *)
+      printf 'Unknown Herdr install mode: %s\n' "$1" >&2
+      return 2
+      ;;
+  esac
 
   # Split from the assignment on purpose: `local arch=$(...)` takes the exit
   # status of `local`, not of the command, so the platform refusal would be

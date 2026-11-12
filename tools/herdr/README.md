@@ -24,13 +24,77 @@ already has it.
    only after the binary is in place, so an interrupted run reinstalls instead
    of believing it succeeded.
 4. Copies `config.toml.template` to `~/.config/herdr/config.toml` if that file
-   does not exist. An existing config is never overwritten — drift is reported
-   and the file is left alone.
+   does not exist. Normal installation never overwrites an existing config —
+   drift is reported and the file is left alone.
 
 The installer neither installs nor removes plugins. Existing registrations and
 plugin-owned configuration remain machine-local.
 
 `bash tools/herdr/install.sh --check` prints the plan and writes nothing.
+
+## Explicit preference refresh
+
+`make herdr-config-refresh` deliberately **replaces** the config with the template;
+review local differences first. It writes an exact, private
+`config.toml.backup.XXXXXX` beside the old file before atomic publication. It does
+not install a binary, register plugins, reload or restart a server. An identical
+config is a no-op; a failed backup leaves the original untouched. For a reviewed
+machine-local full config that preserves additional bindings, use
+`HERDR_CONFIG_TEMPLATE=/absolute/path/to/reviewed.toml make herdr-config-refresh`.
+Then apply with `herdr server reload-config`, not a server restart.
+
+Defaults keep priority Agent rows icon-only and show optional `$needs` workspace
+metadata (hidden at zero). Machine identity stays visible in the dashboard. This does not
+produce counts: a separate reporter may set them on `◆ <project>` headings.
+
+## Optional project dashboard
+
+Run `make herdr-dashboard` explicitly. It copies the stdlib Python pane into a
+content-addressed directory under `${XDG_DATA_HOME:-$HOME/.local/share}/dotfiles`,
+atomically switches `herdr-dashboard` to that copy, and registers it with stock
+`herdr plugin link`. Re-running reconciles the registration; it never links a
+source checkout or opens a pane. Normal installation still does not touch plugins.
+Python 3.11+ with curses and the pinned Herdr must be on the pane's PATH.
+
+Open in a chosen workspace without stealing focus:
+
+```sh
+herdr plugin pane open --plugin project-dashboard --entrypoint projects \
+  --workspace <workspace-id> --no-focus
+```
+
+The pane discovers **all enabled saved machines** from `herdr machine list --json`
+and the local calling session, then reads snapshots. It groups `<project>-coord`
+and `<project>-<number>` workspaces, coordinator first and lanes numerically.
+`◆ <project>` workspaces supply headings only; they are not lanes or focus targets.
+Nonmatching workspaces are excluded. Projects and attention views show task, phase,
+live status and host. Working/blocked wins over stale phase; unseen done is shown
+for review, while unknown is not called complete. No ages or history are inferred.
+
+Use arrows or j/k to select, p/a for views, r to refresh, q to exit. Local Enter
+focuses that returned workspace ID. For a remote lane, Enter shows the target;
+**Ctrl-B w**, select the machine/workspace, then Enter activates the actual terminal.
+The dashboard does not send input to lanes. Return using the same stock navigator.
+
+Failed or slow hosts are visibly offline/checking; their last successful rows stay
+**cached**, excluded from known-live attention totals. Cache lives only in memory.
+One host never blocks the others. Quitting cancels only dashboard-owned CLI reader
+process groups, not shared detached SSH masters or Herdr servers. Snapshot reads
+use saved profile IDs, not user-provided SSH commands. `dashboard.py --once` prints
+one bounded diagnostic view and exits nonzero for discovery/read failures.
+
+Saved machines and strict SSH trust/authentication remain machine-local; this
+installer neither configures SSH nor installs/starts/updates remote Herdr. Enroll
+machines separately with stock `herdr machine add` after checking their existing
+servers. A pane inherits its server's HOME/PATH/SSH agent environment: verify a
+real read from the plugin pane, not only an interactive shell. Hosts enrolled in
+[Heeler](heeler/README.md) may use a separate listener/port; use their actual
+approved SSH configuration rather than assuming a port or changing services.
+
+Undo: close only the created pane with `herdr plugin pane close <pane-id>`, then
+`herdr plugin unlink project-dashboard`. Copies remain under the data directory
+until explicitly removed; retain older versions while a pane may still use them.
+No server needs to stop.
 
 ## Optional native iPhone access
 
