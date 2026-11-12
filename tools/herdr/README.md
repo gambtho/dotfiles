@@ -140,6 +140,25 @@ old state/config before opening it with an older binary, never candidate-written
 state. The preference-only reload procedure below is not a binary-upgrade procedure.
 No plugin or integration adoption follows from this pin.
 
+## Behaviors the tooling radar watches
+
+The weekly radar compares upstream changes with these dependencies, not with a
+list of every Herdr feature:
+
+- Workspace labels and `workspace report-metadata` tokens, including `$task`,
+  `$phase` and `$needs` sidebar rows, retain their meaning and update correctly.
+- Git worktrees stay grouped with their repository in the sidebar.
+- Saved machines remain available, and `Ctrl-B w` navigation works across them.
+- Sidebar row configuration and agent sorting keep their configured behavior.
+- Plugin panes remain usable across configuration reloads and client reconnects.
+- `herdr api` snapshot and agent-list responses remain compatible with the
+  integrations that consume them; protocol/version changes need explicit review.
+
+The radar also tracks [workspace folders](https://github.com/herdrdev/herdr/discussions/1953)
+and the [saved-machine selection API](https://github.com/herdrdev/herdr/discussions/4396).
+These are upstream proposals, not features this repository claims are available.
+See [the automation evidence limits](../automations/README.md#herdr-upstream-evidence).
+
 ## Lane workflow and existing-host rollout
 
 The defaults skip the workspace-name prompt, sort Agents by attention priority, hide a

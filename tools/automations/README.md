@@ -36,6 +36,41 @@ make automation-run NAME=dotfiles-health DRY_RUN=1
 
 If the agent changes nothing, there is no PR. Each automation has a short list of files it may fix, in `libexec/automation_run.py`. If fixes go outside that list, touch a protected path, or exceed 12 files or 300 lines, they are dropped and the report still goes out, with a note in the PR. If the secret scan matches anything, nothing is published and the run is marked failed.
 
+## Herdr upstream evidence
+
+`tooling-radar` also watches unreleased Herdr changes against the
+[behaviors this setup relies on](../herdr/README.md#behaviors-the-tooling-radar-watches).
+These findings are recommendations only; the automation table and fix lists above
+are unchanged. The relied-on list is protected by the prompt and human PR review,
+not by a separate path-policy rule.
+
+Each gather adds three read-only `gh api` requests, at most four:
+
+- `herdr-unreleased.md`: `docs/next/CHANGELOG.md` on `master`, only the
+  `Unreleased` section (12,000 characters); an empty section is explicit.
+- `herdr-commits.json`: compare the pinned `HERDR_VERSION` tag with `master`,
+  titles/SHAs/URLs only, with comparison status and total count. Up to 50 commits
+  per page. When there are more, the only extra request fetches the latest page
+  (possibly fewer than 50 commits); omitted earlier commits are `UNKNOWN`.
+- `herdr-activity.json`: one GraphQL request searches issues and discussions
+  updated in the last eight days for `metadata`, `sidebar`, `worktree`, `machine`,
+  `plugin` or `snapshot`. Keywords are filtered upstream, newest updates first,
+  capped at 20 matches of each type. Counts and `hasNextPage` expose omitted matches.
+- `herdr-tracked.json`: the same GraphQL request watches up to five typed issue
+  or discussion IDs from `herdr-watch.json`, initially discussions 1953 and 4396.
+  Snapshots contain state, update time, comment counts and the latest observed
+  maintainer-reply timestamp. They include the last ten comments and last five
+  replies per discussion comment, 300-character excerpts, and at most 30 linked
+  PRs per thread. Discussion links are explicit PR URLs in fetched text, not
+  complete backlinks; issues also include the last ten cross-reference events.
+
+No retries or automatic pagination. Failed, malformed or oversized evidence is
+`UNKNOWN`. Both GraphQL files fail together, including on partial GraphQL errors
+or a missing tracked thread. Unfetched comments, replies and matches are unknown,
+not proof of no activity. The radar records tracked snapshots in its rolling
+report for comparison next week; absent or incomplete prior snapshots are a new
+baseline, not a claimed change. No separate state store or between-run alerts.
+
 ## Why the agent is sandboxed
 
 The radar reads text written by strangers, and this machine's `gh` token can delete repositories, so a prompt injection must not be able to reach anything valuable.

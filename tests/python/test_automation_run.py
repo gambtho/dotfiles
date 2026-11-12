@@ -1,6 +1,7 @@
 """Publication policy and sandbox boundary for the weekly automations."""
 import dataclasses
 import importlib.util
+import json
 import subprocess
 import sys
 import tempfile
@@ -574,6 +575,199 @@ class LaneEvidenceTests(unittest.TestCase):
         (lanes / 'skip.txt').write_text('x')
         now = (lanes / 'new.md').stat().st_mtime
         self.assertEqual([path.name for path in automation.recent_activity(self.home, now)], ['new.md'])
+
+
+class HerdrUpstreamTests(unittest.TestCase):
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name)
+        (self.root / 'config').mkdir()
+        self.pin = self.root / 'config/versions.env'
+        self.pin.write_text('HERDR_VERSION=v0.9.5\n')
+        self.watch = self.root / 'tools/automations/herdr-watch.json'
+        self.watch.parent.mkdir(parents=True)
+        self.watch.write_text('[{"type":"discussion","number":1953}]')
+        self.evidence = self.root / 'evidence'
+        self.calls = []
+        self.changelog = '# Changelog\n\n## Unreleased\n\n### Fixed\n- Sidebar fix\n\n## [0.9.5]\nold\n'
+        self.compare = {'status': 'diverged', 'total_commits': 1,
+                        'commits': [{'sha': 'abc', 'title': 'Sidebar fix', 'url': 'https://example.com/abc'}]}
+        self.thread = {'title': 'Folders', 'number': 1953, 'url': 'https://github.com/herdrdev/herdr/discussions/1953',
+                       'closed': False, 'updatedAt': '2026-11-12T12:00:00Z', 'body': '',
+                       'comments': {'totalCount': 0, 'nodes': []}}
+        self.search = {'issueCount': 0, 'pageInfo': {'hasNextPage': False}, 'nodes': []}
+        self.discussions = {'discussionCount': 0, 'pageInfo': {'hasNextPage': False}, 'nodes': []}
+        self.graph = {'data': {'issues': self.search, 'discussions': self.discussions,
+                               'repository': {'watch0': self.thread}}}
+
+    def observe(self, cmd, **kwargs):
+        self.calls.append(cmd)
+        self.assertEqual(cmd[:2], ['gh', 'api'])
+        self.assertNotIn('--paginate', cmd)
+        if 'graphql' in cmd:
+            return json.dumps(self.graph)
+        if '/compare/' in cmd[2]:
+            return json.dumps(self.compare)
+        return self.changelog
+
+    def gather(self):
+        with mock.patch.object(automation, 'observe', side_effect=self.observe):
+            automation.gather_herdr_upstream(self.evidence, self.root)
+
+    def test_gather_extracts_unreleased_and_projects_commits_with_three_requests(self):
+        self.gather()
+        changelog = (self.evidence / 'herdr-unreleased.md').read_text()
+        self.assertIn('Sidebar fix', changelog)
+        self.assertNotIn('old', changelog)
+        commits = json.loads((self.evidence / 'herdr-commits.json').read_text())
+        self.assertEqual(commits['status'], 'diverged')
+        self.assertEqual(commits['commits'], self.compare['commits'])
+        self.assertEqual(len(self.calls), 3)
+        self.assertIn('v0.9.5...master?per_page=50', self.calls[1][2])
+        query = self.calls[2][-1]
+        self.assertIn('is:issue', query)
+        self.assertIn('sort:updated-desc', query)
+        self.assertIn(' OR ', query)
+        self.assertIn('updated:>=', query)
+        self.assertIn('first:20', query)
+        self.assertIn('last:10', query)
+        self.assertIn('last:5', query)
+
+    def test_latest_compare_page_is_the_only_fourth_request(self):
+        self.compare['total_commits'] = 101
+        original = self.observe
+
+        def observe(cmd, **kwargs):
+            value = original(cmd, **kwargs)
+            if '/compare/' in cmd[2] and 'page=3' in cmd[2]:
+                return json.dumps({**self.compare, 'commits': [{'sha': 'latest', 'title': 'New', 'url': 'u'}]})
+            return value
+
+        with mock.patch.object(automation, 'observe', side_effect=observe):
+            automation.gather_herdr_upstream(self.evidence, self.root)
+        result = json.loads((self.evidence / 'herdr-commits.json').read_text())
+        self.assertEqual(result['commits'][0]['sha'], 'latest')
+        self.assertTrue(result['truncated'])
+        self.assertEqual(len(self.calls), 4)
+        self.assertEqual(sum('page=3' in c[2] for c in self.calls), 1)
+
+    def test_empty_and_oversized_unreleased_are_explicit_and_bounded(self):
+        for section in ('', 'x' * 30000):
+            self.changelog = '# Changelog\n## Unreleased\n' + section + '\n## [0.9.5]\nold'
+            self.gather()
+            output = (self.evidence / 'herdr-unreleased.md').read_text()
+            self.assertLess(len(output), 12500)
+            self.assertIn('empty' if not section else 'TRUNCATED', output)
+
+    def test_command_and_partial_graphql_failures_share_unknown(self):
+        for response in ('UNKNOWN: gh exited 1', 'not json',
+                         json.dumps({'data': self.graph['data'], 'errors': [{'message': 'missing'}]}),
+                         json.dumps({'data': {**self.graph['data'], 'repository': {'watch0': None}}})):
+            with mock.patch.object(automation, 'observe', return_value=response):
+                automation.gather_herdr_upstream(self.evidence, self.root)
+            for name in ('herdr-activity.json', 'herdr-tracked.json'):
+                self.assertTrue((self.evidence / name).read_text().startswith('UNKNOWN'), name)
+
+    def test_missing_pin_and_invalid_watch_config_do_not_abort_other_evidence(self):
+        self.pin.unlink()
+        self.watch.write_text('[{"type":"discussion","number":true}]')
+        self.gather()
+        self.assertTrue((self.evidence / 'herdr-commits.json').read_text().startswith('UNKNOWN'))
+        self.assertTrue((self.evidence / 'herdr-tracked.json').read_text().startswith('UNKNOWN'))
+        self.assertIn('Sidebar fix', (self.evidence / 'herdr-unreleased.md').read_text())
+        self.assertEqual(len(self.calls), 1)
+        self.pin.write_text('HERDR_VERSION=../../bad\n')
+        self.watch.write_text(json.dumps([{'type': 'discussion', 'number': i} for i in range(1, 7)]))
+        self.calls.clear()
+        self.gather()
+        self.assertEqual(len(self.calls), 1)
+
+    def test_tracked_replies_links_and_search_caps_survive_as_bounded_evidence(self):
+        reply = {'authorAssociation': 'MEMBER', 'createdAt': '2026-11-12T13:00:00Z',
+                 'updatedAt': '2026-11-12T13:00:00Z', 'url': 'u',
+                 'body': 'x' * 2000 + ' https://github.com/herdrdev/herdr/pull/42'}
+        comment = {**reply, 'authorAssociation': 'NONE',
+                   'replies': {'totalCount': 6, 'nodes': [reply] * 6}}
+        self.thread['comments'] = {'totalCount': 11, 'nodes': [comment] * 11}
+        self.search.update(issueCount=25, pageInfo={'hasNextPage': True},
+                           nodes=[{'title': 'Sidebar', 'number': i, 'state': 'OPEN', 'url': 'u'} for i in range(25)])
+        self.gather()
+        activity = json.loads((self.evidence / 'herdr-activity.json').read_text())
+        self.assertEqual(len(activity['issues']['nodes']), 20)
+        self.assertTrue(activity['issues']['pageInfo']['hasNextPage'])
+        tracked = json.loads((self.evidence / 'herdr-tracked.json').read_text())[0]
+        self.assertEqual(len(tracked['comments']['nodes']), 10)
+        self.assertEqual(len(tracked['comments']['nodes'][0]['replies']['nodes']), 5)
+        self.assertEqual(tracked['latestObservedMaintainerReplyAt'], '2026-11-12T13:00:00Z')
+        self.assertIn('https://github.com/herdrdev/herdr/pull/42', tracked['linkedPRs'])
+        self.assertLess(len(tracked['comments']['nodes'][0]['body']), 1100)
+        for path in self.evidence.iterdir():
+            self.assertLessEqual(path.stat().st_size, 200000)
+
+    def test_discussion_count_uses_github_discussion_field_not_issue_count(self):
+        self.discussions.update(discussionCount=75, pageInfo={'hasNextPage': True},
+                                nodes=[{'number': 1953, 'title': 'Folders', 'closed': False, 'url': 'u'}])
+        self.gather()
+        activity = json.loads((self.evidence / 'herdr-activity.json').read_text())
+        self.assertEqual(activity['discussions']['discussionCount'], 75)
+        self.assertEqual(activity['issues']['issueCount'], 0)
+        self.assertIn('discussionCount', self.calls[-1][-1])
+
+    def test_issue_cross_reference_never_copies_other_repository_urls(self):
+        self.watch.write_text('[{"type":"issue","number":123}]')
+        self.thread['timelineItems'] = {'nodes': [
+            {'source': {'url': 'https://github.com/someuser/private-project/pull/7'}},
+            {'source': {'url': 'https://github.com/herdrdev/herdr/pull/99'}}]}
+        self.gather()
+        text = (self.evidence / 'herdr-tracked.json').read_text()
+        self.assertNotIn('private-project', text)
+        self.assertEqual(json.loads(text)[0]['linkedPRs'], ['https://github.com/herdrdev/herdr/pull/99'])
+
+    def test_bad_compare_and_changelog_do_not_hide_successful_graphql(self):
+        self.changelog = 'UNKNOWN: upstream offline'
+        for comparison in ({}, {'status': 'ahead', 'total_commits': -1, 'commits': []},
+                           {'status': 'ahead', 'total_commits': 1,
+                            'commits': [{'sha': 'abc', 'title': '\u2603' * 100000, 'url': 'u'}]}):
+            self.compare = comparison
+            self.gather()
+            self.assertTrue((self.evidence / 'herdr-unreleased.md').read_text().startswith('UNKNOWN'))
+            text = (self.evidence / 'herdr-commits.json').read_text()
+            if text.startswith('UNKNOWN'):
+                self.assertLess(len(text), 1000)
+            else:
+                result = json.loads(text)
+                self.assertLessEqual(len(result['commits'][0]['title']), 500)
+            self.assertEqual(json.loads((self.evidence / 'herdr-tracked.json').read_text())[0]['number'], 1953)
+
+    def test_top_level_radar_includes_upstream_evidence_without_more_upstream_calls(self):
+        upstream = self.observe
+
+        def observe(cmd, **kwargs):
+            if cmd[:2] == ['gh', 'api'] and ('/compare/' in cmd[2] or '/contents/' in cmd[2] or cmd[2] == 'graphql'):
+                return upstream(cmd, **kwargs)
+            return ''
+
+        with mock.patch.object(automation, 'observe', side_effect=observe), \
+             mock.patch.object(automation, 'gather_package_changes'), \
+             mock.patch.object(automation, 'npm_search', return_value=''), \
+             mock.patch.object(automation, 'HOME', self.root), \
+             mock.patch.object(automation, 'PI_AGENT', self.root / 'agent'):
+            automation.gather_tooling_radar(self.evidence, self.root)
+        self.assertIn('Sidebar fix', (self.evidence / 'herdr-unreleased.md').read_text())
+        self.assertEqual(len(self.calls), 3)
+
+    def test_plain_semver_pin_is_normalized_and_issue_watch_gets_cross_references(self):
+        self.pin.write_text('HERDR_VERSION=0.9.5\n')
+        self.watch.write_text('[{"type":"issue","number":123}]')
+        self.thread['state'] = 'CLOSED'
+        self.thread['timelineItems'] = {'nodes': [{'source': {'url': 'https://github.com/herdrdev/herdr/pull/99'}}]}
+        self.gather()
+        self.assertIn('v0.9.5...master', self.calls[1][2])
+        self.assertIn('issue(number:123)', self.calls[2][-1])
+        self.assertIn('CROSS_REFERENCED_EVENT', self.calls[2][-1])
+        tracked = json.loads((self.evidence / 'herdr-tracked.json').read_text())[0]
+        self.assertIn('https://github.com/herdrdev/herdr/pull/99', tracked['linkedPRs'])
 
 
 class RepositoryTests(unittest.TestCase):
