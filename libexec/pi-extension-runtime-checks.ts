@@ -13,7 +13,7 @@ import type { SubagentsService } from "@gotgenes/pi-subagents";
 
 type EvidenceEntry = { sessionId: string } & (ToolCallEvent | ToolResultEvent | ToolExecutionStartEvent | ToolExecutionUpdateEvent | ToolExecutionEndEvent | { type: "loadout"; active: string[]; all: string[] } | { type: "permission_decision"; decision: PermissionDecisionEvent } | { type: "permission_prompt"; prompt: PermissionUiPromptEvent });
 
-const metadataCommands = ["printenv PI_PROVIDER PI_MODEL", "printenv HERDR_PANE_ID HERDR_WORKSPACE_ID"];
+const metadataCommands = ["printenv PI_PROVIDER PI_MODEL", "printenv HERDR_PANE_ID HERDR_WORKSPACE_ID", "printenv HERDR_WORKSPACE_ID PI_PROVIDER PI_MODEL"];
 const permissionFailure = /Denied by policy|requires approval|no interactive UI|Script failed/;
 
 function option(name: string): string {
@@ -294,9 +294,10 @@ try {
       tools.bash({command: ${JSON.stringify(name === "smart" ? "git branch --show-current" : "git branch must-not-exist")}}),
       tools.bash({command: ${JSON.stringify(metadataCommands[0])}}),
       tools.bash({command: ${JSON.stringify(metadataCommands[1])}}),
+      tools.bash({command: ${JSON.stringify(metadataCommands[2])}}),
       tools.bash({command: "grep -E 'TODO$' README.md"}),
       tools.bash({command: "printenv HERDR_PANE_ID HERDR_WORKSPACE_ID GH_TOKEN"})
-    ]); text(out.map(r => r.status === "rejected" ? { status: r.status, error: r.reason.message } : r)); text("metadata-results:" + JSON.stringify(out.slice(7, 9))); text(ALL_TOOLS.map(t => t.name));
+    ]); text(out.map(r => r.status === "rejected" ? { status: r.status, error: r.reason.message } : r)); text("metadata-results:" + JSON.stringify(out.slice(7, ${7 + metadataCommands.length}))); text(ALL_TOOLS.map(t => t.name));
     ${name === "smart" ? 'text((await Promise.allSettled([tools.write({path:"smart.txt",content:"smart-linked"}), tools.write({path:"primary/smart-blocked.txt",content:"blocked"})])).map(r => r.status === "rejected" ? {status:r.status,error:r.reason.message} : r));' : `text({write: "write" in tools, edit: "edit" in tools}); for (const tool of ["write", "edit"]) { try { await tools[tool]({path: "${name}-blocked.txt",content:"must-not-write",oldText:"original",newText:"mutated"}); } catch (e) { text(e.message); } }`}`;
     const id = service.spawn(name, `NATIVE:${source}`, { foreground: true, maxTurns: 4 });
     await service.waitForAll();

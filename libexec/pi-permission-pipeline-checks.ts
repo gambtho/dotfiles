@@ -78,6 +78,8 @@ type ReporterLike = {
 
 const BASELINE_PIPELINE_CASES: PipelineCase[] = [
   { label: "ordinary reader", command: "pwd", expected: "allow" },
+  // The slash-qualified glob also sees directory operands, not just executables.
+  { label: "metadata directory collision still asks", command: "cd /tmp/printenv-fixture && pwd", expected: "ask", surface: "bash", pattern: "*/printenv*" },
   { label: "real session approval and reuse", command: "rm -rf /tmp/pi-permission-example", expected: "ask", approveForSession: true },
   { label: "smart session approval preserves tool and input scope", command: "", toolName: "bash", agentName: "smart", input: { command: "rm -rf /tmp/pi-permission-example" }, expected: "ask", approveForSession: true },
   {
@@ -824,6 +826,7 @@ for (const agentName of [undefined, "rush", "smart", "inspector", "deep", "revie
     "HERDR_SOCKET_PATH",
     "HERDR_PANE_ID",
     "HERDR_WORKSPACE_ID",
+    "HERDR_WORKSPACE_ID PI_PROVIDER PI_MODEL",
     "HERDR_PANE_ID HERDR_ENV",
     "HERDR_PANE_ID HERDR_WORKSPACE_ID",
     "HERDR_ENV HERDR_SESSION HERDR_SOCKET_PATH HERDR_PANE_ID HERDR_WORKSPACE_ID",
@@ -836,7 +839,7 @@ for (const agentName of [undefined, "rush", "smart", "inspector", "deep", "revie
       { label: `${agentName ?? "global"} metadata protected chain: ${command}`, command: `${command} && cat ~/.ssh/config`, agentName, expected: "deny", surface: "path_read" },
     );
   }
-  for (const command of ["printenv", "/usr/bin/printenv", "env", "/usr/bin/env", "printenv GH_TOKEN", "printenv HERDR_PANE", "printenv HERDR_SPACE_ID", "printenv HERDR_ENV_EXTRA", "printenv --null HERDR_ENV", "printenv PI_PROVIDER PI_MODEL PI_REASONING_LEVEL_EXTRA"]) {
+  for (const command of ["printenv", "/usr/bin/printenv", "env", "/usr/bin/env", "printenv GH_TOKEN", "printenv HERDR_PANE", "printenv HERDR_SPACE_ID", "printenv HERDR_ENV_EXTRA", "printenv HERDR_WORKSPACE_ID PI_PROVIDER UNKNOWN_NAME", "printenv PI_PROVIDER PI_MODEL HERDR_WORKSPACE_ID", "/usr/bin/printenv PI_PROVIDER PI_MODEL HERDR_WORKSPACE_ID", "printenv --null HERDR_ENV", "printenv PI_PROVIDER PI_MODEL PI_REASONING_LEVEL_EXTRA"]) {
     QUERY_PIPELINE_CASES.push({ label: `${agentName ?? "global"} environment still asks: ${command}`, command, agentName, expected: "ask", raw: true });
   }
   for (const [toolName, input] of [

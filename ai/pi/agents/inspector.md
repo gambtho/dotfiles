@@ -21,6 +21,7 @@ permission:
     "printenv HERDR_SOCKET_PATH": allow
     "printenv HERDR_PANE_ID": allow
     "printenv HERDR_WORKSPACE_ID": allow
+    "printenv HERDR_WORKSPACE_ID PI_PROVIDER PI_MODEL": allow
     "printenv HERDR_PANE_ID HERDR_ENV": allow
     "printenv HERDR_PANE_ID HERDR_WORKSPACE_ID": allow
     "printenv HERDR_ENV HERDR_SESSION HERDR_SOCKET_PATH HERDR_PANE_ID HERDR_WORKSPACE_ID": allow
@@ -35,6 +36,7 @@ permission:
     "/usr/bin/printenv HERDR_SOCKET_PATH": allow
     "/usr/bin/printenv HERDR_PANE_ID": allow
     "/usr/bin/printenv HERDR_WORKSPACE_ID": allow
+    "/usr/bin/printenv HERDR_WORKSPACE_ID PI_PROVIDER PI_MODEL": allow
     "/usr/bin/printenv HERDR_PANE_ID HERDR_ENV": allow
     "/usr/bin/printenv HERDR_PANE_ID HERDR_WORKSPACE_ID": allow
     "/usr/bin/printenv HERDR_ENV HERDR_SESSION HERDR_SOCKET_PATH HERDR_PANE_ID HERDR_WORKSPACE_ID": allow

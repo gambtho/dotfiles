@@ -712,6 +712,7 @@ setup() {
         "HERDR_SOCKET_PATH",
         "HERDR_PANE_ID",
         "HERDR_WORKSPACE_ID",
+        "HERDR_WORKSPACE_ID PI_PROVIDER PI_MODEL",
         "HERDR_PANE_ID HERDR_ENV",
         "HERDR_PANE_ID HERDR_WORKSPACE_ID",
         "HERDR_ENV HERDR_SESSION HERDR_SOCKET_PATH HERDR_PANE_ID HERDR_WORKSPACE_ID"
@@ -720,7 +721,7 @@ setup() {
         and ($bash | has($command + "*") | not)
         and (($keys | index($command)) > ($keys | index("*/printenv*")))))
     and ([$bash | to_entries[] | select(.value == "allow"
-      and (.key | startswith("printenv ") or startswith("/usr/bin/printenv ")))] | length) == 28
+      and (.key | startswith("printenv ") or startswith("/usr/bin/printenv ")))] | length) == 30
     and $bash.printenv == "ask"
     and $bash["printenv *"] == "ask"
     and $bash["*/printenv*"] == "ask"
