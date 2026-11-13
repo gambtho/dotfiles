@@ -254,10 +254,12 @@ this is an explicit compatibility allowlist, not a minimum-version rule.
 
 The isolated v0.9.5 Heeler version/ping checks pass. Actual Pi startup/readiness,
 prompt delivery, client-focus preservation, bridge transitions and layout recovery
-are not certified for this upgrade. A legacy v0.8.0 default-session fixture omitted
-`HERDR_SESSION` and correctly failed the launcher's inherited-context precondition;
-no session value is guessed or injected. Deterministic launcher fixtures cover both
-accepted protocol/version profiles, not those unperformed live paths. This is not
+are not certified for this upgrade. Default-session panes can omit `HERDR_SESSION`;
+the launcher accepts that only after `herdr session list --json` identifies a unique
+default with the exact inherited socket path and intended name, and the path is an
+absolute local socket. Nothing is guessed or injected. Deterministic fixtures cover
+both accepted protocol/version profiles and matching/mismatched/missing default
+socket cases, not those unperformed live agent paths. This is not
 certification of live Heeler or phone access.
 
 The intervening release notes include operational changes: v0.9.0 removes

@@ -21,12 +21,14 @@ Other harnesses retain their manual fallback; this is only a Pi fast path.
   Herdr's alias constraint `[a-z][a-z0-9_-]{0,31}`. Reject invalid names, overlength
   names and ambiguous collisions. No silent truncation or random suffixes. A user
   override that cannot serve as an alias needs a valid user-selected name, not a guess.
-- Confirm `HERDR_ENV=1`, the inherited `HERDR_SESSION` matches the intended session,
-  and inherited socket/caller pane/workspace exist. Supply that verified session to
-  `--session`; it is an assertion, **not** a session selector. The helper never
-  overrides the inherited destination. Missing/mismatched context means manual handoff.
-  A default session may omit `HERDR_SESSION` (observed with v0.8.0); do not invent
-  a value or switch sessions to bypass that precondition.
+- Confirm `HERDR_ENV=1` and inherited socket/caller pane/workspace exist. A present
+  `HERDR_SESSION` must match the intended session. When it is absent, the helper
+  accepts only a unique default from `herdr session list --json` whose `socket_path`
+  exactly equals `HERDR_SOCKET_PATH`, which must be an absolute local socket.
+  Supply that listed default's name to `--session`; it remains an assertion, **not**
+  a session selector. An empty/mismatched session value or unverifiable default
+  still means manual handoff. No session name or socket is guessed, injected or
+  switched, and live caller identity is checked before any launch mutation.
 - STATE.md needs the five-column Open lanes table from the state template, including
   exactly one row for the lane, with Launch initially `Manual` or `—`. Existing launch
   state or a receipt must be reconciled, not erased. Keep receipts in the same local,
@@ -39,7 +41,7 @@ Linux/macOS/WSL). Resolve the script relative to this skill; quote literal paths
 
 ```bash
 python3 <skill-dir>/scripts/launch.py --requested \
-  --project double-holo --lane W12 --session '<verified inherited session>' \
+  --project double-holo --lane W12 --session '<verified session>' \
   --repo '/home/example/my repo' \
   --prompt '/home/example/double-holo-local/lanes/W12-approved-task.md' \
   --state '/home/example/double-holo-local/STATE.md'
