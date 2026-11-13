@@ -90,6 +90,16 @@ def string(obj, key):
     return value
 
 
+def git(*argv, cwd):
+    try:
+        done = subprocess.run(['git', '-C', str(cwd), *argv], capture_output=True, text=True, timeout=30, check=False)
+    except subprocess.TimeoutExpired as exc:
+        raise LaunchError(f'git {argv[0]} timed out; inspect, do not retry') from exc
+    if done.returncode:
+        raise LaunchError(f'git {argv[0]} failed (exit {done.returncode}); inspect, do not retry')
+    return done.stdout.splitlines()
+
+
 def inherited_context(session):
     required = ('HERDR_SOCKET_PATH', 'HERDR_PANE_ID', 'HERDR_WORKSPACE_ID')
     if os.environ.get('HERDR_ENV') != '1' or any(not os.environ.get(k) for k in required):
@@ -148,6 +158,7 @@ class Launch:
         self.args, self.context, self.live = args, context, live
         self.path = args.prompt.parent / f'{args.lane}-launch.json'
         self.record: dict = {}
+        self.lock = self.group = None
 
     def checkpoint(self, stage=None, **fields):
         if stage:
@@ -169,6 +180,109 @@ class Launch:
             failures[field] = {'expected': expected, 'observed': observed}
             self.checkpoint()
         return matches
+
+    def release(self):
+        if self.lock:
+            self.lock.close()
+            self.lock = None
+
+    def grouping(self):
+        """None only when project grouping is wholly absent; else the locked, validated pin or LaunchError."""
+        project = self.args.project
+        base = Path.home().resolve() / '.lane-anchors'
+        anchor, lanes, lock = base / project, base / f'{project}-lanes', base / f'.{project}.lock'
+        heading = f'◆ {project}'
+
+        def related(w):
+            wt = w.get('worktree') or {}
+            return (w.get('label') == heading or wt.get('repo_root') == str(anchor)
+                    or str(wt.get('checkout_path')).startswith(f'{lanes}/'))
+
+        def check():
+            heads = [w for w in self.live['workspaces'] if w.get('label') == heading]
+            panes = [p for p in self.live['panes'] if heads and p.get('workspace_id') == heads[0].get('workspace_id')]
+            wt = (heads[0].get('worktree') or {}) if heads else {}
+            try:
+                top, common, _ = git('rev-parse', '--path-format=absolute', '--show-toplevel',
+                                     '--git-common-dir', 'HEAD^{commit}', cwd=anchor)
+            except (LaunchError, OSError, ValueError):
+                top = common = None
+            if not (len(heads) == 1 and len(panes) == 1 and lock.is_file() and top == str(anchor)
+                    and common == f'{anchor}/.git' and os.path.realpath(str(panes[0].get('cwd'))) == top
+                    and (not wt or (wt.get('repo_root') == top and wt.get('checkout_path') == top
+                                    and wt.get('repo_key') == common and wt.get('is_linked_worktree') is False))):
+                raise LaunchError('Project grouping setup is partial, broken or ambiguous; stopped before launch, '
+                                  'not flat. Inspect it and repair it with lane setup')
+            return {'anchor': top, 'checkout': f'{lanes}/{self.args.lane[1:]}',
+                    'heading': heads[0]['workspace_id'], 'key': common}
+
+        if not any(related(w) for w in self.live['workspaces']) and not any(
+                os.path.lexists(p) for p in (anchor, lanes, lock)):
+            print(f'Project grouping is not set up for {project}; launching flat', file=sys.stderr)
+            return None
+        group = check()
+        # Existing per-project lock only; never create setup. Nonblocking, released before agent startup.
+        self.lock = lock.open('r+')
+        fcntl.flock(self.lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        self.live = snapshot(dict(self.context))
+        if check() != group:
+            raise LaunchError('Project grouping changed while locking; inspect, never retry automatically')
+        return group
+
+    def collisions(self, group):
+        checkout = group['checkout']
+        if (os.path.lexists(checkout) or f'worktree {checkout}' in git('worktree', 'list', '--porcelain', cwd=group['anchor'])
+                or any((w.get('worktree') or {}).get('checkout_path') == checkout for w in self.live['workspaces'])):
+            raise LaunchError('Lane checkout already exists, is registered or open; inspect, never adopt')
+
+    def confirm(self, live, workspace, panes, source):
+        """Exact panes, source cwd, checkout membership and heading provenance from one snapshot."""
+        group = self.record['group']
+        one = [w for w in live['workspaces'] if w.get('workspace_id') == workspace]
+        head = [w for w in live['workspaces'] if w.get('workspace_id') == group['heading']]
+        wt = (one[0].get('worktree') or {}) if one else {}
+        hw = (head[0].get('worktree') or {}) if head else {}
+        found = {p.get('pane_id'): p for p in live['panes'] if p.get('workspace_id') == workspace}
+        if not (len(one) == 1 and len(head) == 1 and one[0].get('label') == self.record['name']
+                and wt.get('checkout_path') == group['checkout'] and wt.get('is_linked_worktree') is True
+                and hw.get('is_linked_worktree') is False and hw.get('checkout_path') == group['anchor']
+                and wt.get('repo_key') == hw.get('repo_key') == group['key']
+                and {k: v.get('terminal_id') for k, v in found.items()} == panes
+                and found[source].get('cwd') == str(self.args.repo)):
+            raise LaunchError('Topology identity differs from receipt; inspect, do not reuse')
+
+    def topology(self, group, workspace, temp, terminal):
+        """Attach the checkout workspace, add the source-cwd pane, then close only our temporary shell."""
+        self.checkpoint('Attaching', temporary={'pane': temp, 'terminal': terminal})
+        opened = call('worktree', 'open', '--cwd', group['anchor'], '--path', group['checkout'], '--no-focus',
+                      kind='worktree_opened')
+        w, p = mapping(opened.get('workspace'), 'workspace'), mapping(opened.get('root_pane'), 'root_pane')
+        if (opened.get('already_open') is not True or w.get('workspace_id') != workspace
+                or w.get('label') != self.record['name'] or p.get('pane_id') != temp
+                or p.get('terminal_id') != terminal):
+            raise LaunchError('Attachment adopted another workspace or identity changed; inspect receipt')
+        self.checkpoint('Splitting')
+        pane = mapping(call('pane', 'split', temp, '--direction', 'right', '--cwd', str(self.args.repo),
+                            '--env', 'DOTFILES_KEYRING_PROMPT=0', '--no-focus', kind='pane_info').get('pane'), 'pane')
+        source, source_terminal = string(pane, 'pane_id'), string(pane, 'terminal_id')
+        self.checkpoint(source={'pane': source, 'terminal': source_terminal})
+        if pane.get('workspace_id') != workspace or source == temp or source_terminal == terminal:
+            raise LaunchError('Split returned an unexpected pane; inspect receipt, never close')
+        self.confirm(snapshot(dict(self.context)), workspace, {temp: terminal, source: source_terminal}, source)
+        for _ in range(10):
+            info = mapping(call('pane', 'process-info', '--pane', temp, kind='pane_process_info')
+                           .get('process_info'), 'process_info')
+            procs = info.get('foreground_processes') or []
+            if (info.get('pane_id') == temp and len(procs) == 1 and procs[0].get('pid') == info.get('shell_pid')
+                    and str(procs[0].get('name')).lstrip('-') in ('sh', 'bash', 'zsh', 'dash', 'fish')):
+                break
+            time.sleep(0.2)
+        else:
+            raise LaunchError('Temporary shell is not alone in the foreground; not closing, inspect receipt')
+        self.checkpoint('Closing')
+        call('pane', 'close', temp, kind='ok')
+        self.confirm(snapshot(dict(self.context)), workspace, {source: source_terminal}, source)
+        return source, source_terminal
 
     def agent(self, a=None):
         if a is None:
@@ -221,11 +335,18 @@ class Launch:
                     'repo': str(args.repo), 'state': str(args.state), 'context': self.context}
         if self.path.exists():
             candidate = json.loads(self.path.read_text())
-            if candidate.get('version') != 1 or any(candidate.get(k) != v for k, v in identity.items()):
+            if candidate.get('version') not in (1, 2) or any(candidate.get(k) != v for k, v in identity.items()):
                 raise LaunchError('Receipt identity/context/prompt differs; inspect without adopting or renaming')
             self.record = candidate
             if self.record['stage'] == 'Creating':
                 raise LaunchError('Creation uncertain; inspect live workspace list, never create again automatically')
+            if self.record['stage'] not in ('Created', 'Starting', 'Ready', 'Submitting', 'Submitted'):
+                raise LaunchError('Topology/launch stage is incomplete or unknown; inspect receipt and live panes only')
+            if self.record['stage'] not in ('Submitting', 'Submitted'):
+                group = self.group = self.grouping()
+                if (group is not None or candidate['version'] == 2) and group != candidate.get('group'):
+                    raise LaunchError('Receipt topology and current project grouping disagree; '
+                                      'inspect, never regroup or fall back flat')
             w = mapping(call('workspace', 'get', self.record['workspace'],
                              kind='workspace_info').get('workspace'), 'workspace')
             if w.get('workspace_id') != self.record['workspace'] or w.get('label') != identity['name']:
@@ -234,6 +355,9 @@ class Launch:
                      and p['workspace_id'] == self.record['workspace'] and p['terminal_id'] == self.record['terminal']]
             if len(panes) != 1:
                 raise LaunchError('Root pane identity differs from receipt')
+            if self.group:
+                self.confirm(self.live, self.record['workspace'], {self.record['pane']: self.record['terminal']},
+                             self.record['pane'])
             if self.record['stage'] in ('Submitting', 'Submitted'):
                 a = self.agent()
                 self.checkpoint(observation=a['agent_status'])
@@ -245,12 +369,21 @@ class Launch:
             row = state.splitlines()[state_row(state, args.lane)]
             if row.split('|')[-2].strip() not in ('Manual', '—', ''):
                 raise LaunchError('STATE records an existing launch without a matching receipt; inspect first')
+            group = self.grouping()
             if any(w.get('label') == identity['name'] for w in self.live['workspaces']) or any(
                     a.get('name') == identity['name'] for a in self.live['agents']):
                 raise LaunchError('Name collision or existing unrecorded launch; inspect, never adopt implicitly')
+            if group:
+                self.collisions(group)
             self.record = dict(version=1, **identity)
+            initial_cwd = str(args.repo)
+            if group:
+                self.record.update(version=2, group=group)
+                self.checkpoint('Checkout')
+                git('worktree', 'add', '-q', '--detach', group['checkout'], cwd=group['anchor'])
+                initial_cwd = group['checkout']
             self.checkpoint('Creating')
-            result = call('workspace', 'create', '--cwd', str(args.repo), '--label', identity['name'],
+            result = call('workspace', 'create', '--cwd', initial_cwd, '--label', identity['name'],
                           '--no-focus', '--env', 'DOTFILES_KEYRING_PROMPT=0', kind='workspace_created')
             for key in ('workspace', 'root_pane'):
                 self.creation_check('create', key, 'object', result.get(key),
@@ -270,7 +403,7 @@ class Launch:
             self.checkpoint(created_response={'workspace': workspace, 'pane': pane, 'terminal': terminal})
             checks = [self.creation_check('create', 'workspace.label', identity['name'], w.get('label')),
                       self.creation_check('create', 'root_pane.workspace_id', workspace, p.get('workspace_id'))]
-            cwd_matches = self.creation_check('create', 'root_pane.cwd', str(args.repo), p.get('cwd'))
+            cwd_matches = self.creation_check('create', 'root_pane.cwd', initial_cwd, p.get('cwd'))
             if not all(checks):
                 raise LaunchError('Creation returned unexpected workspace/root pane/cwd')
             if not cwd_matches:
@@ -290,11 +423,14 @@ class Launch:
                                   (workspaces[0], 'label', 'workspace.label', identity['name']),
                                   (panes[0], 'workspace_id', 'root_pane.workspace_id', workspace),
                                   (panes[0], 'terminal_id', 'root_pane.terminal_id', terminal),
-                                  (panes[0], 'cwd', 'root_pane.cwd', str(args.repo)))]
+                                  (panes[0], 'cwd', 'root_pane.cwd', initial_cwd))]
                 if not all(checks):
                     raise LaunchError('Creation returned unexpected workspace/root pane/cwd; snapshot did not confirm target')
                 self.checkpoint(creation_cwd_confirmed='snapshot')
+            if group:
+                pane, terminal = self.topology(group, workspace, pane, terminal)
             self.checkpoint('Created', workspace=workspace, pane=pane, terminal=terminal)
+        self.release()
         if self.record['stage'] == 'Created':
             # A Created receipt certifies agent start has not yet been attempted.
             self.checkpoint('Starting')
@@ -370,6 +506,7 @@ def main():
                     launch.checkpoint(error=str(exc))
                 raise
             finally:
+                launch.release()
                 if launch.record:
                     # Capture before entering the handler, where exc_info becomes the STATE error.
                     primary_error = sys.exc_info()[1]

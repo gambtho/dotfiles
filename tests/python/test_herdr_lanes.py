@@ -1,16 +1,18 @@
 """Fictional boundary tests for the installed project-heading tools."""
+import fcntl
 import importlib.util
 import itertools
 import json
 import os
 import shlex
+import socket
 import subprocess
 import sys
 import tempfile
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from threading import Barrier, BrokenBarrierError
+from threading import Barrier, BrokenBarrierError, Thread
 from unittest.mock import patch
 
 import tomllib
@@ -219,6 +221,242 @@ class LaneTests(ToolFixture):
         self.assertEqual(self.sends(), [])
 
 
+MUTATING = (('workspace', 'create'), ('worktree', 'open'), ('pane', 'run'))
+
+
+class CoordinatorTests(ToolFixture):
+    def setUp(self):
+        super().setUp()
+        for key in [k for k in os.environ if k.startswith('HERDR_')]:
+            del os.environ[key]  # the HOME patch restores the original environment
+        self.path = str(self.home / 'h.sock')
+        self.bind(self.path)
+        self.rows = [{'name': 'default', 'default': True, 'running': True, 'socket_path': self.path}]
+        self.tweak = self.hook = lambda *args: None
+        self.pins, self.moves, self.free, self.rawn, self.focus = [], [], [], 0, 'w1'
+        self.move_error = self.move_noop = self.move_focus = self.attach_key = None
+        anchors = self.home / '.lane-anchors'
+        self.space('sentinel')
+        self.space('◆ orchard')
+        self.spaces[1]['worktree'] = {'repo_key': 'orchard-key', 'is_linked_worktree': False,
+                                      'checkout_path': str(anchors / 'orchard')}
+        self.space('orchard-30', anchors / 'orchard-lanes/30')
+        self.space('other-8', anchors / 'other-lanes/8')['worktree']['repo_key'] = 'other-key'
+        patch.object(self.lane, 'herdr', side_effect=self.cli).start()
+        patch.object(self.lane, 'raw', side_effect=self.raw, create=True).start()
+        patch.object(self.lane, 'catalog', side_effect=self.catalog, create=True).start()
+
+    def bind(self, path):
+        server = socket.socket(socket.AF_UNIX)
+        server.bind(path)
+        self.addCleanup(server.close)
+
+    def inside(self):
+        os.environ.update(HERDR_ENV='1', HERDR_PANE_ID='w1:p1', HERDR_WORKSPACE_ID='w1',
+                          HERDR_SOCKET_PATH=self.path)
+
+    def catalog(self):
+        self.calls.append(('catalog',))
+        return self.rows
+
+    def snapshot(self, source):
+        snap = {'protocol': 22, 'version': '0.9.5', 'focused_workspace_id': self.focus,
+                'focused_pane_id': self.focus + ':p1', 'workspaces': [dict(w) for w in self.spaces],
+                'panes': [{'pane_id': w['workspace_id'] + ':p1', 'workspace_id': w['workspace_id'],
+                           'terminal_id': 'term-example'} for w in self.spaces]}
+        self.tweak(source, snap)
+        return snap
+
+    def cli(self, *args):
+        pin = args[1] if args[:1] == ('--session',) else getattr(self.lane, 'PIN', None)
+        args = args[2:] if args[:1] == ('--session',) else args
+        self.pins.append((args[:2], pin))
+        if args == ('api', 'snapshot'):
+            return {'snapshot': self.snapshot('pinned' if pin else 'ambient')}
+        result = self.api(*args)
+        if args[:2] == ('pane', 'run'):
+            with (self.home / '.lane-anchors/.orchard.lock').open('a') as lock:
+                try:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    return self.free.append(False) or result
+                self.free.append(True)
+        if args[:2] == ('workspace', 'create') and result['workspace']['label'].startswith('◆'):
+            result['workspace']['worktree'] = self.spaces[1]['worktree']
+        if args[:2] == ('worktree', 'open'):
+            if self.attach_key:
+                result['workspace']['worktree']['repo_key'] = self.attach_key
+            self.spaces[-1], self.focus = result['workspace'], result['workspace']['workspace_id']
+        return result
+
+    def raw(self, path, method, params, expected):
+        self.rawn += 1
+        self.calls.append(('raw', method))
+        self.hook(method, self.rawn)
+        self.assertEqual(path, self.path)
+        if method != 'workspace.move_block':
+            return {'type': 'session_snapshot', 'snapshot': self.snapshot('raw')}
+        self.moves.append(params)
+        if self.move_error:
+            raise self.move_error
+        if not self.move_noop:
+            moving = next(w for w in self.spaces if w['workspace_id'] == params['workspace_ids'][0])
+            self.spaces.remove(moving)
+            before = next(i for i, w in enumerate(self.spaces) if w['workspace_id'] == params['before_workspace_id'])
+            self.spaces.insert(before, moving)
+        self.focus = 'w2' if self.move_focus else self.focus
+        return {'type': 'workspace_list', 'workspaces': [{'workspace_id': w['workspace_id']} for w in self.spaces]}
+
+    def refuse(self, anchored=False):
+        with self.assertRaises(ValueError):
+            self.lane.open_lane('orchard-coord', 'Task')
+        self.assertEqual([c for c in self.calls if c[:2] in MUTATING], [])
+        self.assertEqual(anchored, (self.home / '.lane-anchors/orchard-lanes/coord').exists())
+        self.assertIsNone(self.lane.PIN)
+
+    def stops(self, **faults):
+        self.inside()
+        vars(self).update(faults)
+        with self.assertRaisesRegex(ValueError, 'uncertain'):
+            self.lane.open_lane('orchard-coord', 'Task')
+        self.assertEqual(self.sends(), [])
+        self.assertLessEqual(len(self.moves), 1)  # never retried
+        self.assertIsNone(self.lane.PIN)
+
+    def test_new_coordinator_moves_first_before_typed_startup_with_pinned_session(self):
+        self.inside()
+        self.lane.open_lane('orchard-coord', 'Task')
+        self.assertEqual(self.moves, [{'workspace_ids': ['w5'], 'before_workspace_id': 'w3'}])
+        self.assertEqual([w['workspace_id'] for w in self.spaces], ['w1', 'w2', 'w5', 'w3', 'w4'])
+        self.assertLess(self.calls.index(('raw', 'workspace.move_block')), self.calls.index(self.sends()[0]))
+        self.assertEqual((self.free, self.focus), ([True], 'w5'))  # lock released; focus kept
+        self.assertEqual({p for c, p in self.pins if c in MUTATING}, {'default'})
+        self.assertIsNone(self.lane.PIN)
+
+    def test_no_sibling_is_not_moved_and_outside_herdr_uses_default(self):
+        self.spaces[2]['worktree']['repo_key'] = 'elsewhere'
+        self.lane.open_lane('orchard-coord', 'Task')
+        self.assertEqual((self.moves, len(self.sends())), ([], 1))
+
+    def test_named_session_is_selected_over_default(self):
+        self.inside()
+        self.rows = [{**self.rows[0], 'default': False, 'name': 'work'}, {**self.rows[0], 'socket_path': '/elsewhere'}]
+        os.environ['HERDR_SESSION'] = 'work'
+        self.lane.open_lane('orchard-coord', 'Task')
+        self.assertEqual({p for c, p in self.pins if c in MUTATING}, {'work'})
+
+    def test_existing_coordinator_is_focus_only_without_context(self):
+        self.space('orchard-coord')
+        with self.assertRaisesRegex(ValueError, 'prompt not sent'):
+            self.lane.open_lane('orchard-coord', 'Task')
+        self.assertEqual([c for c in self.calls if c[0] in ('catalog', 'raw')], [])
+
+    def test_context_mismatches_refuse_before_git_or_workspace_mutation(self):
+        good = self.rows[0]
+        cases = {'empty session': ({'HERDR_SESSION': ''}, [good]), 'unknown session': ({'HERDR_SESSION': 'x'}, [good]),
+                 'stopped': ({}, [{**good, 'running': False}]), 'string running': ({}, [{**good, 'running': 'true'}]),
+                 'two defaults': ({}, [good, {**good, 'name': 'b'}]), 'no default': ({}, [{**good, 'default': False}]),
+                 'socket differs': ({'HERDR_SOCKET_PATH': '/other.sock'}, [good]),
+                 'socket empty': ({'HERDR_SOCKET_PATH': ''}, [good]), 'relative': ({}, [{**good, 'socket_path': 'h.sock'}]),
+                 'not a socket': ({}, [{**good, 'socket_path': str(self.home)}])}
+        for name, (env, rows) in cases.items():
+            with self.subTest(name), patch.dict(os.environ, env):
+                self.rows = rows
+                self.refuse()
+
+    def test_snapshot_disagreement_and_profile_refuse_before_mutation(self):
+        def edit(source, change):
+            return lambda src, snap: change(snap) if src == source else None
+        cases = {'raw caller terminal': edit('raw', lambda s: s['panes'][0].update(terminal_id='x')),
+                 'pinned heading terminal': edit('pinned', lambda s: s['panes'][1].update(terminal_id='x')),
+                 'ambient heading pane': edit('ambient', lambda s: s['panes'].pop(1)),
+                 'caller absent': lambda src, s: s['panes'].pop(0)}
+        for source in ('raw', 'ambient'):
+            for bad in (True, 19.0, 22.0, '22', 20):
+                cases[f'{source} protocol {bad!r}'] = edit(source, lambda s, bad=bad: s.update(protocol=bad))
+            cases[f'{source} version'] = edit(source, lambda s: s.update(version='0.9.4'))
+        for name, tweak in cases.items():
+            with self.subTest(name):
+                self.inside()
+                self.tweak = tweak
+                self.refuse()
+
+    def test_socket_replacement_before_move_stops_before_startup(self):
+        def replace(method, n):
+            if (method, n) == ('session.snapshot', 2):
+                self.bind(self.path + '2')
+                os.replace(self.path + '2', self.path)
+        self.stops(hook=replace)
+        self.assertEqual(self.moves, [])
+
+    def test_terminal_or_group_disagreement_before_move_stops(self):
+        def terminal(src, snap):
+            if src == 'raw':
+                snap['panes'][-1]['terminal_id'] = 'replacement'
+        def group(src, snap):
+            snap['workspaces'][-1]['worktree'] = {**snap['workspaces'][-1]['worktree'], 'repo_key': 'x'}
+        for fault in (dict(tweak=terminal), dict(tweak=group), dict(attach_key='bogus')):
+            with self.subTest(fault):
+                self.setUp()
+                self.stops(**fault)
+                self.assertEqual(self.moves, [])
+
+    def test_move_failure_or_readback_disagreement_stops_without_retry(self):
+        for fault in (dict(move_error=OSError('timed out')), dict(move_noop=True), dict(move_focus=True)):
+            with self.subTest(fault):
+                self.setUp()
+                self.stops(**fault)
+                self.assertEqual(len(self.moves), 1)
+
+
+class RawSocketTests(unittest.TestCase):
+    def setUp(self):
+        self.lane, self.requests = load('lane', 'lane.py'), []
+        self.dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.dir.cleanup)
+
+    def serve(self, name, reply):
+        path = str(Path(self.dir.name, name))
+        server = socket.socket(socket.AF_UNIX)
+        server.bind(path)
+        server.listen(1)
+        self.addCleanup(server.close)
+        def run():
+            conn, _ = server.accept()
+            with conn:
+                request = json.loads(conn.makefile().readline())
+                self.requests.append(request)
+                data = reply(request)
+                try:
+                    conn.sendall(data) if data is not None else conn.recv(1)
+                except OSError:
+                    pass
+        Thread(target=run, daemon=True).start()
+        return path
+
+    def test_framing_identity_type_and_bounds_fail_without_retry(self):
+        def answer(request, **changes):
+            return json.dumps({'id': request['id'], 'result': {'type': 't'}, **changes}).encode() + b'\n'
+        self.assertEqual(self.lane.raw(self.serve('ok', answer), 'm', {'a': 1}, 't'), {'type': 't'})
+        self.assertEqual((self.requests[0]['method'], self.requests[0]['params']), ('m', {'a': 1}))
+        replies = {'id': lambda r: answer(r, id='other'), 'type': lambda r: answer(r, result={'type': 'u'}),
+                   'error': lambda r: answer(r, result=None, error='no'), 'array': lambda r: b'[]\n',
+                   'malformed': lambda r: b'{nope\n', 'eof': lambda r: b'{}', 'oversize': lambda r: b'x' * ((1 << 22) + 1),
+                   'silent': lambda r: None}
+        for name, reply in replies.items():
+            with self.subTest(name), patch.object(self.lane, 'RAW_SECONDS', 0.3):
+                with self.assertRaises((ValueError, OSError)):
+                    self.lane.raw(self.serve(name, reply), 'm', {}, 't')
+        self.assertEqual(len(self.requests), 1 + len(replies))
+
+    def test_expired_deadline_rejects_ready_read(self):
+        with (patch.object(self.lane.socket, 'socket') as made,
+              patch.object(self.lane.time, 'monotonic', side_effect=[0, 0, 0, 11])):
+            made.return_value.__enter__.return_value.recv.return_value = b'{}\n'
+            with self.assertRaisesRegex(TimeoutError, 'deadline'):
+                self.lane.raw('/fictional', 'm', {}, 't')
+
+
 class DashboardTests(ToolFixture):
     def setUp(self):
         super().setUp()
@@ -333,6 +571,17 @@ class TransportTests(unittest.TestCase):
                   {'workspace_id': 'w1', 'label': 'other', 'worktree': 'bad'}]})):
             Path(home, 'orchard-local').mkdir()
             self.assertEqual(lane.main(), 1)
+
+    def test_pinned_session_prefix_and_catalog_command(self):
+        lane = load('lane', 'lane.py')
+        done = subprocess.CompletedProcess([], 0, stdout='{"result": {}, "sessions": []}')
+        with patch.object(lane.subprocess, 'run', return_value=done) as run:
+            lane.PIN = 'work'
+            lane.herdr('workspace', 'list')
+            self.assertEqual(run.call_args.args[0], ['herdr', '--session', 'work', 'workspace', 'list'])
+            lane.PIN = None
+            self.assertEqual(lane.catalog(), [])
+            self.assertEqual(run.call_args.args[0], ['herdr', 'session', 'list', '--json'])
 
     def test_pane_run_and_focus_can_acknowledge_without_stdout(self):
         lane = load('lane', 'lane.py')

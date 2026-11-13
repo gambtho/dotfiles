@@ -1,9 +1,11 @@
 """Launch boundary tests: all Herdr traffic goes to a fixture executable."""
 import contextlib
+import fcntl
 import importlib.util
 import io
 import json
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -104,13 +106,13 @@ elif a == ['api', 'snapshot']:
             (w if obj == 'workspace' else p)[key] = '/unexpected' if key == 'cwd' else 'unexpected'
     reply('session_snapshot', snapshot=s)
 elif a[:2] == ['workspace', 'create']:
-    assert a == ['workspace', 'create', '--cwd', os.environ['FAKE_REPO'],
+    assert a == ['workspace', 'create', '--cwd', os.environ.get('FAKE_CWD', os.environ['FAKE_REPO']),
                  '--label', os.environ.get('FAKE_NAME', 'double-holo-12'), '--no-focus',
                  '--env', 'DOTFILES_KEYRING_PROMPT=0']
     # Isolated 0.9.5 capture, with paths/opaque IDs replaced by fixture values.
     w = dict(workspace_id='opaque-workspace', label=a[5], active_tab_id='opaque-tab',
              agent_status='unknown', focused=False, number=1, pane_count=1, tab_count=1)
-    p = dict(pane_id='opaque-root', terminal_id='terminal-new', workspace_id=w['workspace_id'],
+    p = dict(pane_id=os.environ.get('FAKE_TEMP', 'opaque-root'), terminal_id='terminal-new', workspace_id=w['workspace_id'],
              cwd=a[3], foreground_cwd=a[3], tab_id='opaque-tab', focused=False,
              agent_status='unknown', revision=0,
              scroll=dict(max_offset_from_bottom=0, offset_from_bottom=0, viewport_rows=40))
@@ -138,7 +140,42 @@ elif a[:2] == ['workspace', 'create']:
               root_pane=[] if mode == 'create-pane-list' else p, tab={'tab_id': 'opaque-tab'})
 elif a[:2] == ['workspace', 'get']:
     reply('workspace_info', workspace=next(w for w in s['workspaces'] if w['workspace_id'] == a[2]))
+elif a[:2] == ['worktree', 'open']:
+    anchor, checkout = a[3], a[5]
+    assert a == ['worktree', 'open', '--cwd', anchor, '--path', checkout, '--no-focus']
+    w = s['workspaces'][-1]
+    w['worktree'] = {'checkout_path': checkout, 'is_linked_worktree': True,
+                     'repo_key': anchor + '/.git', 'repo_root': anchor}
+    h = next(x for x in s['workspaces'] if x['label'].startswith('\u25c6'))
+    if mode != 'no-provenance':
+        h['worktree'] = dict(w['worktree'], checkout_path=anchor, is_linked_worktree=False)
+    p = next(x for x in s['panes'] if x['workspace_id'] == w['workspace_id'])
+    save()
+    reply('worktree_opened', already_open=True, root_pane=dict(p, terminal_id='other') if mode == 'attach-terminal' else p,
+          workspace=dict(w, workspace_id='adopted') if mode == 'attach-adopt' else w)
+elif a[:2] == ['pane', 'split']:
+    assert a == ['pane', 'split', os.environ['FAKE_TEMP'], '--direction', 'right', '--cwd',
+                 os.environ['FAKE_REPO'], '--env', 'DOTFILES_KEYRING_PROMPT=0', '--no-focus']
+    t = next(x for x in s['panes'] if x['pane_id'] == a[2])
+    p = dict(t, pane_id='opaque-root', cwd='/unexpected' if mode == 'split-cwd' else a[6],
+             terminal_id=t['terminal_id'] if mode == 'split-terminal' else 'terminal-source')
+    s['panes'].append(p)
+    save()
+    reply('pane_info', pane=p)
+elif a[:2] == ['pane', 'process-info']:
+    reply('pane_process_info', process_info={'pane_id': a[3], 'shell_pid': 1,
+          'foreground_processes': [{'pid': 2 if mode == 'busy' else 1, 'name': 'zsh'}]})
+elif a[:2] == ['pane', 'close']:
+    if mode == 'close-fail':
+        sys.exit(1)
+    if mode != 'close-noop':
+        s['panes'] = [x for x in s['panes'] if x['pane_id'] != a[2]]
+    save()
+    reply('ok')
 elif a[:2] == ['agent', 'start']:
+    if os.environ.get('FAKE_LOCK'):  # the project lock must be free before agent startup
+        import fcntl
+        fcntl.flock(open(os.environ['FAKE_LOCK'], 'r+'), fcntl.LOCK_EX | fcntl.LOCK_NB)
     assert a == ['agent', 'start', os.environ.get('FAKE_NAME', 'double-holo-12'),
                  '--kind', 'pi', '--pane', 'opaque-root', '--', '--name',
                  os.environ.get('FAKE_NAME', 'double-holo-12')]
@@ -190,11 +227,14 @@ else:
 
 class LaunchFixture:
     PROFILE = (19, '0.8.0')
+    EXTRA = set()
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
+        self.home = self.root / 'home'
+        self.home.mkdir()
         self.repo = self.root / "repo ' ; $(touch SENTINEL)"
         self.repo.mkdir()
         self.prompt = self.root / "W12 ' ; $(touch SENTINEL).md"
@@ -209,7 +249,7 @@ class LaunchFixture:
         self.fake.write_text(FAKE)
         self.fake.chmod(0o700)
         self.env = dict(os.environ, PATH=str(self.root) + os.pathsep + os.environ['PATH'],
-                        HERDR_ENV='1', HERDR_SESSION='intended',
+                        HOME=str(self.home), HERDR_ENV='1', HERDR_SESSION='intended',
                         HERDR_SOCKET_PATH=str(self.root / 'herdr.sock'),
                         HERDR_PANE_ID='caller-pane', HERDR_WORKSPACE_ID='caller-workspace',
                         FAKE_ROOT=str(self.root), FAKE_REPO=str(self.repo), FAKE_PROMPT=str(self.prompt))
@@ -223,12 +263,14 @@ class LaunchFixture:
 
     def tearDown(self):
         allowed = {('session','list'), ('api','snapshot'), ('workspace','create'), ('workspace','get'),
-                   ('agent','start'), ('agent','get'), ('agent','read'), ('agent','prompt')}
+                   ('agent','start'), ('agent','get'), ('agent','read'), ('agent','prompt')} | self.EXTRA
         for argv in self.calls():
             self.assertIn(tuple(argv[:2]), allowed, 'focus/approval/kill/close operations are forbidden')
             self.assertTrue({'--focus','--force','--wait'}.isdisjoint(argv))
             if argv[:2] == ['workspace','create']:
                 self.assertIn('--no-focus', argv)
+            if argv[:2] == ['pane','close']:
+                self.assertEqual(argv[2], 'opaque-temp', 'only the owned temporary pane may close')
 
     def run_launch(self, mode='', extra=(), env=None):
         environment = dict(self.env, FAKE_MODE=mode, **(env or {}))
@@ -684,6 +726,178 @@ class LaunchTests(LaunchFixture, unittest.TestCase):
 
 class Protocol22LaunchTests(LaunchTests):
     PROFILE = (22, '0.9.5')
+
+
+GIT = ['git', '-c', 'user.name=t', '-c', 'user.email=t@example.invalid']
+FLAT = {'FAKE_CWD': None, 'FAKE_TEMP': None, 'FAKE_LOCK': None}  # today's flat fixture contract
+
+
+class GroupedTests(LaunchFixture, unittest.TestCase):
+    EXTRA = {('worktree', 'open'), ('pane', 'split'), ('pane', 'process-info'), ('pane', 'close')}
+    TOPOLOGY = [['workspace', 'create'], ['worktree', 'open'], ['pane', 'split'], ['pane', 'close'],
+                ['agent', 'start'], ['agent', 'prompt']]
+
+    def setUp(self):
+        super().setUp()
+        self.anchors = self.home / '.lane-anchors'
+        self.anchor, self.lock = self.anchors / 'double-holo', self.anchors / '.double-holo.lock'
+        self.checkout = self.anchors / 'double-holo-lanes' / '12'
+        self.env.update(FAKE_TEMP='opaque-temp', FAKE_CWD=str(self.checkout), FAKE_LOCK=str(self.lock))
+
+    def edit(self, change):
+        data = json.loads(self.live.read_text())
+        change(data)
+        self.live.write_text(json.dumps(data))
+
+    def setup_grouping(self, anchor=True, lock=True, heading='bare'):
+        shutil.rmtree(self.anchors, ignore_errors=True)
+        self.anchors.mkdir(parents=True)
+        if anchor:
+            self.anchor.mkdir()
+            subprocess.run([*GIT, '-C', str(self.anchor), 'init', '-q', '-b', 'main'], check=True)
+            subprocess.run([*GIT, '-C', str(self.anchor), 'commit', '-q', '--allow-empty', '-m', 'a'], check=True)
+        if lock:
+            self.lock.touch()
+        if heading:
+            primary = {'repo_root': str(self.anchor), 'checkout_path': str(self.anchor),
+                       'is_linked_worktree': False, 'repo_key': f'{self.anchor}/.git'}
+            def add(data):
+                data['workspaces'].append({'workspace_id': 'heading', 'label': '\u25c6 double-holo',
+                                           'worktree': primary if heading == 'primary' else None})
+                data['panes'].append({'pane_id': 'heading-pane', 'workspace_id': 'heading',
+                                      'terminal_id': 'heading-terminal', 'cwd': str(self.anchor)})
+            self.edit(add)
+
+    def prepare(self, **kwargs):
+        self.reset_fixture(json.loads(self.initial_live))
+        self.setup_grouping(**kwargs)
+
+    def effects(self):
+        return [a[:2] for a in self.calls() if a[:2] in self.TOPOLOGY]
+
+    def test_absent_setup_launches_flat_and_says_so(self):
+        result = self.run_launch(env=FLAT)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('not set up', result.stderr)
+        self.assertEqual(json.loads(self.receipt.read_text())['version'], 1)
+        self.assertEqual(self.effects(), [['workspace', 'create'], ['agent', 'start'], ['agent', 'prompt']])
+
+    def test_partial_broken_or_ambiguous_setup_stops_before_mutation(self):
+        bare = dict(anchor=False, lock=False, heading=None)
+        def workspace(**fields):
+            return lambda: self.edit(lambda d: d['workspaces'].append({'workspace_id': 'x', **fields}))
+        def mutate_heading(change):
+            return lambda: self.edit(lambda d: change(next(w for w in d['workspaces'] if w['workspace_id'] == 'heading')))
+        def pane(cwd):
+            return lambda: self.edit(lambda d: d['panes'][-1].update(cwd=cwd))
+        for name, kwargs, change in [
+            ('heading only', dict(anchor=False, lock=False), None),
+            ('anchor only', dict(heading=None, lock=False), None),
+            ('lock only', dict(anchor=False, heading=None), None),
+            ('missing lock', dict(lock=False), None),
+            ('orphan lanes', bare, lambda: (self.anchors / 'double-holo-lanes').mkdir()),
+            ('dangling anchor', bare, lambda: self.anchor.symlink_to(self.root / 'missing')),
+            ('related workspace', bare, workspace(label='x', worktree={'checkout_path': str(self.checkout)})),
+            ('uncommitted anchor', dict(anchor=False),
+             lambda: (self.anchor.mkdir(), subprocess.run(['git', '-C', str(self.anchor), 'init', '-q'], check=True))),
+            ('duplicate heading', {}, workspace(label='\u25c6 double-holo')),
+            ('wrong heading cwd', {}, pane('/elsewhere')),
+            ('wrong provenance', dict(heading='primary'), mutate_heading(lambda w: w['worktree'].update(repo_root='/x'))),
+        ]:
+            with self.subTest(name):
+                self.prepare(**kwargs)
+                if change:
+                    change()
+                self.assert_stopped(self.run_launch(), 'partial, broken or ambiguous')
+                self.assertEqual((self.effects(), self.receipt.exists(), self.checkout.exists()), ([], False, False))
+
+    def test_grouped_topology_alias_provenance_and_lock_release(self):
+        for heading, alias in (('bare', None), ('primary', 'review_room')):
+            with self.subTest(heading=heading, alias=alias):
+                self.prepare(heading=heading)
+                name = alias or 'double-holo-12'
+                result = self.run_launch(extra=('--name', alias) if alias else (), env={'FAKE_NAME': name})
+                self.assertEqual(result.returncode, 0, result.stderr)
+                receipt = json.loads(self.receipt.read_text())
+                self.assertEqual((receipt['version'], receipt['stage'], receipt['name'], receipt['pane'],
+                                  receipt['terminal'], receipt['group']['checkout']),
+                                 (2, 'Submitted', name, 'opaque-root', 'terminal-source', str(self.checkout)))
+                self.assertEqual(self.effects(), self.TOPOLOGY)
+                panes = [p for p in json.loads(self.live.read_text())['panes'] if p['workspace_id'] == 'opaque-workspace']
+                self.assertEqual([(p['pane_id'], p['cwd']) for p in panes], [('opaque-root', str(self.repo))])
+                listing = subprocess.run(['git', '-C', str(self.anchor), 'worktree', 'list'], capture_output=True, text=True)
+                self.assertIn(str(self.checkout), listing.stdout)
+                with self.lock.open('r+') as held:
+                    fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    def test_checkout_collisions_and_held_project_lock_never_mutate(self):
+        def registered():
+            subprocess.run(['git', '-C', str(self.anchor), 'worktree', 'add', '-q', '--detach', str(self.checkout)], check=True)
+            shutil.rmtree(self.checkout)
+        for name, change in [
+            ('orphan directory', lambda: self.checkout.mkdir(parents=True)),
+            ('registered missing directory', registered),
+            ('open workspace', lambda: self.edit(lambda d: d['workspaces'].append(
+                {'workspace_id': 'x', 'label': 'x', 'worktree': {'checkout_path': str(self.checkout)}}))),
+        ]:
+            with self.subTest(name):
+                self.prepare()
+                change()
+                self.assert_stopped(self.run_launch(), 'Lane checkout')
+                self.assertEqual((self.effects(), self.receipt.exists()), ([], False))
+        self.prepare()
+        with self.lock.open('r+') as held:
+            fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self.assert_stopped(self.run_launch())
+        self.assertEqual((self.effects(), self.receipt.exists(), self.checkout.exists()), ([], False, False))
+
+    def test_topology_faults_stop_and_reruns_only_inspect(self):
+        for mode, stage, closes in [('create-malformed', 'Creating', 0), ('checkout', 'Checkout', 0),
+                ('attach-adopt', 'Attaching', 0), ('attach-terminal', 'Attaching', 0),
+                ('split-terminal', 'Splitting', 0), ('split-cwd', 'Splitting', 0), ('busy', 'Splitting', 0),
+                ('no-provenance', 'Splitting', 0), ('close-fail', 'Closing', 1), ('close-noop', 'Closing', 1)]:
+            with self.subTest(mode):
+                self.prepare()
+                if mode == 'checkout':
+                    (self.anchors / 'double-holo-lanes').write_text('not a directory')
+                self.assert_stopped(self.run_launch(mode))
+                self.assertEqual(json.loads(self.receipt.read_text())['stage'], stage)
+                self.assertEqual(len(self.mutations(['pane', 'close'])), closes)
+                self.assertEqual(self.mutations(['agent', 'start']) + self.mutations(['agent', 'prompt']), [])
+                seen = self.calls()
+                self.assert_stopped(self.run_launch())
+                self.assertEqual([a for a in self.calls()[len(seen):] if a[:2] != ['api', 'snapshot']], [])
+
+    def test_receipts_never_regroup_or_fall_back_flat_and_revalidate_target(self):
+        flat = dict(anchor=False, lock=False, heading=None)
+        for mode, outcome in (('', 0), ('dialog', 2)):
+            with self.subTest(flat=mode):
+                self.prepare(**flat)
+                self.assertEqual(self.run_launch(mode, env=FLAT).returncode, 0 if not mode else 2)
+                self.setup_grouping()
+                before = self.calls()
+                result = self.run_launch()
+                self.assertEqual(result.returncode, outcome, result.stderr)
+                self.assertEqual([a for a in self.calls()[len(before):] if a[:2] != ['api', 'snapshot']],
+                                 [['workspace', 'get', 'opaque-workspace'], ['agent', 'get', 'opaque-root']]
+                                 if outcome == 0 else [])
+        for name, change, expected in [
+            ('grouping lost', lambda d: (d['workspaces'].pop(0), d['workspaces'][0].pop('worktree')), 'never regroup'),
+            ('source cwd differs', lambda d: d['panes'][-1].update(cwd='/elsewhere'), 'Topology'),
+        ]:
+            with self.subTest(name):
+                self.prepare()
+                self.assert_stopped(self.run_launch('dialog'), 'Startup blocked')
+                self.edit(change)
+                if name == 'grouping lost':
+                    shutil.rmtree(self.anchors)
+                self.assert_stopped(self.run_launch(), expected)
+                self.assertEqual(len(self.mutations(['agent', 'start'])), 1)
+                self.assertEqual(self.mutations(['agent', 'prompt']), [])
+        self.prepare()
+        self.assert_stopped(self.run_launch('prompt-malformed'))
+        self.assert_stopped(self.run_launch())
+        self.assertEqual(len(self.mutations(['agent', 'prompt'])), 1)
 
 
 class ProtocolPolicyTests(LaunchFixture, unittest.TestCase):
