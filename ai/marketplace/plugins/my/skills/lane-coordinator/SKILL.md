@@ -121,13 +121,15 @@ use the project folder.
   from [lane-template.md](references/lane-template.md). Use the single-line
   handoff: local `lane <project>-<n> "Read <path> and follow it."` when installed,
   otherwise plain Read (see [local handoff](references/herdr-launch.md#manual-pi-handoff)).
-  Remote: `lane --host <binding> <project>-<n> <prompt>` from the project-local folder;
-  this replaces that reference's remote Read-only fallback. Don't add `/name` or `--name`.
+  Remote: where installed and project-authorized, `lane --host <binding> <project>-<n>
+  <prompt>` from the project-local folder replaces that reference's remote Read-only rule;
+  otherwise use [manual copy/start](references/remote-lanes.md#explicit-copy-and-manual-startup).
+  Don't add `/name` or `--name`.
   Default new workspace labels, Pi names and live Herdr aliases to
   `<project-slug>-<lane-number>` (e.g. `double-holo-12`). Keep full W12/task identity in lane files and
   STATE.md; preserve filenames/numbering and all existing names. Honor explicit
-  naming overrides that satisfy Herdr's alias constraints; reject invalid names
-  or collisions, never truncate or invent suffixes.
+  naming overrides that satisfy Herdr's alias constraints; use the approved label in
+  both handoff commands. Reject invalid names or collisions, never truncate or invent suffixes.
 - Follow the project's AGENTS.md and each repo's contribution rules for authority,
   worktrees, PR ownership, sequencing, size, conflicts and publication. Use the repo
   row's WIP limit. Keep the owner responsible end to end; no extra "merge captain".
