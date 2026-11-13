@@ -43,11 +43,12 @@ def fresh_pane(result, spaces, label):
     return pane['pane_id']
 
 
-def wait_shell(pane):
+def wait_shell(pane, call=None):
     # New shells have the keyring opt-out before startup. Also refuse other jobs.
     # This process check is not a general shell-prompt detector.
+    call = herdr if call is None else call
     for _ in range(30):
-        info = herdr('pane', 'process-info', '--pane', pane)['process_info']
+        info = call('pane', 'process-info', '--pane', pane)['process_info']
         foreground = info.get('foreground_processes') or []
         if (info.get('pane_id') == pane and len(foreground) == 1
                 and foreground[0].get('pid') == info.get('shell_pid')
@@ -178,9 +179,21 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('lane', help='<project>-<n|coord>, <project> heading, or <n|coord> from its local folder')
     parser.add_argument('prompt', nargs='?', default='', help='optional initial Pi prompt (new lanes only)')
+    parser.add_argument('--host', help='saved remote binding in project-local/lane-hosts.json (flat numbered lanes)')
     args = parser.parse_args()
+    if args.host and not args.prompt:
+        parser.error('--host requires a host-resolved local prompt file')
     try:
-        open_lane(args.lane, args.prompt)
+        if args.host:
+            # Resolve the sibling runtime even when invoked through the installed symlink.
+            import importlib.util
+            spec = importlib.util.spec_from_file_location('lane_remote', Path(__file__).resolve().with_name('remote.py'))
+            assert spec is not None and spec.loader is not None
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            module.open_remote(args.lane, args.prompt, args.host, sys.modules[__name__])
+        else:
+            open_lane(args.lane, args.prompt)
     except (ValueError, KeyError, TypeError, AttributeError, OSError, subprocess.SubprocessError) as error:
         print(f'lane: {error}', file=sys.stderr)
         return 1

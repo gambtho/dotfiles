@@ -409,6 +409,7 @@ lanes_fixture() {
   printf '#!/usr/bin/env python3\nprint("installed lane fixture")\n' >"$TEST_ROOT/source/tools/herdr/lanes/lane.py"
   printf 'NEEDS = "fixture"\n' >"$TEST_ROOT/source/tools/herdr/lanes/needs.py"
   printf 'DASHBOARD = "fixture"\n' >"$TEST_ROOT/source/tools/herdr/lanes/dashboard-open.py"
+  printf 'REMOTE = "fixture"\n' >"$TEST_ROOT/source/tools/herdr/lanes/remote.py"
 }
 
 @test "make herdr-lanes exposes only the explicit installer mode" {
@@ -432,7 +433,7 @@ lanes_fixture() {
   [ -d "$version" ]
   [ ! -L "$version" ]
   assert_symlink_target "$TEST_ROOT/bin with spaces/lane" "$destination/lane.py"
-  for file in lane.py needs.py dashboard-open.py; do
+  for file in lane.py needs.py dashboard-open.py remote.py; do
     [ -f "$version/$file" ]
     [ ! -L "$version/$file" ]
     cmp "$TEST_ROOT/source/tools/herdr/lanes/$file" "$version/$file"
@@ -533,7 +534,7 @@ lanes_fixture() {
     source "$1/tools/herdr/install.sh"
     DOTFILES_ROOT="$TEST_ROOT/source"
     main --install-lanes
-    for file in lane.py needs.py dashboard-open.py; do
+    for file in lane.py needs.py dashboard-open.py remote.py; do
       before=$(readlink "$XDG_DATA_HOME/dotfiles/herdr-lanes")
       cp "$before/$file" "$TEST_ROOT/previous"
       printf "\n# refreshed\n" >>"$DOTFILES_ROOT/tools/herdr/lanes/$file"
@@ -545,7 +546,7 @@ lanes_fixture() {
     done
   ' _ "$REPO_ROOT"
   [ "$status" -eq 0 ]
-  [ "$(find "$XDG_DATA_HOME/dotfiles" -maxdepth 1 -type d -name '.herdr-lanes-*' | wc -l)" -eq 4 ]
+  [ "$(find "$XDG_DATA_HOME/dotfiles" -maxdepth 1 -type d -name '.herdr-lanes-*' | wc -l)" -eq 5 ]
 }
 
 @test "lanes updates the directory symlink even when mv is not GNU" {
@@ -604,6 +605,20 @@ lanes_fixture() {
   assert_symlink_target "$TEST_ROOT/bin/lane" "$XDG_DATA_HOME/dotfiles/herdr-lanes/lane.py"
   run find "$XDG_DATA_HOME/dotfiles" "$TEST_ROOT/bin" -name '.lanes.*' -o -name '.lanes-link.*' -o -name '.lane-link.*'
   [ -z "$output" ]
+}
+
+@test "installed remote command resolves its sibling without source path discovery" {
+  mkdir -p "$HOME/orchard-local"
+  source_installer bash -c '
+    source "$1/tools/herdr/install.sh"
+    main --install-lanes
+  ' _ "$REPO_ROOT"
+  [ "$status" -eq 0 ]
+  run "$TEST_ROOT/bin/lane" --host fictional orchard-7 task.md
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"lane-hosts.json"* ]]
+  [[ "$output" != *"Traceback"* ]]
+  [[ "$output" != *"remote.py"* ]]
 }
 
 @test "normal convergence never invokes Herdr plugin commands" {

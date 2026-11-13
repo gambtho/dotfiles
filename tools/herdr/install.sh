@@ -281,16 +281,16 @@ install_lanes() {
       return 1
     fi
   done
-  digest=$(cd "$source" && sha256sum lane.py needs.py dashboard-open.py | sha256sum | cut -d ' ' -f 1)
+  digest=$(cd "$source" && sha256sum lane.py needs.py dashboard-open.py remote.py | sha256sum | cut -d ' ' -f 1)
   prepare_destination_directory "$root"
   prepare_destination_directory "$HERDR_INSTALL_DIR"
   version="$root/.herdr-lanes-$digest"
   # Copy one coherent runtime; keep older versions for already-running commands.
   if [[ ! -d "$version" ]]; then
     STAGED_LANES=$(mktemp -d "$root/.lanes.XXXXXX")
-    command cp "$source/lane.py" "$source/needs.py" "$source/dashboard-open.py" "$STAGED_LANES/"
+    command cp "$source/lane.py" "$source/needs.py" "$source/dashboard-open.py" "$source/remote.py" "$STAGED_LANES/"
     chmod 0755 "$STAGED_LANES/lane.py"
-    chmod 0644 "$STAGED_LANES/needs.py" "$STAGED_LANES/dashboard-open.py"
+    chmod 0644 "$STAGED_LANES/needs.py" "$STAGED_LANES/dashboard-open.py" "$STAGED_LANES/remote.py"
     command mv -T -- "$STAGED_LANES" "$version"
     STAGED_LANES=""
   fi
