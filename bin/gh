@@ -93,6 +93,10 @@ exec_real_gh() {
       exit 6
     fi
   fi
+  # setup-git writes --global; keep those writes off the tracked config.
+  if [ "${1-}" = auth ] && [ "${2-}" = setup-git ] && [ "${GIT_CONFIG_GLOBAL+x}" != x ]; then
+    GIT_CONFIG_GLOBAL="$HOME/.gitconfig.local" exec "$real_gh" "$@"
+  fi
   exec "$real_gh" "$@"
 }
 
