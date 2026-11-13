@@ -180,8 +180,8 @@ where installed; this coordinator helper does not launch them. See
 For a local lane, when an approved prompt exists and the user says "start W12", use
 the mechanical helper in [herdr-launch.md](references/herdr-launch.md) immediately after
 context/prompt/source verification, not another planning round or a manual handoff
-when eligible access exists. It reconciles live identity, creates one `--no-focus`
-space, starts named Pi on the exact returned root pane, and submits once without
+when eligible access exists. It reconciles live identity, groups with prepared project
+setup (reports flat when wholly absent), starts named Pi on the verified source pane, and submits once without
 waiting for task completion. Its receipt is authoritative; uncertain delivery is
 inspect-only, never an automatic resend/replacement workspace. Never approve dialogs,
 control another client's focused pane, or infer implementation approval from launch

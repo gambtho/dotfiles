@@ -95,11 +95,12 @@ Reporters stop with Ctrl-C and do not auto-respawn; after a server
 restart rerun `python3 -B "${XDG_DATA_HOME:-$HOME/.local/share}/dotfiles/herdr-lanes/needs.py"`
 in each heading pane. Never restart a server just to apply these preferences.
 
-The coordinator's unattended `launch.py` stays flat: Herdr 0.9.5 worktree-open has
-no pre-shell `--env`, and its `--cwd` selects the anchor repository rather than the
-lane's working directory. Keeping the keyring opt-out, real repo cwd, no-focus and
-at-most-once startup takes precedence over automatic grouping. Manual `lane`
-provides grouping with the foreground-shell check described above.
+The unattended `launch.py` groups when complete project heading/anchor setup exists:
+create at the lane checkout, attach no-focus, split at the source repo, close only
+its owned temporary shell, then start named Pi with receipt-controlled delivery.
+Wholly absent setup launches flat and says so; partial/broken/ambiguous setup stops.
+New local coordinators go first within their group before startup; existing ones
+stay focus-only. Remote lanes remain flat. Grouped child dragging is still upstream UI behavior.
 
 ## Manual remote lanes
 

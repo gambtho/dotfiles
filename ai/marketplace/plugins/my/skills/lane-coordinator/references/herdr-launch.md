@@ -55,13 +55,13 @@ root shell starts, so locked-keyring password input cannot consume the agent-sta
 command. Caller-created or existing panes need that opt-out at creation too;
 setting it after a password prompt is already active is too late.
 
-The helper deliberately keeps `workspace create`, even when project anchors exist.
-Herdr 0.9.5 `worktree open --cwd <anchor> --path <checkout>` groups the workspace,
-but `--cwd` resolves the repository: its root shell starts at the checkout, and
-there is no `--env` option. `workspace create` on that checkout supports env but
-does not attach worktree provenance; `agent start` has no cwd option. Keep the
-real repo cwd, pre-shell opt-out, no-focus and at-most-once launch guarantees rather
-than adding shell-input choreography. Manual `lane` below still groups.
+With complete project heading/anchor setup, the helper creates an env-configured
+lane-checkout workspace, attaches grouping without focus, splits at the source repo,
+and closes only its owned temporary shell before starting Pi. No typed cd is needed.
+Wholly absent setup keeps today's flat launch and explicitly reports why; partial,
+broken or ambiguous setup stops before launch. A failed grouped operation never
+falls back to a second flat workspace. `--project` and lane number select grouping;
+`--name` changes only the display/native alias, not the checkout or coordinator role.
 
 Historical Herdr 0.8.0 capability inspection informed this helper's protocol 19
 contract (`api snapshot`, `workspace create/get`, `agent start/get/read/prompt`).
@@ -76,7 +76,7 @@ The snapshot acceptance policy is explicit:
 Floats such as `19.0`, booleans, strings and missing protocols are rejected, with
 no coercion or semver normalization. Snapshot panes/workspaces/agents must be lists
 of objects; consumed workspace/root-pane, agent/session and read boundaries are
-checked before use. Receipt version 1 and at-most-once delivery remain unchanged.
+checked before use. Flat receipts remain v1; grouped v2 receipts retain topology intents.
 There is no per-launch help/status dump or global capability cache. On
 incompatibility, inspect installed help/schema once and report manual fallback;
 do not update Herdr/Pi or broaden permissions to make a launch work.
@@ -102,16 +102,16 @@ helpers sharing that lanes directory. STATE gets one concise projection on exit;
 receipt checkpoints don't require extra model/tool rounds.
 
 Flow: reconcile existing receipt and live labels/aliases → persist **Creating** →
-create ONE workspace with explicit cwd/label and `--no-focus` → validate returned
-workspace/root pane IDs and cwd → **Created** → persist **Starting** → start Pi with `--name`
+create ONE workspace (and complete grouped topology if applicable) without focus → validate
+final source pane IDs and cwd → **Created** → persist **Starting** → start Pi with `--name`
 on that **exact returned pane** → verify recognized Pi/session and readiness →
 **Ready** → persist **Submitting before sending** → submit the lane instruction ONCE,
 without `--wait` → **Submitted** → inspect working/blocked/unknown truthfully.
-No focus, approval, key sending, kill, close, force or other-session operations exist.
+No approval, key sending, force or other-session operations; only the new grouped temporary shell is closed.
 
 Creation must return valid IDs, the requested label and the matching root-pane
 workspace association. Herdr's pane cwd is optional and nullable. If creation-time
-cwd does not exactly match the resolved source cwd, the helper takes **one** fresh,
+cwd does not exactly match the requested initial cwd, the helper takes **one** fresh,
 protocol-checked snapshot. Exactly one workspace and root pane must confirm the same
 label, workspace/pane/terminal IDs and exact cwd before **Created** or any agent start.
 No polling or path normalization is added; malformed cwd values or an unconfirmed
@@ -132,6 +132,13 @@ panes cannot be Ready. A successful submission/idle marker never proves lane com
 
 ## Interrupted launch / recovery
 
+Grouped topology intents are inspect-only on interruption; retain both returned pane IDs.
+**Checkout** may fail before any pane exists: inspect the receipt and Git worktree registry;
+even a failed Git command is not permission to retry automatically or discard the receipt.
+With explicit operator approval and verified never-started state, inspect exact IDs/group/cwd,
+create a missing source pane once, close only the verified shell-only temporary pane,
+then start named Pi manually in the source pane and submit once. Never edit/delete receipts.
+An unfinished old flat receipt with grouping now present is inspect-only; lock contention stops.
 Re-run the **same invocation** only to reconcile; it does not mean "try again".
 - Existing live labels/aliases without a matching receipt, or STATE recording an old
   launch, stop before creation. Inspect and identify them; do not rename/adopt implicitly.
