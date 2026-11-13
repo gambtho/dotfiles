@@ -2,8 +2,9 @@
 
 Local remains the default. Use another host when a whole lane benefits from its
 capacity or tools; the coordinator stays the single STATE writer. No sync service
-is needed. An approved human-invoked remote lane command can replace manual delivery
-and startup; it does not extend coordinator launch authority.
+is needed. On the user's explicit "start W<n>", the coordinator may run the remote
+lane command once from the project-local folder, where installed and project-authorized.
+Record the launch in STATE; no retry, and inspect only on uncertain delivery/startup.
 
 ## Bind the host and prepare inputs
 
@@ -52,21 +53,26 @@ prompt, rules and profile before startup; unconfirmed currency is unknown. If eq
 size/mtime hides different support-file bytes, inspect the intended source, deliberately make
 only its mtime distinct, then rerun delivery and byte read-back. Unchanged rsync is
 not a repair; no automatic force/checksum/delete flags, receipts or staging folders.
-The human can open a workspace on that host and start Pi manually. Hand over only
-the resolved line:
+The human can still open a workspace on that host and start Pi manually after delivery.
+Where the remote command is available, hand over the resolved command from the
+project-local folder instead of a plain Read line:
 
-```text
-Read /home/example/project-local/lanes/task.md and follow it.
+```sh
+lane --host build project-12 lanes/task.md
 ```
 
-## Optional human-invoked command
+For laptop lanes, the handoff is `lane <project>-<n> "Read <path> and follow it."`.
+Without installed command support, retain manual copy/start and say launch is manual.
+
+## Explicit remote command
 
 Where installed and authorized by the project, `lane --host <binding> <project-N>
 <local-prompt-file>` delivers the four approved snapshots with byte read-back and
 creates a flat remote workspace. The private project-local binding supplies the
 saved-machine ID/target/session, independently verified SSH host/user, paths and
 source files. Prepare host-resolved prose first; the command does not translate it.
-No remote helper/anchor installation or automatic remote coordinator launch.
+No remote helper/anchor installation. An explicit "start W<n>" authorizes the
+coordinator's single invocation above, not automatic launches or recovery.
 
 Before mutation it compares the nonempty workspace/pane/terminal inventory through
 transfer SSH, the saved API, and transfer SSH again. A mismatch or changing/empty
@@ -75,8 +81,9 @@ binding under trusted host authentication, not a cryptographic host-identity pro
 Each external call has a10-second outer limit. No mutation replay or timeout increase;
 partial file delivery needs inspection, and a create/start timeout is uncertain.
 Existing labels get remote-server focus only, no copy/input; laptop machine selection
-is unchanged. Read returned IDs and inspect before any explicit recovery. A repeated
-command cannot resume partial startup; it only focuses an existing label.
+is unchanged. Record the command, observed result and returned IDs in STATE; an existing
+label is not proof of startup. On uncertainty, record unknown and inspect only, never
+retry. A repeated command cannot resume partial startup; it only focuses an existing label.
 Keep the manual copy/start fallback above and the primary-first fetch below.
 
 ## Fetch before judging readiness
