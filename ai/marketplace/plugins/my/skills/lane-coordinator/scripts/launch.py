@@ -91,14 +91,28 @@ def string(obj, key):
 
 
 def inherited_context(session):
-    required = ('HERDR_SESSION', 'HERDR_SOCKET_PATH', 'HERDR_PANE_ID', 'HERDR_WORKSPACE_ID')
+    required = ('HERDR_SOCKET_PATH', 'HERDR_PANE_ID', 'HERDR_WORKSPACE_ID')
     if os.environ.get('HERDR_ENV') != '1' or any(not os.environ.get(k) for k in required):
         raise LaunchError('Manual handoff: missing inherited Herdr context')
-    if os.environ['HERDR_SESSION'] != session:
+    inherited = os.environ.get('HERDR_SESSION')
+    if inherited is not None and (not inherited or inherited != session):
         raise LaunchError('Manual handoff: intended and inherited sessions differ')
     socket = Path(os.environ['HERDR_SOCKET_PATH'])
     if not socket.is_absolute() or not stat.S_ISSOCK(socket.stat().st_mode):
         raise LaunchError('Manual handoff: inherited socket is not an absolute local socket')
+    if inherited is None:
+        # Default-session panes can omit HERDR_SESSION. Verify inventory identity
+        # without guessing a session name, changing env, or selecting a socket.
+        try:
+            listed = subprocess.run(['herdr', 'session', 'list', '--json'],
+                                    capture_output=True, text=True, timeout=10, check=True)
+            sessions = object_list(mapping(json.loads(listed.stdout), 'session list').get('sessions'), 'sessions')
+        except (subprocess.SubprocessError, ValueError, KeyError, TypeError) as exc:
+            raise LaunchError('Manual handoff: default session could not be verified') from exc
+        defaults = [entry for entry in sessions if entry.get('default') is True]
+        if (len(defaults) != 1 or defaults[0].get('name') != session
+                or defaults[0].get('socket_path') != os.environ['HERDR_SOCKET_PATH']):
+            raise LaunchError('Manual handoff: listed default does not match intended session and inherited socket')
     info = socket.stat()
     return {'session': session, 'socket': str(socket), 'socket_device': info.st_dev,
             'socket_inode': info.st_ino, 'caller': os.environ['HERDR_PANE_ID'],

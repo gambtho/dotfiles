@@ -45,7 +45,61 @@ Then apply with `herdr server reload-config`, not a server restart.
 
 Defaults keep priority Agent rows icon-only and show optional `$needs` workspace
 metadata (hidden at zero). Machine identity stays visible in the dashboard. This does not
-produce counts: a separate reporter may set them on `◆ <project>` headings.
+produce counts by itself: the optional heading reporter below sets them.
+
+## Optional project headings and lanes
+
+Run `make herdr-lanes` to install copied Python tools under
+`${XDG_DATA_HOME:-$HOME/.local/share}/dotfiles/herdr-lanes` and link
+`~/.local/bin/lane` to the installed copy. Like the dashboard, installs are
+content-addressed and published atomically; older copies remain for running
+publishers. First-use creation is serialized per project; an anchor with no HEAD
+retries its initial empty commit without overriding signing or hooks.
+No repository checkout is used at runtime, `bin/` stays unchanged,
+and `libexec/` never goes on PATH. An existing regular file at `lane` is not replaced.
+`HERDR_INSTALL_DIR` can override the command directory; the default popup assumes
+`~/.local/bin/lane`.
+
+```sh
+lane orchard-12 "Read /absolute/orchard-local/lanes/task.md and follow it."
+lane orchard-coord
+# From ~/orchard-local, shorthand also works:
+lane 13
+```
+
+Projects are existing `~/<project>-local` folders. The longest matching folder
+name wins, including dashed names. A lane suffix is a number or `coord`; a bare
+project name prepares only its heading without changing focus. Avoid folders
+whose names collide with lane labels (for example `orchard-12-local`).
+
+First use creates an empty Git anchor at `~/.lane-anchors/<project>`, detached
+lane checkouts beside it under `<project>-lanes/`, and a `◆ <project>` workspace.
+The helper first creates its own workspace at the checkout with
+`DOTFILES_KEYRING_PROMPT=0` before shell startup, then attaches stock grouping to
+that exact workspace without relabelling an adopted checkout. Its shell then
+changes to the project folder. Existing matching labels or open checkouts are only focused: no rename,
+regrouping or input, even if a prompt was supplied. Duplicate labels are refused.
+New panes receive commands only after their shell is confirmed alone in the
+foreground. Labels and prompts with terminal control characters are rejected
+(multiline prompt text is supported). If startup still owns the pane (including a keyring prompt), the
+workspace remains open and nothing is typed there; finish startup and run Pi
+manually. This process check is not a general shell-prompt detector.
+
+The template binds **prefix+shift+l** to the lane popup. Apply to an existing
+config only through the reviewed refresh/backup path above. The heading pane runs
+`needs.py`, which shows the project's numbered/coord lanes and publishes `$needs`:
+grouped linked lanes blocked or reporting `phase=needs-decision`. Ungrouped lanes
+are marked in the pane summary but excluded from the badge. Zero is not total
+lane count. Count tokens expire within three minutes if updates stop.
+Reporters stop with Ctrl-C and do not auto-respawn; after a server
+restart rerun `python3 -B "${XDG_DATA_HOME:-$HOME/.local/share}/dotfiles/herdr-lanes/needs.py"`
+in each heading pane. Never restart a server just to apply these preferences.
+
+The coordinator's unattended `launch.py` stays flat: Herdr 0.9.5 worktree-open has
+no pre-shell `--env`, and its `--cwd` selects the anchor repository rather than the
+lane's working directory. Keeping the keyring opt-out, real repo cwd, no-focus and
+at-most-once startup takes precedence over automatic grouping. Manual `lane`
+provides grouping with the foreground-shell check described above.
 
 ## Optional project dashboard
 
@@ -56,7 +110,14 @@ atomically switches `herdr-dashboard` to that copy, and registers it with stock
 source checkout or opens a pane. Normal installation still does not touch plugins.
 Python 3.11+ with curses and the pinned Herdr must be on the pane's PATH.
 
-Open in a chosen workspace without stealing focus:
+After both `make herdr-lanes` and `make herdr-dashboard`, **prefix+shift+o** focuses
+an existing `Projects` workspace and types nothing. If none is open, it creates `Projects` at the
+installed dashboard directory and runs `./dashboard.py` in its **primary pane**,
+not a plugin tab or split. The new shell has `DOTFILES_KEYRING_PROMPT=0` before
+startup; the opener also checks foreground-shell ownership before sending input.
+Duplicate `Projects` labels are refused; missing installs give an error/notification.
+
+Alternatively, the plugin remains available in a chosen workspace without stealing focus:
 
 ```sh
 herdr plugin pane open --plugin project-dashboard --entrypoint projects \
@@ -193,10 +254,12 @@ this is an explicit compatibility allowlist, not a minimum-version rule.
 
 The isolated v0.9.5 Heeler version/ping checks pass. Actual Pi startup/readiness,
 prompt delivery, client-focus preservation, bridge transitions and layout recovery
-are not certified for this upgrade. A legacy v0.8.0 default-session fixture omitted
-`HERDR_SESSION` and correctly failed the launcher's inherited-context precondition;
-no session value is guessed or injected. Deterministic launcher fixtures cover both
-accepted protocol/version profiles, not those unperformed live paths. This is not
+are not certified for this upgrade. Default-session panes can omit `HERDR_SESSION`;
+the launcher accepts that only after `herdr session list --json` identifies a unique
+default with the exact inherited socket path and intended name, and the path is an
+absolute local socket. Nothing is guessed or injected. Deterministic fixtures cover
+both accepted protocol/version profiles and matching/mismatched/missing default
+socket cases, not those unperformed live agent paths. This is not
 certification of live Heeler or phone access.
 
 The intervening release notes include operational changes: v0.9.0 removes

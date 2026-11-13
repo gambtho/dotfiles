@@ -21,12 +21,14 @@ Other harnesses retain their manual fallback; this is only a Pi fast path.
   Herdr's alias constraint `[a-z][a-z0-9_-]{0,31}`. Reject invalid names, overlength
   names and ambiguous collisions. No silent truncation or random suffixes. A user
   override that cannot serve as an alias needs a valid user-selected name, not a guess.
-- Confirm `HERDR_ENV=1`, the inherited `HERDR_SESSION` matches the intended session,
-  and inherited socket/caller pane/workspace exist. Supply that verified session to
-  `--session`; it is an assertion, **not** a session selector. The helper never
-  overrides the inherited destination. Missing/mismatched context means manual handoff.
-  A default session may omit `HERDR_SESSION` (observed with v0.8.0); do not invent
-  a value or switch sessions to bypass that precondition.
+- Confirm `HERDR_ENV=1` and inherited socket/caller pane/workspace exist. A present
+  `HERDR_SESSION` must match the intended session. When it is absent, the helper
+  accepts only a unique default from `herdr session list --json` whose `socket_path`
+  exactly equals `HERDR_SOCKET_PATH`, which must be an absolute local socket.
+  Supply that listed default's name to `--session`; it remains an assertion, **not**
+  a session selector. An empty/mismatched session value or unverifiable default
+  still means manual handoff. No session name or socket is guessed, injected or
+  switched, and live caller identity is checked before any launch mutation.
 - STATE.md needs the five-column Open lanes table from the state template, including
   exactly one row for the lane, with Launch initially `Manual` or `—`. Existing launch
   state or a receipt must be reconciled, not erased. Keep receipts in the same local,
@@ -39,7 +41,7 @@ Linux/macOS/WSL). Resolve the script relative to this skill; quote literal paths
 
 ```bash
 python3 <skill-dir>/scripts/launch.py --requested \
-  --project double-holo --lane W12 --session '<verified inherited session>' \
+  --project double-holo --lane W12 --session '<verified session>' \
   --repo '/home/example/my repo' \
   --prompt '/home/example/double-holo-local/lanes/W12-approved-task.md' \
   --state '/home/example/double-holo-local/STATE.md'
@@ -52,6 +54,14 @@ It creates agent workspaces with `--env DOTFILES_KEYRING_PROMPT=0`, before the
 root shell starts, so locked-keyring password input cannot consume the agent-start
 command. Caller-created or existing panes need that opt-out at creation too;
 setting it after a password prompt is already active is too late.
+
+The helper deliberately keeps `workspace create`, even when project anchors exist.
+Herdr 0.9.5 `worktree open --cwd <anchor> --path <checkout>` groups the workspace,
+but `--cwd` resolves the repository: its root shell starts at the checkout, and
+there is no `--env` option. `workspace create` on that checkout supports env but
+does not attach worktree provenance; `agent start` has no cwd option. Keep the
+real repo cwd, pre-shell opt-out, no-focus and at-most-once launch guarantees rather
+than adding shell-input choreography. Manual `lane` below still groups.
 
 Historical Herdr 0.8.0 capability inspection informed this helper's protocol 19
 contract (`api snapshot`, `workspace create/get`, `agent start/get/read/prompt`).
@@ -128,7 +138,24 @@ Re-run the **same invocation** only to reconcile; it does not mean "try again".
 
 ## Manual Pi handoff
 
-Hand the user the instruction alone; they name the conversation themselves:
+For a local lane, use `lane` only when its resolved target is the installed
+dotfiles `herdr-lanes/lane.py`, not another same-named tool. Hand over:
+
+```sh
+lane double-holo-12 "Read /absolute/project-local/lanes/W12-approved-task.md and follow it."
+```
+
+Shell-quote the prompt so its absolute path is passed literally, without expansion.
+This opens under the project heading; an existing lane is only focused and never
+receives the prompt. Failed or uncertain invocations are inspect-only: use the
+pane named by the error and establish whether anything ran before taking action.
+For a heading-shell failure, restore only its `needs.py` publisher using the error's
+recovery command; no numbered lane exists yet. Never start Pi or paste the Read
+instruction in the heading. For a numbered-lane shell failure with no submission,
+finish startup, change to `~/<project>-local`, start Pi manually, then paste the
+approved Read instruction into that idle Pi. Never blindly resend or relaunch.
+
+Without installed `lane`, and always for remote lanes, use only:
 
 ```text
 Read /absolute/project-local/lanes/W12-approved-task.md and follow it.

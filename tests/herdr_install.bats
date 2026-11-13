@@ -403,6 +403,209 @@ SH
   [ "$status" -eq 0 ]
 }
 
+# Independent source fixtures keep installer coverage separate from the runtime.
+lanes_fixture() {
+  mkdir -p "$TEST_ROOT/source/tools/herdr/lanes"
+  printf '#!/usr/bin/env python3\nprint("installed lane fixture")\n' >"$TEST_ROOT/source/tools/herdr/lanes/lane.py"
+  printf 'NEEDS = "fixture"\n' >"$TEST_ROOT/source/tools/herdr/lanes/needs.py"
+  printf 'DASHBOARD = "fixture"\n' >"$TEST_ROOT/source/tools/herdr/lanes/dashboard-open.py"
+}
+
+@test "make herdr-lanes exposes only the explicit installer mode" {
+  run make -n -C "$REPO_ROOT" herdr-lanes
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"bash tools/herdr/install.sh --install-lanes"* ]]
+  [ ! -e "$HOME/.local/bin/lane" ]
+}
+
+@test "lanes installs executable copied content and stable public links without Herdr" {
+  lanes_fixture
+  source_installer XDG_DATA_HOME="$TEST_ROOT/data with spaces" HERDR_INSTALL_DIR="$TEST_ROOT/bin with spaces" bash -c '
+    source "$1/tools/herdr/install.sh"
+    DOTFILES_ROOT="$TEST_ROOT/source"
+    main --install-lanes
+  ' _ "$REPO_ROOT"
+  [ "$status" -eq 0 ]
+  local destination="$TEST_ROOT/data with spaces/dotfiles/herdr-lanes" file version
+  version=$(readlink "$destination")
+  [[ "$version" == "$TEST_ROOT/data with spaces/dotfiles/.herdr-lanes-"* ]]
+  [ -d "$version" ]
+  [ ! -L "$version" ]
+  assert_symlink_target "$TEST_ROOT/bin with spaces/lane" "$destination/lane.py"
+  for file in lane.py needs.py dashboard-open.py; do
+    [ -f "$version/$file" ]
+    [ ! -L "$version/$file" ]
+    cmp "$TEST_ROOT/source/tools/herdr/lanes/$file" "$version/$file"
+  done
+  [ "$(stat -c %a "$destination/lane.py")" = 755 ]
+  [ "$(stat -c %a "$destination/needs.py")" = 644 ]
+  [ "$(stat -c %a "$destination/dashboard-open.py")" = 644 ]
+  rm -rf "$TEST_ROOT/source"
+  run "$TEST_ROOT/bin with spaces/lane"
+  [ "$status" -eq 0 ]
+  [ "$output" = "installed lane fixture" ]
+  [ ! -e "$TEST_ROOT/bin with spaces/herdr" ]
+  [ ! -e "$TEST_ROOT/config/herdr/config.toml" ]
+}
+
+@test "lanes defaults to machine-local data and bin directories" {
+  lanes_fixture
+  source_installer XDG_DATA_HOME= HERDR_INSTALL_DIR= bash -c '
+    source "$1/tools/herdr/install.sh"
+    DOTFILES_ROOT="$TEST_ROOT/source"
+    main --install-lanes
+  ' _ "$REPO_ROOT"
+  [ "$status" -eq 0 ]
+  [ -L "$HOME/.local/share/dotfiles/herdr-lanes" ]
+  assert_symlink_target "$HOME/.local/bin/lane" "$HOME/.local/share/dotfiles/herdr-lanes/lane.py"
+}
+
+@test "lanes replaces existing symlinks without writing through their targets" {
+  lanes_fixture
+  mkdir -p "$XDG_DATA_HOME/dotfiles" "$TEST_ROOT/untouched"
+  printf 'keep\n' >"$TEST_ROOT/untouched/sentinel"
+  ln -s "$TEST_ROOT/untouched" "$XDG_DATA_HOME/dotfiles/herdr-lanes"
+  ln -s "$TEST_ROOT/untouched" "$TEST_ROOT/bin/lane"
+  source_installer bash -c '
+    source "$1/tools/herdr/install.sh"
+    DOTFILES_ROOT="$TEST_ROOT/source"
+    main --install-lanes
+  ' _ "$REPO_ROOT"
+  [ "$status" -eq 0 ]
+  assert_symlink_target "$TEST_ROOT/bin/lane" "$XDG_DATA_HOME/dotfiles/herdr-lanes/lane.py"
+  cmp "$TEST_ROOT/source/tools/herdr/lanes/lane.py" "$XDG_DATA_HOME/dotfiles/herdr-lanes/lane.py"
+  [ "$(find "$TEST_ROOT/untouched" -mindepth 1 | wc -l)" -eq 1 ]
+  [ "$(<"$TEST_ROOT/untouched/sentinel")" = keep ]
+}
+
+@test "lanes refuses a regular file or directory at either public link" {
+  lanes_fixture
+  local path kind
+  mkdir -p "$XDG_DATA_HOME/dotfiles"
+  for path in "$TEST_ROOT/bin/lane" "$XDG_DATA_HOME/dotfiles/herdr-lanes"; do
+    for kind in file directory; do
+      if [ "$kind" = file ]; then
+        printf 'keep\n' >"$path"
+      else
+        mkdir "$path"
+        printf 'keep\n' >"$path/sentinel"
+      fi
+      source_installer bash -c '
+        source "$1/tools/herdr/install.sh"
+        DOTFILES_ROOT="$TEST_ROOT/source"
+        main --install-lanes
+      ' _ "$REPO_ROOT"
+      [ "$status" -ne 0 ]
+      [[ "$output" == *"Refusing to replace non-symlink"* ]]
+      if [ "$kind" = file ]; then
+        [ "$(<"$path")" = keep ]
+        rm "$path"
+      else
+        [ "$(<"$path/sentinel")" = keep ]
+        rm -r "$path"
+      fi
+      [ ! -L "$TEST_ROOT/bin/lane" ]
+      [ ! -L "$XDG_DATA_HOME/dotfiles/herdr-lanes" ]
+      [ "$(find "$XDG_DATA_HOME/dotfiles" -mindepth 1 | wc -l)" -eq 0 ]
+    done
+  done
+}
+
+@test "lanes repeated install reuses one version without staging litter" {
+  lanes_fixture
+  source_installer bash -c '
+    source "$1/tools/herdr/install.sh"
+    DOTFILES_ROOT="$TEST_ROOT/source"
+    main --install-lanes
+    before=$(readlink "$XDG_DATA_HOME/dotfiles/herdr-lanes")
+    main --install-lanes
+    [[ "$(readlink "$XDG_DATA_HOME/dotfiles/herdr-lanes")" == "$before" ]]
+  ' _ "$REPO_ROOT"
+  [ "$status" -eq 0 ]
+  [ "$(find "$XDG_DATA_HOME/dotfiles" -mindepth 1 -maxdepth 1 -type d -name '.herdr-lanes-*' | wc -l)" -eq 1 ]
+  [ "$(find "$XDG_DATA_HOME/dotfiles" -mindepth 1 -maxdepth 1 | wc -l)" -eq 2 ]
+  [ "$(find "$TEST_ROOT/bin" -mindepth 1 -maxdepth 1 | wc -l)" -eq 1 ]
+}
+
+@test "lanes each runtime content update retains the previous copied version" {
+  lanes_fixture
+  source_installer bash -c '
+    source "$1/tools/herdr/install.sh"
+    DOTFILES_ROOT="$TEST_ROOT/source"
+    main --install-lanes
+    for file in lane.py needs.py dashboard-open.py; do
+      before=$(readlink "$XDG_DATA_HOME/dotfiles/herdr-lanes")
+      cp "$before/$file" "$TEST_ROOT/previous"
+      printf "\n# refreshed\n" >>"$DOTFILES_ROOT/tools/herdr/lanes/$file"
+      main --install-lanes
+      after=$(readlink "$XDG_DATA_HOME/dotfiles/herdr-lanes")
+      [[ "$before" != "$after" ]]
+      cmp "$TEST_ROOT/previous" "$before/$file"
+      cmp "$DOTFILES_ROOT/tools/herdr/lanes/$file" "$after/$file"
+    done
+  ' _ "$REPO_ROOT"
+  [ "$status" -eq 0 ]
+  [ "$(find "$XDG_DATA_HOME/dotfiles" -maxdepth 1 -type d -name '.herdr-lanes-*' | wc -l)" -eq 4 ]
+}
+
+@test "lanes updates the directory symlink even when mv is not GNU" {
+  lanes_fixture
+  local actual_mv
+  actual_mv=$(command -v mv)
+  stub_command mv 'if [ "$1" = --version ]; then printf "other mv\n"; exit 0; fi; exec "$REAL_MV" "$@"'
+  source_installer REAL_MV="$actual_mv" bash -c '
+    source "$1/tools/herdr/install.sh"
+    DOTFILES_ROOT="$TEST_ROOT/source"
+    main --install-lanes
+    before=$(readlink "$XDG_DATA_HOME/dotfiles/herdr-lanes")
+    printf "\n# refreshed\n" >>"$DOTFILES_ROOT/tools/herdr/lanes/needs.py"
+    main --install-lanes
+    after=$(readlink "$XDG_DATA_HOME/dotfiles/herdr-lanes")
+    [[ "$before" != "$after" ]]
+    cmp "$DOTFILES_ROOT/tools/herdr/lanes/needs.py" "$after/needs.py"
+    [[ -z "$(find "$before" -name ".lanes-link.*")" ]]
+  ' _ "$REPO_ROOT"
+  [ "$status" -eq 0 ]
+}
+
+@test "lanes failed copy removes staging and leaves no public links" {
+  lanes_fixture
+  stub_command cp 'exit 73'
+  source_installer bash -c '
+    source "$1/tools/herdr/install.sh"
+    DOTFILES_ROOT="$TEST_ROOT/source"
+    main --install-lanes
+  ' _ "$REPO_ROOT"
+  [ "$status" -eq 73 ]
+  [ "$(find "$XDG_DATA_HOME/dotfiles" -mindepth 1 | wc -l)" -eq 0 ]
+  [ ! -L "$TEST_ROOT/bin/lane" ]
+}
+
+@test "lanes failed data link publication preserves old links and removes staging" {
+  lanes_fixture
+  source_installer bash -c '
+    source "$1/tools/herdr/install.sh"
+    DOTFILES_ROOT="$TEST_ROOT/source"
+    main --install-lanes
+  ' _ "$REPO_ROOT"
+  [ "$status" -eq 0 ]
+  readlink "$XDG_DATA_HOME/dotfiles/herdr-lanes" >"$TEST_ROOT/previous-link"
+  printf '\n# refreshed\n' >>"$TEST_ROOT/source/tools/herdr/lanes/needs.py"
+  local actual_mv
+  actual_mv=$(command -v mv)
+  stub_command mv 'for arg in "$@"; do case "$arg" in */.lanes-link.*) exit 77;; esac; done; exec "$REAL_MV" "$@"'
+  source_installer REAL_MV="$actual_mv" bash -c '
+    source "$1/tools/herdr/install.sh"
+    DOTFILES_ROOT="$TEST_ROOT/source"
+    main --install-lanes
+  ' _ "$REPO_ROOT"
+  [ "$status" -eq 77 ]
+  [ "$(readlink "$XDG_DATA_HOME/dotfiles/herdr-lanes")" = "$(<"$TEST_ROOT/previous-link")" ]
+  assert_symlink_target "$TEST_ROOT/bin/lane" "$XDG_DATA_HOME/dotfiles/herdr-lanes/lane.py"
+  run find "$XDG_DATA_HOME/dotfiles" "$TEST_ROOT/bin" -name '.lanes.*' -o -name '.lanes-link.*' -o -name '.lane-link.*'
+  [ -z "$output" ]
+}
+
 @test "normal convergence never invokes Herdr plugin commands" {
   source_installer bash -c '
     source "$1/tools/herdr/install.sh"
@@ -414,4 +617,6 @@ SH
   ' _ "$REPO_ROOT"
   [ "$status" -eq 0 ]
   [ ! -e "$TEST_ROOT/plugin-calls" ]
+  [ ! -e "$TEST_ROOT/bin/lane" ]
+  [ ! -e "$XDG_DATA_HOME/dotfiles/herdr-lanes" ]
 }

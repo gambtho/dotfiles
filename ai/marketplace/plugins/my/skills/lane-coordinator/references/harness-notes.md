@@ -24,6 +24,8 @@ sessions without terminal tools use the manual handoff.
 Background reviewers are read-only helpers, not lanes: say so in their prompt (no edits,
 commits, pushes or posts) and spot-check what they find.
 Codex CLI reviewers wait on "Reading additional input from stdin" unless stdin is closed (`</dev/null`).
+From Claude Code, a background cross-family Pi reviewer (`pi -p …`) also needs
+stdin closed (`< /dev/null`); otherwise it can wait silently until timeout.
 
 ## Bundled review and writing tools
 

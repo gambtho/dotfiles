@@ -50,7 +50,16 @@ def save():
     (root / 'live.json').write_text(json.dumps(s))
 def reply(kind, **data):
     print(json.dumps({'id': 'fixture', 'result': {'type': kind, **data}}))
-if a == ['api', 'snapshot']:
+if a == ['session', 'list', '--json']:
+    sessions = [{'default': True, 'name': 'default', 'socket_path': str(root / 'herdr.sock')}]
+    if mode == 'default-mismatch':
+        sessions[0]['socket_path'] = str(root / 'other.sock')
+    elif mode == 'default-not-listed':
+        sessions[0]['default'] = False
+    elif mode == 'default-malformed':
+        sessions = None
+    print(json.dumps({'sessions': sessions}))
+elif a == ['api', 'snapshot']:
     boundary, _, shape = mode.partition('-')
     if boundary in ('envelope', 'result', 'snapshot') and shape in ('null', 'list', 'string', 'missing'):
         value = {'null': None, 'list': [], 'string': 'invalid', 'missing': None}[shape]
@@ -178,7 +187,7 @@ class LaunchFixture:
         self.initial_state = self.state.read_bytes()
 
     def tearDown(self):
-        allowed = {('api','snapshot'), ('workspace','create'), ('workspace','get'),
+        allowed = {('session','list'), ('api','snapshot'), ('workspace','create'), ('workspace','get'),
                    ('agent','start'), ('agent','get'), ('agent','read'), ('agent','prompt')}
         for argv in self.calls():
             self.assertIn(tuple(argv[:2]), allowed, 'focus/approval/kill/close operations are forbidden')
@@ -187,10 +196,12 @@ class LaunchFixture:
                 self.assertIn('--no-focus', argv)
 
     def run_launch(self, mode='', extra=(), env=None):
+        environment = dict(self.env, FAKE_MODE=mode, **(env or {}))
+        environment = {key: value for key, value in environment.items() if value is not None}
         return subprocess.run([sys.executable, str(SCRIPT), '--requested', '--project', 'double-holo',
             '--lane', 'W12', '--prompt', str(self.prompt), '--repo', str(self.repo),
             '--state', str(self.state), '--session', 'intended', *extra],
-            env=dict(self.env, FAKE_MODE=mode, **(env or {})), text=True, capture_output=True, cwd=self.root, check=False)
+            env=environment, text=True, capture_output=True, cwd=self.root, check=False)
 
     def calls(self):
         p = self.root / 'calls.jsonl'
@@ -237,8 +248,47 @@ class LaunchTests(LaunchFixture, unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(self.receipt.read_text())['name'], 'custom_lane')
 
+    def test_absent_session_verified_default_matches_and_reconciles_once(self):
+        for _ in range(2):
+            result = self.run_launch(extra=('--session', 'default'), env={'HERDR_SESSION': None})
+            self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(self.mutations(['workspace', 'create'])), 1)
+        self.assertEqual(len(self.mutations(['agent', 'start'])), 1)
+        self.assertEqual(len(self.mutations(['agent', 'prompt'])), 1)
+        self.assertEqual(json.loads(self.receipt.read_text())['context']['session'], 'default')
+        self.assertEqual(self.calls()[0], ['session', 'list', '--json'])
+
+    def test_absent_session_mismatched_or_unlisted_default_never_launches(self):
+        for mode in ('default-mismatch', 'default-not-listed', 'default-malformed'):
+            with self.subTest(mode=mode):
+                self.reset_fixture(json.loads(self.initial_live))
+                self.assert_stopped(self.run_launch(mode, extra=('--session', 'default'),
+                                                   env={'HERDR_SESSION': None}))
+                self.assertEqual(self.calls(), [['session', 'list', '--json']])
+                self.assertFalse(self.receipt.exists())
+
+    def test_present_empty_session_refuses_even_when_requested_name_is_empty(self):
+        self.assert_stopped(self.run_launch(extra=('--session', ''), env={'HERDR_SESSION': ''}))
+        self.assertEqual(self.calls(), [])
+
+    def test_absent_session_default_name_must_match_requested_session(self):
+        self.assert_stopped(self.run_launch(env={'HERDR_SESSION': None}))
+        self.assertEqual(self.calls(), [['session', 'list', '--json']])
+
+    def test_absent_session_missing_or_regular_socket_path_never_queries_or_launches(self):
+        self.sock.close()
+        socket_path = self.root / 'herdr.sock'
+        socket_path.unlink()
+        for regular_file in (False, True):
+            with self.subTest(regular_file=regular_file):
+                if regular_file:
+                    socket_path.write_text('not a socket')
+                self.assert_stopped(self.run_launch(extra=('--session', 'default'), env={'HERDR_SESSION': None}))
+                self.assertEqual(self.calls(), [])
+
     def test_missing_or_mismatched_context_and_missing_prompt_prevent_calls(self):
-        for env in ({'HERDR_ENV':''}, {'HERDR_SESSION':'wrong'}, {'HERDR_PANE_ID':''}, {'HERDR_SOCKET_PATH':''}):
+        for env in ({'HERDR_ENV':''}, {'HERDR_SESSION':'wrong'}, {'HERDR_SESSION':''},
+                    {'HERDR_PANE_ID':''}, {'HERDR_SOCKET_PATH':''}):
             with self.subTest(env=env):
                 self.assertNotEqual(self.run_launch(env=env).returncode, 0)
                 self.assertEqual(self.calls(), [])

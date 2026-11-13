@@ -11,6 +11,8 @@ Host: local (default). Coordinator: for a remote lane, replace this entire parag
 with its host alias, verified OS hostname/user, project/checkout/worktree roots and
 report source/return command. Use [remote lanes](remote-lanes.md) to put the host/user
 guard first and resolve paths and authority/profile references before delivery.
+Coordinator: use the [manual handoff](herdr-launch.md#manual-pi-handoff), choosing
+installed `lane` only for local lanes; remote lanes keep the plain Read line.
 
 ## Session identity (private)
 
