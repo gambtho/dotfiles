@@ -119,13 +119,17 @@ use the project folder.
   and fetch reports; the coordinator remains the single STATE writer.
 - Next number: the highest `W<n>` in `lanes/` or STATE.md, plus one. One file per lane
   from [lane-template.md](references/lane-template.md). Use the single-line
-  [manual handoff](references/herdr-launch.md#manual-pi-handoff): installed `lane` for
-  local lanes, plain Read otherwise. Don't add a `/name` or `--name` instruction.
+  handoff: local `lane <project>-<n> "Read <path> and follow it."` when installed,
+  otherwise plain Read (see [local handoff](references/herdr-launch.md#manual-pi-handoff)).
+  Remote: where installed and project-authorized, `lane --host <binding> <project>-<n>
+  <prompt>` from the project-local folder replaces that reference's remote Read-only rule;
+  otherwise use [manual copy/start](references/remote-lanes.md#explicit-copy-and-manual-startup).
+  Don't add `/name` or `--name`.
   Default new workspace labels, Pi names and live Herdr aliases to
   `<project-slug>-<lane-number>` (e.g. `double-holo-12`). Keep full W12/task identity in lane files and
   STATE.md; preserve filenames/numbering and all existing names. Honor explicit
-  naming overrides that satisfy Herdr's alias constraints; reject invalid names
-  or collisions, never truncate or invent suffixes.
+  naming overrides that satisfy Herdr's alias constraints; use the approved label in
+  both handoff commands. Reject invalid names or collisions, never truncate or invent suffixes.
 - Follow the project's AGENTS.md and each repo's contribution rules for authority,
   worktrees, PR ownership, sequencing, size, conflicts and publication. Use the repo
   row's WIP limit. Keep the owner responsible end to end; no extra "merge captain".
@@ -142,10 +146,17 @@ use the project folder.
   (fragments, directory-level maps) or every merge breaks every other open PR.
 - Before giving a lane git commands (rebase, retarget, reset), verify the branch's actual
   ancestry (`gh api repos/<o>/<r>/compare/<base>...<head>`). Don't guess commit ranges.
-- Don't treat our own issue or plan text as requirements the user set. When the user's
-  decision and our earlier wording disagree, the user wins; fix the wording.
-- Before advising action or sending an instruction, check its lane, PR and current owner
-  against the latest report; refresh live PR/head/CI and session state the advice relies on.
+- To avoid sending lanes down a guessed path, label prompt assumptions
+  "coordinator's guess, unverified", separate from the user's words. Our issue/plan
+  text is not the user's requirement; when it disagrees with their decision, fix it.
+- To avoid cutting the wrong outcome, confirm the user-visible goal before proposing
+  descopes; trivially fixable setup (such as a fork) is a task, not a risk.
+- To avoid designing for an imagined UI, inspect the human's real screen and learn
+  how the UI and the human's workflow work before proposing UI changes.
+- To avoid stale "waiting on you" reminders, re-observe cheap evidence before repeating
+  a pending item: processes, file times, Git and PR state; never copy your earlier message
+  as evidence. Before advising action or sending an instruction, check its lane, PR and
+  current owner against the latest report; refresh live PR/head/CI and session state the advice relies on.
   An open lane is not a running session; use a current runtime/user observation or say unknown.
   After a rule or ownership change, reconcile affected prompts and STATE.md in the same
   approved update; mark old instructions superseded, without rewriting history.
@@ -168,14 +179,14 @@ use the project folder.
 
 ## Start a lane only when asked
 
-Manual creation remains the default, including when the coordinator runs in a
-Claude app session. Preparing a prompt does not launch it. An explicit request
-such as "start W12" may create a named Herdr space and start Pi **only** with
-shell/tool access inside the intended Herdr session (`HERDR_ENV=1`). Otherwise
-return the manual handoff without claiming a launch. Remote lanes start manually on
-their declared host, including an approved human-invoked `lane --host` command
-where installed; this coordinator helper does not launch them. See
-[remote lanes](references/remote-lanes.md) for snapshot ownership and endpoint checks.
+Manual handoff remains the default, including in a Claude app session; preparing
+a prompt does not launch it. On explicit "start W<n>" for a remote lane, the coordinator
+may run `lane --host <binding> <project>-<n> <prompt>` once from the project-local folder,
+where installed and project-authorized. Record the launch in STATE; never retry,
+and inspect only if delivery/startup is uncertain. See [remote lanes](references/remote-lanes.md)
+for bindings, snapshots and endpoint checks. Local launches require shell/tool access
+inside the intended Herdr session (`HERDR_ENV=1`); otherwise return the handoff
+without claiming a launch.
 
 For a local lane, when an approved prompt exists and the user says "start W12", use
 the mechanical helper in [herdr-launch.md](references/herdr-launch.md) immediately after
@@ -190,9 +201,9 @@ permission. A Herdr workspace is not an isolated Git worktree.
 ## Handle a lane report
 
 A lane returns one consolidated readiness report or ONE batched real blocker.
-The user's "W12 ready" asks for attention, not a claim of completion. Read the report,
-establish whether the lane finished, is blocked, failed or is waiting, and give its
-next action without copy/paste relays. Fetch a remote lane's named reports first;
+The user's "W12 ready" means the lane stopped and needs an action (merge, reply,
+close or decide), not "done" or "not done". Read the report and name the next action
+and its owner without copy/paste relays. Fetch a remote lane's named reports first;
 failed/offline fetch means unknown, not ready. Manual sessions are not automatically
 monitored. STATE.md answers repeated-report or ownership questions.
 
@@ -243,9 +254,13 @@ retain their exact approval requirements.
 5. **Check interactions.** List other open PRs touching the same files, commands or
    flags. Recommend a merge order and say which lane absorbs the conflict (usually the
    one that owns the rename or the broader change).
-6. **Reply in this order:** what's true, what's off (with file:line), your recommendation,
-   then one batched next instruction only if needed. Read shared files directly; provide
-   a paste-ready reply only when no authorized direct handoff is available.
+6. **Reply in this order:** first line names the action and owner, not a "done/not done" verdict:
+   ```text
+   W<n> needs <action> from <owner>.
+   ```
+   Then evidence, what's off (with file:line), your recommendation and one batched next
+   instruction if needed. Read shared files directly; give paste-ready text only when
+   no authorized direct handoff is available.
 7. **Recommend; don't just list options.** Before forwarding a finding as work, decide
    in-scope repair or separate follow-up; give a bounded outcome and size, not an invented
    mechanism. Push back on over-engineering, timeout bumps, scope creep and public process noise.

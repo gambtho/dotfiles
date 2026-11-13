@@ -39,6 +39,22 @@ PY
   [ "$status" -eq 0 ]
 }
 
+@test "ready reply template starts with the action and its owner, not a verdict" {
+  run python3 - "$SKILL_DIR/SKILL.md" <<'PY'
+from pathlib import Path
+import sys
+
+text = Path(sys.argv[1]).read_text()
+reports = text.split("## Handle a lane report\n", 1)[1].split("\n## ", 1)[0]
+reply = reports.split("**Reply in this order:**", 1)[1].split("\n7.", 1)[0]
+assert "first line" in reply
+first_line = reply.split("```text\n", 1)[1].splitlines()[0].strip()
+assert first_line == "W<n> needs <action> from <owner>."
+assert 'not a "done/not done" verdict' in " ".join(reply.split())
+PY
+  [ "$status" -eq 0 ]
+}
+
 @test "lane guidance checks real outcomes and resolves project Git policy" {
   run python3 - "$SKILL_DIR" <<'PY'
 from pathlib import Path

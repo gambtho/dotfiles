@@ -11,8 +11,10 @@ Host: local (default). Coordinator: for a remote lane, replace this entire parag
 with its host alias, verified OS hostname/user, project/checkout/worktree roots and
 report source/return command. Use [remote lanes](remote-lanes.md) to put the host/user
 guard first and resolve paths and authority/profile references before delivery.
-Coordinator: use the [manual handoff](herdr-launch.md#manual-pi-handoff), choosing
-installed `lane` only for local lanes; remote lanes keep the plain Read line.
+Coordinator: use the [local handoff](herdr-launch.md#manual-pi-handoff): installed
+`lane <project>-<n> "Read <path> and follow it."`, otherwise plain Read. For remote lanes,
+use `lane --host <binding> <project>-<n> <prompt>` from the project-local folder instead
+of that reference's remote Read-only fallback; follow [remote lanes](remote-lanes.md).
 
 ## Session identity (private)
 
@@ -104,8 +106,8 @@ must all match. Include reusable review evidence
 (base, head provenance, scope, content identity, profile identity, model and dispositions)
 so the coordinator can check freshness, blockers and the delta without redoing review.
 For a PR, include closeout's bot-opportunity evidence from its final report.
-The user's "W<n> ready" asks for attention, not a claim of completion. The coordinator
-reads the report, establishes finished/blocked/failed/waiting and gives the next action.
+The user's "W<n> ready" means stopped and needing an action, not a completion verdict.
+The coordinator reads the report and opens its reply with the next action and its owner.
 Manual sessions are not automatically monitored. Escalate only genuinely new material
 scope/data/security/product choices, shared/destructive operations or actions outside
 authority. Exact public text/publication and production/provider approvals still apply.
