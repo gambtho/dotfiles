@@ -65,7 +65,8 @@ def publish(spaces, last):
                 and w["worktree"]["is_linked_worktree"] and needs_you(w))
         if last.get(head["workspace_id"]) != n or int(time.time()) % 60 < 5:
             subprocess.run(["herdr", "workspace", "report-metadata", head["workspace_id"],
-                            "--source", "projects", "--token", f"needs={n}"],
+                            "--source", "projects", "--token", f"needs={n}",
+                            "--ttl-ms", "180000"],
                            capture_output=True, timeout=5, check=True)
             last[head["workspace_id"]] = n
 
@@ -100,7 +101,7 @@ def draw(spaces, me):
         room = max(cols - 22 - (14 if not grouped else 0), 10)
         lines.append(left + (task[:room - 1] + "…" if len(task) > room else task) + tag)
     lines += ["", DIM + " · ".join(f"{k} {v}" for k, v in counts.items()) + OFF,
-              f"{DIM}Ctrl-C stops this summary and the sidebar count.{OFF}"]
+              f"{DIM}Ctrl-C stops updates; the sidebar count expires within 3 min.{OFF}"]
     return lines
 
 

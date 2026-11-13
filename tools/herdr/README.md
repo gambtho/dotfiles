@@ -53,7 +53,9 @@ Run `make herdr-lanes` to install copied Python tools under
 `${XDG_DATA_HOME:-$HOME/.local/share}/dotfiles/herdr-lanes` and link
 `~/.local/bin/lane` to the installed copy. Like the dashboard, installs are
 content-addressed and published atomically; older copies remain for running
-publishers. No repository checkout is used at runtime, `bin/` stays unchanged,
+publishers. First-use creation is serialized per project; an anchor with no HEAD
+retries its initial empty commit without overriding signing or hooks.
+No repository checkout is used at runtime, `bin/` stays unchanged,
 and `libexec/` never goes on PATH. An existing regular file at `lane` is not replaced.
 `HERDR_INSTALL_DIR` can override the command directory; the default popup assumes
 `~/.local/bin/lane`.
@@ -88,7 +90,8 @@ config only through the reviewed refresh/backup path above. The heading pane run
 `needs.py`, which shows the project's numbered/coord lanes and publishes `$needs`:
 grouped linked lanes blocked or reporting `phase=needs-decision`. Ungrouped lanes
 are marked in the pane summary but excluded from the badge. Zero is not total
-lane count. Reporters stop with Ctrl-C and do not auto-respawn; after a server
+lane count. Count tokens expire within three minutes if updates stop.
+Reporters stop with Ctrl-C and do not auto-respawn; after a server
 restart rerun `python3 -B "${XDG_DATA_HOME:-$HOME/.local/share}/dotfiles/herdr-lanes/needs.py"`
 in each heading pane. Never restart a server just to apply these preferences.
 

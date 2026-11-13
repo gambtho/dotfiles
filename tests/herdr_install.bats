@@ -548,6 +548,26 @@ lanes_fixture() {
   [ "$(find "$XDG_DATA_HOME/dotfiles" -maxdepth 1 -type d -name '.herdr-lanes-*' | wc -l)" -eq 4 ]
 }
 
+@test "lanes updates the directory symlink even when mv is not GNU" {
+  lanes_fixture
+  local actual_mv
+  actual_mv=$(command -v mv)
+  stub_command mv 'if [ "$1" = --version ]; then printf "other mv\n"; exit 0; fi; exec "$REAL_MV" "$@"'
+  source_installer REAL_MV="$actual_mv" bash -c '
+    source "$1/tools/herdr/install.sh"
+    DOTFILES_ROOT="$TEST_ROOT/source"
+    main --install-lanes
+    before=$(readlink "$XDG_DATA_HOME/dotfiles/herdr-lanes")
+    printf "\n# refreshed\n" >>"$DOTFILES_ROOT/tools/herdr/lanes/needs.py"
+    main --install-lanes
+    after=$(readlink "$XDG_DATA_HOME/dotfiles/herdr-lanes")
+    [[ "$before" != "$after" ]]
+    cmp "$DOTFILES_ROOT/tools/herdr/lanes/needs.py" "$after/needs.py"
+    [[ -z "$(find "$before" -name ".lanes-link.*")" ]]
+  ' _ "$REPO_ROOT"
+  [ "$status" -eq 0 ]
+}
+
 @test "lanes failed copy removes staging and leaves no public links" {
   lanes_fixture
   stub_command cp 'exit 73'
@@ -567,9 +587,16 @@ lanes_fixture() {
     source "$1/tools/herdr/install.sh"
     DOTFILES_ROOT="$TEST_ROOT/source"
     main --install-lanes
-    readlink "$XDG_DATA_HOME/dotfiles/herdr-lanes" >"$TEST_ROOT/previous-link"
-    printf "\n# refreshed\n" >>"$DOTFILES_ROOT/tools/herdr/lanes/needs.py"
-    publish_staged_file() { return 77; }
+  ' _ "$REPO_ROOT"
+  [ "$status" -eq 0 ]
+  readlink "$XDG_DATA_HOME/dotfiles/herdr-lanes" >"$TEST_ROOT/previous-link"
+  printf '\n# refreshed\n' >>"$TEST_ROOT/source/tools/herdr/lanes/needs.py"
+  local actual_mv
+  actual_mv=$(command -v mv)
+  stub_command mv 'for arg in "$@"; do case "$arg" in */.lanes-link.*) exit 77;; esac; done; exec "$REAL_MV" "$@"'
+  source_installer REAL_MV="$actual_mv" bash -c '
+    source "$1/tools/herdr/install.sh"
+    DOTFILES_ROOT="$TEST_ROOT/source"
     main --install-lanes
   ' _ "$REPO_ROOT"
   [ "$status" -eq 77 ]

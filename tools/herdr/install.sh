@@ -297,7 +297,9 @@ install_lanes() {
   STAGED_LINK=$(mktemp "$root/.lanes-link.XXXXXX")
   rm -f -- "$STAGED_LINK"
   ln -s "$version" "$STAGED_LINK"
-  publish_staged_file "$STAGED_LINK" "$destination"
+  # This target is a directory symlink: always replace the link itself. Like
+  # the version-directory rename above, this Linux installer requires mv -T.
+  command mv -Tf -- "$STAGED_LINK" "$destination"
   STAGED_LINK=""
   STAGED_LINK=$(mktemp "$HERDR_INSTALL_DIR/.lane-link.XXXXXX")
   rm -f -- "$STAGED_LINK"

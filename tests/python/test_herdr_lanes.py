@@ -1,12 +1,16 @@
 """Fictional boundary tests for the installed project-heading tools."""
 import importlib.util
+import itertools
+import json
 import os
 import shlex
 import subprocess
 import sys
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Barrier, BrokenBarrierError
 from unittest.mock import patch
 
 import tomllib
@@ -80,6 +84,37 @@ class ToolFixture(unittest.TestCase):
 
 
 class LaneTests(ToolFixture):
+    def test_unborn_anchor_is_completed_before_worktree_creation(self):
+        anchor = self.home / '.lane-anchors/orchard'
+        anchor.mkdir(parents=True)
+        subprocess.run(['git', '-C', str(anchor), 'init', '-q', '-b', 'main'], check=True)
+        checkout = self.home / '.lane-anchors/orchard-lanes/7'
+        self.lane.anchor_checkout(anchor, checkout)
+        self.assertTrue((checkout / '.git').is_file())
+        self.assertEqual(subprocess.run(['git', '-C', str(anchor), 'rev-parse', '--verify', 'HEAD'],
+                                       capture_output=True, check=False).returncode, 0)
+
+    def test_concurrent_first_lanes_create_only_one_heading(self):
+        barrier, counter = Barrier(2), itertools.count()
+        original = self.api
+        def api(*args):
+            if args == ('workspace', 'list') and next(counter) < 2:
+                result = original(*args)
+                # Force competing unlocked readers to see the same snapshot.
+                # A serialized reader proceeds when no competitor can enter.
+                try:
+                    barrier.wait(timeout=1)
+                except BrokenBarrierError:
+                    pass
+                return result
+            return original(*args)
+        with patch.object(self.lane, 'herdr', side_effect=api), ThreadPoolExecutor(2) as pool:
+            futures = [pool.submit(self.lane.open_lane, label, '') for label in ('orchard-7', 'orchard-8')]
+            for future in futures:
+                future.result()
+        self.assertEqual(sum(w['label'] == '◆ orchard' for w in self.spaces), 1)
+        self.assertEqual(len([c for c in self.calls if c[:2] == ('pane', 'run')]), 3)
+
     def test_longest_project_and_shorthand(self):
         self.assertEqual(self.lane.resolve('double-holo-12', self.home / 'double-holo-local'),
                          ('double-holo', '12'))
@@ -151,7 +186,7 @@ class LaneTests(ToolFixture):
             self.lane.open_lane('orchard-7', 'Never submit this')
         self.assertIn(('workspace', 'focus', existing['workspace_id']), self.calls)
         self.assertEqual(self.sends(), [])
-        self.assertFalse((self.home / '.lane-anchors').exists())
+        self.assertFalse((self.home / '.lane-anchors/orchard').exists())
         self.assertFalse(any(c[:2] == ('worktree', 'open') for c in self.calls))
 
     def test_existing_checkout_other_label_not_renamed_or_typed_into(self):
@@ -249,6 +284,13 @@ class PublisherTests(unittest.TestCase):
             self.needs.publish(self.spaces, last)
             self.assertIn('needs=1', run.call_args.args[0])
 
+    def test_published_counts_expire_if_the_reporter_stops(self):
+        with patch.object(self.needs.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0)) as run:
+            self.needs.publish(self.spaces, {})
+            args = run.call_args.args[0]
+            self.assertIn('--ttl-ms', args)
+            self.assertEqual(args[args.index('--ttl-ms') + 1], '180000')
+
     def test_missing_provenance_publishes_zero_and_marks_ungrouped(self):
         self.spaces[0]['worktree'] = None
         self.spaces[1]['worktree'] = None
@@ -313,6 +355,22 @@ class BindingTests(unittest.TestCase):
             result = subprocess.run(['/bin/sh', '-c', command], input="orchard-7\nRead 'a file'; $(false)\n",
                                     text=True, capture_output=True, env={**os.environ, 'HOME': home}, check=True)
             self.assertIn("<orchard-7>\n<Read 'a file'; $(false)>", result.stdout)
+
+    def test_popup_passes_dash_prefixed_prompt_to_real_argument_parser(self):
+        config = tomllib.loads((SOURCE.parent / 'config.toml.template').read_text())
+        command = next(c['command'] for c in config['keys']['command'] if c['key'] == 'prefix+shift+l')
+        with tempfile.TemporaryDirectory() as home:
+            executable = Path(home, '.local/bin/lane')
+            executable.parent.mkdir(parents=True)
+            executable.write_text('#!/usr/bin/env python3\nimport json,os,sys\nfrom pathlib import Path\nPath(os.environ["HOME"],"args.json").write_text(json.dumps(sys.argv[1:]))\n')
+            executable.chmod(0o700)
+            subprocess.run(['/bin/sh', '-c', command], input='orchard-7\n-review\n', text=True,
+                           capture_output=True, env={**os.environ, 'HOME': home}, check=True)
+            args = json.loads(Path(home, 'args.json').read_text())
+            lane = load('lane', 'lane.py')
+            with patch.object(sys, 'argv', ['lane', *args]), patch.object(lane, 'open_lane') as opened:
+                self.assertEqual(lane.main(), 0)
+                opened.assert_called_once_with('orchard-7', '-review')
 
     def test_dashboard_binding_runs_installed_opener_from_data_home(self):
         config = tomllib.loads((SOURCE.parent / 'config.toml.template').read_text())

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Open interactive lanes under stock Herdr worktree headings."""
 import argparse
+import fcntl
 import json
 import shlex
 import subprocess
@@ -85,6 +86,8 @@ def anchor_checkout(anchor, checkout):
     if not (anchor / '.git').is_dir():
         anchor.mkdir(parents=True, exist_ok=True)
         subprocess.run(['git', '-C', str(anchor), 'init', '-q', '-b', 'main'], check=True)
+    if subprocess.run(['git', '-C', str(anchor), 'rev-parse', '--verify', 'HEAD'],
+                      capture_output=True, check=False).returncode:
         subprocess.run(['git', '-C', str(anchor), '-c', 'user.name=Lane anchor',
                         '-c', 'user.email=lane-anchor@localhost', 'commit', '-q',
                         '--allow-empty', '-m', 'Project heading anchor'], check=True)
@@ -98,6 +101,15 @@ def open_lane(label, prompt=''):
             or any((ord(c) < 32 and c != '\n') or 127 <= ord(c) < 160 for c in prompt)):
         raise ValueError('terminal control characters are not supported; sent nothing')
     project, number = resolve(label)
+    root = Path.home() / '.lane-anchors'
+    root.mkdir(parents=True, exist_ok=True)
+    with (root / f'.{project}.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        return open_locked(project, number, prompt)
+
+
+def open_locked(project, number, prompt):
+    # Refresh the workspace list below only after taking the project lock.
     label = f'{project}-{number}' if number else project
     anchor = Path.home() / '.lane-anchors' / project
     checkout = Path.home() / '.lane-anchors' / f'{project}-lanes' / number if number else None

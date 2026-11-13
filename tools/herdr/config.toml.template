@@ -42,7 +42,7 @@ rows = [["state_icon", "workspace", { token = "$needs", fg = "#f7768e", bold = t
 [[keys.command]]
 key = "prefix+shift+l"
 type = "popup"
-command = "test -x \"$HOME/.local/bin/lane\" || { printf 'Install first: make herdr-lanes\\n'; sleep 4; exit 1; }; printf 'Lane (<project>-<n>, or <n> in its local folder): '; read -r l; [ -n \"$l\" ] || exit 0; printf 'Prompt for pi (Enter for none): '; read -r p; \"$HOME/.local/bin/lane\" \"$l\" \"$p\" || sleep 4"
+command = "test -x \"$HOME/.local/bin/lane\" || { printf 'Install first: make herdr-lanes\\n'; sleep 4; exit 1; }; printf 'Lane (<project>-<n>, or <n> in its local folder): '; read -r l; [ -n \"$l\" ] || exit 0; printf 'Prompt for pi (Enter for none): '; read -r p; \"$HOME/.local/bin/lane\" -- \"$l\" \"$p\" || sleep 4"
 description = "open lane under its project"
 width = 90
 height = 7
