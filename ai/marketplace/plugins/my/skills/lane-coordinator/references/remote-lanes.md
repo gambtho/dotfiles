@@ -24,26 +24,32 @@ prompt and selected read-only repo profile. Replace references to absent coordin
 files with the scoped authority/profile locations in the host brief. Keep STATE,
 other lanes' context, credentials and runtime/session trees on their owning hosts.
 Inspect existing destinations/profile stores before copying; preserve unrelated work.
-Where the human approves it, the four named project-local files are replaceable
-coordinator-owned delivery snapshots. The selected profile snapshot is read-only for
-the lane, not a separately edited cumulative profile store.
+The prompt destination is create-only: before any delivery or workspace creation,
+refuse an existing same-name file with different bytes; identical bytes are fine
+and left unchanged. Choose another prompt filename for a different task.
+Where approved, AGENTS.md, COMMON-RULES.md and the selected profile remain replaceable
+coordinator-owned support files. Running lanes read the current shared rules/profile,
+as local lanes do, not frozen per-lane copies. This does not reload already loaded
+context. The profile is read-only for the lane, not a separately edited cumulative store.
 
 ## Explicit copy and manual startup
 
-Create the approved project/lanes/reports/profile directories over SSH first. Bind
-this fictional example to the actual verified paths/user. Copy each selected file
-to its named destination with the same plain rsync form:
+Inspect and byte-compare any existing prompt destination before delivering anything;
+a different task must use another filename. Then create the approved project/lanes/
+reports/profile directories over SSH. Bind this fictional example to the actual
+verified paths/user. Use plain `rsync -a` for the three replaceable support files;
+use create-only delivery for the prompt:
 
 ```sh
 remote_shell='sh -c '\''exec tailscale ssh example@"$@"'\'' sh'
-rsync -a -e "$remote_shell" /home/example/project-local/lanes/task.md build-host:/home/example/project-local/lanes/task.md
+rsync -a --ignore-existing -e "$remote_shell" /home/example/project-local/lanes/task.md build-host:/home/example/project-local/lanes/task.md
 ```
 
 The inline shell supplies `example@build-host`: rsync's usual `user@host:` spelling
 passes `-l`, which the Tailscale SSH wrapper may not accept. Plain `-a` compares size
 and time, so success alone does not prove current bytes. Read back the delivered
 prompt, rules and profile before startup; unconfirmed currency is unknown. If equal
-size/mtime hides different bytes, inspect the intended source, deliberately make
+size/mtime hides different support-file bytes, inspect the intended source, deliberately make
 only its mtime distinct, then rerun delivery and byte read-back. Unchanged rsync is
 not a repair; no automatic force/checksum/delete flags, receipts or staging folders.
 The human can open a workspace on that host and start Pi manually. Hand over only

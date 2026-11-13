@@ -158,13 +158,21 @@ copy or launch. Focus and agent-status changes are ignored. This is observationa
 session binding, not cryptographic proof against malicious/cloned peers or routing
 changes made concurrently by another operator.
 
-Running the command authorizes replacing exactly four coordinator-owned delivery
-snapshots: `AGENTS.md`, `lanes/COMMON-RULES.md`, `lanes/<prompt-basename>` and
-`review-profile/learnings.md`. Other files/profile stores remain untouched. Symlinked source files and existing destination
-symlinks, escaping paths and unexpected file types are refused. Each file uses plain
-`rsync -a`, then full byte read-back; local sources are rechecked before startup.
-The profile destination is a read-only snapshot for the lane, not a separately edited
-cumulative store. The coordinator remains responsible for semantic rule freshness.
+The prompt destination `lanes/<prompt-basename>` is **create-only**. Before any
+delivery or workspace creation, an existing file with different bytes is refused;
+choose a different prompt filename. Identical bytes are fine and the existing file
+is left unchanged. Prompt delivery uses `rsync -a --ignore-existing` and byte read-back,
+so a later launch cannot replace an earlier lane's unread task through this command.
+
+Running the command authorizes replacing the three coordinator-owned support files:
+`AGENTS.md`, `lanes/COMMON-RULES.md` and `review-profile/learnings.md`. A running lane
+reads the current shared rules/profile at those paths, just as local lanes do; these
+are not frozen per-lane copies or an automatic reload of already loaded context.
+The profile is read-only for the lane, not a separately edited cumulative store.
+Other files/profile stores remain untouched. Symlinked source files and existing
+destination symlinks, escaping paths and unexpected file types are refused. Support
+files use plain `rsync -a`; all four inputs receive full byte read-back and local
+sources are rechecked before startup. The coordinator owns semantic rule freshness.
 There is no multi-file rollback: partial delivery must be inspected and rechecked.
 
 A same-name existing workspace is only focused **on the remote server**, with no
@@ -182,7 +190,7 @@ After a create/run timeout, inspect the bound host and returned IDs: an error do
 not prove the operation was unapplied. Rerunning an existing label only focuses it;
 it never resumes a partial launch, resends the prompt or creates a replacement.
 
-If equal-size/equal-mtime stale bytes make rsync skip a snapshot, read-back fails
+If equal-size/equal-mtime stale bytes make rsync skip a support file, read-back fails
 and no lane starts. Inspect the intended source and destination, deliberately refresh
 only that source's mtime (for example `touch -- /verified/source`), verify it differs
 from the destination, then rerun delivery after inspection. Read-back still decides

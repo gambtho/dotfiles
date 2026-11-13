@@ -47,6 +47,7 @@ class RemoteTests(unittest.TestCase):
         self.panes: list[dict] = [{'workspace_id': 'w1', 'pane_id': 'w1:p1', 'terminal_id': 'term_original'}]
         self.calls = []
         self.copies = []
+        self.directory_creations = 0
         self.busy = False
         self.bad_snapshot = False
         self.failure = None
@@ -82,8 +83,9 @@ class RemoteTests(unittest.TestCase):
         if cmd == ['workspace', 'list']:
             return {'workspaces': self.spaces[:]}
         if cmd[:2] == ['workspace', 'create']:
-            w = {'workspace_id': 'w2', 'label': cmd[cmd.index('--label') + 1]}
-            p = {'workspace_id': 'w2', 'pane_id': 'w2:p1', 'terminal_id': 'term_new'}
+            wid = f'w{len(self.spaces) + 1}'
+            w = {'workspace_id': wid, 'label': cmd[cmd.index('--label') + 1]}
+            p = {'workspace_id': wid, 'pane_id': wid + ':p1', 'terminal_id': 'term_' + wid}
             self.spaces.append(w)
             self.panes.append(p)
             if self.failure == ('workspace', 'create'):
@@ -92,7 +94,7 @@ class RemoteTests(unittest.TestCase):
         if cmd[:2] == ['pane', 'get']:
             return {'pane': self.panes[-1]}
         if cmd[:2] == ['pane', 'process-info']:
-            return {'process_info': {'pane_id': 'w2:p1', 'shell_pid': 1,
+            return {'process_info': {'pane_id': cmd[-1], 'shell_pid': 1,
                     'foreground_processes': [{'pid': 2 if self.busy else 1, 'name': 'fish'}]}}
         if cmd[:2] in (['workspace', 'focus'], ['pane', 'run']):
             if self.failure == tuple(cmd[:2]):
@@ -118,6 +120,8 @@ class RemoteTests(unittest.TestCase):
             self.copies.append((src.name, dst.relative_to(self.root).as_posix()))
             if self.failure == ('copy', src.name):
                 raise ValueError('copy failed')
+            if '--ignore-existing' in argv and dst.exists():
+                return b''
             if not (dst.exists() and dst.stat().st_size == src.stat().st_size and
                     int(dst.stat().st_mtime) == int(src.stat().st_mtime)):
                 shutil.copy2(src, dst)
@@ -134,6 +138,8 @@ class RemoteTests(unittest.TestCase):
             self.assertIn('--session default', script[-1])
             self.assertIn('unset HERDR_', script[-1])
             return json.dumps({'result': {'snapshot': self.snapshot()}}).encode()
+        if script[-1].startswith('mkdir '):
+            self.directory_creations += 1
         env = dict(os.environ, HOME=str(self.root.parent))
         return subprocess.check_output(script, env=env, stderr=subprocess.PIPE)
 
@@ -163,6 +169,49 @@ class RemoteTests(unittest.TestCase):
         self.assertIn('flat', text)
         self.assertFalse(any('worktree' in c for c in self.calls))
         self.assertFalse((self.home / 'local/.lane-anchors').exists())
+
+    def test_second_launch_cannot_replace_the_first_lanes_unread_prompt(self):
+        self.start()
+        first_instruction = self.sends()[0][-1]
+        delivered = {p: p.read_bytes() for p in (self.root / 'AGENTS.md',
+                     self.root / 'lanes/COMMON-RULES.md', self.root / 'lanes/task.md',
+                     self.root / 'review-profile/learnings.md')}
+        writes = len(self.copies), self.directory_creations
+        for name in ('agents.md', 'rules.md', 'profile.md', 'task.md'):
+            (self.local / name).write_text('second lane task, different scope')
+        with self.assertRaisesRegex(ValueError, 'prompt.*different bytes'):
+            self.remote.open_remote('orchard-8', 'task.md', 'build', self.lane)
+        self.assertIn('lanes/task.md', first_instruction)
+        self.assertEqual((self.root / 'lanes/task.md').read_bytes(), b'fresh task.md')
+        self.assertEqual({p: p.read_bytes() for p in delivered}, delivered)
+        self.assertEqual((len(self.copies), self.directory_creations), writes)
+        self.assertEqual(sum(c[2:4] == ['workspace', 'create'] for c in self.calls), 1)
+        self.assertEqual(len(self.sends()), 1)
+
+    def test_identical_prompt_allows_current_shared_rules_and_profile_to_refresh(self):
+        self.start()
+        prompt = self.root / 'lanes/task.md'
+        os.utime(prompt, ns=(1_000_000_000, 1_000_000_000))
+        for name in ('agents.md', 'rules.md', 'profile.md'):
+            (self.local / name).write_text('current shared ' + name)
+        self.remote.open_remote('orchard-8', 'task.md', 'build', self.lane)
+        self.assertEqual(prompt.read_bytes(), b'fresh task.md')
+        self.assertEqual(prompt.stat().st_mtime_ns, 1_000_000_000)
+        self.assertEqual((self.root / 'AGENTS.md').read_text(), 'current shared agents.md')
+        self.assertEqual((self.root / 'lanes/COMMON-RULES.md').read_text(), 'current shared rules.md')
+        self.assertEqual((self.root / 'review-profile/learnings.md').read_text(), 'current shared profile.md')
+        self.assertEqual(len(self.sends()), 2)
+
+    def test_existing_different_empty_prompt_refuses_before_any_delivery(self):
+        prompt = self.root / 'lanes/task.md'
+        prompt.parent.mkdir()
+        prompt.write_bytes(b'')
+        with self.assertRaisesRegex(ValueError, 'prompt.*different bytes'):
+            self.start()
+        self.assertEqual(self.copies, [])
+        self.assertEqual(self.directory_creations, 0)
+        self.assertFalse(any(c[2:4] == ['workspace', 'create'] for c in self.calls))
+        self.assertEqual(prompt.read_bytes(), b'')
 
     def test_ssh_transport_and_rsync_wrapper_preserve_user_and_server_arguments(self):
         self.config['transport'] = 'ssh'
@@ -199,8 +248,14 @@ class RemoteTests(unittest.TestCase):
             return original(owner, argv)
         with patch.object(self.remote.Remote, 'run', new=real_copy):
             self.start()
+            prompt = self.root / 'lanes/task.md'
+            os.utime(prompt, ns=(1_000_000_000, 1_000_000_000))
+            (self.local / 'rules.md').write_text('current shared rules')
+            self.remote.open_remote('orchard-8', 'task.md', 'build', self.lane)
         self.assertEqual((self.root / 'AGENTS.md').read_text(), 'fresh agents.md')
-        self.assertEqual(len(self.sends()), 1)
+        self.assertEqual((self.root / 'lanes/COMMON-RULES.md').read_text(), 'current shared rules')
+        self.assertEqual(prompt.stat().st_mtime_ns, 1_000_000_000)
+        self.assertEqual(len(self.sends()), 2)
 
     def test_catalog_retarget_during_delivery_cannot_create_workspace(self):
         original = self.api

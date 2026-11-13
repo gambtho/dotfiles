@@ -26,6 +26,10 @@ for text in sys.argv[1:]:
         if p.stat().st_uid != os.geteuid():
             raise SystemExit("delivery path owned by another user")
 '''
+PROMPT = '''import json, pathlib, sys
+p = pathlib.Path(sys.argv[1])
+print(json.dumps(p.read_bytes().hex() if p.exists() else None))
+'''
 HOST = '''import json, os, pathlib, pwd, shutil, socket, sys
 print(json.dumps(dict(hostname=socket.gethostname(), user=pwd.getpwuid(os.geteuid()).pw_name,
                      home=str(pathlib.Path.home()), tools=all(os.access(p, os.X_OK) for p in sys.argv[1:])
@@ -187,6 +191,11 @@ class Remote:
         directories = [self.root, *(self.root / p for p in ('lanes', 'reports', 'review-profile'))]
         paths = [str(p) for p in (*directories, *self.targets)]
         self.ssh(shlex.join(['python3', '-c', INSPECT, *paths]))
+        self.stage = 'prompt destination check'
+        current = json.loads(self.ssh(shlex.join(['python3', '-c', PROMPT, str(self.targets[2])])))
+        if current is not None and current != self.originals[2][0].hex():
+            raise ValueError(f'prompt {self.targets[2].name} exists with different bytes; '
+                             'inputs unchanged; choose a different prompt filename')
         self.stage = 'delivery directory creation'
         self.catalog()
         self.ssh(shlex.join(['mkdir', '-p', '--', *(str(p) for p in directories)]))
@@ -196,7 +205,10 @@ class Remote:
         for src, dst, original in zip(self.sources, self.targets, self.originals):
             self.stage = f'delivery {dst.relative_to(self.root)}'
             self.catalog()
-            self.run(['rsync', '-a', '-e', shell, str(src), self.config['target'] + ':' + str(dst)])
+            # The task path outlives startup admission; never refresh an existing prompt.
+            options = ['--ignore-existing'] if dst == self.targets[2] else []
+            self.run(['rsync', '-a', *options, '-e', shell, str(src),
+                      self.config['target'] + ':' + str(dst)])
             self.stage = f'read-back {dst.relative_to(self.root)}'
             if self.ssh(shlex.join(['cat', '--', str(dst)])) != original[0]:
                 raise ValueError(f'read-back mismatch: {dst.relative_to(self.root)}; no lane started. '
