@@ -147,10 +147,13 @@ lane double-holo-12 "Read /absolute/project-local/lanes/W12-approved-task.md and
 
 Shell-quote the prompt so its absolute path is passed literally, without expansion.
 This opens under the project heading; an existing lane is only focused and never
-receives the prompt. If startup still owns the foreground (for example a keyring
-prompt), `lane` sends nothing: finish startup, start Pi manually, then paste the
-approved Read instruction into that idle Pi. A failed or uncertain invocation is
-inspect-only; first establish whether submission happened, never blindly resend.
+receives the prompt. Failed or uncertain invocations are inspect-only: use the
+pane named by the error and establish whether anything ran before taking action.
+For a heading-shell failure, restore only its `needs.py` publisher using the error's
+recovery command; no numbered lane exists yet. Never start Pi or paste the Read
+instruction in the heading. For a numbered-lane shell failure with no submission,
+finish startup, change to `~/<project>-local`, start Pi manually, then paste the
+approved Read instruction into that idle Pi. Never blindly resend or relaunch.
 
 Without installed `lane`, and always for remote lanes, use only:
 
