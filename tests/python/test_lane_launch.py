@@ -79,14 +79,41 @@ elif a == ['api', 'snapshot']:
         sys.exit(0)
     if mode == 'snapshot-workspace-list':
         s['workspaces'] = [[]]
+    followup = os.environ.get('FAKE_FOLLOWUP', '')
+    if followup and s['workspaces']:
+        w, p = s['workspaces'][-1], s['panes'][-1]
+        if followup == 'missing-workspace':
+            s['workspaces'] = []
+        elif followup == 'duplicate-workspace':
+            s['workspaces'].append(dict(w))
+        elif followup == 'missing-pane':
+            s['panes'].pop()
+        elif followup == 'duplicate-pane':
+            s['panes'].append(dict(p))
+        elif followup == 'caller-terminal':
+            s['panes'][0]['terminal_id'] = 'caller-replaced'
+        elif followup == 'protocol':
+            s['protocol'] = 23
+        elif followup == 'malformed':
+            print('{}')
+            sys.exit(0)
+        elif followup == 'failed':
+            sys.exit(1)
+        else:
+            obj, key = followup.split('.')
+            (w if obj == 'workspace' else p)[key] = '/unexpected' if key == 'cwd' else 'unexpected'
     reply('session_snapshot', snapshot=s)
 elif a[:2] == ['workspace', 'create']:
     assert a == ['workspace', 'create', '--cwd', os.environ['FAKE_REPO'],
                  '--label', os.environ.get('FAKE_NAME', 'double-holo-12'), '--no-focus',
                  '--env', 'DOTFILES_KEYRING_PROMPT=0']
-    w = dict(workspace_id='opaque-workspace', label=a[5])
+    # Isolated 0.9.5 capture, with paths/opaque IDs replaced by fixture values.
+    w = dict(workspace_id='opaque-workspace', label=a[5], active_tab_id='opaque-tab',
+             agent_status='unknown', focused=False, number=1, pane_count=1, tab_count=1)
     p = dict(pane_id='opaque-root', terminal_id='terminal-new', workspace_id=w['workspace_id'],
-             cwd=a[3], tab_id='opaque-tab', focused=False, agent_status='unknown', revision=1)
+             cwd=a[3], foreground_cwd=a[3], tab_id='opaque-tab', focused=False,
+             agent_status='unknown', revision=0,
+             scroll=dict(max_offset_from_bottom=0, offset_from_bottom=0, viewport_rows=40))
     s['workspaces'].append(w)
     s['panes'].append(p)
     save()
@@ -99,6 +126,14 @@ elif a[:2] == ['workspace', 'create']:
             p['workspace_id'] = 'unexpected-workspace'
         elif mode == 'create-cwd-mismatch':
             p['cwd'] = '/unexpected/cwd'
+        elif mode == 'create-cwd-missing':
+            del p['cwd']
+        elif mode == 'create-cwd-null':
+            p['cwd'] = None
+        patch = json.loads(os.environ.get('FAKE_CREATE_PATCH', '{}'))
+        for field, value in patch.items():
+            obj, key = field.split('.')
+            (w if obj == 'workspace' else p)[key] = value
         reply('workspace_created', workspace=[] if mode == 'create-workspace-list' else w,
               root_pane=[] if mode == 'create-pane-list' else p, tab={'tab_id': 'opaque-tab'})
 elif a[:2] == ['workspace', 'get']:
@@ -238,6 +273,7 @@ class LaunchTests(LaunchFixture, unittest.TestCase):
         self.assertEqual(receipt['stage'], 'Submitted')
         self.assertEqual(receipt['observation'], 'working')
         self.assertIn('Submitted', self.state.read_text())
+        self.assertEqual(self.calls().count(['api', 'snapshot']), 1)
         self.assertEqual(self.run_launch().returncode, 0)
         for verb in (['workspace', 'create'], ['agent', 'start'], ['agent', 'prompt']):
             self.assertEqual(len(self.mutations(verb)), 1)
@@ -310,7 +346,7 @@ class LaunchTests(LaunchFixture, unittest.TestCase):
 
     def test_creation_metadata_mismatch_preserves_observed_ids_without_advancing(self):
         initial_live, initial_state = self.live.read_text(), self.state.read_text()
-        for mode in ('create-label-mismatch', 'create-association-mismatch', 'create-cwd-mismatch'):
+        for mode in ('create-label-mismatch', 'create-association-mismatch'):
             with self.subTest(mode=mode):
                 self.live.write_text(initial_live)
                 self.state.write_text(initial_state)
@@ -327,6 +363,109 @@ class LaunchTests(LaunchFixture, unittest.TestCase):
                 self.assertEqual(self.mutations(['agent','start']), [])
                 self.assertEqual(self.run_launch().returncode, 2)
                 self.assertEqual(len(self.mutations(['workspace','create'])), 1)
+
+    def test_creation_cwd_discrepancy_requires_one_exact_snapshot_before_start(self):
+        # Missing/null are schema-permitted mutations, not incident reproductions.
+        for mode in ('create-cwd-missing', 'create-cwd-null', 'create-cwd-mismatch'):
+            with self.subTest(mode=mode):
+                self.reset_fixture(json.loads(self.initial_live))
+                result = self.run_launch(mode)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                record = json.loads(self.receipt.read_text())
+                self.assertEqual(record['stage'], 'Submitted')
+                self.assertEqual(record['creation_cwd_confirmed'], 'snapshot')
+                self.assertEqual(record['context']['terminal'], 'caller-terminal')
+                calls = self.calls()
+                snapshots = [i for i, a in enumerate(calls) if a == ['api', 'snapshot']]
+                self.assertEqual(len(snapshots), 2)
+                self.assertLess(snapshots[-1], next(i for i, a in enumerate(calls)
+                                                  if a[:2] == ['agent', 'start']))
+                self.assertEqual(self.run_launch().returncode, 0)
+                for verb in (['workspace', 'create'], ['agent', 'start'], ['agent', 'prompt']):
+                    self.assertEqual(len(self.mutations(verb)), 1)
+
+    def test_creation_fallback_does_not_rewrite_caller_terminal_fingerprint(self):
+        result = self.run_launch('create-cwd-null', env={'FAKE_FOLLOWUP': 'caller-terminal'})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(self.receipt.read_text())['context']['terminal'], 'caller-terminal')
+
+    def test_creation_failure_records_all_three_metadata_comparisons(self):
+        result = self.run_launch('create-cwd-null', env={'FAKE_CREATE_PATCH': json.dumps({
+            'workspace.label': 'bad-label', 'root_pane.workspace_id': 'bad-workspace'})})
+        self.assert_stopped(result)
+        record = json.loads(self.receipt.read_text())
+        self.assertEqual(record['creation_validation']['create'], {
+            'workspace.label': {'expected': 'double-holo-12', 'observed': 'bad-label'},
+            'root_pane.workspace_id': {'expected': 'opaque-workspace', 'observed': 'bad-workspace'},
+            'root_pane.cwd': {'expected': str(self.repo), 'observed': None}})
+        self.assertEqual(record['stage'], 'Creating')
+        self.assertEqual(self.calls().count(['api', 'snapshot']), 1)
+        self.assertEqual(self.mutations(['agent', 'start']), [])
+
+    def test_creation_fallback_requires_unique_exact_workspace_and_root_pane(self):
+        for followup, field, expected, observed in [
+            ('missing-workspace', 'workspace_count', 1, 0),
+            ('duplicate-workspace', 'workspace_count', 1, 2),
+            ('workspace.label', 'workspace.label', 'double-holo-12', 'unexpected'),
+            ('missing-pane', 'root_pane_count', 1, 0),
+            ('duplicate-pane', 'root_pane_count', 1, 2),
+            ('pane.workspace_id', 'root_pane.workspace_id', 'opaque-workspace', 'unexpected'),
+            ('pane.terminal_id', 'root_pane.terminal_id', 'terminal-new', 'unexpected'),
+            ('pane.cwd', 'root_pane.cwd', str(self.repo), '/unexpected'),
+        ]:
+            with self.subTest(followup=followup):
+                self.reset_fixture(json.loads(self.initial_live))
+                result = self.run_launch('create-cwd-null', env={'FAKE_FOLLOWUP': followup})
+                self.assert_stopped(result)
+                record = json.loads(self.receipt.read_text())
+                self.assertEqual(record['creation_validation']['snapshot'][field],
+                                 {'expected': expected, 'observed': observed})
+                self.assertEqual(record['creation_validation']['create']['root_pane.cwd'],
+                                 {'expected': str(self.repo), 'observed': None})
+                self.assertEqual(record['stage'], 'Creating')
+                self.assertEqual(self.mutations(['agent', 'start']), [])
+                self.assertEqual(self.mutations(['agent', 'prompt']), [])
+                self.assert_stopped(self.run_launch(), 'Creation uncertain')
+                self.assertEqual(len(self.mutations(['workspace', 'create'])), 1)
+
+    def test_creation_failure_receipt_names_each_failed_comparison(self):
+        for field, value, expected, observed in [
+            ('workspace.label', 'unexpected-label', 'double-holo-12', 'unexpected-label'),
+            ('root_pane.workspace_id', 'other-workspace', 'opaque-workspace', 'other-workspace'),
+            ('workspace.workspace_id', '', 'nonempty string', ''),
+            ('root_pane.pane_id', None, 'nonempty string', None),
+            ('root_pane.terminal_id', [], 'nonempty string', {'type': 'list'}),
+            ('root_pane.cwd', {'text': 'DO NOT RECORD'}, str(self.repo), {'type': 'dict'}),
+            ('root_pane.cwd', str(self.repo) + '\n', str(self.repo), {'type': 'str'}),
+            ('workspace.label', 'DO NOT RECORD\n', 'double-holo-12', {'type': 'str'}),
+            ('workspace.label', 'DO NOT RECORD' * 400, 'double-holo-12', {'type': 'str'}),
+        ]:
+            with self.subTest(field=field):
+                self.reset_fixture(json.loads(self.initial_live))
+                result = self.run_launch(env={'FAKE_CREATE_PATCH': json.dumps({field: value})})
+                self.assert_stopped(result)
+                record = json.loads(self.receipt.read_text())
+                self.assertEqual(record['creation_validation']['create'][field],
+                                 {'expected': expected, 'observed': observed})
+                self.assertNotIn('DO NOT RECORD', self.receipt.read_text())
+                self.assertEqual(record['stage'], 'Creating')
+                self.assertEqual(self.calls().count(['api', 'snapshot']), 1)
+                self.assertEqual(self.mutations(['agent', 'start']), [])
+
+    def test_creation_fallback_read_errors_keep_first_evidence_and_never_start(self):
+        for followup in ('malformed', 'failed', 'protocol'):
+            with self.subTest(followup=followup):
+                self.reset_fixture(json.loads(self.initial_live))
+                # Deliberately reject the second snapshot's protocol, not preflight.
+                result = LaunchFixture.run_launch(self, 'create-cwd-null', env={'FAKE_FOLLOWUP': followup})
+                self.assertEqual(result.returncode, 2, result.stderr)
+                record = json.loads(self.receipt.read_text())
+                self.assertEqual(record['creation_validation']['create']['root_pane.cwd'],
+                                 {'expected': str(self.repo), 'observed': None})
+                self.assertEqual(record['stage'], 'Creating')
+                self.assertEqual(self.calls().count(['api', 'snapshot']), 2)
+                self.assertEqual(self.mutations(['agent', 'start']), [])
+                self.assertEqual(self.mutations(['agent', 'prompt']), [])
 
     def test_malformed_nested_responses_use_normal_error_path(self):
         initial_live, initial_state = self.live.read_text(), self.state.read_text()
@@ -359,6 +498,10 @@ class LaunchTests(LaunchFixture, unittest.TestCase):
                     record = json.loads(self.receipt.read_text())
                     self.assertEqual(record['stage'], stage)
                     self.assertIn(reason, record['error'])
+                    if mode in ('create-workspace-list', 'create-pane-list'):
+                        field = 'workspace' if mode == 'create-workspace-list' else 'root_pane'
+                        self.assertEqual(record['creation_validation']['create'][field],
+                                         {'expected': 'object', 'observed': {'type': 'list'}})
                     if mode == 'create-pane-list':
                         self.assertNotIn('created_response', record)
                         self.assertNotIn('Created', record['checkpoints'])
