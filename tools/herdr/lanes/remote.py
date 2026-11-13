@@ -5,6 +5,7 @@ import os
 import re
 import shlex
 import signal
+import stat
 import subprocess
 from pathlib import Path
 
@@ -100,8 +101,10 @@ class Remote:
     def source(path):
         if path.is_symlink():
             raise ValueError(f'symlink source refused: {path}; select a regular snapshot file')
-        stat = path.stat()
-        return path.read_bytes(), stat.st_mtime_ns, stat.st_size
+        info = path.stat()
+        if not stat.S_ISREG(info.st_mode):
+            raise ValueError(f'non-regular source refused: {path}')
+        return path.read_bytes(), info.st_mtime_ns, info.st_size
 
     def run(self, argv):
         # A local timeout does not cancel a request already admitted remotely.

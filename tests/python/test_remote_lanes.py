@@ -261,6 +261,29 @@ class RemoteTests(unittest.TestCase):
         self.assertEqual(self.calls, [])
         self.assertEqual(self.copies, [])
 
+    def test_explicit_empty_host_never_dispatches_local(self):
+        with (patch.object(sys, 'argv', ['lane', '--host', '', 'orchard-7', 'task.md']),
+              patch.object(self.lane, 'open_lane') as local,
+              self.assertRaises(SystemExit) as failure):
+            self.lane.main()
+        self.assertEqual(failure.exception.code, 2)
+        local.assert_not_called()
+
+    def test_fifo_source_is_refused_before_reading_or_remote_calls(self):
+        fifo = self.local / 'profile.fifo'
+        os.mkfifo(fifo)
+        self.config['profile'] = str(fifo)
+        self.write_config()
+        original = Path.read_bytes
+        def guarded(path):
+            if path == fifo:
+                raise AssertionError('non-regular source reached the byte reader')
+            return original(path)
+        with (patch.object(Path, 'read_bytes', guarded),
+              self.assertRaisesRegex(ValueError, 'regular source|source.*regular')):
+            self.start()
+        self.assertEqual(self.calls, [])
+
     def test_cli_names_missing_host_binding_instead_of_bare_key(self):
         result = subprocess.run([sys.executable, str(SOURCE / 'lane.py'), '--host', 'missing',
                                  'orchard-7', 'task.md'], capture_output=True, text=True, check=False)

@@ -181,10 +181,12 @@ def main():
     parser.add_argument('prompt', nargs='?', default='', help='optional initial Pi prompt (new lanes only)')
     parser.add_argument('--host', help='saved remote binding in project-local/lane-hosts.json (flat numbered lanes)')
     args = parser.parse_args()
-    if args.host and not args.prompt:
+    if args.host is not None and not args.host:
+        parser.error('--host must not be empty')
+    if args.host is not None and not args.prompt:
         parser.error('--host requires a host-resolved local prompt file')
     try:
-        if args.host:
+        if args.host is not None:
             # Resolve the sibling runtime even when invoked through the installed symlink.
             import importlib.util
             spec = importlib.util.spec_from_file_location('lane_remote', Path(__file__).resolve().with_name('remote.py'))
