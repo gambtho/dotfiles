@@ -1501,6 +1501,112 @@ render_routes() {
   [ "$output" = "feat-a" ]
 }
 
+setup_setup_git() {
+  unset GIT_CONFIG GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM GIT_CONFIG_COUNT \
+    GIT_CONFIG_PARAMETERS GIT_DIR GIT_COMMON_DIR GIT_WORK_TREE GH_CONFIG_DIR
+  export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_SYSTEM=/dev/null
+  setup_shim_repo "$TEST_ROOT/default" https://github.com/gambtho/repo.git
+  git init -q "$TEST_ROOT/secondary"
+  git -C "$TEST_ROOT/secondary" remote add origin https://github.com/guarzo/repo.git
+  provision_guarzo_files
+  cat >>"$HOME/.gitconfig.guarzo" <<'EOF'
+[credential "https://github.com"]
+  helper =
+  helper = !GH_CONFIG_DIR=$HOME/.gh-guarzo gh auth git-credential
+EOF
+  cp "$REPO_ROOT/core/git/gitconfig.symlink" "$DOTFILES/core/git/"
+  cp "$DOTFILES/core/git/gitconfig.symlink" "$TEST_ROOT/tracked.before"
+  ln -s "$DOTFILES/core/git/gitconfig.symlink" "$HOME/.gitconfig"
+  printf '[user]\n email = default@example.invalid\n' >"$DOTFILES/core/git/gitconfig.local.symlink"
+  ln -s "$DOTFILES/core/git/gitconfig.local.symlink" "$HOME/.gitconfig.local"
+  cat >"$HOME/.gitconfig.identity-routes" <<'EOF'
+[includeIf "hasconfig:remote.*.url:https://github.com/guarzo/**"]
+  path = ~/.gitconfig.guarzo
+EOF
+  # Only the native CLI is doubled: real Git still exercises writes through
+  # both symlinks and the actual baseline's helper reset/include ordering.
+  cat >"$STUB_BIN/real/gh" <<'EOF'
+#!/usr/bin/env bash
+set -eu
+[ "$#" -eq 4 ] && [ "$1" = auth ] && [ "$2" = setup-git ] && [ "$3" = --hostname ] || exit 97
+for host in "$4" "gist.$4"; do
+  git config --global --replace-all "credential.https://$host.helper" ""
+  git config --global --add "credential.https://$host.helper" "!$0 auth git-credential"
+done
+EOF
+}
+
+effective_github_helper() {
+  git -C "$1" config --get-all credential.https://github.com.helper |
+    awk '!NF { chain = ""; next } { chain = chain $0 ORS } END { printf "%s", chain }'
+}
+
+@test "setup-git through the shim writes local config and preserves effective identity helpers" {
+  setup_setup_git
+  local context host
+  for context in default secondary; do
+    cd "$TEST_ROOT/$context"
+    for host in github.com enterprise.example.com; do
+      run "$REPO_ROOT/bin/gh" auth setup-git --hostname "$host"
+      [ "$status" -eq 0 ]
+      cmp "$TEST_ROOT/tracked.before" "$DOTFILES/core/git/gitconfig.symlink"
+      [ "$(effective_github_helper "$TEST_ROOT/default")" = '!gh auth git-credential' ]
+      [ "$(effective_github_helper "$TEST_ROOT/secondary")" = '!GH_CONFIG_DIR=$HOME/.gh-guarzo gh auth git-credential' ]
+      [ "$(git config --file "$DOTFILES/core/git/gitconfig.local.symlink" --get "credential.https://$host.helper")" = "!$STUB_BIN/real/gh auth git-credential" ]
+      [ "$(git config --file "$DOTFILES/core/git/gitconfig.local.symlink" --get "credential.https://gist.$host.helper")" = "!$STUB_BIN/real/gh auth git-credential" ]
+    done
+  done
+}
+
+@test "setup-git respects the caller global config override outside a repository" {
+  setup_setup_git
+  cp "$HOME/.gitconfig.local" "$TEST_ROOT/local.before"
+  export GIT_CONFIG_GLOBAL="$TEST_ROOT/caller config"
+  export GH_CONFIG_DIR="$TEST_ROOT/explicit gh"
+  cd "$TEST_ROOT"
+  run "$REPO_ROOT/bin/gh" auth setup-git --hostname github.com
+  [ "$status" -eq 0 ]
+  [ "$(git config --file "$GIT_CONFIG_GLOBAL" --get credential.https://github.com.helper)" = "!$STUB_BIN/real/gh auth git-credential" ]
+  cmp "$TEST_ROOT/tracked.before" "$DOTFILES/core/git/gitconfig.symlink"
+  cmp "$TEST_ROOT/local.before" "$HOME/.gitconfig.local"
+}
+
+@test "setup-git preserves an explicitly empty global config override" {
+  setup_setup_git
+  printf '#!/usr/bin/env bash\nprintf "global=<%%s>\\n" "${GIT_CONFIG_GLOBAL-unset}"\n' >"$STUB_BIN/real/gh"
+  export GIT_CONFIG_GLOBAL=""
+  cd "$TEST_ROOT/default"
+  run "$REPO_ROOT/bin/gh" auth setup-git
+  [ "$status" -eq 0 ]
+  [ "$output" = 'global=<>' ]
+}
+
+@test "non-setup commands retain their global config environment arguments and exit status" {
+  setup_setup_git
+  cat >"$STUB_BIN/real/gh" <<'EOF'
+#!/usr/bin/env bash
+printf 'global=<%s>\n' "${GIT_CONFIG_GLOBAL-unset}"
+printf 'arg=<%s>\n' "$@"
+exit 9
+EOF
+  cd "$TEST_ROOT/default"
+  run "$REPO_ROOT/bin/gh"
+  [ "$status" -eq 9 ]
+  [ "$output" = $'global=<unset>\narg=<>' ]
+  run "$REPO_ROOT/bin/gh" auth
+  [ "$status" -eq 9 ]
+  [ "$output" = $'global=<unset>\narg=<auth>' ]
+  local command
+  for command in login status; do
+    run "$REPO_ROOT/bin/gh" auth "$command"
+    [ "$status" -eq 9 ]
+    [ "$output" = "$(printf 'global=<unset>\narg=<auth>\narg=<%s>' "$command")" ]
+  done
+  run "$REPO_ROOT/bin/gh" pr list
+  [ "$status" -eq 9 ]
+  [ "$output" = $'global=<unset>\narg=<pr>\narg=<list>' ]
+}
+
 setup_keyring_preflight() {
   mkdir -p "$DOTFILES/libexec"
   cat >"$DOTFILES/libexec/keyring" <<'EOF'
