@@ -273,6 +273,7 @@ class CoordinatorTests(ToolFixture):
         self.pins.append((args[:2], pin))
         if args == ('api', 'snapshot'):
             return {'snapshot': self.snapshot('pinned' if pin else 'ambient')}
+        self.hook(' '.join(args[:2]), self.rawn)
         result = self.api(*args)
         if args[:2] == ('pane', 'run'):
             with (self.home / '.lane-anchors/.orchard.lock').open('a') as lock:
@@ -402,7 +403,8 @@ class CoordinatorTests(ToolFixture):
                 self.assertEqual(self.moves, [])
 
     def test_move_failure_or_readback_disagreement_stops_without_retry(self):
-        for fault in (dict(move_error=OSError('timed out')), dict(move_noop=True), dict(move_focus=True)):
+        for fault in (dict(move_error=OSError('timed out')), dict(move_noop=True), dict(move_focus=True),
+                      dict(hook=lambda m, n: setattr(self, 'tweak', lambda _, s: s['panes'][2].update(terminal_id='new')) if m == 'pane process-info' else None)):
             with self.subTest(fault):
                 self.setUp()
                 self.stops(**fault)

@@ -295,6 +295,10 @@ def open_locked(project, number, prompt, lock):
             place_first(context, heading_label, result['workspace'], result['root_pane'])
             fcntl.flock(lock, fcntl.LOCK_UN)  # typed startup runs outside the project lock
         wait_shell(pane)
+        if context:
+            observe(context[0], heading_label, result['workspace']['worktree']['repo_key'],
+                    context[2] | {(pane, created['workspace']['workspace_id'],
+                                   created['root_pane']['terminal_id'])})
         command = f'cd {shlex.quote(str(workdir))}'
         if prompt:
             command += f' && pi -- {shlex.quote(prompt)}'
