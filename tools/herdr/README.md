@@ -101,6 +101,105 @@ lane's working directory. Keeping the keyring opt-out, real repo cwd, no-focus a
 at-most-once startup takes precedence over automatic grouping. Manual `lane`
 provides grouping with the foreground-shell check described above.
 
+## Manual remote lanes
+
+`lane --host` starts a numbered lane on an already-enrolled saved Herdr machine:
+
+```sh
+lane --host build orchard-12 lanes/task.md
+```
+
+Install with `make herdr-lanes` on the calling machine only. Remote creation is flat,
+not grouped, even if the host has project anchors. It needs a running compatible Herdr
+server, Linux SSH, Python 3, rsync and existing mise/Pi executables; it never installs,
+updates or starts a server. Selecting a different machine in the TUI does not route
+CLI commands. Every remote API call uses the bound saved-machine ID.
+
+The existing `~/orchard-local` folder holds a private `lane-hosts.json`. The host key
+is an explicit project-policy choice, not a way to send any project to any saved host.
+Prepare the prompt and adapted rules first; the tool does not rewrite paths in prose.
+Relative input paths resolve from that project-local folder, not the current directory.
+Absolute source paths (including a profile outside the project folder) also work.
+For example, after verifying the real saved ID, host, user and paths:
+
+```json
+{
+  "build": {
+    "machine_id": "0123456789abcdef0123456789abcdef",
+    "saved_target": "build-host",
+    "target": "build-host",
+    "session": "default",
+    "hostname": "build-machine",
+    "user": "worker",
+    "root": "/home/worker/orchard-local",
+    "herdr": "/home/worker/.local/bin/herdr",
+    "mise": "/home/worker/.local/bin/mise",
+    "pi": "/home/worker/.pi/agent/bin/pi",
+    "transport": "tailscale",
+    "agents": "reports/build-AGENTS.md",
+    "rules": "reports/build-COMMON-RULES.md",
+    "profile": "/home/example/.pi/pr-reviews/example/project/learnings.md"
+  }
+}
+```
+
+`saved_target` and `session` must exactly match `herdr machine list --json` for that
+ID. The separate transfer `target` is a simple host alias (no `user@` or SSH URL).
+`transport` is `tailscale` or `ssh`, never an arbitrary command. Bind the real SSH
+hostname, effective user and HOME; `root` must be that user's `~/<project>-local`.
+Control characters and backslashes in interpolated values are refused. Keep this
+private binding out of the public dotfiles repository; no credentials belong in it.
+Locks live under `${XDG_STATE_HOME:-$HOME/.local/state}/dotfiles/lane-locks`.
+
+Before any remote change, the command compares a nonempty inventory of
+`(workspace_id, pane_id, terminal_id)` through transfer SSH, the saved-machine API,
+and transfer SSH again. Empty, changing or different inventories fail without a
+copy or launch. Focus and agent-status changes are ignored. This is observational
+session binding, not cryptographic proof against malicious/cloned peers or routing
+changes made concurrently by another operator.
+
+The prompt destination `lanes/<prompt-basename>` is **create-only**. Before any
+delivery or workspace creation, an existing file with different bytes is refused;
+choose a different prompt filename. Identical bytes are fine and the existing file
+is left unchanged. Prompt delivery uses `rsync -a --ignore-existing` and byte read-back,
+so a later launch cannot replace an earlier lane's unread task through this command.
+
+Running the command authorizes replacing the three coordinator-owned support files:
+`AGENTS.md`, `lanes/COMMON-RULES.md` and `review-profile/learnings.md`. A running lane
+reads the current shared rules/profile at those paths, just as local lanes do; these
+are not frozen per-lane copies or an automatic reload of already loaded context.
+The profile is read-only for the lane, not a separately edited cumulative store.
+Other files/profile stores remain untouched. Symlinked source files and existing
+destination symlinks, escaping paths and unexpected file types are refused. Support
+files use plain `rsync -a`; all four inputs receive full byte read-back and local
+sources are rechecked before startup. The coordinator owns semantic rule freshness.
+There is no multi-file rollback: partial delivery must be inspected and rechecked.
+
+A same-name existing workspace is only focused **on the remote server**, with no
+transfer or input, and exits 1 because the requested prompt was not sent. The laptop
+client's selected machine stays unchanged; select the workspace in Herdr to inspect.
+New workspaces preserve focus and set the keyring opt-out before shell startup. Only
+that new shell gets one `/bin/sh` startup command, with the hostname/user guard,
+absolute mise/Pi paths, native Pi `--name`, and the remote prompt path as initial argv.
+Command admission does not prove Pi/provider readiness or task completion.
+
+Each external operation has a **10-second** outer limit, including connection time.
+Herdr's internal read-only discovery/probe may take longer; a cold call can therefore
+fail safely at this outer limit. No timeout increases or automatic mutation retries.
+After a create/run timeout, inspect the bound host and returned IDs: an error does
+not prove the operation was unapplied. Rerunning an existing label only focuses it;
+it never resumes a partial launch, resends the prompt or creates a replacement.
+
+If equal-size/equal-mtime stale bytes make rsync skip a support file, read-back fails
+and no lane starts. Inspect the intended source and destination, deliberately refresh
+only that source's mtime (for example `touch -- /verified/source`), verify it differs
+from the destination, then rerun delivery after inspection. Read-back still decides
+success; the tool never touches sources or adds force/checksum/delete flags itself.
+Exit 2 means invalid CLI usage; exit 1 means failed, incomplete or uncertain execution;
+exit 0 means the reported verification/admission succeeded, not merge readiness.
+Report return remains the explicit primary-first fetch in the remote-lane runbook.
+This command does not grant coordinator automation, profile maintenance or merge authority.
+
 ## Optional project dashboard
 
 Run `make herdr-dashboard` explicitly. It copies the stdlib Python pane into a

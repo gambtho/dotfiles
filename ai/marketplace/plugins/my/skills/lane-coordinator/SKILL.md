@@ -173,7 +173,9 @@ Claude app session. Preparing a prompt does not launch it. An explicit request
 such as "start W12" may create a named Herdr space and start Pi **only** with
 shell/tool access inside the intended Herdr session (`HERDR_ENV=1`). Otherwise
 return the manual handoff without claiming a launch. Remote lanes start manually on
-their declared host; this local helper does not launch them.
+their declared host, including an approved human-invoked `lane --host` command
+where installed; this coordinator helper does not launch them. See
+[remote lanes](references/remote-lanes.md) for snapshot ownership and endpoint checks.
 
 For a local lane, when an approved prompt exists and the user says "start W12", use
 the mechanical helper in [herdr-launch.md](references/herdr-launch.md) immediately after
