@@ -157,6 +157,19 @@ class Launch:
         self.record.update(fields)
         atomic_write(self.path, json.dumps(self.record, indent=2) + '\n')
 
+    def creation_check(self, source, field, expected, observed, matches=None):
+        matches = observed == expected if matches is None else matches
+        if not matches:
+            # Keep only selected scalar evidence, not arbitrary objects or terminal text.
+            if not (observed is None or type(observed) is int or (
+                    isinstance(observed, str) and len(observed) <= 4096
+                    and not any(ord(c) < 32 for c in observed))):
+                observed = {'type': type(observed).__name__}
+            failures = self.record.setdefault('creation_validation', {}).setdefault(source, {})
+            failures[field] = {'expected': expected, 'observed': observed}
+            self.checkpoint()
+        return matches
+
     def agent(self, a=None):
         if a is None:
             a = call('agent', 'get', self.record['pane'], kind='agent_info')['agent']
@@ -239,13 +252,48 @@ class Launch:
             self.checkpoint('Creating')
             result = call('workspace', 'create', '--cwd', str(args.repo), '--label', identity['name'],
                           '--no-focus', '--env', 'DOTFILES_KEYRING_PROMPT=0', kind='workspace_created')
+            for key in ('workspace', 'root_pane'):
+                self.creation_check('create', key, 'object', result.get(key),
+                                    isinstance(result.get(key), dict))
             w = mapping(result.get('workspace'), 'workspace')
             p = mapping(result.get('root_pane'), 'root_pane')
-            workspace, pane, terminal = string(w, 'workspace_id'), string(p, 'pane_id'), string(p, 'terminal_id')
+            for obj, key, field in ((w, 'workspace_id', 'workspace.workspace_id'),
+                                    (p, 'pane_id', 'root_pane.pane_id'),
+                                    (p, 'terminal_id', 'root_pane.terminal_id')):
+                try:
+                    string(obj, key)
+                except LaunchError:
+                    self.creation_check('create', field, 'nonempty string', obj.get(key), False)
+                    raise
+            workspace, pane, terminal = w['workspace_id'], p['pane_id'], p['terminal_id']
             # Preserve observed IDs for inspection without certifying a valid creation.
             self.checkpoint(created_response={'workspace': workspace, 'pane': pane, 'terminal': terminal})
-            if w.get('label') != identity['name'] or p.get('workspace_id') != workspace or p.get('cwd') != str(args.repo):
+            checks = [self.creation_check('create', 'workspace.label', identity['name'], w.get('label')),
+                      self.creation_check('create', 'root_pane.workspace_id', workspace, p.get('workspace_id'))]
+            cwd_matches = self.creation_check('create', 'root_pane.cwd', str(args.repo), p.get('cwd'))
+            if not all(checks):
                 raise LaunchError('Creation returned unexpected workspace/root pane/cwd')
+            if not cwd_matches:
+                cwd = p.get('cwd')
+                if cwd is not None and (not isinstance(cwd, str) or any(ord(c) < 32 for c in cwd)):
+                    raise LaunchError('Creation returned unexpected workspace/root pane/cwd')
+                # PaneInfo.cwd is optional/nullable. Confirm once, without changing
+                # the inherited caller fingerprint or retrying any launch mutation.
+                live = snapshot(dict(self.context))
+                workspaces = [w for w in live['workspaces'] if w.get('workspace_id') == workspace]
+                panes = [p for p in live['panes'] if p.get('pane_id') == pane]
+                checks = [self.creation_check('snapshot', 'workspace_count', 1, len(workspaces)),
+                          self.creation_check('snapshot', 'root_pane_count', 1, len(panes))]
+                if all(checks):
+                    checks = [self.creation_check('snapshot', field, expected, obj.get(key))
+                              for obj, key, field, expected in (
+                                  (workspaces[0], 'label', 'workspace.label', identity['name']),
+                                  (panes[0], 'workspace_id', 'root_pane.workspace_id', workspace),
+                                  (panes[0], 'terminal_id', 'root_pane.terminal_id', terminal),
+                                  (panes[0], 'cwd', 'root_pane.cwd', str(args.repo)))]
+                if not all(checks):
+                    raise LaunchError('Creation returned unexpected workspace/root pane/cwd; snapshot did not confirm target')
+                self.checkpoint(creation_cwd_confirmed='snapshot')
             self.checkpoint('Created', workspace=workspace, pane=pane, terminal=terminal)
         if self.record['stage'] == 'Created':
             # A Created receipt certifies agent start has not yet been attempted.

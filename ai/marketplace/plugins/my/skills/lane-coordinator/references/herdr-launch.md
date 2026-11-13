@@ -103,11 +103,26 @@ receipt checkpoints don't require extra model/tool rounds.
 
 Flow: reconcile existing receipt and live labels/aliases → persist **Creating** →
 create ONE workspace with explicit cwd/label and `--no-focus` → validate returned
-workspace/root pane IDs → **Created** → persist **Starting** → start Pi with `--name`
+workspace/root pane IDs and cwd → **Created** → persist **Starting** → start Pi with `--name`
 on that **exact returned pane** → verify recognized Pi/session and readiness →
 **Ready** → persist **Submitting before sending** → submit the lane instruction ONCE,
 without `--wait` → **Submitted** → inspect working/blocked/unknown truthfully.
 No focus, approval, key sending, kill, close, force or other-session operations exist.
+
+Creation must return valid IDs, the requested label and the matching root-pane
+workspace association. Herdr's pane cwd is optional and nullable. If creation-time
+cwd does not exactly match the resolved source cwd, the helper takes **one** fresh,
+protocol-checked snapshot. Exactly one workspace and root pane must confirm the same
+label, workspace/pane/terminal IDs and exact cwd before **Created** or any agent start.
+No polling or path normalization is added; malformed cwd values or an unconfirmed
+snapshot leave **Creating** inspect-only. A matching create response needs no extra read.
+
+Creation validation failures retain selected `creation_validation` comparisons with
+expected and observed values, grouped by `create` or `snapshot`. Malformed objects,
+strings containing characters below U+0020 and oversized strings are represented
+by type, not raw content; no prompt or terminal text is copied. A successful snapshot fallback keeps the initial
+cwd discrepancy and records `creation_cwd_confirmed: snapshot`. These observations do
+not authorize recovery from an existing **Creating** receipt.
 
 The helper only waits up to 30 seconds for the known Powerline welcome overlay
 (`Welcome back!` plus `Press any key to continue (Ns)` in the **visible** viewport).
