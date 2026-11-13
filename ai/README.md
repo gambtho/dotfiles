@@ -73,6 +73,7 @@ The parent and all five named children silently allow the following exact
 | Pi model selection | `PI_PROVIDER`; `PI_MODEL`; `PI_REASONING_LEVEL`; `PI_PROVIDER PI_MODEL`; `PI_PROVIDER PI_MODEL PI_REASONING_LEVEL` |
 | Pi configuration locations | `XDG_CONFIG_HOME PI_CODING_AGENT_DIR` |
 | Herdr identity | `HERDR_ENV`; `HERDR_SESSION`; `HERDR_SOCKET_PATH`; `HERDR_PANE_ID`; `HERDR_WORKSPACE_ID` |
+| Workspace and model reporting | `HERDR_WORKSPACE_ID PI_PROVIDER PI_MODEL` |
 | Herdr identity groups | `HERDR_PANE_ID HERDR_ENV`; `HERDR_PANE_ID HERDR_WORKSPACE_ID`; `HERDR_ENV HERDR_SESSION HERDR_SOCKET_PATH HERDR_PANE_ID HERDR_WORKSPACE_ID` |
 
 Herdr's session and socket path are non-secret control metadata already inherited
@@ -84,6 +85,12 @@ secret operands still require approval. Every child's blanket `*$*` denial
 remains unchanged: variable-based queries and even literal regex/jq dollars can
 still be denied. Use the reviewed literal query forms instead of weakening that
 guard. An unset variable may make `printenv` exit 1 without a permission failure.
+
+The slash-qualified `*/printenv*` ask rule matches each command's full text,
+including operands, not just the executable name. A path such as `/tmp/printenv-fixture` can
+therefore trigger it even in a command that does not invoke `printenv`. Avoid
+that name in worktree paths; the exact metadata exceptions do not narrow this
+catch-all rule.
 
 ### Context and turn budgets
 
