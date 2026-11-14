@@ -560,7 +560,7 @@ refs = Path(sys.argv[1]) / "references"
 lane = (refs / "lane-template.md").read_text()
 host_lines = [line for line in lane.splitlines() if line.startswith("Host:")]
 assert len(host_lines) == 1, "Lane template needs one explicit Host field"
-assert "<" in host_lines[0] and "reason" in host_lines[0], "Host field needs a choice and reason"
+assert host_lines[0].startswith("Host: <") and "reason" in host_lines[0], "Host field needs a choice and reason"
 assert "(default)" not in host_lines[0], "Host field must not silently preselect local"
 coordination = (refs / "coordination-template.md").read_text()
 assert "## Hosts\n" in coordination, "Missing host bindings table"

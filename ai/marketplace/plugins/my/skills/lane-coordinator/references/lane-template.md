@@ -7,7 +7,7 @@ and contribution guide, and any effort rules named below; follow them. Publicati
 follows COORDINATION.md's authority table; without permission there, draft exact
 public text for the human. State any deliberate publication hold explicitly.
 
-Host: <chosen host>: <brief reason matched against Hosts “Use for”; local if no row matches>.
+Host: <chosen host>: <brief reason matched against Hosts `Use for`; local if no row matches>.
 Coordinator: to avoid an implicit local choice, record the same host/reason in STATE's
 `What / report` cell. For remote lanes, include the host alias, verified OS hostname/user,
 project/checkout/worktree roots and report source/return command. Use [remote lanes](remote-lanes.md)

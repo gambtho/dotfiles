@@ -78,8 +78,9 @@ start path, where installed and project-authorized: it removes manual transfer o
 delivers the four approved snapshots with byte read-back and creates a flat remote workspace.
 The private project-local `lane-hosts.json` [format](https://github.com/gambtho/dotfiles/blob/main/tools/herdr/README.md#manual-remote-lanes)
 supplies the saved-machine ID/target/session, independently verified SSH host/user, paths
-and source files. A binding does not prove availability: report missing command support,
-authority or host access explicitly, not as a silent local/manual fallback.
+and source files. A binding does not prove availability: missing command support,
+authority or host access blocks that start. Report the blocker rather than substituting
+local or manual startup; the manual fallback is only for documented unbound hosts.
 Prepare host-resolved prose first; the command does not translate it.
 No remote helper/anchor installation. An explicit "start W<n>" authorizes the
 coordinator's single invocation above, not automatic launches or recovery.
