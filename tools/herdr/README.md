@@ -41,16 +41,54 @@ not install a binary, register plugins, reload or restart a server. An identical
 config is a no-op; a failed backup leaves the original untouched. For a reviewed
 machine-local full config that preserves additional bindings, use
 `HERDR_CONFIG_TEMPLATE=/absolute/path/to/reviewed.toml make herdr-config-refresh`.
-Then apply with `herdr server reload-config`, not a server restart.
+Then run `herdr config check` and, only if it passes, apply with
+`herdr server reload-config`, not a server restart.
 
 Defaults keep priority Agent rows icon-only and show optional `$needs` workspace
 metadata (hidden at zero). Machine identity stays visible in the dashboard. This does not
 produce counts by itself: the optional heading reporter below sets them.
 
-## Optional project headings and lanes
+## Set up a machine as a project home
 
-Run `make herdr-lanes` to install copied Python tools under
-`${XDG_DATA_HOME:-$HOME/.local/share}/dotfiles/herdr-lanes` and link
+A project home has a `◆ <project>` heading, a needs publisher and a coordinator.
+Installing the lane runtime alone does not create these or update an existing config.
+With Herdr installed and running, and the project's `~/<project>-local` folder present,
+use this order (the examples use the fictional project `orchard`):
+
+1. From the canonical dotfiles checkout, run `make herdr-lanes`. This installs
+   the runtime only; it does not change sidebar preferences or start a harness.
+2. For an existing config, make a reviewed copy of its **full current contents**.
+   Change only `[ui.sidebar.spaces].rows` to the `$needs` row in
+   `tools/herdr/config.toml.template`; preserve all other preferences and bindings.
+   Do not refresh straight from the shipped template unless replacing every local
+   preference is intentional. Apply the reviewed copy through the backup path:
+
+   ```sh
+   HERDR_CONFIG_TEMPLATE=/absolute/path/to/reviewed.toml make herdr-config-refresh
+   herdr config check
+   # Only if the check passes:
+   herdr server reload-config
+   ```
+
+   A fresh config installed from the template already has this row. If validation
+   fails, correct the reviewed copy or restore the printed backup; do not reload.
+3. Run `lane orchard` to create the heading, Git anchor and needs publisher without
+   changing focus. Verify the publisher is running in the heading pane. If shell
+   startup blocks it, finish startup and run the publisher command printed by the
+   error there; do not resend a lane prompt or start Pi in the heading.
+4. Close the old project coordinator, wherever it runs, before starting its replacement.
+   This is a manual handover; the helper does not detect coordinators on other hosts.
+5. Run `lane orchard-coord`. A new coordinator goes first within its local group
+   and opens a shell in `~/orchard-local`; **no harness starts without a prompt**.
+6. In that coordinator shell, start the chosen harness yourself: for example,
+   `pi --name orchard-coord`, or `claude` for Claude Code. The workspace label and
+   agent session name are separate identities; the label does not name or rename
+   a manually started conversation. Use the chosen harness's own naming controls.
+
+### Open lanes and understand the runtime
+
+`make herdr-lanes` installs copied Python tools under
+`${XDG_DATA_HOME:-$HOME/.local/share}/dotfiles/herdr-lanes` and links
 `~/.local/bin/lane` to the installed copy. Like the dashboard, installs are
 content-addressed and published atomically; older copies remain for running
 publishers. First-use creation is serialized per project; an anchor with no HEAD
@@ -62,15 +100,16 @@ and `libexec/` never goes on PATH. An existing regular file at `lane` is not rep
 
 ```sh
 lane orchard-12 "Read /absolute/orchard-local/lanes/task.md and follow it."
-lane orchard-coord
 # From ~/orchard-local, shorthand also works:
 lane 13
 ```
 
 Projects are existing `~/<project>-local` folders. The longest matching folder
 name wins, including dashed names. A lane suffix is a number or `coord`; a bare
-project name prepares only its heading without changing focus. Avoid folders
-whose names collide with lane labels (for example `orchard-12-local`).
+project name prepares only its heading without changing focus. A prompt starts
+Pi with `--name <project>-<n>` (or `<project>-coord` for a prompted coordinator),
+matching the workspace label. Without a prompt, only a shell is prepared.
+Avoid folders whose names collide with lane labels (for example `orchard-12-local`).
 
 First use creates an empty Git anchor at `~/.lane-anchors/<project>`, detached
 lane checkouts beside it under `<project>-lanes/`, and a `◆ <project>` workspace.
@@ -85,15 +124,35 @@ foreground. Labels and prompts with terminal control characters are rejected
 workspace remains open and nothing is typed there; finish startup and run Pi
 manually. This process check is not a general shell-prompt detector.
 
-The template binds **prefix+shift+l** to the lane popup. Apply to an existing
-config only through the reviewed refresh/backup path above. The heading pane runs
-`needs.py`, which shows the project's numbered/coord lanes and publishes `$needs`:
+The template binds **prefix+shift+l** to the lane popup; adding that binding to an
+existing config is separate from the sidebar-only refresh above. The heading pane
+runs `needs.py`, which shows the project's numbered/coord lanes and publishes `$needs`:
 grouped linked lanes blocked or reporting `phase=needs-decision`. Ungrouped lanes
 are marked in the pane summary but excluded from the badge. Zero is not total
 lane count. Count tokens expire within three minutes if updates stop.
-Reporters stop with Ctrl-C and do not auto-respawn; after a server
-restart rerun `python3 -B "${XDG_DATA_HOME:-$HOME/.local/share}/dotfiles/herdr-lanes/needs.py"`
-in each heading pane. Never restart a server just to apply these preferences.
+
+### Recover or undo a project home
+
+The needs publisher is pane-bound, stops with Ctrl-C and does not auto-respawn.
+After a Herdr server restart, open each project's heading pane and rerun:
+
+```sh
+python3 -B "${XDG_DATA_HOME:-$HOME/.local/share}/dotfiles/herdr-lanes/needs.py"
+```
+
+Run it in the heading, not a lane or operator shell: it uses that pane's workspace
+identity. Re-running `lane orchard` only finds the existing heading; it does not
+restart its publisher. Never restart a server just to apply preferences.
+
+For config undo, restore the exact backup printed by the refresh, run
+`herdr config check`, then reload only if valid. To undo project grouping entirely,
+closing the heading alone is insufficient: the unattended launcher refuses flat
+fallback while partial setup remains. First obtain approval and verify no project
+lanes or coordinator are running; close that project's workspaces, remove its
+registered detached worktrees with Git, then remove only that project's
+`~/.lane-anchors/orchard`, `~/.lane-anchors/orchard-lanes/` and
+`~/.lane-anchors/.orchard.lock`. Keep `~/orchard-local` and other projects untouched.
+Do not remove an active lock or worktree; config restoration alone does not undo grouping.
 
 The unattended `launch.py` groups when complete project heading/anchor setup exists:
 create at the lane checkout, attach no-focus, split at the source repo, close only
