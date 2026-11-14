@@ -729,6 +729,17 @@ setup() {
   [ "$status" -eq 0 ]
 }
 
+@test "Pi metadata guidance names only allowed printenv forms" {
+  run jq -e --rawfile guidance "$REPO_ROOT/ai/pi/AGENTS.md" '
+    .permission.bash as $bash
+    | [$guidance | scan("`(printenv [^`]+)`") | .[0]] as $commands
+    | ($commands | length) > 0
+      and all($commands[];
+        $bash[.] == "allow" and $bash["/usr/bin/" + .] == "allow")
+  ' "$PERMISSION_CONFIG"
+  [ "$status" -eq 0 ]
+}
+
 @test "Pi GitHub HEAD approvals are literal and follow ls-remote asks" {
   run jq -e '
     .permission.bash as $bash | ($bash | keys_unsorted) as $keys
