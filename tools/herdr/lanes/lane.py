@@ -301,7 +301,7 @@ def open_locked(project, number, prompt, lock):
                                    created['root_pane']['terminal_id'])})
         command = f'cd {shlex.quote(str(workdir))}'
         if prompt:
-            command += f' && pi -- {shlex.quote(prompt)}'
+            command += f' && pi --name {shlex.quote(label)} -- {shlex.quote(prompt)}'
         herdr('pane', 'run', pane, command)
     except (ValueError, KeyError, TypeError, AttributeError, OSError) as error:
         raise ValueError(f'{pane}: launch incomplete or uncertain: {error}; inspect this pane, '

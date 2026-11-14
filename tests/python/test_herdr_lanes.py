@@ -135,7 +135,8 @@ class LaneTests(ToolFixture):
         self.assertEqual(opening[opening.index('--cwd') + 1], str(self.home / '.lane-anchors/double-holo'))
         self.assertEqual(len(self.sends()), 2)  # heading publisher and one lane command
         command = shlex.split(self.sends()[-1][-1])
-        self.assertEqual(command, ['cd', str(self.home / 'double-holo-local'), '&&', 'pi', '--', prompt])
+        self.assertEqual(command, ['cd', str(self.home / 'double-holo-local'),
+                                   '&&', 'pi', '--name', 'double-holo-12', '--', prompt])
         self.assertTrue((self.home / '.lane-anchors/double-holo-lanes/12/.git').is_file())
 
     def test_lane_opt_out_is_set_before_its_shell_starts_and_group_attachment(self):
@@ -148,6 +149,7 @@ class LaneTests(ToolFixture):
         self.assertIn(str(self.home / '.lane-anchors/orchard-lanes/7'), create)
         self.assertLess(self.calls.index(create), self.calls.index(opened))
         self.assertNotIn('--label', opened)  # adoption must never rename another workspace
+        self.assertEqual(shlex.split(self.sends()[-1][-1]), ['cd', str(self.home / 'orchard-local')])
 
     def test_terminal_controls_rejected_without_input_or_creation(self):
         for prompt in ('before\x03after', 'before\x15touch never', 'before\tafter', 'before\x1bafter'):
@@ -332,6 +334,8 @@ class CoordinatorTests(ToolFixture):
         self.assertLess(self.calls.index(('raw', 'workspace.move_block')), self.calls.index(self.sends()[0]))
         self.assertEqual((self.free, self.focus), ([True], 'w5'))  # lock released; focus kept
         self.assertEqual({p for c, p in self.pins if c in MUTATING}, {'default'})
+        self.assertEqual(shlex.split(self.sends()[0][-1]), ['cd', str(self.home / 'orchard-local'),
+                                                         '&&', 'pi', '--name', 'orchard-coord', '--', 'Task'])
         self.assertIsNone(self.lane.PIN)
 
     def test_no_sibling_is_not_moved_and_outside_herdr_uses_default(self):
