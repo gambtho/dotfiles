@@ -30,7 +30,7 @@ for committing Superpowers artifacts below.
 ## Verify before acting
 
 - Inspect relevant source, tests, docs, configuration, and nearby patterns before substantial changes.
-- Runtime metadata inspection is optional when useful, not a session-start requirement. Use `printenv PI_PROVIDER PI_MODEL PI_REASONING_LEVEL` or `printenv XDG_CONFIG_HOME PI_CODING_AGENT_DIR` (or their `/usr/bin/printenv` spellings); do not dump the environment or append secret-variable operands.
+- Runtime metadata inspection is optional when useful, not a session-start requirement. Use exactly `printenv PI_PROVIDER PI_MODEL PI_REASONING_LEVEL`, `printenv XDG_CONFIG_HOME PI_CODING_AGENT_DIR`, `printenv HERDR_PANE_ID`, `printenv HERDR_PANE_ID HERDR_WORKSPACE_ID`, or `printenv HERDR_ENV HERDR_SESSION HERDR_SOCKET_PATH HERDR_PANE_ID HERDR_WORKSPACE_ID` (or their `/usr/bin/printenv` spellings); never add other variables or dump the environment.
 - Before amending a commit or assuming merge state, run `gh pr view` and `git log`. Never amend an already-merged PR.
 - Before reviewing an unnamed commit or branch, state its exact SHA and subject and wait for confirmation.
 - Verify callers before describing code as unused, deprecated, or dead.
