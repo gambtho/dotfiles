@@ -188,6 +188,10 @@ elif a[:2] == ['agent', 'start']:
         agent['agent_status'] = []
     s['agents'] = [agent]
     save()
+    if os.environ.get('FAKE_START_ERROR'):
+        print(json.dumps({'id': 'cli:agent:start', 'error': {
+            'code': os.environ['FAKE_START_ERROR'], 'message': 'DO NOT RECORD STDERR'}}), file=sys.stderr)
+        sys.exit(1)
     reply('agent_started', agent=[] if mode == 'start-agent-list' else agent,
           argv=['pi', '--name', a[2]])
 elif a[:2] == ['agent', 'get']:
@@ -195,18 +199,25 @@ elif a[:2] == ['agent', 'get']:
     if not s['agents']:
         sys.exit(1)
     agent = dict(s['agents'][0])
-    if mode in ('welcome', 'dialog', 'welcome-dialog', 'read-list', 'read-text-list') and not s.get('read'):
+    if mode in ('welcome', 'dialog', 'welcome-dialog', 'read-fail', 'read-empty', 'read-json') and not s.get('read'):
         agent.update(agent_status='blocked', interactive_ready=False)
     reply('agent_info', agent=agent)
 elif a[:2] == ['agent', 'read']:
-    assert a == ['agent', 'read', 'opaque-root', '--source', 'visible', '--lines', '80']
+    assert a == ['agent', 'read', 'opaque-root', '--source', 'visible', '--lines', '80', '--format', 'text']
+    if mode == 'read-fail':
+        print('DO NOT RECORD STDERR', file=sys.stderr)
+        sys.exit(1)
     s['read'] = True
     save()
+    # Herdr 0.9.5 CLI emits plain text, not the socket API's pane_read envelope.
     text = 'Welcome back!\nPress any key to continue (1s)' if mode == 'welcome' else 'Trust this project? Allow?'
     if mode == 'welcome-dialog':
         text += '\nWelcome back!\nPress any key to continue (1s)'
-    reply('pane_read', read=[] if mode == 'read-list' else {
-        'pane_id':'opaque-root','text':[] if mode == 'read-text-list' else text})
+    if mode == 'read-empty':
+        text = ''
+    elif mode == 'read-json':
+        text = '{"result":{"type":"pane_read","read":{"text":"unknown"}}}'
+    print(text)
 elif a[:2] == ['agent', 'prompt']:
     assert a == ['agent', 'prompt', 'opaque-root', 'Read ' + os.environ['FAKE_PROMPT'] + ' and follow it.']
     receipt = json.loads((root / 'W12-launch.json').read_text())
@@ -516,8 +527,9 @@ class LaunchTests(LaunchFixture, unittest.TestCase):
             ('create-workspace-list', 'Creating', 'Invalid response object: workspace'),
             ('create-pane-list', 'Creating', 'Invalid response object: root_pane'),
             ('start-agent-list', 'Starting', 'Invalid response object: agent'),
-            ('read-list', 'Starting', 'Invalid response object: read'),
-            ('read-text-list', 'Starting', 'Invalid response field: text'),
+            ('read-fail', 'Starting', "('agent', 'read') failed (exit 1)"),
+            ('read-empty', 'Starting', 'Startup blocked/unknown'),
+            ('read-json', 'Starting', 'Startup blocked/unknown'),
             ('agent-status-list', 'Starting', 'Invalid response field: agent_status'),
             ('prompt-agent-list', 'Submitting', 'Invalid response object: agent'),
         ]
@@ -594,6 +606,31 @@ class LaunchTests(LaunchFixture, unittest.TestCase):
         result = self.run_launch('welcome')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(len(self.mutations(['agent','read'])), 1)
+
+    def test_start_exit_one_with_recognized_pi_inspects_without_restart(self):
+        for mode, code, submitted in [('welcome', 'agent_not_ready', True),
+                                       ('', 'timeout', True), ('dialog', 'agent_not_ready', False)]:
+            with self.subTest(mode=mode, code=code):
+                self.reset_fixture(json.loads(self.initial_live))
+                result = self.run_launch(mode, env={'FAKE_START_ERROR': code})
+                self.assertEqual(result.returncode, 0 if submitted else 2, result.stderr)
+                record = json.loads(self.receipt.read_text())
+                self.assertEqual(record['stage'], 'Submitted' if submitted else 'Starting')
+                self.assertIn(f'Herdr code: {code}', record['start_error'])
+                self.assertEqual(record['agent_session']['value'], 'session-new')
+                self.assertEqual(len(self.mutations(['agent', 'prompt'])), int(submitted))
+                for private in ('DO NOT RECORD STDERR', 'Trust this project?', 'Welcome back!'):
+                    self.assertNotIn(private, self.receipt.read_text() + self.state.read_text() + result.stderr)
+                if submitted:
+                    self.assertEqual(self.run_launch().returncode, 0)
+                    self.assertEqual(len(self.mutations(['agent', 'prompt'])), 1)
+                self.assertEqual(len(self.mutations(['agent', 'start'])), 1)
+
+    def test_unrecognized_start_stderr_is_not_recorded(self):
+        result = self.run_launch(env={'FAKE_START_ERROR': 'DO NOT RECORD CODE'})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn('DO NOT RECORD', self.receipt.read_text() + self.state.read_text() + result.stderr)
+        self.assertNotIn('Herdr code:', json.loads(self.receipt.read_text())['start_error'])
 
     def test_real_dialog_stops(self):
         self.assert_stopped(self.run_launch('dialog'), 'Startup blocked/unknown')

@@ -59,8 +59,19 @@ def call(*argv, kind, timeout=10):
     except subprocess.TimeoutExpired as exc:
         raise LaunchError(f'{argv[0:2]} timed out; effects may be uncertain') from exc
     if completed.returncode:
-        # Do not copy terminal output or arbitrary stderr into durable state.
-        raise LaunchError(f'{argv[0:2]} failed (exit {completed.returncode}); inspect recorded target')
+        # Keep only known startup codes, never terminal output or arbitrary stderr.
+        detail = ''
+        if argv[:2] == ('agent', 'start'):
+            try:
+                code = json.loads(completed.stderr).get('error', {}).get('code')
+            except (ValueError, AttributeError):
+                code = None
+            if code in ('timeout', 'agent_not_ready', 'agent_start_failed', 'agent_kind_mismatch',
+                        'agent_name_not_found', 'agent_start_transport_failed', 'agent_start_input_failed'):
+                detail = f'; Herdr code: {code}'
+        raise LaunchError(f'{argv[0:2]} failed (exit {completed.returncode}){detail}; inspect recorded target')
+    if kind is None:  # agent read's CLI contract is plain text, unlike the JSON commands.
+        return completed.stdout
     try:
         envelope = mapping(json.loads(completed.stdout), 'envelope')
         result = mapping(envelope.get('result'), 'result')
@@ -314,13 +325,8 @@ class Launch:
             if a.get('interactive_ready') is True and a['agent_status'] in ('idle', 'done'):
                 self.checkpoint('Ready', agent_session=a['agent_session'])
                 return
-            read = mapping(call('agent', 'read', self.record['pane'], '--source', 'visible', '--lines', '80',
-                                kind='pane_read').get('read'), 'read')
-            if read.get('pane_id') != self.record['pane']:
-                raise LaunchError('Read returned a different pane')
-            text = read.get('text')
-            if not isinstance(text, str):
-                raise LaunchError('Invalid response field: text')
+            text = call('agent', 'read', self.record['pane'], '--source', 'visible', '--lines', '80',
+                        '--format', 'text', kind=None)
             welcome = 'Welcome back!' in text and re.search(r'Press any key to continue \(([0-9]|[12][0-9]|30)s\)', text)
             dialog = re.search(r'(?i)\b(trust|permission|approve|allow|deny)\b|\?', text)
             if not welcome or dialog or time.monotonic() >= deadline:
@@ -439,8 +445,8 @@ class Launch:
                                '--', '--name', identity['name'], kind='agent_started', timeout=35)
             except LaunchError as exc:
                 self.checkpoint(start_error=str(exc))
-                # A startup timeout may leave a recognized Pi behind its welcome overlay.
-                # Inspect it; never invoke start a second time.
+                # Herdr exit 1 can mean not-ready or its own 30s readiness timeout,
+                # with Pi still alive. Inspect identity/readiness; never start twice.
             else:
                 self.agent(started['agent'])
         if self.record['stage'] not in ('Starting', 'Ready'):
