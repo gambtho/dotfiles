@@ -1,15 +1,20 @@
 # Remote lanes
 
-Local remains the default. Use another host when a whole lane benefits from its
-capacity or tools; the coordinator stays the single STATE writer. No sync service
-is needed. On the user's explicit "start W<n>", the coordinator may run the remote
-lane command once from the project-local folder, where installed and project-authorized.
+To avoid local winning by omission, match the lane against each Hosts row's `Use for`;
+local is the fallback when no row matches. Record the host and brief reason in its
+`Host:` line and STATE row's `What / report` cell; the coordinator stays the single
+STATE writer. No sync service is needed. On the user's explicit "start W<n>", the
+coordinator may run the remote lane command once from the project-local folder,
+where installed and project-authorized.
 Record the launch in STATE; no retry, and inspect only on uncertain delivery/startup.
 
 ## Bind the host and prepare inputs
 
-Use COORDINATION.md's Hosts table. Verify SSH access, actual hostname/user, home,
-canonical checkout, host-local worktree root, Pi/tool versions and provider/gh status
+To avoid incomplete remote setup, each remote Hosts row in COORDINATION.md needs a
+project-local `lane-hosts.json` binding or a reason it remains manual. The project's
+coordinator prepares its own [binding](#explicit-remote-command), not other projects' files.
+Verify SSH access, actual hostname/user, home, canonical checkout, host-local worktree
+root, Pi/tool versions and provider/gh status
 before delivery. Inspect status only, never auth files; the human does logins and
 approves installs/resource updates with Pi stopped. A host alias can differ from its
 OS hostname: the prompt's first-action guard checks the verified hostname/user.
@@ -18,7 +23,7 @@ Fill the lane's `Host:` with those bindings, concrete project paths, remote repo
 source and fetch command. Say plainly that its coordinator is on another machine
 and fetches reports. Resolve filesystem paths before writing the prompt, not by
 leaving shell variables in prose. Each lane uses its own fresh host-local worktree;
-never copy a laptop worktree's `.git` pointer.
+never copy another host's worktree `.git` pointer, regardless of which host coordinates.
 
 Deliver only the task's project AGENTS/authority brief, host-resolved COMMON-RULES,
 prompt and selected read-only repo profile. Replace references to absent coordinator
@@ -35,6 +40,8 @@ context. The profile is read-only for the lane, not a separately edited cumulati
 
 ## Explicit copy and manual startup
 
+This fallback is only for an unbound host whose Hosts row explains why; bound hosts
+use the [remote command](#explicit-remote-command) to avoid manual transfer overhead.
 Inspect and byte-compare any existing prompt destination before delivering anything;
 a different task must use another filename. Then create the approved project/lanes/
 reports/profile directories over SSH. Bind this fictional example to the actual
@@ -54,23 +61,26 @@ size/mtime hides different support-file bytes, inspect the intended source, deli
 only its mtime distinct, then rerun delivery and byte read-back. Unchanged rsync is
 not a repair; no automatic force/checksum/delete flags, receipts or staging folders.
 The human can still open a workspace on that host and start Pi manually after delivery.
-Where the remote command is available, hand over the resolved command from the
-project-local folder instead of a plain Read line:
+For a bound host, hand over the resolved command from the project-local folder
+instead of manual copy/start or a plain Read line:
 
 ```sh
 lane --host build project-12 lanes/task.md
 ```
 
-For laptop lanes, the handoff is `lane <project>-<n> "Read <path> and follow it."`.
-Without installed command support, retain manual copy/start and say launch is manual.
+For lanes on the coordinator's own host, the handoff is
+`lane <project>-<n> "Read <path> and follow it."`; without local command support, use plain Read.
 
 ## Explicit remote command
 
-Where installed and authorized by the project, `lane --host <binding> <project-N>
-<local-prompt-file>` delivers the four approved snapshots with byte read-back and
-creates a flat remote workspace. The private project-local binding supplies the
-saved-machine ID/target/session, independently verified SSH host/user, paths and
-source files. Prepare host-resolved prose first; the command does not translate it.
+For a bound host, `lane --host <binding> <project-N> <local-prompt-file>` is the normal
+start path, where installed and project-authorized: it removes manual transfer overhead,
+delivers the four approved snapshots with byte read-back and creates a flat remote workspace.
+The private project-local `lane-hosts.json` [format](https://github.com/gambtho/dotfiles/blob/main/tools/herdr/README.md#manual-remote-lanes)
+supplies the saved-machine ID/target/session, independently verified SSH host/user, paths
+and source files. A binding does not prove availability: report missing command support,
+authority or host access explicitly, not as a silent local/manual fallback.
+Prepare host-resolved prose first; the command does not translate it.
 No remote helper/anchor installation. An explicit "start W<n>" authorizes the
 coordinator's single invocation above, not automatic launches or recovery.
 
@@ -80,9 +90,9 @@ inventory stops; alias equality alone is insufficient. This is observational ses
 binding under trusted host authentication, not a cryptographic host-identity proof.
 Each external call has a10-second outer limit. No mutation replay or timeout increase;
 partial file delivery needs inspection, and a create/start timeout is uncertain.
-Existing labels get remote-server focus only, no copy/input; laptop machine selection
-is unchanged. Record the command, observed result and returned IDs in STATE; an existing
-label is not proof of startup. On uncertainty, record unknown and inspect only, never
+Existing labels get remote-server focus only, no copy/input; the calling client's machine
+selection is unchanged, whichever host coordinates. Record the command, observed result
+and returned IDs in STATE; an existing label is not proof of startup. On uncertainty, record unknown and inspect only, never
 retry. A repeated command cannot resume partial startup; it only focuses an existing label.
 Keep the manual copy/start fallback above and the primary-first fetch below.
 

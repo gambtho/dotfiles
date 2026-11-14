@@ -16,14 +16,17 @@ not the stable repo table. Verify repository identity before assigning a profile
 
 ## Hosts
 
-Local is the default. For remote lanes, record verified bindings and use
-[remote lanes](remote-lanes.md) for delivery/report return. This table grants no setup
-or launch authority; STATE keeps its single coordinator writer. Host checks record
-tools/access only, not lane or PR readiness.
+To avoid local winning by omission, match each lane to `Use for`; local is the fallback
+when no row matches. To avoid incomplete remote setup, each remote row needs a project-local
+`lane-hosts.json` binding or a reason it remains manual; the project's coordinator prepares
+its own [binding](remote-lanes.md#explicit-remote-command). Bound hosts use `lane --host`
+to avoid manual transfer; unbound hosts use the documented copy/start fallback. This table
+grants no setup or launch authority; STATE keeps its single coordinator writer. Host checks
+record tools/access only, not lane or PR readiness.
 
-| Host alias / SSH user / OS hostname | Project root | Checkout / Worktree root | Manual startup / copy / fetch | Host check (time / tools / access) |
-|---|---|---|---|---|
-| <host bindings> | <absolute host path> | <host-local paths> | <commands and report source> | <time; tools/access ready or unknown and why> |
+| Host alias / SSH user / OS hostname | Use for | Project root | Checkout / Worktree root | Binding or reason | Startup / fetch | Host check (time / tools / access) |
+|---|---|---|---|---|---|---|
+| <host bindings> | <matching lane work> | <absolute host path> | <host-local paths> | <binding key or reason for manual startup; local: not applicable> | <commands and report source> | <time; tools/access ready or unknown and why> |
 
 ## Authority table
 

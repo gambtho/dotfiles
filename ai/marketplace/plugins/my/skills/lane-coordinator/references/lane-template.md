@@ -7,14 +7,16 @@ and contribution guide, and any effort rules named below; follow them. Publicati
 follows COORDINATION.md's authority table; without permission there, draft exact
 public text for the human. State any deliberate publication hold explicitly.
 
-Host: local (default). Coordinator: for a remote lane, replace this entire paragraph
-with its host alias, verified OS hostname/user, project/checkout/worktree roots and
-report source/return command. Use [remote lanes](remote-lanes.md) to put the host/user
-guard first and resolve paths and authority/profile references before delivery.
+Host: <chosen host>: <brief reason matched against Hosts “Use for”; local if no row matches>.
+Coordinator: to avoid an implicit local choice, record the same host/reason in STATE's
+`What / report` cell. For remote lanes, include the host alias, verified OS hostname/user,
+project/checkout/worktree roots and report source/return command. Use [remote lanes](remote-lanes.md)
+to put the host/user guard first and resolve paths and authority/profile references before delivery.
 Coordinator: use the [local handoff](herdr-launch.md#manual-pi-handoff): installed
 `lane <project>-<n> "Read <path> and follow it."`, otherwise plain Read. For remote lanes,
-use `lane --host <binding> <project>-<n> <prompt>` from the project-local folder instead
-of that reference's remote Read-only fallback; follow [remote lanes](remote-lanes.md).
+use `lane --host <binding> <project>-<n> <prompt>` for bound hosts to avoid manual transfer,
+instead of that reference's remote Read-only fallback. Follow [bindings](remote-lanes.md#explicit-remote-command)
+for setup/authority; manual copy/start is for an unbound host whose Hosts row explains why.
 
 ## Session identity (private)
 
