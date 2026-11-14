@@ -551,17 +551,21 @@ PY
   }
 }
 
-@test "lane templates have a host binding without changing the local default" {
+@test "lane templates require an explicit host choice and remote binding or reason" {
   run python3 - "$SKILL_DIR" <<'PY'
 from pathlib import Path
 import sys
 
 refs = Path(sys.argv[1]) / "references"
 lane = (refs / "lane-template.md").read_text()
-assert "Host: local (default)" in lane, "Lane template omits the local-default host binding"
+host_lines = [line for line in lane.splitlines() if line.startswith("Host:")]
+assert len(host_lines) == 1, "Lane template needs one explicit Host field"
+assert host_lines[0].startswith("Host: <") and "reason" in host_lines[0], "Host field needs a choice and reason"
+assert "(default)" not in host_lines[0], "Host field must not silently preselect local"
 coordination = (refs / "coordination-template.md").read_text()
 assert "## Hosts\n" in coordination, "Missing host bindings table"
 assert "Project root" in coordination and "Worktree root" in coordination
+assert "Use for" in coordination and "Binding or reason" in coordination
 PY
   [ "$status" -eq 0 ] || {
     echo "$output"
