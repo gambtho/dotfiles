@@ -277,19 +277,24 @@ elif a[:2] == ['agent', 'get']:
         agent.update(agent_status='blocked', interactive_ready=False)
     reply('agent_info', agent=agent)
 elif a[:2] == ['agent', 'read']:
-    assert a == ['agent', 'read', 'opaque-root', '--source', 'visible', '--lines', '80', '--format', 'text']
+    assert a == ['agent', 'read', s['agents'][0]['pane_id'], '--source', 'visible', '--format', 'text']
     if mode == 'read-fail':
         print('DO NOT RECORD STDERR', file=sys.stderr)
         sys.exit(1)
+    was_read = s.get('read', False)
     s['read'] = True
     save()
     # Herdr 0.9.5 CLI emits plain text, not the socket API's pane_read envelope.
-    text = 'Welcome back!\nPress any key to continue (1s)' if mode == 'welcome' else 'Trust project folder?'
-    if mode == 'read-empty':
+    text = '── smart ───────────────────\n\n───────────────────────────'
+    if mode in ('welcome', 'ready-welcome') and not was_read:
+        text = os.environ.get('FAKE_SCREEN', 'Welcome back!\nPress any key to continue (1s)')
+    elif mode in ('dialog', 'ready-dialog'):
+        text = 'Trust project folder?'
+    elif mode == 'read-empty':
         text = ''
     elif mode == 'read-json':
         text = '{"result":{"type":"pane_read","read":{"text":"unknown"}}}'
-    print(os.environ.get('FAKE_SCREEN', text))
+    print(text)
 elif a[:2] == ['agent', 'prompt']:
     assert a == ['agent', 'prompt', 'opaque-root', 'Read ' + os.environ['FAKE_PROMPT'] + ' and follow it.']
     receipt = json.loads((root / 'W12-launch.json').read_text())
@@ -306,6 +311,50 @@ elif a[:2] == ['agent', 'prompt']:
 else:
     raise AssertionError('Forbidden or unknown Herdr operation: ' + repr(a))
 '''
+
+
+class SendGuardTests(unittest.TestCase):
+    def setUp(self):
+        spec = importlib.util.spec_from_file_location('guarded_launch', SCRIPT)
+        assert spec is not None and spec.loader is not None
+        self.module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.module)
+
+    def test_idle_editor_proof_supports_both_kinds_and_rejects_overlays(self):
+        pi = '── smart ───────────────────\n\n───────────────────────────\n ↳ last request'
+        claude = '───────────────────────────\n❯\n───────────────────────────\nauto mode on'
+        self.assertTrue(self.module.visible_idle('pi', pi))
+        self.assertTrue(self.module.visible_idle('claude', claude))
+        for kind, screen in [('pi', pi+TRUST_PROMPT), ('pi', pi+PERMISSION_PROMPT),
+                             ('pi', PI_STARTUP), ('pi', '┌─┐\n│status│\n└─┘\n'+pi),
+                             ('pi', pi.replace('\n\n','\ntyped\n')),
+                             ('claude', claude.replace('❯','❯ 1. Yes')), ('claude','shell $')]:
+            with self.subTest(kind=kind, screen=screen):
+                self.assertFalse(self.module.visible_idle(kind, screen))
+
+    def test_prompt_errors_preserve_only_allowlisted_codes(self):
+        for code in ('agent_not_ready', 'agent_blocked', 'agent_not_found', 'timeout',
+                     'empty_agent_prompt', 'agent_prompt_failed', 'secret-unrecognized'):
+            error = json.dumps({'error': {'code': code, 'message': 'DO NOT LOG'}})
+            completed = subprocess.CompletedProcess([], 1, stdout='', stderr=error)
+            with (mock.patch.object(self.module.subprocess, 'run', return_value=completed),
+                  self.assertRaises(self.module.LaunchError) as raised):
+                self.module.call('agent', 'prompt', 'pane', 'text', kind='agent_prompted')
+            self.assertNotIn('DO NOT LOG', str(raised.exception))
+            self.assertEqual('Herdr code:' in str(raised.exception), code != 'secret-unrecognized')
+
+    def test_caller_pin_is_separate_from_legacy_context_and_optional(self):
+        context = dict(caller='source', workspace='ws-source', terminal='term-source')
+        before = dict(context)
+        self.assertIsNone(self.module.caller_pin(context, dict(agents=[], workspaces=[])))
+        for kind in ('pi', 'claude'):
+            agent = dict(agent=kind, agent_session=dict(agent=kind, kind='id', source='herdr:'+kind, value='session'),
+                         pane_id='source', workspace_id='ws-source', terminal_id='term-source', foreground_cwd='/repo')
+            live = dict(agents=[agent], workspaces=[dict(workspace_id='ws-source', label='sample-coord')])
+            pin = self.module.caller_pin(context, live)
+            self.assertEqual(pin['agent_session'], agent['agent_session'])
+            self.assertEqual(pin['label'], 'sample-coord')
+            self.assertEqual(context, before)
 
 
 class LaunchFixture:
@@ -674,6 +723,16 @@ class LaunchTests(LaunchFixture, unittest.TestCase):
         self.assertNotEqual(self.run_launch().returncode, 0)
         self.assertEqual(json.loads(self.live.read_text())['delivered'], 1)
 
+    def test_metadata_ready_still_checks_overlay_and_dialog_before_submit(self):
+        result = self.run_launch('ready-welcome')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(self.mutations(['agent', 'read'])), 2)
+        self.assertEqual(len(self.mutations(['agent', 'prompt'])), 1)
+
+    def test_metadata_ready_dialog_never_submits(self):
+        self.assert_stopped(self.run_launch('ready-dialog'))
+        self.assertEqual(self.mutations(['agent', 'prompt']), [])
+
     def test_realistic_welcome_waits_then_submits_once(self):
         for screen in (PI_STARTUP, PI_STARTUP.replace('startup help', 'startup help?')):
             with self.subTest(question_mark='help?' in screen):
@@ -681,7 +740,7 @@ class LaunchTests(LaunchFixture, unittest.TestCase):
                 result = self.run_launch('welcome', env={'FAKE_SCREEN': screen})
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(json.loads(self.receipt.read_text())['stage'], 'Submitted')
-                self.assertEqual(len(self.mutations(['agent', 'read'])), 1)
+                self.assertEqual(len(self.mutations(['agent', 'read'])), 2)
                 self.assertEqual(self.run_launch().returncode, 0)
                 for verb in (['workspace', 'create'], ['agent', 'start'], ['agent', 'prompt']):
                     self.assertEqual(len(self.mutations(verb)), 1)

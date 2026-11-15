@@ -1,7 +1,7 @@
 # Local messages and attention
 
-Use local notes to remove paste relays, not human approvals. These helpers never execute
-instructions, send terminal input, edit STATE or contact remote hosts. Invoke through Python:
+Use local notes to remove paste relays, not human approvals. `messages.py` never executes
+instructions, sends terminal input, edits STATE or contacts remote hosts. Invoke through Python:
 
 ```sh
 python3 <skill-dir>/scripts/messages.py status --root <project-root> --project sample
@@ -105,6 +105,87 @@ Reject missing/foreign predecessors. A stale prompt hash is rejected: ask the se
 new note targeting the current prompt. New instructions do not undo already applied actions.
 Sender reads the recipient's named report for acknowledgement, never assumes file publication
 means pickup. Only the coordinator writes its STATE using its normal stale-write protocol.
+
+## Optional once-only local pointers
+
+For owned local Claude Code and Pi lanes/coordinators, `send.py` can send one short
+category/ID/path pointer to an already published note. It never sends the body as a command.
+Coordinators may send within approved scope; a lane's ready nudge is `fyi` to its own
+coordinator. This is not launch, cross-project messaging or remote delivery.
+
+```sh
+python3 <skill-dir>/scripts/send.py --root <project-root> --project sample --host local --session <verified-session> --ownership <current-ownership.json> --note <project-root>/reports/inbox/<id>.json
+# Same arguments with --inspect inspect only; rerunning an existing claim also never sends.
+```
+
+Use the actual sender's inherited Herdr context, not selected/guessed `HERDR_*` variables.
+The helper checks the server socket/session, both workspace labels and exact pane, terminal,
+foreground cwd and agent session; the target must be idle/done with a recognized visible
+idle editor and no dialog. A stale/unknown/busy/scrolled viewport means no send. A box-drawn
+table or banner anywhere in view also counts as ambiguous; leave the note for checkpoint
+pickup rather than automatically clearing the screen. Missing
+`interactive_ready` on manually started agents is supported through equivalent identity,
+idle and screen evidence; pending managed launches are refused. No focus, approval keys,
+dialog answers or shell delivery. Ambiguous/custom screens require inspection, not guessing.
+The native `agent prompt` endpoint also checks foreground-agent and blocked state; there is
+no automatic fallback to `pane run` or another transport. This is a fresh check, not an atomic
+idle/session lock: a state change after checking remains a race, not a delivery guarantee.
+
+### Ownership evidence
+
+New launch receipts carry optional `caller_agent` **outside** their legacy compared `context`.
+It pins the coordinator's kind/session, pane/workspace/terminal, foreground cwd and label.
+The child remains pinned by the receipt's existing fields. The child foreground cwd is
+`repo`, including grouped launches; `group.checkout` describes workspace worktree identity.
+A conventional label alone never establishes ownership. The helper requires the matching
+project, existing lane row in `<root>/STATE.md`, and current prompt under `<root>/lanes/`.
+A lane recipient's note hash must match current prompt bytes, not its historical launch hash.
+A reverse FYI has no recipient prompt hash; its source lane's prompt must still exist and its
+STATE row must still exist. The helper does not interpret status-column text; the coordinator
+checks that the lane is still an appropriate target. Row presence does not authorize an
+instruction or weaken source review.
+
+Old receipts without caller evidence cannot silently adopt whatever session is there now.
+For a manual Claude lane or an explicitly reassigned/restarted coordinator, the coordinator
+may write a **new private ownership copy**, leaving the launch receipt intact:
+
+1. Verify current project/coordinator authority and the lane's original creation or approved
+   handoff evidence. Retain the explicitly owned child pane/terminal/session and `repo`, lane,
+   project, STATE and prompt paths; never pick a replacement by matching its label.
+2. From the actual coordinator process, derive `context = launch.inherited_context(session)`,
+   then `live = launch.snapshot(context)` and `caller_agent = launch.caller_pin(context, live)`
+   using this skill's scripts. Require a non-null pin and check it is the authorized coordinator.
+   Freshly compare the child pins against live metadata too. For a manually created lane,
+   populate the same child fields from its verified create/start evidence, not guesses.
+3. Save an exclusive new project-local JSON copy with those `context` and `caller_agent`
+   fields and use it as `--ownership`. Recheck before sending; do not rewrite old delivery
+   claims when a coordinator session changes.
+
+This is coordinator attestation, not authenticated create/start proof: the helper checks
+structure and current pins, not the history of the copy. Inherited context proves the pane,
+not the calling process; a subagent inheriting it is not isolated by this helper. Existing
+permission/worktree tripwires and the project's authority rules remain unchanged.
+
+### Claims and observation
+
+Coordinator records intent and outcome in its lane row through the existing single STATE
+writer/stale-write protocol. A lane records its ready nudge in its report; it never writes
+STATE. Recipient ID/hash acknowledgement still lives in the named report, not this receipt.
+The helper never edits STATE. Publication, successful submission and acknowledgement are
+three different observations; none proves a human gate, external completion or merge readiness.
+
+Read-only preflight runs before claiming. Busy/unknown at that point creates no delivery
+receipt: leave the note for checkpoint pickup, no retry/polling loop. A later explicit
+invocation can make its first send if no claim exists. After successful preflight, exclusive
+`reports/inbox/delivery/<id>.json` claims serialize concurrent invocations. `prepared` is
+flushed before another guard; `submitting` with attempts=1 is durable before native input;
+`submitted` means a matching API response, not pickup. A failed post-claim guard is `not-sent`;
+errors/timeouts/malformed responses after admission become `uncertain`. A crash can leave
+`prepared`/`submitting` or an incomplete claim. Every existing claim is inspect-only: never resend,
+change its ID to disguise a retry, delete it to retry, or try a different transport after
+uncertainty. Reconcile real effects and current authority; unresolved effects mean stop.
+Known structured error codes are retained, never arbitrary stderr or terminal content.
+Inspection uses stored pins even if the launch receipt later adds an observation checkpoint.
 
 ## Lifecycle and hosts
 

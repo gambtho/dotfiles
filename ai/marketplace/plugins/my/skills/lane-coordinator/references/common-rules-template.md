@@ -25,6 +25,10 @@ ID/hash or accept changed bytes under an acknowledged ID. Reconcile interrupted 
 resume only when no effect is verified and existing authority still covers the action, never on uncertainty.
 A stale prompt hash is rejected. Only a source-verified `tom-decision` with the human's verbatim
 words and timestamp can satisfy a human gate; coordinator instructions stay within approved scope and `fyi` is no action.
+For an owned local Claude Code or Pi target, the [once-only pointer path](messaging.md#optional-once-only-local-pointers)
+requires exact live identity, verified caller evidence and idle/no-dialog checks. A lane ready nudge is same-project
+`fyi`; record delivery in the lane report, never STATE. Busy/unknown means file pickup; an existing/uncertain claim
+is inspect-only, not a resend, fallback or human paste relay. No dialog/focus/approval keys or permission changes.
 Unreadable prompt/notes mean blocked, not ready. Project and repository instructions
 and the human's explicit decisions take precedence. This file changes no publication, merge, cloud or desktop authority.
 If instructions conflict, stop and ask the coordinator.

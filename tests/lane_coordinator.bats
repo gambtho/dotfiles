@@ -86,6 +86,25 @@ PY
   [ "$status" -eq 0 ]
 }
 
+@test "direct pointers retain both-agent ownership and once-only delivery gates" {
+  run python3 - "$SKILL_DIR" <<'PY'
+from pathlib import Path
+import sys
+
+skill = Path(sys.argv[1])
+assert (skill / 'scripts/send.py').is_file()
+contract = ' '.join((skill / 'references/messaging.md').read_text().split())
+for phrase in ('Claude Code and Pi', '--ownership', 'caller_agent', 'delivery/<id>.json',
+               'no automatic fallback', 'never resend', 'single STATE writer'):
+    assert phrase in contract, phrase
+for name in ('SKILL.md', 'references/common-rules-template.md', 'references/lane-template.md'):
+    text = (skill / name).read_text()
+    assert 'ready nudge' in text, name
+    assert 'messaging.md' in text, name
+PY
+  [ "$status" -eq 0 ]
+}
+
 @test "ready reply template starts with the action and its owner, not a verdict" {
   run python3 - "$SKILL_DIR/SKILL.md" <<'PY'
 from pathlib import Path
