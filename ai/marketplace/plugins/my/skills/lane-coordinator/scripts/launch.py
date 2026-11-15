@@ -328,7 +328,8 @@ class Launch:
             text = call('agent', 'read', self.record['pane'], '--source', 'visible', '--lines', '80',
                         '--format', 'text', kind=None)
             welcome = 'Welcome back!' in text and re.search(r'Press any key to continue \(([0-9]|[12][0-9]|30)s\)', text)
-            dialog = re.search(r'(?i)\b(trust|permission|approve|allow|deny)\b|\?', text)
+            # Match prompt titles, not resource names or punctuation in startup help.
+            dialog = re.search(r'(?m)^[ \t]*(?:Trust project folder\?|Permission Required(?: \(Subagent\))?)[ \t\r]*$', text)
             if not welcome or dialog or time.monotonic() >= deadline:
                 raise LaunchError('Startup blocked/unknown: user intervention or inspection required')
             time.sleep(1)
