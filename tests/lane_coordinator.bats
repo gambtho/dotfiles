@@ -70,6 +70,22 @@ PY
   [ "$status" -eq 0 ]
 }
 
+@test "coordinator and lane entry points expose the shared inbox contract" {
+  run python3 - "$SKILL_DIR" <<'PY'
+from pathlib import Path
+import sys
+
+skill = Path(sys.argv[1])
+for name in ('SKILL.md', 'references/common-rules-template.md', 'references/lane-template.md'):
+    source = skill / name
+    assert 'messaging.md' in source.read_text(), name
+coordinator = (skill / 'SKILL.md').read_text()
+assert '**every user message**' in coordinator
+assert 'reports/inbox/' in coordinator
+PY
+  [ "$status" -eq 0 ]
+}
+
 @test "ready reply template starts with the action and its owner, not a verdict" {
   run python3 - "$SKILL_DIR/SKILL.md" <<'PY'
 from pathlib import Path

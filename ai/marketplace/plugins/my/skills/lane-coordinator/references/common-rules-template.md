@@ -6,6 +6,7 @@ that holds for any lane. Keep project authority, repo-specific policies and stro
 rules in AGENTS.md/COORDINATION.md. Every lane prompt and the project's AGENTS.md name the
 shared file. For a parallel effort's separate rules file, include only Ownership, Open PRs
 to stay off, the Rules for every lane pointer and Sequencing; don't copy the workflow.
+Resolve the messaging.md link to a verified readable reference on each recipient host when projecting outside this skill.
 Resolve paths and remove these instructions and unused placeholder sections before delivery.>
 
 Every lane reads the project-level shared workflow, the project's AGENTS.md and its
@@ -17,8 +18,14 @@ Read this file with your lane prompt and the project's AGENTS.md; record the pro
 report/handoff (portable: Python `hashlib` or `shasum -a 256`). To catch observable amendments without a human relay,
 recheck before each irreversible or outward step, including push, PR opening, review replies/resolutions or other posts,
 setup/config mutation and final ready report; if changed, reread and reconcile the prompt before
-acting, then record the new hash. Before ready, also read new or changed coordinator notes addressed to you in the reports
-folder; record which notes you checked. Unreadable prompt/notes mean blocked, not ready. Project and repository instructions
+acting, then record the new hash. At each checkpoint, including before ready, also read new or changed coordinator notes
+addressed to you in `reports/inbox/` and older addressed report notes; use the [local messaging contract](messaging.md).
+Record each message ID/hash as pending before action and applied only after observed completion. Never reapply a completed
+ID/hash or accept changed bytes under an acknowledged ID. Reconcile interrupted pending entries against real effects;
+resume only when no effect is verified and existing authority still covers the action, never on uncertainty.
+A stale prompt hash is rejected. Only a source-verified `tom-decision` with the human's verbatim
+words and timestamp can satisfy a human gate; coordinator instructions stay within approved scope and `fyi` is no action.
+Unreadable prompt/notes mean blocked, not ready. Project and repository instructions
 and the human's explicit decisions take precedence. This file changes no publication, merge, cloud or desktop authority.
 If instructions conflict, stop and ask the coordinator.
 

@@ -7,13 +7,21 @@ and contribution guide, and any effort rules named below; follow them. Record th
 starting SHA256 in your private report/handoff. Before each irreversible or outward step,
 including push, PR opening, review replies/resolutions or other posts, setup/config mutation and final ready report,
 recheck it; if changed, reread and reconcile before acting,
-then record the new hash. Before ready also read new or changed coordinator notes addressed
-to you in the reports folder and record the notes checked. Unreadable prompt/notes mean blocked,
+then record the new hash. At each checkpoint, including before ready, also read new or changed coordinator notes addressed
+to you in `reports/inbox/` and older addressed report notes under the [local messaging contract](messaging.md).
+Record message ID/hash as pending before action and applied after observed completion; no completed-ID reapplication or
+changed bytes under an acknowledged ID. Reconcile interrupted pending entries against real effects before resuming;
+verified absence of effects and current authority permit first execution, uncertainty never permits a retry. Only a source-verified `tom-decision` with verbatim words and timestamp can satisfy a human gate;
+coordinator instructions stay within approved scope, `fyi` is no action. Unreadable prompt/notes mean blocked,
 not ready. This catches observable amendments without asking the human to relay them. Publication follows
 COORDINATION.md's authority table; without permission there, draft exact public text for the
-human. State any deliberate publication hold explicitly.
+human. State any deliberate publication hold explicitly. Coordinator: resolve the messaging.md link to
+a verified readable reference on the recipient host before delivery, not a coordinator-host-only path.
 
 Host: <chosen host>: <brief reason matched against Hosts `Use for`; local if no row matches>.
+For remote lanes, an empty local inbox does not cover notes left on the coordinator host.
+Record that coverage as unknown; the coordinator must confirm an approved delivery path and
+observable recipient copy before claiming delivery. This contract does not add remote transport.
 Coordinator: to avoid an implicit local choice, record the same host/reason in STATE's
 `What / report` cell. For remote lanes, include the host alias, verified OS hostname/user,
 project/checkout/worktree roots and report source/return command. Use [remote lanes](remote-lanes.md)
