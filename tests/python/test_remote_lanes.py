@@ -32,7 +32,8 @@ class RemoteTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.home = Path(self.temp.name)
         self.local = self.home / 'local/orchard-local'
-        self.root = self.home / 'remote/orchard-local'
+        self.remote_home = self.home / 'remote'
+        self.root = self.remote_home / 'orchard-local'
         self.local.mkdir(parents=True)
         self.root.mkdir(parents=True)
         self.user = pwd.getpwuid(os.geteuid()).pw_name
@@ -140,7 +141,7 @@ class RemoteTests(unittest.TestCase):
             return json.dumps({'result': {'snapshot': self.snapshot()}}).encode()
         if script[-1].startswith('mkdir '):
             self.directory_creations += 1
-        env = dict(os.environ, HOME=str(self.root.parent))
+        env = dict(os.environ, HOME=str(self.remote_home))
         return subprocess.check_output(script, env=env, stderr=subprocess.PIPE)
 
     def start(self):
@@ -169,6 +170,32 @@ class RemoteTests(unittest.TestCase):
         self.assertIn('flat', text)
         self.assertFalse(any('worktree' in c for c in self.calls))
         self.assertFalse((self.home / 'local/.lane-anchors').exists())
+
+    def test_renamed_and_nested_roots_receive_delivery_and_startup(self):
+        for number, name in enumerate(('orchard-lanes', 'projects/orchard-lanes'), start=7):
+            with self.subTest(root=name):
+                self.root = self.remote_home / name
+                self.config['root'] = str(self.root)
+                self.write_config()
+                self.remote.open_remote(f'orchard-{number}', 'task.md', 'build', self.lane)
+                self.assertEqual((self.root / 'lanes/task.md').read_bytes(), b'fresh task.md')
+                self.assertEqual((self.root / 'AGENTS.md').read_bytes(), b'fresh agents.md')
+                create = [c for c in self.calls if c[2:4] == ['workspace', 'create']][-1]
+                self.assertEqual(create[create.index('--cwd') + 1], str(self.root))
+                self.assertIn('Read ' + str(self.root / 'lanes/task.md'), self.sends()[-1][-1])
+
+    def test_roots_outside_home_or_not_concrete_stop_before_delivery(self):
+        for root, error in ((self.remote_home, 'home/tools binding mismatch'),
+                            (self.home / 'remote-other/orchard-lanes', 'home/tools binding mismatch'),
+                            (Path('orchard-lanes'), 'root must be an absolute concrete path'),
+                            (self.remote_home / '../outside', 'root must be an absolute concrete path')):
+            with self.subTest(root=root):
+                self.config['root'] = str(root)
+                self.write_config()
+                with self.assertRaisesRegex(ValueError, error):
+                    self.start()
+                self.assertEqual(self.copies, [])
+                self.assertEqual(self.directory_creations, 0)
 
     def test_second_launch_cannot_replace_the_first_lanes_unread_prompt(self):
         self.start()
@@ -230,6 +257,7 @@ class RemoteTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which('rsync'), 'rsync is not installed')
     def test_real_rsync_shell_handles_remote_paths_with_spaces_and_quotes(self):
         self.root = self.home / "remote's home/orchard-local"
+        self.remote_home = self.root.parent
         self.root.mkdir(parents=True)
         self.config['root'] = str(self.root)
         self.write_config()
