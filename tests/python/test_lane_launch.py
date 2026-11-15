@@ -327,6 +327,8 @@ class SendGuardTests(unittest.TestCase):
         self.assertTrue(self.module.visible_idle('claude', claude))
         for kind, screen in [('pi', pi+TRUST_PROMPT), ('pi', pi+PERMISSION_PROMPT),
                              ('pi', PI_STARTUP), ('pi', '┌─┐\n│status│\n└─┘\n'+pi),
+                             ('pi', '┏━━┓\n┃ x┃\n┗━━┛\n'+pi),
+                             ('pi', '╔══╗\n║ x║\n╚══╝\n'+pi),
                              ('pi', pi.replace('\n\n','\ntyped\n')),
                              ('claude', claude.replace('❯','❯ 1. Yes')), ('claude','shell $')]:
             with self.subTest(kind=kind, screen=screen):

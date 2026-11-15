@@ -24,7 +24,10 @@ lock=(root/'live.lock').open('a'); fcntl.flock(lock,fcntl.LOCK_EX)
 s=json.loads((root/'live.json').read_text())
 with (root/'calls').open('a') as f: f.write(json.dumps(a)+'\n')
 def reply(kind, **fields): print(json.dumps({'result':dict(type=kind,**fields)}))
-if a==['api','snapshot']:
+if a==['session','list','--json']:
+    if mode=='prompt-race': (root/'lanes/W7.md').write_text('amended during caller-context lookup')
+    print(json.dumps({'sessions':[{'default':True,'name':'default','socket_path':str(root/'herdr.sock')}]}))
+elif a==['api','snapshot']:
     n=s.get('snapshots',0)+1; s['snapshots']=n
     if n==2 and mode=='race-busy': s['agents'][1]['agent_status']='working'
     if n==2 and mode=='race-session': s['agents'][1]['agent_session']['value']='replaced'
@@ -180,6 +183,11 @@ class SendTests(unittest.TestCase):
             with self.subTest(screen=screen):
                 self.env['SCREEN'] = screen
                 self.assert_no_send(self.run_send(), 'unknown visible idle screen')
+
+    def test_prompt_changes_after_note_hash_check_never_send(self):
+        self.env.pop('HERDR_SESSION')
+        self.assert_no_send(self.run_send('prompt-race'), 'Prompt changed during validation')
+        self.assertFalse(self.receipt.exists())
 
     def test_tall_viewport_does_not_hide_dialog_above_last_eighty_lines(self):
         self.env['SCREEN'] = 'Permission Required' + '\n'*100 + PI

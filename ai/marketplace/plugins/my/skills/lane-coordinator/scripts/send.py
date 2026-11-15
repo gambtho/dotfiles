@@ -82,9 +82,10 @@ def ownership(args, note):
     # Presence of a name in old launch receipts is not evidence that a manually
     # started agent has a managed alias. The workspace label is checked separately.
     sender, recipient = note['sender'], note['recipient']
+    prompt_hash = launch.digest(prompt)
     if sender['role'] == 'coordinator' and recipient['role'] == 'lane':
         source, target = caller, child
-        if note['prompt_sha256'] != launch.digest(prompt):
+        if note['prompt_sha256'] != prompt_hash:
             raise launch.LaunchError('Current prompt hash differs from note')
     elif sender['role'] == 'lane' and recipient['role'] == 'coordinator' and note['category'] == 'fyi':
         source, target = child, caller
@@ -99,7 +100,7 @@ def ownership(args, note):
         raise launch.LaunchError('Ownership socket/session differs from inherited context')
     if context['caller'] != source['pane_id'] or context['workspace'] != source['workspace_id']:
         raise launch.LaunchError('Inherited source differs from addressed sender')
-    return context, source, target, launch.digest(prompt), data
+    return context, source, target, prompt_hash, data
 
 
 def inspect(path, project, identifier, note_hash):

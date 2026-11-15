@@ -194,7 +194,8 @@ def caller_pin(context, live):
 def visible_idle(kind, screen):
     """Positive supported editor shapes, not an exhaustive dialog denylist."""
     screen = screen.replace('\u00a0', ' ')
-    if (re.search(r'[╭╮╰╯┌┐└┘]', screen) or 'Press any key to continue' in screen
+    # Corner ranges cover light/heavy, mixed/double and rounded borders, not editor rules.
+    if (re.search(r'[┌-┛╒-╝╭-╰]', screen) or 'Press any key to continue' in screen
             or 'Welcome back!' in screen or re.search(
                 r'(?im)^[ \t]*(?:Trust project folder\?|Permission Required.*|Do you (?:want|trust).*|'
                 r'Claude Code needs your permission.*)[ \t]*$', screen)):
