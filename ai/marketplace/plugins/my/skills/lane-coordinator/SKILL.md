@@ -22,6 +22,22 @@ because they are not listed in the coordinator's session. If a sibling file real
 is missing, report it to the human and stop. See [harness notes](references/harness-notes.md)
 for invocation and capability limits outside Pi.
 
+## Attention and messages on every turn
+
+Before answering **every user message**, read this project's live lane status and your
+addressed coordinator inbox, not only on `coordinate` or morning sweeps. Use the one-shot
+[local messaging helper and contract](references/messaging.md) for filtered Herdr metadata
+and immutable `reports/inbox/` notes; unknown/offline status is not a clean sweep. Live
+working/blocked state beats stale ready metadata. Fetch reports and verify head/CI before
+advising action; status discovery never grants pane-input or publication authority.
+
+Notes have categories: `tom-decision` carries the human's verbatim words, timestamp and
+inspectable source; `coordinator-instruction` stays within approved scope; `fyi` is no action.
+Only a verified, correctly scoped `tom-decision` can satisfy a human gate. Cross-coordinator
+notes are advisory `fyi` only, with receiving-project write authority. Preserve the single
+STATE writer and record pickup/disposition in the recipient's report; never infer delivery
+from publication. Existing addressed report notes remain inputs during inbox adoption.
+
 ## Start or resume
 
 Invocation: `coordinate <project>` (for example `coordinate sample`). The project is a

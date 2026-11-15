@@ -7,11 +7,15 @@ and contribution guide, and any effort rules named below; follow them. Record th
 starting SHA256 in your private report/handoff. Before each irreversible or outward step,
 including push, PR opening, review replies/resolutions or other posts, setup/config mutation and final ready report,
 recheck it; if changed, reread and reconcile before acting,
-then record the new hash. Before ready also read new or changed coordinator notes addressed
-to you in the reports folder and record the notes checked. Unreadable prompt/notes mean blocked,
+then record the new hash. At each checkpoint, including before ready, also read new or changed coordinator notes addressed
+to you in `reports/inbox/` and older addressed report notes under the [local messaging contract](messaging.md).
+Record message ID, hash and disposition in your report before acting; no duplicate reapplication or changed bytes under an
+acknowledged ID. Only a source-verified `tom-decision` with verbatim words and timestamp can satisfy a human gate;
+coordinator instructions stay within approved scope, `fyi` is no action. Unreadable prompt/notes mean blocked,
 not ready. This catches observable amendments without asking the human to relay them. Publication follows
 COORDINATION.md's authority table; without permission there, draft exact public text for the
-human. State any deliberate publication hold explicitly.
+human. State any deliberate publication hold explicitly. Coordinator: resolve the messaging.md link to
+this skill's bundled absolute reference path before delivery outside the skill.
 
 Host: <chosen host>: <brief reason matched against Hosts `Use for`; local if no row matches>.
 Coordinator: to avoid an implicit local choice, record the same host/reason in STATE's
