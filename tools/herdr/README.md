@@ -191,7 +191,7 @@ For example, after verifying the real saved ID, host, user and paths:
     "session": "default",
     "hostname": "build-machine",
     "user": "worker",
-    "root": "/home/worker/orchard-local",
+    "root": "/home/worker/projects/orchard-lanes",
     "herdr": "/home/worker/.local/bin/herdr",
     "mise": "/home/worker/.local/bin/mise",
     "pi": "/home/worker/.pi/agent/bin/pi",
@@ -206,7 +206,8 @@ For example, after verifying the real saved ID, host, user and paths:
 `saved_target` and `session` must exactly match `herdr machine list --json` for that
 ID. The separate transfer `target` is a simple host alias (no `user@` or SSH URL).
 `transport` is `tailscale` or `ssh`, never an arbitrary command. Bind the real SSH
-hostname, effective user and HOME; `root` must be that user's `~/<project>-local`.
+hostname, effective user and HOME; `root` may have any name but must be an absolute,
+concrete path (no `..`) strictly under that user's HOME.
 Control characters and backslashes in interpolated values are refused. Keep this
 private binding out of the public dotfiles repository; no credentials belong in it.
 Locks live under `${XDG_STATE_HOME:-$HOME/.local/state}/dotfiles/lane-locks`.

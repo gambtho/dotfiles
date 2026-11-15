@@ -86,8 +86,6 @@ class Remote:
             if not Path(c[key]).is_absolute() or '..' in Path(c[key]).parts:
                 raise ValueError(f'{key} must be an absolute concrete path')
         self.root = Path(c['root'])
-        if self.root.name != f'{project}-local':
-            raise ValueError('remote root must name the selected project-local directory')
         sources = [c['agents'], c['rules'], prompt, c['profile']]
         self.sources = [Path(clean(p)) if Path(clean(p)).is_absolute() else self.local / p for p in sources]
         self.targets = [self.root / p for p in ('AGENTS.md', 'lanes/COMMON-RULES.md',
@@ -158,7 +156,7 @@ class Remote:
         c = self.config
         info = json.loads(self.ssh(shlex.join(['python3', '-c', HOST, c['herdr'], c['mise'], c['pi']])))
         if (info['hostname'] != c['hostname'] or info['user'] != c['user']
-                or Path(info['home']) != self.root.parent or info['tools'] is not True):
+                or Path(info['home']) not in self.root.parents or info['tools'] is not True):
             raise ValueError('SSH host/user/home/tools binding mismatch')
         self.stage = 'endpoint session binding'
         snapshot = ('unset HERDR_ENV HERDR_SESSION HERDR_SOCKET_PATH HERDR_PANE_ID '
