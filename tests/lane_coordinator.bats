@@ -39,6 +39,37 @@ PY
   [ "$status" -eq 0 ]
 }
 
+@test "lane checkpoints reread changed prompts and distinguish evidence from inference" {
+  run python3 - "$SKILL_DIR" "$REPO_ROOT" <<'PY'
+from pathlib import Path
+import sys
+
+skill, repo = map(Path, sys.argv[1:])
+for name in ('references/common-rules-template.md', 'references/lane-template.md'):
+    text = ' '.join((skill / name).read_text().split())
+    for phrase in ('starting SHA256', 'each irreversible or outward step', 'push, PR opening',
+                   'setup/config mutation and final ready report', 'if changed', 'reread and reconcile', 'coordinator notes'):
+        assert phrase in text, (name, phrase)
+workflow = ' '.join((skill / 'references/common-rules-template.md').read_text().split())
+coordinator = ' '.join((skill / 'SKILL.md').read_text().split())
+for text in (workflow, coordinator):
+    for phrase in ('observed', 'command or source', 'inferred'):
+        assert phrase in text, phrase
+for phrase in ('re-observe', 'blocker', 'instruction', 'Needs the human', 'dated heading',
+               'shared-resource lead', 'exact cleanup list', 'never cleans up another project',
+               'prompt copy is observable', 'checkpoint is loaded', 'explicit reread instruction',
+               'delivery unknown until confirmed'):
+    assert phrase in coordinator, phrase
+closeout = (skill.parent / 'pr-closeout/SKILL.md').read_text()
+assert 'lane prompt checkpoint' in closeout
+review = (repo / 'tools/automations/prompts/lane-review.md').read_text()
+for phrase in ('prompts amended after launch', 'inferred claims relayed without re-observation',
+               'helper reruns after a stopped launch', 'human corrections', 'lower bounds'):
+    assert phrase in review, phrase
+PY
+  [ "$status" -eq 0 ]
+}
+
 @test "ready reply template starts with the action and its owner, not a verdict" {
   run python3 - "$SKILL_DIR/SKILL.md" <<'PY'
 from pathlib import Path

@@ -3,9 +3,15 @@
 You are an implementation lane in `<owner/repo>` (checkout `<path>`; a new worktree per
 PR from a freshly fetched `origin/<base>`). Read the project's AGENTS.md, its shared
 workflow at `<resolved project path>/lanes/COMMON-RULES.md`, the repo's own AGENTS.md
-and contribution guide, and any effort rules named below; follow them. Publication
-follows COORDINATION.md's authority table; without permission there, draft exact
-public text for the human. State any deliberate publication hold explicitly.
+and contribution guide, and any effort rules named below; follow them. Record this prompt's
+starting SHA256 in your private report/handoff. Before each irreversible or outward step,
+including push, PR opening, review replies/resolutions or other posts, setup/config mutation and final ready report,
+recheck it; if changed, reread and reconcile before acting,
+then record the new hash. Before ready also read new or changed coordinator notes addressed
+to you in the reports folder and record the notes checked. Unreadable prompt/notes mean blocked,
+not ready. This catches observable amendments without asking the human to relay them. Publication follows
+COORDINATION.md's authority table; without permission there, draft exact public text for the
+human. State any deliberate publication hold explicitly.
 
 Host: <chosen host>: <brief reason matched against Hosts `Use for`; local if no row matches>.
 Coordinator: to avoid an implicit local choice, record the same host/reason in STATE's
