@@ -69,6 +69,7 @@ Add only the resources the coordinator wants observed:
   "checkouts": [{"repo":"example/project","path":"~/project"}],
   "disk": {
     "filesystem":"~", "minimum_free_gib":50,
+    "projects":[{"name":"example","path":"~/example-local","budget_gib":100}],
     "output_roots":["lanes","reports","~/project-worktrees"],
     "caches":{"go":"~/.cache/go-build","uv":"~/.cache/uv","npm":"~/.npm"},
     "cache_check_checkout":"~/config"
@@ -93,6 +94,14 @@ coverage stays unknown. No match is not proof of merge/deletion; no fetch/prune.
 
 Disk compares `df -Pk` available KiB with the configured floor (default 50 GiB).
 Below-floor output says Needs the human; nothing edits STATE or cleans up.
+Optional `disk.projects` entries require nonblank `name` and `path`; optional `budget_gib`
+is a positive finite number. Missing budget means size only, not a budget-health claim.
+Projects are measured after `df`, before output rankings: one `du -sk` per resolved project
+folder (including shared failures), at most 20 seconds each within the disk/global deadline.
+Timeout/failure names the project and budget (if configured) with size unknown, never healthy.
+An over-budget line names the project and asks its coordinator for an exact cleanup list;
+it never proposes deleting paths in other projects. The coordinator of the project owning
+shared machines leads this request, not another project's cleanup.
 Only immediate output directories are candidates (max 100); files/child symlinks
 are excluded and overlapping candidates deduplicated. Show up to five largest
 `du -sk` measurements; omitted/failed coverage qualifies the ranking as partial.

@@ -154,13 +154,20 @@ def configure(root):
             and c['repo'] in repos and path_name(c['path']) for c in checkouts):
         raise ValueError('checkouts must contain configured repo/path objects')
     disk = settings.get('disk', {})
-    if not isinstance(disk, dict) or set(disk) - {'filesystem', 'minimum_free_gib', 'output_roots', 'caches', 'cache_check_checkout'}:
+    if not isinstance(disk, dict) or set(disk) - {'filesystem', 'minimum_free_gib', 'projects', 'output_roots', 'caches', 'cache_check_checkout'}:
         raise ValueError('disk has unknown settings')
     for key in ('filesystem', 'cache_check_checkout'):
         if key in disk and not path_name(disk[key]):
             raise ValueError(f'disk.{key} must be a path')
     if 'minimum_free_gib' in disk and (type(disk['minimum_free_gib']) not in (int, float) or not 0 < disk['minimum_free_gib'] < float('inf')):
         raise ValueError('disk.minimum_free_gib must be positive and finite')
+    projects = disk.get('projects', [])
+    if not isinstance(projects, list) or not all(
+            isinstance(p, dict) and {'name', 'path'} <= set(p) <= {'name', 'path', 'budget_gib'}
+            and path_name(p['name']) and path_name(p['path'])
+            and ('budget_gib' not in p or (type(p['budget_gib']) in (int, float)
+                 and 0 < p['budget_gib'] < float('inf'))) for p in projects):
+        raise ValueError('disk.projects must contain name/path objects with optional positive finite budget_gib')
     roots = disk.get('output_roots', [])
     caches = disk.get('caches', {})
     if not isinstance(roots, list) or not all(path_name(p) for p in roots):
@@ -1257,6 +1264,27 @@ def disk_observations(client):
             local_unknown(client, lines, 'filesystem', error)
     else:
         lines.append('- Filesystem: not checked (not configured).')
+    # Observe project totals before the optional ranking can consume the disk deadline.
+    project_sizes = {}
+    for project in disk.get('projects', []):
+        limit = project.get('budget_gib')
+        label = 'Project ' + project['name']
+        budget_text = f'; budget={limit} GiB' if limit is not None else ''
+        try:
+            path = configured_path(project['path'])
+            if path not in project_sizes:
+                try:
+                    project_sizes[path] = size(path)
+                except (OSError, ValueError) as error:
+                    project_sizes[path] = error
+            kib = project_sizes[path]
+            if isinstance(kib, Exception):
+                raise kib
+            lines.append(f'- {safe_text(label)}: {kib} KiB ({kib / 1024**2:.2f} GiB){budget_text}.'
+                         + (' Ask its coordinator for an exact cleanup list.'
+                            if limit is not None and kib > limit * 1024**2 else ''))
+        except (OSError, ValueError) as error:
+            local_unknown(client, lines, label + budget_text, error)
     roots, candidates, sizes = disk.get('output_roots', []), set(), []
     partial = False
     for value in dict.fromkeys(roots):

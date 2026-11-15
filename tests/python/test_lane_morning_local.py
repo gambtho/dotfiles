@@ -209,6 +209,53 @@ class LocalObservationsTests(unittest.TestCase):
             self.assertEqual('Needs the human' in text, low)
             self.assertFalse(client.activity_failures)
 
+    def test_project_sizes_compare_optional_budgets_and_measure_folder_once(self):
+        projects = [{'name': name, 'path': str(self.root), **budget} for name, budget in (
+            ('under', {'budget_gib': 2}), ('equal', {'budget_gib': 1}),
+            ('over <limit>', {'budget_gib': .5}), ('size only', {}))]
+        self.settings(disk={'projects': projects})
+        self.tool(['du', '-sk', str(self.root)], f'{1024**2}\t{self.root}\n')
+        text, client = self.collect('disk_observations')
+        for name in ('under', 'equal', 'size only'):
+            line = next(line for line in text.splitlines() if f'Project {name}:' in line)
+            self.assertIn('1.00 GiB', line)
+            self.assertNotIn('cleanup', line)
+        over = next(line for line in text.splitlines() if 'Project over &lt;limit&gt;:' in line)
+        self.assertIn('budget=0.5 GiB', over)
+        self.assertIn('Ask its coordinator for an exact cleanup list.', over)
+        self.assertNotIn('budget=', next(line for line in text.splitlines() if 'Project size only:' in line))
+        self.assertEqual(len(self.calls()), 1)
+        self.assertFalse(client.activity_failures)
+
+    def test_project_timeout_is_named_unknown_and_cached_before_ranking(self):
+        self.settings(disk={'projects': [{'name': name, 'path': str(self.root), 'budget_gib': 1}
+                                        for name in ('first', 'alias')],
+                            'output_roots': [str(self.root)]})
+        measured = []
+        def read(argv, **kwargs):
+            measured.append(argv)
+            self.assertEqual(kwargs['timeout'], 20)
+            self.assertLessEqual(kwargs['budget'].remaining(), 120)
+            raise self.m.ObservationError('read timed out')
+        with patch.object(self.m, 'run_read', side_effect=read):
+            text, client = self.collect('disk_observations')
+        for name in ('first', 'alias'):
+            line = next(line for line in text.splitlines() if f'Project {name}' in line)
+            for value in ('unknown', 'timed out', 'budget=1 GiB'):
+                self.assertIn(value, line)
+            self.assertNotIn('cleanup', line)
+        self.assertEqual(measured[0], ['du', '-sk', str(self.root)])
+        self.assertEqual(measured.count(['du', '-sk', str(self.root)]), 1)
+        self.assertFalse(client.activity_failures)
+
+    def test_project_config_rejects_malformed_entries(self):
+        for projects in ({}, [None], [{'name': 'x'}], [{'name': '', 'path': '.'}],
+                         [{'name': 'x', 'path': '', 'budget_gib': 1}],
+                         *([{'name': 'x', 'path': '.', 'budget_gib': value}]
+                           for value in (True, 0, -1, '1', float('inf'), float('nan')))):
+            with self.subTest(projects=projects), self.assertRaisesRegex(ValueError, 'disk.projects'):
+                self.settings(disk={'projects': projects})
+
     def test_top_five_excludes_files_symlinks_and_overlapping_candidates(self):
         outputs = self.root / 'outputs'
         outputs.mkdir()

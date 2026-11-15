@@ -21,7 +21,7 @@ Review the process, not the product. Do not judge what a project is building, it
 4. **Template drift.** Compare local `AGENTS.md`, `COORDINATION.md` and `lanes/COMMON-RULES.md` against the skill's corresponding templates. Which rules repeated across projects belong in the skill, and which skill clauses projects keep restating need clearing up? Flag local rules the skill has since replaced, accidental differences and missing expected files; retain deliberate local overrides and authority. Do not prescribe PR workflow to projects that do not use PRs.
 5. **Structural health across projects.** Stale lanes, worktrees and checkouts that have piled up, reports growing without archiving, and cross-project dependencies such as one project relying on another's rules. Name candidates for cleanup, and never suggest deleting a checkout without first checking for unpushed work.
 
-6. **Unshared lessons.** Classify friction lines and memory corrections as landed in the skill / landed locally only / not landed, citing the matching rule or noting partial coverage. Distinguish missing guidance from behavior that ignored an existing rule. Promotion stays with the owning coordinator's weekly pass and human confirmation; propose, never promote automatically.
+6. **Unshared lessons and behavior.** Classify friction lines and memory corrections as landed in the skill / landed locally only / not landed, citing the matching rule or partial coverage. From the week's reports and `SKILL-FRICTION.md`, count prompts amended after launch, inferred claims relayed without re-observation, helper reruns after a stopped launch, and human corrections. Cite each counted incident; deduplicate aliases and copied corrections. Counts are lower bounds where evidence is truncated, missing or unmarked; say unknown rather than inventing zero. Report-only: no new tooling. Distinguish missing guidance from behavior that ignored a rule. Promotion stays with the owning coordinator's weekly pass and human confirmation; propose, never promote automatically.
 
 Note what is working too: if a discipline is holding across all projects, say so in a line so nobody changes it.
 
@@ -52,6 +52,7 @@ One or two sentences: the most important thing, and whether the system is gettin
 - Risk: what could break
 
 ## Unshared lessons
+- Weekly behavior counts: prompt amendments / unverified relays / stopped-launch reruns / human corrections; evidence and coverage limits.
 - Correction source: landed in the skill / landed locally only / not landed; matching rule or coverage limit. Group copied corrections, not separate incidents.
 
 ## Notes per coordinator

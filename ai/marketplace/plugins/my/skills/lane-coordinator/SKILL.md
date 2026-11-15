@@ -141,16 +141,23 @@ use the project folder.
   path in every prompt. Keep project authority and stronger or different local rules
   in AGENTS.md/COORDINATION.md; the shared workflow supplements, not replaces, them.
   When relocating existing rules, create the destination and reconcile affected
-  prompts before deleting source clauses. Give already-running lanes an explicit
-  reread instruction; editing a template does not update their context.
+  prompts before deleting source clauses. For already-running lanes, amend their prompt
+  file under a dated heading and mark superseded instructions; verify the amended prompt copy is observable
+  by the lane and its checkpoint is loaded. Otherwise give an explicit reread instruction through an
+  already-approved channel; mark amendment/note delivery unknown until confirmed, not delivered by a local edit.
+  Do not rely on the human relaying "reread". Editing a template does not update loaded context;
+  remote copies and pre-checkpoint lanes need delivery evidence. Remote create-only launch delivery
+  remains unchanged; do not rerun launch helpers to deliver amendments.
 - **Shared hot files:** once two lanes will PR into the same repo, check which files every
   PR edits (changelog, repository maps, generated inventories, counts). Fix that first
   (fragments, directory-level maps) or every merge breaks every other open PR.
 - Before giving a lane git commands (rebase, retarget, reset), verify the branch's actual
   ancestry (`gh api repos/<o>/<r>/compare/<base>...<head>`). Don't guess commit ranges.
-- To avoid sending lanes down a guessed path, label prompt assumptions
-  "coordinator's guess, unverified", separate from the user's words. Our issue/plan
-  text is not the user's requirement; when it disagrees with their decision, fix it.
+- To avoid relaying unverified guesses as facts, mark claims about another lane, host,
+  person or project in prompts, reports, handoffs and coordinator replies **observed**
+  (command or source) or **inferred**, separate from the user's words. Re-observe an
+  inferred claim before making it a blocker, instruction or **Needs the human** item.
+  Our issue/plan text is not the user's requirement; when it disagrees with their decision, fix it.
 - To avoid cutting the wrong outcome, confirm the user-visible goal before proposing
   descopes; trivially fixable setup (such as a fork) is a task, not a risk.
 - To avoid designing for an imagined UI, inspect the human's real screen and learn
@@ -320,7 +327,10 @@ below and the per-PR sweep in Start or resume. Record failed checks or exhausted
 budgets as **unknown**, then continue with that uncertainty visible; never invent results.
 
 **Disk, at end of day and weekly:** use the project's Routines disk check to report
-free disk and the five largest lane folders with sizes, in private reports only.
+free disk, configured project sizes/budgets and the five largest lane folders with sizes,
+in private reports only. To avoid unowned shared disk growth, the coordinator of the project
+that owns shared machines is the shared-resource lead: for an over-budget project it asks
+that project's coordinator for an exact cleanup list; it never cleans up another project.
 If no disk-check command exists, inspect only configured roots manually; record
 observation time and mark missing commands, roots or measurements unknown.
 Below its free-space threshold, add a **Needs the human** item; missing thresholds

@@ -13,8 +13,13 @@ own prompt. Parallel lanes also read their effort rules.
 
 ## Shared workflow
 
-Read this file with your lane prompt and the project's AGENTS.md. Project and repository instructions and the human's
-explicit decisions take precedence. This file changes no publication, merge, cloud or desktop authority.
+Read this file with your lane prompt and the project's AGENTS.md; record the prompt's starting SHA256 in your private
+report/handoff (portable: Python `hashlib` or `shasum -a 256`). To catch observable amendments without a human relay,
+recheck before each irreversible or outward step, including push, PR opening, review replies/resolutions or other posts,
+setup/config mutation and final ready report; if changed, reread and reconcile the prompt before
+acting, then record the new hash. Before ready, also read new or changed coordinator notes addressed to you in the reports
+folder; record which notes you checked. Unreadable prompt/notes mean blocked, not ready. Project and repository instructions
+and the human's explicit decisions take precedence. This file changes no publication, merge, cloud or desktop authority.
 If instructions conflict, stop and ask the coordinator.
 
 The review skills, including `pr-closeout`, and `/second-opinion` and `/adversarial-review` wrappers ship with the package.
@@ -71,7 +76,9 @@ Read `<resolved harness-notes path>` for invocation outside Pi; resolve it to th
 ### Scope and evidence
 
 - Don't invent requirements beyond what the human decided; our own issue text isn't a requirement if the human says
-  otherwise. Lanes add no prompts, confirmations, refusals or safety rules without the human's OK.
+  otherwise. In reports and handoffs, mark claims about another lane, host, person or project **observed** (command or source)
+  or **inferred**, so a guess cannot silently become an instruction. Lanes add no prompts, confirmations, refusals or safety
+  rules without the human's OK.
 - Put code in the repo that will own it in production. Proof harnesses for unbuilt features don't get a home in a
   product repo just because the test infrastructure is there; ask the coordinator.
 - Demos and proofs: build the smallest thing that shows the point. No general subsystems, setup layers or extra
