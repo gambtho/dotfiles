@@ -23,7 +23,9 @@ status and its own inbox, not only on `coordinate` or morning sweeps. Use `statu
 it takes one Herdr snapshot, filters conventional numbered/coordinator labels by longest
 matching sibling project slug, and includes custom labels pinned by this project's local
 launch receipts (matching project, resolved STATE path and workspace). Pending receipts without
-a workspace appear separately as `unresolved_launches`; existing lane observations remain visible.
+a workspace, or pinned workspaces absent from this snapshot, appear separately as
+`unresolved_launches`; existing lane observations remain visible. Inspect that field too;
+a recorded workspace ID is historical evidence, not a live observation.
 No terminal content is read.
 Remote/unbound or unobserved lanes remain unknown; a local snapshot is not remote coverage.
 If the wrapper needs approval, use the already-approved native `herdr api snapshot` read
@@ -87,10 +89,13 @@ notes. Partial valid notes may accompany rejections; inspect the whole result. E
 stderr; fatal failures leave stdout empty. No prompts, pager or background polling.
 
 Recipient maintains this private report ledger **before acting**, not in STATE:
-`message <id> sha256=<hash> disposition=<applied|rejected|superseded|deferred> reason=<why>`.
-Compare ID AND hash. Repeated ID/hash is not reapplied; changed bytes under an acknowledged
-ID are rejected, never treated as a new instruction. An acknowledgement is a disposition,
-not proof that an external action completed; check real effects before recovery. The helper
+`message <id> sha256=<hash> disposition=<pending|applied|rejected|superseded|deferred> reason=<why>`.
+Before executing, record pending; record applied only after observing completion. Compare ID
+AND hash. Completed matching IDs are not reapplied; changed bytes under any acknowledged ID
+are rejected, never treated as a new instruction. On interruption, inspect real effects: if
+completed, record applied without repeating; verified absence of effects permits first execution
+of the still-authorized action; partial or uncertain effects mean stop/reconcile, never automatic
+retry. Acknowledgement alone is not proof of external completion. The helper
 does not parse the report or perform actions; the consuming agent owns these checks.
 
 New notes can name an existing same-recipient, same-sender, same-category ID in `supersedes`;
@@ -107,6 +112,11 @@ No automatic expiry, deletion, archival or versioning. Retain notes and acknowle
 history until the coordinator proposes an exact cleanup list and the human approves it.
 The receiving project owns retention; sender owns publication; recipient owns acknowledgements.
 These are trusted-local workflow files, not authenticated messaging or OS containment.
-Remote note transport is not provided: later transfer one immutable addressed note with
-verified host binding, preserve bytes/hash and fetch the named acknowledgement. Never copy
+Remote note transport is not provided. An empty recipient-host inbox says nothing about
+notes still on the coordinator host: record remote coverage as unknown, not no notes. The
+coordinator confirms an already-approved delivery path and observable recipient copy before
+claiming delivery; do not pretend a local edit reached a remote lane. Resolve this reference
+to an installed/readable recipient-host path and verify it before prompt delivery; never use
+an unverified coordinator-host-only absolute path. Later transport must transfer one immutable
+addressed note with verified host binding, preserve bytes/hash and fetch the named acknowledgement. Never copy
 STATE/session trees or personal-host content to another host to deliver a note.

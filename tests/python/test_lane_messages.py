@@ -3,11 +3,13 @@ import copy
 import hashlib
 import json
 import os
+import runpy
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 SCRIPT = Path(__file__).resolve().parents[2] / 'ai/marketplace/plugins/my/skills/lane-coordinator/scripts/messages.py'
 
@@ -85,6 +87,23 @@ class MessagesTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout), {'notes': [], 'rejected': []})
         self.assertFalse((self.root / 'reports').exists())
+
+    @unittest.skipIf(os.geteuid() == 0, 'Directory permissions are not enforceable for root')
+    def test_unreadable_existing_inbox_is_not_a_successful_empty_read(self):
+        self.assertEqual(self.publish(note()).returncode, 0)
+        directory = self.root / 'reports/inbox'
+        directory.chmod(0o100)
+        try:
+            self.assert_rejected(self.inbox(), 'Permission denied')
+        finally:
+            directory.chmod(0o700)
+
+    def test_parser_recursion_error_uses_normal_rejection_boundary(self):
+        self.source.write_text(json.dumps(note()))
+        scope = runpy.run_path(str(SCRIPT))
+        with (mock.patch.object(json, 'loads', side_effect=RecursionError('decoder depth')),
+              self.assertRaisesRegex(scope['MessageError'], 'Invalid note JSON')):
+            scope['read_note'](self.source)
 
     def test_bad_note_fields_are_rejected_before_publication(self):
         cases = [('id', '../escape', 'id'), ('category', 'urgent', 'category'),
@@ -271,6 +290,20 @@ class MessagesTests(unittest.TestCase):
         data = json.loads(result.stdout)
         self.assertEqual([r['label'] for r in data['lanes']], ['sample-8'])
         self.assertEqual(data['unresolved_launches'], [{'label': 'custom-worker', 'stage': 'Creating'}])
+
+    def test_unobserved_receipt_workspace_remains_unknown(self):
+        directory = self.root / 'lanes'
+        directory.mkdir()
+        (directory / 'W7-launch.json').write_text(json.dumps({
+            'project': 'sample', 'name': 'custom-worker', 'stage': 'Submitted',
+            'workspace': 'w7', 'state': str(self.root / 'STATE.md')}))
+        self.status_fixture([])
+        result = self.run_cli('status')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        data = json.loads(result.stdout)
+        self.assertEqual(data['lanes'], [])
+        self.assertEqual(data['unresolved_launches'], [
+            {'label': 'custom-worker', 'workspace': 'w7', 'stage': 'unobserved'}])
 
     def test_status_unknown_protocol_malformed_or_offline_never_means_empty_success(self):
         for protocol, version, rows in [(999, '0.9.5', []), (22, 'future', []),

@@ -99,7 +99,7 @@ def read_note(path):
         raise MessageError('Note exceeds 64 KiB')
     try:
         note = json.loads(data)
-    except (ValueError, UnicodeError):
+    except (ValueError, UnicodeError, RecursionError):
         raise MessageError('Invalid note JSON') from None
     validate(note)
     return note, data
@@ -162,6 +162,13 @@ def publish(root, project, source):
     return {'path': str(destination), 'sha256': hashlib.sha256(data).hexdigest()}
 
 
+def entries(directory):
+    try:
+        return sorted(directory.iterdir())
+    except FileNotFoundError:
+        return []
+
+
 def inbox(root, recipient, prompt):
     directory = inbox_path(root)
     expected_hash = None
@@ -170,7 +177,9 @@ def inbox(root, recipient, prompt):
             raise MessageError('Lane inbox requires --prompt')
         expected_hash = hashlib.sha256(prompt.read_bytes()).hexdigest()
     notes, rejected = [], []
-    for path in sorted(directory.glob('*.json')):
+    for path in entries(directory):
+        if path.suffix != '.json':
+            continue
         try:
             note, data = read_note(path)
             if note['id'] != path.stem:
@@ -204,9 +213,12 @@ def status(root, project):
         if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
             raise ValueError()
         # Conventional labels use longest project-prefix ownership, like the dashboard.
-        projects = {project} | {p.name[:-6] for p in root.parent.glob('*-local') if p.is_dir()}
+        projects = {project} | {p.name[:-6] for p in entries(root.parent)
+                                if p.name.endswith('-local') and p.is_dir()}
         owned, unresolved = {}, []
-        for path in (root / 'lanes').glob('*-launch.json'):
+        for path in entries(root / 'lanes'):
+            if not path.name.endswith('-launch.json'):
+                continue
             record = json.loads(path.read_bytes())
             if record.get('project') == project and record.get('state') == str(root / 'STATE.md'):
                 name = token(record['name'], 'name')
@@ -234,9 +246,14 @@ def status(root, project):
                          'ready' if phase == 'ready' else state)
             lanes.append({'label': label, 'workspace': text(row['workspace_id'], 'workspace'),
                           'agent_status': state, 'phase': phase, 'attention': attention})
+            if owned.get(label) == row['workspace_id']:
+                del owned[label]
+        unresolved.extend({'label': label, 'workspace': workspace, 'stage': 'unobserved'}
+                          for label, workspace in owned.items())
         return {'observed_at': datetime.now(timezone.utc).isoformat(),
                 'lanes': lanes, 'unresolved_launches': unresolved}
-    except (OSError, ValueError, KeyError, TypeError, AttributeError, subprocess.SubprocessError):
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, RecursionError,
+            subprocess.SubprocessError):
         raise MessageError('Project attention unknown; inspect Herdr snapshot and ownership evidence') from None
 
 
