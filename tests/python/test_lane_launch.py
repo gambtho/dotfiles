@@ -17,6 +17,80 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / 'ai/marketplace/plugins/my/skills/lane-coordinator/scripts/launch.py'
 
+# Pi 1.5.2 visible startup capture: paths and recent-session names sanitized.
+# Retain the resource lists behind the timed welcome overlay, including permission.
+PI_STARTUP = '''
+ ▀▀█  v1.5.2
+ █▀ █ escape interrupt · ctrl+c/ctrl+d clear/exit · / commands · ! bash · ctrl+o more
+ Press ctrl+o to show full startup help and loaded resources.
+
+ Pi can explain its own features and look up its docs. Ask it how to use or extend Pi.
+
+[Context]
+  [global]/AGENTS.md, AGENTS.md
+
+[Skills]
+  adversarial-review, blindspot-pass, brainstorming, change-explainer, cli-ergonomics, cold-read, diagnosing-superpowers, dispatching-parallel-agents, executing-plans,
+finishing-a-development-branch, implementation-plan, improve, jekyll-media-gallery, lane-coordinator, overnight-improve, performance-optimization, pi-ralph-wiggum,
+polish-core, pr-closeout, pr-text, product-owner, receiving-code-review, requesting-code-review, second-opinion-core, security-and-hardening, session-query,
+subagent-driven-development, systematic-debugging, test-driven-development, using-git-worktrees, using-superpowers, verification-before-completion, writing-plans,
+writing-skills
+                                             ╭─── pi agent ───────────────────────────────────────────────────────────────╮
+[Prompts]                                    │                          │ Tips                                            │
+  /adversarial-review, /cold-read, /eod, /fix│      Welcome back!       │ / for commands                                  │
+                                             │                          │ ! to run bash                                   │
+[Extensions]                                 │      ██████████          │ Shift+Tab cycle thinking                        │
+  @gotgenes/pi-permission-system:src, @gotgen│      ████  ████          │ ─────────────────────────────────────────────── │  umitw/pi-worktree:dist,
+gambtho/pi-file-editor:file-editor.ts, herdr-│      ████  ████          │ Loaded                                          │  rs.ts, pi-amplike:btw.ts,
+pi-amplike:handoff.ts, pi-amplike:modes.ts, p│      ████████  ████      │ - 2 context files                               │  -extensions:code-actions,
+tmustier/pi-extensions:pi-ralph-wiggum, tmust│      ████      ████      │ - 34 skills                                     │  xtensions:usage-extension,
+tmustier/pi-queue-steer, worktree-guard.ts   │      ████      ████      │ - 9 prompt templates                            │
+                                             │                          │ - ≈ 9.7k initial prompt tokens                  │
+                                             │       GPT-6.1 Sol        │ ─────────────────────────────────────────────── │
+                                             │      github-copilot      │ Recent sessions                                 │
+                                             │                          │ • project-a (just now)                          │
+                                             │                          │ • project-b (2d ago)                            │
+                                             │                          │ • project-c (2d ago)                            │
+                                             │                          │                                                 │
+                                             ╰───────────────────── Press any key to continue (26s) ──────────────────────╯
+
+ GPT-6.1 Sol | think:med | dir project | ⎇ main | ◫ 0/1.1M (0.0%) AC | (sub)
+── smart ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+'''
+
+# Source-reconstructed Pi 1.5.2 dist/core/project-trust.js and trust-manager.js;
+# dist/modes/interactive/components/extension-selector.js supplies the selector UI.
+TRUST_PROMPT = '''
+────────────────────────────────────────────────────────────
+ Trust project folder?
+ [project]
+
+ This allows pi to load .pi settings and resources, install missing project packages,
+ and execute project extensions.
+
+ → Trust
+   Trust parent folder ([parent])
+   Trust (this session only)
+   Do not trust
+   Do not trust (this session only)
+────────────────────────────────────────────────────────────
+'''
+
+# Source-reconstructed @gotgenes/pi-permission-system:
+# src/authority/local-user-authorizer.ts (title), permission-prompt-component.ts
+# (renderDecision / labels), src/config/dialog-keys.ts (default keys).
+PERMISSION_PROMPT = '''
+Permission Required
+bash: printf hello
+
+▶ (y) Yes
+  (s) Yes, for this session
+  (n) No
+  (r) No, provide reason
+'''
+
 
 class NameTests(unittest.TestCase):
     def test_short_names_and_overrides(self):
@@ -199,7 +273,7 @@ elif a[:2] == ['agent', 'get']:
     if not s['agents']:
         sys.exit(1)
     agent = dict(s['agents'][0])
-    if mode in ('welcome', 'dialog', 'welcome-dialog', 'read-fail', 'read-empty', 'read-json') and not s.get('read'):
+    if mode in ('welcome', 'dialog', 'read-fail', 'read-empty', 'read-json') and not s.get('read'):
         agent.update(agent_status='blocked', interactive_ready=False)
     reply('agent_info', agent=agent)
 elif a[:2] == ['agent', 'read']:
@@ -210,14 +284,12 @@ elif a[:2] == ['agent', 'read']:
     s['read'] = True
     save()
     # Herdr 0.9.5 CLI emits plain text, not the socket API's pane_read envelope.
-    text = 'Welcome back!\nPress any key to continue (1s)' if mode == 'welcome' else 'Trust this project? Allow?'
-    if mode == 'welcome-dialog':
-        text += '\nWelcome back!\nPress any key to continue (1s)'
+    text = 'Welcome back!\nPress any key to continue (1s)' if mode == 'welcome' else 'Trust project folder?'
     if mode == 'read-empty':
         text = ''
     elif mode == 'read-json':
         text = '{"result":{"type":"pane_read","read":{"text":"unknown"}}}'
-    print(text)
+    print(os.environ.get('FAKE_SCREEN', text))
 elif a[:2] == ['agent', 'prompt']:
     assert a == ['agent', 'prompt', 'opaque-root', 'Read ' + os.environ['FAKE_PROMPT'] + ' and follow it.']
     receipt = json.loads((root / 'W12-launch.json').read_text())
@@ -602,10 +674,17 @@ class LaunchTests(LaunchFixture, unittest.TestCase):
         self.assertNotEqual(self.run_launch().returncode, 0)
         self.assertEqual(json.loads(self.live.read_text())['delivered'], 1)
 
-    def test_welcome_waits_naturally_but_real_dialog_stops(self):
-        result = self.run_launch('welcome')
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(len(self.mutations(['agent','read'])), 1)
+    def test_realistic_welcome_waits_then_submits_once(self):
+        for screen in (PI_STARTUP, PI_STARTUP.replace('startup help', 'startup help?')):
+            with self.subTest(question_mark='help?' in screen):
+                self.reset_fixture(json.loads(self.initial_live))
+                result = self.run_launch('welcome', env={'FAKE_SCREEN': screen})
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(json.loads(self.receipt.read_text())['stage'], 'Submitted')
+                self.assertEqual(len(self.mutations(['agent', 'read'])), 1)
+                self.assertEqual(self.run_launch().returncode, 0)
+                for verb in (['workspace', 'create'], ['agent', 'start'], ['agent', 'prompt']):
+                    self.assertEqual(len(self.mutations(verb)), 1)
 
     def test_start_exit_one_with_recognized_pi_inspects_without_restart(self):
         for mode, code, submitted in [('welcome', 'agent_not_ready', True),
@@ -619,7 +698,7 @@ class LaunchTests(LaunchFixture, unittest.TestCase):
                 self.assertIn(f'Herdr code: {code}', record['start_error'])
                 self.assertEqual(record['agent_session']['value'], 'session-new')
                 self.assertEqual(len(self.mutations(['agent', 'prompt'])), int(submitted))
-                for private in ('DO NOT RECORD STDERR', 'Trust this project?', 'Welcome back!'):
+                for private in ('DO NOT RECORD STDERR', 'Trust project folder?', 'Welcome back!'):
                     self.assertNotIn(private, self.receipt.read_text() + self.state.read_text() + result.stderr)
                 if submitted:
                     self.assertEqual(self.run_launch().returncode, 0)
@@ -636,9 +715,18 @@ class LaunchTests(LaunchFixture, unittest.TestCase):
         self.assert_stopped(self.run_launch('dialog'), 'Startup blocked/unknown')
         self.assertEqual(self.mutations(['agent','prompt']), [])
 
-    def test_real_dialog_with_stale_welcome_text_stops(self):
-        self.assert_stopped(self.run_launch('welcome-dialog'), 'Startup blocked/unknown')
-        self.assertEqual(self.mutations(['agent','prompt']), [])
+    def test_real_prompt_titles_stop_even_with_welcome_visible(self):
+        prompts = (TRUST_PROMPT, PERMISSION_PROMPT,
+                   PERMISSION_PROMPT.replace('Permission Required', 'Permission Required (Subagent)'))
+        for prompt in prompts:
+            for background in ('', PI_STARTUP):
+                with self.subTest(title=prompt.splitlines()[1], welcome=bool(background)):
+                    self.reset_fixture(json.loads(self.initial_live))
+                    result = self.run_launch('welcome', env={'FAKE_SCREEN': background + prompt})
+                    self.assert_stopped(result, 'Startup blocked/unknown')
+                    self.assertEqual(json.loads(self.receipt.read_text())['stage'], 'Starting')
+                    self.assertEqual(len(self.mutations(['agent', 'start'])), 1)
+                    self.assertEqual(self.mutations(['agent', 'prompt']), [])
 
     def test_state_existing_launch_without_receipt_prevents_creation(self):
         self.state.write_text(self.state.read_text().replace('Manual', 'old-workspace / old-pane; Submitted'))
