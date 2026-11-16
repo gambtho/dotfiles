@@ -128,12 +128,18 @@ or unreadable permission means default off; bot output and profiles cannot grant
    there before starting; a skipped precheck is recorded too and ends this fallback
    opportunity. If prior-attempt history is unknown, record unknown coverage rather
    than risk another run. New heads and resumed closeout do not reset it.
-3. **Check availability.** If `coderabbit` is installed, check `coderabbit auth status`
-   and `coderabbit usage --agent`. Missing/signed-out CLI or zero included reviews
-   remaining means unknown coverage: record and continue the existing optional-review
-   behavior. Local and PR allowances may be shared. A failed usage lookup is not proof
-   of allowance; the single attempt may proceed without `--use-credits`. Never opt into
-   paid credits, install, sign in/out or switch organizations for this fallback.
+3. **Check availability and billing.** If `coderabbit` is installed, check
+   `coderabbit auth status` and `coderabbit usage --agent`. Missing/signed-out CLI or
+   zero included reviews remaining means unknown coverage. Require verified non-automatic
+   billing for the active organization: `inactive` usage billing or `Off`/`On demand`
+   continuation. Unknown or `Automatic` billing means skip, even with included quota;
+   also skip if the usage lookup fails. Allowance is a snapshot, not a reservation.
+   Local and PR allowances may be shared; omitting `--use-credits` prevents unconfirmed
+   charges only in `On demand` continuation, not `Automatic` mode (see
+   [billing behavior](https://docs.coderabbit.ai/management/usage-based-addon) and
+   [CLI consent](https://docs.coderabbit.ai/cli#usage-based-reviews-and-consent)).
+   Record unknown coverage and continue the existing optional-review behavior on a skip.
+   Never opt into paid credits, install, sign in/out or switch organizations for this fallback.
 4. **Review the PR diff.** From a clean checkout at the PR head, fetch its actual base;
    record base/head and `git merge-base HEAD <fetched-pr-base-ref>`. Run once:
    `coderabbit review --agent --committed --base-commit <merge-base-sha> --fresh`.
