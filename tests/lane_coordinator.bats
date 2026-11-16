@@ -121,6 +121,25 @@ PY
   [ "$status" -eq 0 ]
 }
 
+@test "human attention push is once per state change and harness scoped" {
+  run python3 - "$SKILL_DIR" <<'PY'
+from pathlib import Path
+import sys
+
+skill = Path(sys.argv[1])
+reports = ' '.join((skill / 'SKILL.md').read_text().split('## Handle a lane report\n', 1)[1].split('\n## ', 1)[0].split())
+for phrase in ('lane nudge, inbox note or status read', 'one notification per lane state change',
+               'Record the attempt or skip in STATE', 'never repeat an unchanged item',
+               'lane id, action and owner only', 'never request or accept approval',
+               'clearly at the terminal', 'harness-notes.md'):
+    assert phrase in reports, phrase
+harness = (skill / 'references/harness-notes.md').read_text()
+assert 'PushNotification' in harness and 'presence check' in harness
+assert 'No equivalent callable push tool' in harness
+PY
+  [ "$status" -eq 0 ]
+}
+
 @test "lane guidance checks real outcomes and resolves project Git policy" {
   run python3 - "$SKILL_DIR" <<'PY'
 from pathlib import Path

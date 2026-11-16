@@ -10,6 +10,7 @@ report a capability blocker rather than silently skipping or replacing them.
 | Wait for CI without polling by hand | Background shell: `gh pr checks <n> -R <repo> --watch` | Same command in a background shell if available; otherwise check on return |
 | Wait for the bot-review budget | Background shell for the remaining budget (`sleep <seconds>`), which re-invokes the session when it exits; overlap with the CI watch | Same command in a background shell if available; otherwise park with head, start time and remaining budget as the stop/resume line, not ready |
 | Reminders | Session-only cron (say they end with the session); STATE.md "Upcoming" for anything longer | STATE.md "Upcoming" |
+| Human attention on a lane state change | `PushNotification` when available; keep its presence check (it skips an active terminal). Informational only, never an approval channel. | No equivalent callable push tool is available in this Pi setup; keep the reply and STATE record, without a substitute transport. |
 | Durable facts about people and preferences | Auto-memory, one fact per file; STATE.md stays the source of truth for lanes | `session_query` for missing context from a known session file; record durable facts in COORDINATION.md |
 | Worktree writes | Normal git worktrees | The worktree guard blocks writes in primary checkouts; use linked worktrees |
 
