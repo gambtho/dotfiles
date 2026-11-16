@@ -3,25 +3,14 @@
 You are an implementation lane in `<owner/repo>` (checkout `<path>`; a new worktree per
 PR from a freshly fetched `origin/<base>`). Read the project's AGENTS.md, its shared
 workflow at `<resolved project path>/lanes/COMMON-RULES.md`, the repo's own AGENTS.md
-and contribution guide, and any effort rules named below; follow them. Record this prompt's
-starting SHA256 in your private report/handoff. Before each irreversible or outward step,
-including push, PR opening, review replies/resolutions or other posts, setup/config mutation and final ready report,
-recheck it; if changed, reread and reconcile before acting,
-then record the new hash. At each checkpoint, including before ready, also read new or changed coordinator notes addressed
-to you in `reports/inbox/` and older addressed report notes under the [local messaging contract](messaging.md).
-Record message ID/hash as pending before action and applied after observed completion; no completed-ID reapplication or
-changed bytes under an acknowledged ID. Reconcile interrupted pending entries against real effects before resuming;
-verified absence of effects and current authority permit first execution, uncertainty never permits a retry. Only a source-verified `tom-decision` with verbatim words and timestamp can satisfy a human gate;
-coordinator instructions stay within approved scope, `fyi` is no action. Unreadable prompt/notes mean blocked,
-not ready. This catches observable amendments without asking the human to relay them. Publication follows
-COORDINATION.md's authority table; without permission there, draft exact public text for the
-human. State any deliberate publication hold explicitly. Coordinator: resolve the messaging.md link to
-a verified readable reference on the recipient host before delivery, not a coordinator-host-only path.
+and contribution guide, and any effort rules named below; follow them. Use the shared
+workflow's prompt-hash and addressed-note checkpoints before acting and reporting ready.
+Coordinator: verify that workflow and its [messaging reference](messaging.md) are readable on
+the recipient host before delivery. Publication follows COORDINATION.md's authority table;
+without permission there, draft exact public text. State any publication hold explicitly.
 
 Host: <chosen host>: <brief reason matched against Hosts `Use for`; local if no row matches>.
-For remote lanes, an empty local inbox does not cover notes left on the coordinator host.
-Record that coverage as unknown; the coordinator must confirm an approved delivery path and
-observable recipient copy before claiming delivery. This contract does not add remote transport.
+For remote lanes, inbox coverage and note delivery follow messaging.md's host rules.
 Coordinator: to avoid an implicit local choice, record the same host/reason in STATE's
 `What / report` cell. For remote lanes, include the host alias, verified OS hostname/user,
 project/checkout/worktree roots and report source/return command. Use [remote lanes](remote-lanes.md)
@@ -52,8 +41,10 @@ infrastructure-only. What's in, what's explicitly out.>
 
 ## Steps
 
-These review tools ship with the package; read `<resolved harness-notes path>` for invocation outside Pi.
-Coordinator: resolve that path to the skill's bundled `references/harness-notes.md` before delivery.
+These review tools and `pr-text` ship with the package. Outside Pi, read `<resolved harness-notes path>`
+and each skill's `<resolved skills dir>/<name>/SKILL.md` instead of its slash command.
+Coordinator: resolve those to the skill's bundled `references/harness-notes.md` and the package's
+`skills/` directory before delivery.
 The requirements below are unchanged.
 
 1. <Audit/design: what to read and answer; local design/report path.> For new product
@@ -84,21 +75,10 @@ The requirements below are unchanged.
   coordinator assigns, starts authorized lanes, verifies reports and maintains state;
   launch/publication permission does not authorize source takeover or a shadow worker.
 - Only edit your scope's files; report anything outside it instead of changing it.
-- Approved LOCAL delivery includes authorized setup/verification, safe in-scope fixes
-  and exact restoration of tool-generated temporary changes. Save pre-run bytes/hash,
-  check for unrelated edits before restoring formatting/reordering, and verify the
-  original hash afterward. No repeated relays for these authorized steps; no arbitrary
-  resource/config changes, test bypasses or edits in another lane's area.
 - Resolve Git policy from project AGENTS.md, the COORDINATION.md repo row and repo rules;
-  ask on conflict. A method grants no push authority. Use the shared workflow and those
-  rules for PR size/sequencing, replies, privacy, tests and reports; don't copy them here.
-  If no project or repo Git policy exists: keep one small PR current end to end, never push
-  to a default branch or merge a PR, never rewrite someone else's branch, and resolve
-  conflicts by merging the base branch into yours.
-  Keep secrets and internal identities out of public text; put reports in the project
-  folder. Tests cover distinct invariants; no timeout bumps or test bypasses as a fix.
-- Where the authority table permits direct PR publication, write a short body: what it
-  does, what it doesn't and how verified. Otherwise keep it as a draft for the human.
+  ask on conflict. A method grants no push authority. The shared workflow carries the
+  no-policy Git fallback, LOCAL delivery, PR size/sequencing/body, replies, privacy and
+  timeout rules; don't copy them here. Tests cover distinct invariants.
 
 - Read only the **Review evidence** section of the shared project-review contract
   bundled with `pr-closeout`, plus all applicable profiles at their verified
@@ -124,11 +104,9 @@ so the coordinator can check freshness, blockers and the delta without redoing r
 For a PR, include closeout's bot-opportunity evidence from its final report.
 The user's "W<n> ready" means stopped and needing an action, not a completion verdict.
 The coordinator reads the report and opens its reply with the next action and its owner.
-For an owned local coordinator, publish a same-project `fyi` ready nudge and use the
-[once-only messaging helper](messaging.md#optional-once-only-local-pointers) only with fresh
-exact identity, idle/no-dialog and verified caller evidence. Record its receipt/outcome here,
-never in STATE. Busy/unknown means leave the note for pickup; uncertainty is inspect-only,
-never a resend, fallback or request for a human paste relay.
+For an owned local coordinator, an optional ready nudge follows the
+[once-only pointer rules](messaging.md#optional-once-only-local-pointers); record its outcome
+here, never in STATE.
 Manual sessions are not automatically monitored. Escalate only genuinely new material
 scope/data/security/product choices, shared/destructive operations or actions outside
 authority. Exact public text/publication and production/provider approvals still apply.
