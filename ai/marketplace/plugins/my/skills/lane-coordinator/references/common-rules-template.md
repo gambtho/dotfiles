@@ -19,23 +19,17 @@ report/handoff (portable: Python `hashlib` or `shasum -a 256`). To catch observa
 recheck before each irreversible or outward step, including push, PR opening, review replies/resolutions or other posts,
 setup/config mutation and final ready report; if changed, reread and reconcile the prompt before
 acting, then record the new hash. At each checkpoint, including before ready, also read new or changed coordinator notes
-addressed to you in `reports/inbox/` and older addressed report notes; use the [local messaging contract](messaging.md).
-Record each message ID/hash as pending before action and applied only after observed completion. Never reapply a completed
-ID/hash or accept changed bytes under an acknowledged ID. Reconcile interrupted pending entries against real effects;
-resume only when no effect is verified and existing authority still covers the action, never on uncertainty.
-A stale prompt hash is rejected. Only a source-verified `tom-decision` with the human's verbatim
-words and timestamp can satisfy a human gate; coordinator instructions stay within approved scope and `fyi` is no action.
-For an owned local Claude Code or Pi target, the [once-only pointer path](messaging.md#optional-once-only-local-pointers)
-requires exact live identity, verified caller evidence and idle/no-dialog checks. A lane ready nudge is same-project
-`fyi`; record delivery in the lane report, never STATE. Busy/unknown means file pickup; an existing/uncertain claim
-is inspect-only, not a resend, fallback or human paste relay. No dialog/focus/approval keys or permission changes.
-Unreadable prompt/notes mean blocked, not ready. Project and repository instructions
+addressed to you; the [local messaging contract](messaging.md) owns note pickup, acknowledgement, human-decision notes
+and the optional ready nudge. Your report, never STATE, records pickup, effects and delivery. Only a source-verified
+human decision satisfies a human gate. Uncertainty never permits a resend, fallback or human paste relay.
+Unreadable prompt, notes or contract mean blocked, not ready. Project and repository instructions
 and the human's explicit decisions take precedence. This file changes no publication, merge, cloud or desktop authority.
 If instructions conflict, stop and ask the coordinator.
 
-The review skills, including `pr-closeout`, and `/second-opinion` and `/adversarial-review` wrappers ship with the package.
-Read `<resolved harness-notes path>` for invocation outside Pi; resolve it to the skill's bundled
-`references/harness-notes.md` before delivery. Requirements are unchanged.
+The review skills, including `pr-closeout`, `pr-text`, and `/second-opinion` and `/adversarial-review` wrappers ship with
+the package. Outside Pi, read `<resolved harness-notes path>` and each skill's `<resolved skills dir>/<name>/SKILL.md`
+(`second-opinion-core` and `adversarial-review` back the wrappers); resolve them to the skill's bundled
+`references/harness-notes.md` and the package's `skills/` directory before delivery. Requirements are unchanged.
 
 ### Design, then plan
 
