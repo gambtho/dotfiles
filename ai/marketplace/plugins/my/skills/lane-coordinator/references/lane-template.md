@@ -124,6 +124,11 @@ so the coordinator can check freshness, blockers and the delta without redoing r
 For a PR, include closeout's bot-opportunity evidence from its final report.
 The user's "W<n> ready" means stopped and needing an action, not a completion verdict.
 The coordinator reads the report and opens its reply with the next action and its owner.
+For an owned local coordinator, publish a same-project `fyi` ready nudge and use the
+[once-only messaging helper](messaging.md#optional-once-only-local-pointers) only with fresh
+exact identity, idle/no-dialog and verified caller evidence. Record its receipt/outcome here,
+never in STATE. Busy/unknown means leave the note for pickup; uncertainty is inspect-only,
+never a resend, fallback or request for a human paste relay.
 Manual sessions are not automatically monitored. Escalate only genuinely new material
 scope/data/security/product choices, shared/destructive operations or actions outside
 authority. Exact public text/publication and production/provider approvals still apply.

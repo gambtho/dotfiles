@@ -59,15 +59,18 @@ def call(*argv, kind, timeout=10):
     except subprocess.TimeoutExpired as exc:
         raise LaunchError(f'{argv[0:2]} timed out; effects may be uncertain') from exc
     if completed.returncode:
-        # Keep only known startup codes, never terminal output or arbitrary stderr.
+        # Keep only known codes, never terminal output or arbitrary stderr.
         detail = ''
-        if argv[:2] == ('agent', 'start'):
+        if argv[:2] in (('agent', 'start'), ('agent', 'prompt')):
             try:
                 code = json.loads(completed.stderr).get('error', {}).get('code')
             except (ValueError, AttributeError):
                 code = None
-            if code in ('timeout', 'agent_not_ready', 'agent_start_failed', 'agent_kind_mismatch',
-                        'agent_name_not_found', 'agent_start_transport_failed', 'agent_start_input_failed'):
+            allowed = (('agent_blocked', 'agent_not_ready', 'agent_not_found', 'timeout', 'empty_agent_prompt',
+                        'agent_prompt_failed') if argv[1] == 'prompt' else (
+                            'timeout', 'agent_not_ready', 'agent_start_failed', 'agent_kind_mismatch',
+                            'agent_name_not_found', 'agent_start_transport_failed', 'agent_start_input_failed'))
+            if code in allowed:
                 detail = f'; Herdr code: {code}'
         raise LaunchError(f'{argv[0:2]} failed (exit {completed.returncode}){detail}; inspect recorded target')
     if kind is None:  # agent read's CLI contract is plain text, unlike the JSON commands.
@@ -154,6 +157,62 @@ def snapshot(context):
         raise LaunchError('Inherited caller does not match live context')
     context['terminal'] = string(caller[0], 'terminal_id')
     return live
+
+
+def agent_identity(agent, label):
+    agent = mapping(agent, 'agent')
+    kind = agent.get('agent')
+    if kind not in ('pi', 'claude'):
+        raise LaunchError('Expected a Pi or Claude agent')
+    session = mapping(agent.get('agent_session'), 'agent_session')
+    if session.get('agent') != kind:
+        raise LaunchError('Agent session kind differs')
+    for key in ('source', 'kind', 'value'):
+        string(session, key)
+    pin = {key: string(agent, key) for key in (
+        'pane_id', 'workspace_id', 'terminal_id', 'foreground_cwd')}
+    pin.update(agent=kind, agent_session=dict(session), label=label)
+    if agent.get('name'):
+        pin['name'] = string(agent, 'name')
+    return pin
+
+
+def caller_pin(context, live):
+    """Optional extra evidence, never part of legacy receipt context equality."""
+    matches = [a for a in live['agents'] if a.get('pane_id') == context['caller']
+               and a.get('workspace_id') == context['workspace']
+               and a.get('terminal_id') == context['terminal']]
+    spaces = [w for w in live['workspaces'] if w.get('workspace_id') == context['workspace']]
+    if len(matches) == len(spaces) == 1:
+        try:
+            return agent_identity(matches[0], string(spaces[0], 'label'))
+        except LaunchError:
+            pass
+    return None
+
+
+def visible_idle(kind, screen):
+    """Positive supported editor shapes, not an exhaustive dialog denylist."""
+    screen = screen.replace('\u00a0', ' ')
+    # Corner ranges cover light/heavy, mixed/double and rounded borders, not editor rules.
+    if (re.search(r'[┌-┛╒-╝╭-╰]', screen) or 'Press any key to continue' in screen
+            or 'Welcome back!' in screen or re.search(
+                r'(?im)^[ \t]*(?:Trust project folder\?|Permission Required.*|Do you (?:want|trust).*|'
+                r'Claude Code needs your permission.*)[ \t]*$', screen)):
+        return False
+    rows = screen.splitlines()
+    if kind == 'pi':
+        headers = [i for i, row in enumerate(rows) if re.fullmatch(r'─{2,}\s+\S.*\s+─{4,}', row.strip())]
+        if headers:
+            start = headers[-1]
+            end = next((i for i in range(start + 1, len(rows)) if re.fullmatch(r'─{8,}', rows[i].strip())), None)
+            return end is not None and end > start + 1 and not any(row.strip() for row in rows[start + 1:end])
+    elif kind == 'claude':
+        borders = [i for i, row in enumerate(rows) if re.fullmatch(r'─{8,}', row.strip())]
+        if len(borders) >= 2:
+            inside = [row.strip() for row in rows[borders[-2] + 1:borders[-1]] if row.strip()]
+            return len(inside) == 1 and re.fullmatch(r'❯(?:\s*|\s+Try "[^"\n]*")', inside[0]) is not None
+    return False
 
 
 def state_row(text, lane):
@@ -322,11 +381,12 @@ class Launch:
         deadline = time.monotonic() + 30
         while True:
             a = self.agent()
-            if a.get('interactive_ready') is True and a['agent_status'] in ('idle', 'done'):
+            text = call('agent', 'read', self.record['pane'], '--source', 'visible',
+                        '--format', 'text', kind=None)
+            if (a.get('interactive_ready') is True and a['agent_status'] in ('idle', 'done')
+                    and visible_idle('pi', text)):
                 self.checkpoint('Ready', agent_session=a['agent_session'])
                 return
-            text = call('agent', 'read', self.record['pane'], '--source', 'visible', '--lines', '80',
-                        '--format', 'text', kind=None)
             welcome = 'Welcome back!' in text and re.search(r'Press any key to continue \(([0-9]|[12][0-9]|30)s\)', text)
             # Match prompt titles, not resource names or punctuation in startup help.
             dialog = re.search(r'(?m)^[ \t]*(?:Trust project folder\?|Permission Required(?: \(Subagent\))?)[ \t\r]*$', text)
@@ -382,7 +442,7 @@ class Launch:
                 raise LaunchError('Name collision or existing unrecorded launch; inspect, never adopt implicitly')
             if group:
                 self.collisions(group)
-            self.record = dict(version=1, **identity)
+            self.record = dict(version=1, **identity, caller_agent=caller_pin(self.context, self.live))
             initial_cwd = str(args.repo)
             if group:
                 self.record.update(version=2, group=group)

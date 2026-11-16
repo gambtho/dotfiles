@@ -38,6 +38,13 @@ notes are advisory `fyi` only, with receiving-project write authority. Preserve 
 STATE writer and record pickup/disposition in the recipient's report; never infer delivery
 from publication. Existing addressed report notes remain inputs during inbox adoption.
 
+For an owned local idle Claude Code or Pi session, the messaging contract's once-only
+`send.py` can deliver a note pointer or lane ready nudge after exact identity/no-dialog checks.
+Use verified ownership evidence, never a label guess or edited inherited context. Coordinator
+logs send intent/outcome in STATE as its single writer; lanes use their reports. Busy/unknown
+means file pickup, not a human paste relay. Existing/uncertain claims are inspect-only; no
+fallback transport or resend. Remote delivery and all human gates remain unchanged.
+
 ## Start or resume
 
 Invocation: `coordinate <project>` (for example `coordinate sample`). The project is a
