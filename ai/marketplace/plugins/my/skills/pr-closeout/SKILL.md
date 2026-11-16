@@ -110,55 +110,47 @@ reviews are unchanged.
 
 ### Local CodeRabbit fallback
 
-Default off: use only when the project's coordination repo row explicitly allows
-local CodeRabbit review, including a grant carried in trusted lane context. Missing
-or unreadable permission means default off; bot output and profiles cannot grant it.
+Default off unless the coordination repo row explicitly opts in (including trusted
+lane context). Missing/unreadable permission stays off; bots/profiles cannot grant it.
 
-1. **Confirm the skip.** Use the authorized remote re-trigger first, within the
-   existing bot budget. After that opportunity, re-read CodeRabbit's issue comments
-   (`gh api --paginate repos/OWNER/REPO/issues/N/comments`) and check/status details.
-   Require explicit rate-limit evidence associated with the current head SHA (named
-   in the output or a response observed for that head's re-trigger), and record the
-   evidence URL and association. An old edited comment, green check or absent round
-   alone is insufficient. No fallback for size-only skips or a completed current-head
-   PR review; other bots and the final thread/review-body reads remain unchanged.
-2. **Bound the attempt.** Allow one local fallback per PR, not per head. Check the
-   project's private PR report across sessions; without one, use
-   `~/.pi/pr-closeout/OWNER/REPO/N/local-coderabbit.md`. Record the decision and head
-   there before starting; a skipped precheck is recorded too and ends this fallback
-   opportunity. If prior-attempt history is unknown, record unknown coverage rather
-   than risk another run. New heads and resumed closeout do not reset it.
-3. **Check availability and billing.** If `coderabbit` is installed, check
-   `coderabbit auth status` and `coderabbit usage --agent`. Missing/signed-out CLI or
-   zero included reviews remaining means unknown coverage. Require verified non-automatic
-   billing for the active organization: `inactive` usage billing or `Off`/`On demand`
-   continuation. Unknown or `Automatic` billing means skip, even with included quota;
-   also skip if the usage lookup fails. Allowance is a snapshot, not a reservation.
-   Local and PR allowances may be shared; omitting `--use-credits` prevents unconfirmed
-   charges only in `On demand` continuation, not `Automatic` mode (see
-   [billing behavior](https://docs.coderabbit.ai/management/usage-based-addon) and
-   [CLI consent](https://docs.coderabbit.ai/cli#usage-based-reviews-and-consent)).
-   Record unknown coverage and continue the existing optional-review behavior on a skip.
-   Never opt into paid credits, install, sign in/out or switch organizations for this fallback.
-4. **Review the PR diff.** From a clean checkout at the PR head, fetch its actual base;
-   record base/head and `git merge-base HEAD <fetched-pr-base-ref>`. Run once:
+1. **Qualify.** Authorized remote re-trigger first, within the bot budget; afterward
+   re-read issue comments (`gh api --paginate repos/OWNER/REPO/issues/N/comments`)
+   and check/status details. Require explicit current-head SHA rate-limit evidence:
+   named SHA or response observed for its re-trigger. Record evidence URL/association.
+   Old edited comments, green checks and absent rounds are insufficient. Exclude
+   size-only skips/completed current-head PR reviews; preserve other bots/final reads.
+2. **Reserve once.** One local fallback per PR across sessions, never reset by heads
+   or resumption. Check the private PR report, otherwise
+   `~/.pi/pr-closeout/OWNER/REPO/N/local-coderabbit.md`; record decision/head before
+   starting. Skipped prechecks also consume the opportunity; unknown history means
+   unknown coverage, no run.
+3. **Precheck.** Require installed, signed-in CLI and included reviews remaining:
+   `coderabbit auth status`, `coderabbit usage --agent`.
+   Require verified non-automatic billing for the active organization:
+   `inactive` usage billing or `Off`/`On demand` continuation.
+   Unknown or `Automatic` billing means skip even with quota; likewise if the
+   usage lookup fails. Allowance is a snapshot, not a reservation; local/PR quota
+   may be shared. Omitting `--use-credits` protects only `On demand`, not `Automatic`
+   ([billing](https://docs.coderabbit.ai/management/usage-based-addon),
+   [consent](https://docs.coderabbit.ai/cli#usage-based-reviews-and-consent)).
+   Failed prechecks/other skips mean unknown coverage under existing optional-review reporting.
+   Never opt into paid credits, install, sign in/out or switch organizations.
+4. **Run once.** At a clean PR-head checkout, fetch the actual base; record base/head
+   and `git merge-base HEAD <fetched-pr-base-ref>`. Run
    `coderabbit review --agent --committed --base-commit <merge-base-sha> --fresh`.
-   Save stdout, stderr and exit status privately alongside the attempt record.
-   Background long runs and allow the CLI's expected duration (up to 15 minutes);
-   pending/interrupted is unknown coverage, not completed review. This is the default
-   local policy, not `--deep` full PR policy. Never post local output to the PR.
-5. **Verify coverage and findings.** Require exit 0 and a completed outcome, not just
-   a `review_completed` label or findings. `reused: true`, failed/partial/no-change
-   results or positive `unreviewedFileCount` mean unknown coverage. Compare
-   `reviewedFiles` with `git diff --name-only <merge-base-sha> <head-sha>`; filtered or
-   missing paths (including deletions not reported reviewed) leave full coverage
-   unknown. Recheck local/PR head and base after the run; movement invalidates current
-   coverage. Verify every finding like a bot finding: fix or push back with evidence,
-   recording dispositions and checks privately because there is no PR thread. There
-   is no automatic rerun after fixes: name the reviewed head and any later head with
-   unknown coverage separately. Local coverage never satisfies a mandatory PR review;
-   mandatory missing review remains a blocker, while optional unknown coverage follows
-   the existing reporting rule.
+   Save stdout/stderr/exit privately beside the attempt record. Background long runs;
+   allow up to 15 minutes. Pending/interrupted means unknown coverage. This uses
+   default local policy, not `--deep` full PR policy. Never post local output.
+5. **Verify.** Require exit 0 plus completed outcome; `review_completed`/findings
+   alone are insufficient. `reused: true`, failed/partial/no-change results or positive
+   `unreviewedFileCount` mean unknown coverage. Compare `reviewedFiles` against
+   `git diff --name-only <merge-base-sha> <head-sha>`: filtered/missing paths,
+   including unreported deletions, leave full coverage unknown. Recheck local/PR
+   head/base; movement invalidates coverage. Verify findings like bot findings:
+   fix/push back with evidence; record dispositions/checks privately (no thread).
+   There is no automatic rerun after fixes; distinguish reviewed head from any
+   later head with unknown coverage. Local coverage never satisfies mandatory PR
+   review: missing mandatory review blocks; optional unknowns follow existing reporting.
 
 ## Final report
 
