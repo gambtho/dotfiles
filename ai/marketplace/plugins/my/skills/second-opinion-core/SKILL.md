@@ -27,12 +27,14 @@ Review one document by default. Pair a spec and plan only when two paths, `--wit
 
 ## Select an independent model
 
-Use the model supplied by `--model` when present. Otherwise choose a model from a different family than the current model:
+MAI is its own family, distinct from GPT, Claude, Gemini and Grok; a shared provider or API transport does not make models same-family. If the current model's family is unknown, report the conflict rather than guessing.
 
-- Current model is GPT/Gemini/Grok: use `subagent_type: review` (centrally mapped to Claude Opus 5.5).
-- Current model is Claude: use `subagent_type: deep` (centrally mapped to GPT-6 Astra).
+Use the model supplied by `--model` when present. If it is same-family or cannot resolve, report the conflict rather than silently falling back. Otherwise choose a model from a different family than the current model:
 
-State the target document, repository root, current model, selected `subagent_type`, and reviewer model before dispatching.
+- Current model is GPT/Gemini/Grok: use `subagent_type: review` (centrally mapped to MAI-Code-2).
+- Current model is Claude/MAI: use `subagent_type: deep` (centrally mapped to GPT-6 Astra).
+
+State the target document, repository root, current model, selected `subagent_type`, and reviewer model before dispatching. Verify the actual resolved model in the tool receipt before accepting the review: its family must differ from the current model's. If resolution is unavailable or mismatched, report incomplete independence; do not silently substitute Opus or a same-family reviewer.
 
 ## Dispatch
 

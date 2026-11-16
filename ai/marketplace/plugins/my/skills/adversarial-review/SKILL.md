@@ -30,7 +30,12 @@ Reuse matching prior coverage; retain repository-required reviews. Never edit pr
 ## Select two isolated reviewers
 
 Record current provider/model and known author model. Reviewer A must use a different model family from the current model; prefer a family different from the author too.
-Default routing: current GPT/Gemini/Grok → `review`; current Claude → `deep`. These are configured roles, not proof of their models.
+MAI is its own family, distinct from GPT, Claude, Gemini and Grok; a shared provider or API transport does not make models same-family. If the current model's family is unknown, return INCOMPLETE rather than guessing.
+Default routing:
+- Current model is GPT/Gemini/Grok: use `subagent_type: review` (centrally mapped to MAI-Code-2).
+- Current model is Claude/MAI: use `subagent_type: deep` (centrally mapped to GPT-6 Astra).
+
+These are configured roles, not proof of their models. Do not silently substitute Opus or a same-family reviewer.
 An explicit `--model` selects A; pass that override only when supplied. If it is same-family or cannot resolve, report the conflict rather than silently relaxing independence.
 Resolve A's actual model before selecting B. Reviewer B must use a different model family from A's resolved family. Prefer `deep` for a named failure/concurrency/state risk, otherwise `inspector` for a named consumer/representation risk; if that role resolves to A's family, choose another eligible role while retaining B's boundary mandate.
 Verify **both actual resolved models** in their tool receipts before accepting coverage: A's family must differ from the current model's, and B's family must differ from A's. Replace a mismatched selection if available. If no eligible different-family reviewer is available, or tools/models/context are unavailable, return INCOMPLETE with any limited evidence and do not claim complete coverage; do not simulate independent reviewers in one conversation.
