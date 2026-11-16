@@ -233,11 +233,10 @@ permission. A Herdr workspace is not an isolated Git worktree.
 ## Handle a lane report
 
 A lane returns one consolidated readiness report or ONE batched real blocker.
-The user's "W12 ready" means the lane stopped and needs an action (merge, reply,
-close or decide), not "done" or "not done". Read the report and name the next action
-and its owner without copy/paste relays. Fetch a remote lane's named reports first;
-failed/offline fetch means unknown, not ready. Manual sessions are not automatically
-monitored. STATE.md answers repeated-report or ownership questions.
+"W12 ready" means stopped for an action (merge, reply, close or decide), not done.
+Read the report; fetch a remote lane's named reports first. Failed/offline fetch
+means unknown, not ready. Manual sessions are not automatically monitored.
+STATE.md tracks next actions, owners and notification attempts.
 
 Approved LOCAL delivery includes authorized setup/verification, safe in-scope
 corrections, and exact restoration of tool-generated temporary changes. For
@@ -290,9 +289,13 @@ retain their exact approval requirements.
    ```text
    W<n> needs <action> from <owner>.
    ```
-   Then evidence, what's off (with file:line), your recommendation and one batched next
-   instruction if needed. Read shared files directly; give paste-ready text only when
-   no authorized direct handoff is available.
+   When a lane nudge, inbox note or status read reveals a human action, send this line
+   via [the harness tool](references/harness-notes.md): one notification per lane state change.
+   Record the attempt or skip in STATE; never repeat an unchanged item. Include lane id, action
+   and owner only; never request or accept approval through a notification. Skip when the human
+   is clearly at the terminal; preserve the tool's presence check. Then give evidence, issues
+   (file:line), recommendation and one batched instruction. Read shared files directly;
+   paste-ready text only when no authorized direct handoff exists.
 7. **Recommend; don't just list options.** Before forwarding a finding as work, decide
    in-scope repair or separate follow-up; give a bounded outcome and size, not an invented
    mechanism. Push back on over-engineering, timeout bumps, scope creep and public process noise.
