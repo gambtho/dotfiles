@@ -497,10 +497,12 @@ After integrating the reviewed source into the canonical checkout:
 
    [ui.toast]
    delivery = "herdr"
-
-   [ui.sidebar.spaces]
-   rows = [["state_icon", "workspace"]]
    ```
+
+   For sidebar rows, merge `[ui.sidebar.agents]` and `[ui.sidebar.spaces]` from
+   `tools/herdr/config.toml.template`: icon-only Agents and the optional `$needs`
+   token on Spaces. This is the same row used by the project-home setup above;
+   do not replace it with a workspace-only row that hides the count.
 
 3. Remove only existing `[[keys.command]]` blocks whose `command` is exactly
    `devcontainer.open-shell` or `devcontainer.open-stop`. Preserve all other
