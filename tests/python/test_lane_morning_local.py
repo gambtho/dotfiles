@@ -8,7 +8,7 @@ from unittest.mock import patch
 import test_lane_morning as fixtures
 
 TOOLS = '''#!/usr/bin/env python3
-import json, os, pathlib, sys
+import json, os, pathlib, sys, time
 name = pathlib.Path(sys.argv[0]).name
 args = [name, *sys.argv[1:]]
 with open(os.environ['LOCAL_LOG'], 'a') as f:
@@ -17,7 +17,9 @@ r = json.loads(pathlib.Path(os.environ['LOCAL_RESPONSES']).read_text()).get(json
 if r is None:
     sys.stderr.write('unexpected tool invocation')
     sys.exit(9)
+time.sleep(r.get('sleep', 0))
 sys.stdout.write(r['out'])
+sys.stderr.write(r.get('err', ''))
 sys.exit(r.get('exit',0))
 '''
 SHA = 'a' * 40
@@ -43,8 +45,8 @@ class LocalObservationsTests(unittest.TestCase):
         self.checkout.mkdir()
         self.tool(['git', '-C', str(self.root), 'rev-parse', 'HEAD'], SHA+'\n')
 
-    def tool(self, args, out='', code=0):
-        self.rows[json.dumps(args)] = {'out': out, 'exit': code}
+    def tool(self, args, out='', code=0, **extra):
+        self.rows[json.dumps(args)] = {'out': out, 'exit': code, **extra}
         self.responses.write_text(json.dumps(self.rows))
 
     def settings(self, **settings):
@@ -248,11 +250,66 @@ class LocalObservationsTests(unittest.TestCase):
         self.assertEqual(measured.count(['du', '-sk', str(self.root)]), 1)
         self.assertFalse(client.activity_failures)
 
+    def project_line(self, name, budget, out, code=0, **extra):
+        self.settings(disk={'projects': [{'name': name, 'path': str(self.root), **budget}]})
+        self.tool(['du', '-sk', str(self.root)], out, code, **extra)
+        text, client = self.collect('disk_observations')
+        self.assertFalse(client.activity_failures)
+        return next(line for line in text.splitlines() if f'Project {name}' in line)
+
+    def test_permission_denials_report_partial_lower_bound(self):
+        denied = ''.join(f"du: cannot read directory '{self.root}/secret {n}': Permission denied\n" for n in (1, 2))
+        under = self.project_line('under', {'budget_gib': 2}, f'{1024**2}\t{self.root}\n', 1, err=denied)
+        for value in ('at least 1048576 KiB (1.00 GiB)', 'coverage partial', '2 paths unreadable', 'budget=2 GiB'):
+            self.assertIn(value, under)
+        self.assertNotIn('secret', under)
+        self.assertNotIn('cleanup', under)
+        over = self.project_line('over', {'budget_gib': .5}, f'{1024**2}\t{self.root}\n', 1,
+                                 err=f"du: {self.root}/secret: Permission denied\n")
+        for value in ('at least', '1 path unreadable', 'over budget', 'Ask its coordinator for an exact cleanup list.'):
+            self.assertIn(value, over)
+        many = ''.join(f"du: cannot read directory '{self.root}/{'deep/' * 20}{n}': Permission denied\n" for n in range(500))
+        line = self.project_line('many', {}, f'{1024**2}\t{self.root}\n', 1, err=many)
+        self.assertIn('500 paths unreadable', line)
+
+    def test_other_du_errors_stay_unknown(self):
+        for err in (f"du: cannot access '{self.root}/gone': No such file or directory\n",
+                    f"du: {self.root}/private\nname: Permission denied\n",
+                    f"du: {self.root}/a: Permission denied\ndu: fts_read: Input/output error\n", ''):
+            with self.subTest(err=err):
+                line = self.project_line('mixed', {'budget_gib': 2}, f'{1024**2}\t{self.root}\n', 1, err=err)
+                self.assertIn('unknown', line)
+                self.assertNotIn('KiB', line)
+                self.assertNotIn(str(self.root), line)
+        line = self.project_line('fatal', {}, f'{1024**2}\t{self.root}\n', 2, err=f"du: {self.root}/a: Permission denied\n")
+        self.assertIn('unknown', line)
+
+    def test_slow_project_uses_its_bounded_timeout_then_stays_unknown(self):
+        line = self.project_line('slow', {'budget_gib': 1, 'timeout_seconds': 1},
+                                 f'{1024**2}\t{self.root}\n', sleep=3)
+        for value in ('unknown', 'timed out', 'budget=1 GiB'):
+            self.assertIn(value, line)
+        self.assertNotIn('KiB', line)
+        timeouts = []
+        def read(argv, **kwargs):
+            timeouts.append(kwargs['timeout'])
+            self.assertLessEqual(kwargs['budget'].remaining(), 120)
+            return f'1\t{self.root}\n', 0
+        self.settings(disk={'projects': [{'name': 'big', 'path': str(self.root), 'timeout_seconds': 90},
+                                         {'name': 'default', 'path': str(self.root / 'other')}]})
+        with patch.object(self.m, 'run_read', side_effect=read):
+            text, _ = self.collect('disk_observations')
+        self.assertEqual(timeouts, [90, 20])
+        for name in ('big', 'default'):
+            self.assertIn(f'Project {name}: 1 KiB', text)
+
     def test_project_config_rejects_malformed_entries(self):
         for projects in ({}, [None], [{'name': 'x'}], [{'name': '', 'path': '.'}],
                          [{'name': 'x', 'path': '', 'budget_gib': 1}],
                          *([{'name': 'x', 'path': '.', 'budget_gib': value}]
-                           for value in (True, 0, -1, '1', float('inf'), float('nan')))):
+                           for value in (True, 0, -1, '1', float('inf'), float('nan'))),
+                         *([{'name': 'x', 'path': '.', 'timeout_seconds': value}]
+                           for value in (True, 0, 1.5, 121, '30'))):
             with self.subTest(projects=projects), self.assertRaisesRegex(ValueError, 'disk.projects'):
                 self.settings(disk={'projects': projects})
 

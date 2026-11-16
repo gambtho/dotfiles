@@ -163,11 +163,14 @@ def configure(root):
         raise ValueError('disk.minimum_free_gib must be positive and finite')
     projects = disk.get('projects', [])
     if not isinstance(projects, list) or not all(
-            isinstance(p, dict) and {'name', 'path'} <= set(p) <= {'name', 'path', 'budget_gib'}
+            isinstance(p, dict) and {'name', 'path'} <= set(p) <= {'name', 'path', 'budget_gib', 'timeout_seconds'}
             and path_name(p['name']) and path_name(p['path'])
             and ('budget_gib' not in p or (type(p['budget_gib']) in (int, float)
-                 and 0 < p['budget_gib'] < float('inf'))) for p in projects):
-        raise ValueError('disk.projects must contain name/path objects with optional positive finite budget_gib')
+                 and 0 < p['budget_gib'] < float('inf')))
+            and ('timeout_seconds' not in p or (type(p['timeout_seconds']) is int
+                 and 1 <= p['timeout_seconds'] <= 120)) for p in projects):
+        raise ValueError('disk.projects must contain name/path objects with optional positive finite budget_gib'
+                         ' and timeout_seconds 1-120')
     roots = disk.get('output_roots', [])
     caches = disk.get('caches', {})
     if not isinstance(roots, list) or not all(path_name(p) for p in roots):
@@ -234,7 +237,8 @@ def command_failure(stderr, fallback, forced=None):
     return f'{kind}: {(text or fallback)[:240]}; coverage unknown'
 
 
-def run_read(argv, *, timeout, budget, environment=None):
+def run_read(argv, *, timeout, budget, environment=None, denials=None):
+    """With a denials pattern, exit 1 whose every stderr line matches returns (stdout, count)."""
     timeout = min(timeout, budget.remaining())
     if timeout <= 0:
         raise BudgetExhausted('time budget exhausted; coverage unknown')
@@ -257,7 +261,7 @@ def run_read(argv, *, timeout, budget, environment=None):
         while streams.get_map():
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise ObservationError(command_failure(error_bytes, 'read timed out', 'timeout'))
+                raise subprocess.TimeoutExpired(argv, timeout)
             for key, _ in streams.select(remaining):
                 chunk = os.read(key.fd, 65536)
                 if not chunk:
@@ -268,14 +272,26 @@ def run_read(argv, *, timeout, budget, environment=None):
                     raise ObservationError('read output exceeds 16 MiB; coverage unknown; narrow --since')
                 if key.data == 'stdout':
                     output.append(chunk)
+                elif denials is not None:
+                    error_bytes.extend(chunk)  # every line is checked; MAX_CAPTURE bounds it
                 elif len(error_bytes) < 4096 and b'\n' not in error_bytes:
                     error_bytes.extend(chunk[:4096-len(error_bytes)])
         process.wait(timeout=max(.001, deadline - time.monotonic()))
+        if denials is not None:
+            errors = error_bytes.decode('utf-8', errors='replace').splitlines()
+            if process.returncode == 0 or (process.returncode == 1 and errors
+                                           and all(denials.fullmatch(line) for line in errors)):
+                return b''.join(output).decode('utf-8'), len(errors) if process.returncode else 0
+            # Do not echo stderr here: an unmatched line may be a fragment of an unreadable path.
+            raise ObservationError(f'command failure: exited {process.returncode} with errors other than '
+                                   'permission denials; coverage unknown')
         if process.returncode:
             raise ObservationError(command_failure(error_bytes, f'read command exited {process.returncode}'))
         return b''.join(output).decode('utf-8')
     except subprocess.TimeoutExpired as error:
-        raise ObservationError(command_failure(error_bytes, 'read timed out', 'timeout')) from error
+        # Denied paths seen before a timeout are not the failure reason; do not echo them.
+        raise ObservationError(command_failure(b'' if denials is not None else error_bytes,
+                                               'read timed out', 'timeout')) from error
     except UnicodeError as error:
         raise ObservationError('read returned invalid UTF-8; coverage unknown') from error
     finally:
@@ -1264,6 +1280,16 @@ def disk_observations(client):
             local_unknown(client, lines, 'filesystem', error)
     else:
         lines.append('- Filesystem: not checked (not configured).')
+
+    def project_size(path, timeout):
+        # Permission denials alone leave a measured lower bound; other du errors stay unknown.
+        raw, denied = run_read(['du', '-sk', str(path)], timeout=timeout, budget=budget,
+                               environment={'LC_ALL': 'C'}, denials=re.compile(r'du: .*: Permission denied'))
+        match = re.match(r'^(\d+)\s', raw)
+        if match is None:
+            raise ObservationError('malformed du measurement')
+        return int(match[1]), denied
+
     # Observe project totals before the optional ranking can consume the disk deadline.
     project_sizes = {}
     for project in disk.get('projects', []):
@@ -1274,15 +1300,21 @@ def disk_observations(client):
             path = configured_path(project['path'])
             if path not in project_sizes:
                 try:
-                    project_sizes[path] = size(path)
+                    project_sizes[path] = project_size(path, project.get('timeout_seconds', 20))
                 except (OSError, ValueError) as error:
                     project_sizes[path] = error
-            kib = project_sizes[path]
-            if isinstance(kib, Exception):
-                raise kib
-            lines.append(f'- {safe_text(label)}: {kib} KiB ({kib / 1024**2:.2f} GiB){budget_text}.'
-                         + (' Ask its coordinator for an exact cleanup list.'
-                            if limit is not None and kib > limit * 1024**2 else ''))
+            measured = project_sizes[path]
+            if isinstance(measured, Exception):
+                raise measured
+            kib, denied = measured
+            over = limit is not None and kib > limit * 1024**2
+            amount = f'{kib} KiB ({kib / 1024**2:.2f} GiB)'
+            if denied:
+                paths = '1 path' if denied == 1 else f'{denied} paths'
+                amount = f'at least {amount}, coverage partial ({paths} unreadable)'
+            lines.append(f'- {safe_text(label)}: {amount}{budget_text}.'
+                         + (' Partial size is already over budget.' if over and denied else '')
+                         + (' Ask its coordinator for an exact cleanup list.' if over else ''))
         except (OSError, ValueError) as error:
             local_unknown(client, lines, label + budget_text, error)
     roots, candidates, sizes = disk.get('output_roots', []), set(), []
