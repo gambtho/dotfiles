@@ -69,7 +69,7 @@ Add only the resources the coordinator wants observed:
   "checkouts": [{"repo":"example/project","path":"~/project"}],
   "disk": {
     "filesystem":"~", "minimum_free_gib":50,
-    "projects":[{"name":"example","path":"~/example-local","budget_gib":100}],
+    "projects":[{"name":"example","path":"~/example-local","budget_gib":100,"timeout_seconds":60}],
     "output_roots":["lanes","reports","~/project-worktrees"],
     "caches":{"go":"~/.cache/go-build","uv":"~/.cache/uv","npm":"~/.npm"},
     "cache_check_checkout":"~/config"
@@ -81,7 +81,8 @@ Absent components say not checked; configured failures say unknown. In `--check`
 checkout/worktree observations run before STATE queries, disk/cache last. In sweep
 mode disk/cache runs after activity; checkouts require `--check`. They share the
 same global deadline/request ledger. Disk gets at most 120 remaining seconds;
-Git/df commands get at most 10 seconds, du/cache commands 20, clipped to budget.
+Git/df commands get at most 10 seconds, du/cache commands 20 (or a project's
+`timeout_seconds`), clipped to budget.
 
 Primary status includes branch, HEAD, dirtiness and local tracking-ref divergence,
 not live upstream freshness. NUL-delimited Git output preserves paths with spaces
@@ -98,7 +99,13 @@ Optional `disk.projects` entries require nonblank `name` and `path`; optional `b
 is a positive finite number. Missing budget means size only, not a budget-health claim.
 Projects are measured after `df`, before output rankings: one `du -sk` per resolved project
 folder (including shared failures), at most 20 seconds each within the disk/global deadline.
+Optional integer `timeout_seconds` (1-120) gives a large project more of that same deadline;
+list slow projects last so they cannot starve the others. No retries.
 Timeout/failure names the project and budget (if configured) with size unknown, never healthy.
+When `du` exits 1 and every error is a permission denial, the project reports the measured
+size as "at least N, coverage partial" with the count of unreadable paths (never their names).
+A partial size over budget is reported over budget; under budget it stays a lower bound.
+Any other `du` error keeps the size unknown.
 An over-budget line names the project and asks its coordinator for an exact cleanup list;
 it never proposes deleting paths in other projects. The coordinator of the project owning
 shared machines leads this request, not another project's cleanup.
