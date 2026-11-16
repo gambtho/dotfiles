@@ -84,7 +84,7 @@ custom units. The installer never performs that migration for you.
   ai/             # Pi configuration, personal prompts/skills, standalone Copilot CLI bootstrap
   profiles/       # Machine profiles: personal.zsh, work.zsh
   config/         # XDG config files, symlinked to ~/.config/<name>
-  docs/guides/    # Long-form guides for the tooling in bin/
+  docs/automation-reports/ # Weekly automation review reports
 ```
 
 ## Profile System
