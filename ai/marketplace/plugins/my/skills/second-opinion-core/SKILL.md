@@ -14,6 +14,7 @@ Review a design document or implementation plan against the actual repository us
 - **Automatic workflow mode:** when a non-trivial spec or implementation plan was just written or substantially revised in this session, run this review before implementation begins. After a spec, review the spec alone. After a plan, review it paired with its source spec whenever one is identifiable — written in this session, or referenced by the plan, even from an earlier session; review a plan alone only when no source spec can be found. Review each document revision automatically at most once; a revision made after a `REVISE` or `RETHINK` verdict is a new revision and gets one automatic review. Otherwise rerun only on user request.
   - On `SHIP` with no Blocking findings, summarize the review and continue the workflow.
   - On `REVISE`, `RETHINK`, or any Blocking finding, present the review and pause for the user to choose which findings to fold in before implementation.
+  - Exception: when trusted project or prompt authority explicitly delegates plan corrections within an already-approved design, apply the in-scope findings you agree with, explain each rejection, and continue. A finding that would change the design, scope or authority still pauses.
 - **Standalone mode:** when the user asks only for a review, return the report and stop.
 
 ## Resolve the target
@@ -71,4 +72,4 @@ If the subagent cannot read the repository or document, report the failure and d
 
 Present the independent review without silently rewriting its findings. Then add a short, clearly separated **My take** section explaining agreements, disagreements, and any false positives using the current session context.
 
-Do not edit source code. Offer to fold selected findings into the reviewed spec or plan; apply only findings the user explicitly accepts.
+Do not edit source code. Offer to fold selected findings into the reviewed spec or plan; apply only findings the user explicitly accepts, or, under the delegated exception above, the in-scope corrections you agree with. Standalone mode returns findings only.

@@ -45,12 +45,14 @@ from pathlib import Path
 import sys
 
 skill, repo = map(Path, sys.argv[1:])
-for name in ('references/common-rules-template.md', 'references/lane-template.md'):
-    text = ' '.join((skill / name).read_text().split())
-    for phrase in ('starting SHA256', 'each irreversible or outward step', 'push, PR opening',
-                   'setup/config mutation and final ready report', 'if changed', 'reread and reconcile', 'coordinator notes'):
-        assert phrase in text, (name, phrase)
 workflow = ' '.join((skill / 'references/common-rules-template.md').read_text().split())
+for phrase in ('starting SHA256', 'each irreversible or outward step', 'push, PR opening',
+               'setup/config mutation and final ready report', 'if changed', 'reread and reconcile', 'coordinator notes'):
+    assert phrase in workflow, phrase
+# The lane template points at the shared checkpoints instead of restating them.
+lane = ' '.join((skill / 'references/lane-template.md').read_text().split())
+assert "shared workflow's prompt-hash and addressed-note checkpoints" in lane
+assert 'starting SHA256' not in lane
 coordinator = ' '.join((skill / 'SKILL.md').read_text().split())
 for text in (workflow, coordinator):
     for phrase in ('observed', 'command or source', 'inferred'):
@@ -153,7 +155,8 @@ for text in (coordinator, lane):
     for phrase in ("human's current workflow", "infrastructure-only", "unverified",
                    "what the change gives the human", "why existing mechanisms do not already cover it"):
         assert phrase in text, phrase
-for text in (coordinator, lane, closeout):
+common = " ".join((skill / "references/common-rules-template.md").read_text().split())
+for text in (coordinator, lane, closeout, common):
     for phrase in ("COORDINATION.md", "repo rules", "ask on conflict", "method", "authority"):
         assert phrase in text, phrase
 assert "Merge the base, resolve" not in closeout
@@ -237,9 +240,13 @@ PY
 from pathlib import Path
 import sys
 
-lane = (Path(sys.argv[1]) / "references/lane-template.md").read_text()
+refs = Path(sys.argv[1]) / "references"
+lane = (refs / "lane-template.md").read_text()
+common = (refs / "common-rules-template.md").read_text()
 assert "If none exist:" not in lane
-fallback = " ".join(lane.split("If no project or repo Git policy exists:", 1)[1].split())
+# One home: the shared workflow carries the fallback; the lane template points to it.
+assert "Git policy exists" not in lane and "no-policy Git fallback" in lane
+fallback = " ".join(common.split("Without project or repo Git policy,", 1)[1].split())
 for phrase in ("resolve conflicts by merging the base branch into yours",
                "never push to a default branch or merge a PR",
                "never rewrite someone else's branch"):
@@ -711,6 +718,39 @@ PY
   run bash "$TEST_ROOT/fetch.sh"
   [ "$status" -eq 23 ] || {
     echo "Expected missing-report exit 23; got $status"
+    false
+  }
+}
+
+@test "messaging protocol has one home and bundled skills name their SKILL.md path" {
+  run python3 - "$PACKAGE_DIR/skills" <<'PY'
+from pathlib import Path
+import sys
+
+skills = Path(sys.argv[1])
+refs = skills / "lane-coordinator/references"
+messaging = " ".join((refs / "messaging.md").read_text().split())
+for phrase in ("disposition=<pending|applied", "tom-decision", "A stale prompt hash is rejected",
+               "inspect-only", "it never writes STATE"):
+    assert phrase in messaging, phrase
+for name in ("lane-template.md", "common-rules-template.md"):
+    text = " ".join((refs / name).read_text().split())
+    for restated in ("tom-decision", "pending before action", "A stale prompt hash"):
+        assert restated not in text, (name, restated)
+    assert "`<resolved skills dir>/<name>/SKILL.md`" in text, name
+    assert "`pr-text`" in text, name
+common = " ".join((refs / "common-rules-template.md").read_text().split())
+for phrase in ("never STATE", "source-verified human decision", "never permits a resend, fallback",
+               "Unreadable prompt, notes or contract mean blocked"):
+    assert phrase in common, phrase
+opinion = " ".join((skills / "second-opinion-core/SKILL.md").read_text().split())
+for phrase in ("explicitly delegates plan corrections within an already-approved design",
+               "explain each rejection", "design, scope or authority still pauses",
+               "Standalone mode returns findings only"):
+    assert phrase in opinion, phrase
+PY
+  [ "$status" -eq 0 ] || {
+    echo "$output"
     false
   }
 }
