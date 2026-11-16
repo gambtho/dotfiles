@@ -518,19 +518,19 @@ class PublisherTests(unittest.TestCase):
     def test_grouped_count_transitions_exclude_ungrouped_needs(self):
         with patch.object(self.needs.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0)) as run:
             last = {}
-            self.needs.publish(self.spaces, last)
+            self.needs.publish(self.spaces, 'w1', last)
             self.assertIn('needs=1', run.call_args.args[0])
             self.spaces[1]['agent_status'] = 'idle'
             self.spaces[2]['tokens']['phase'] = 'needs-decision'
-            self.needs.publish(self.spaces, last)
+            self.needs.publish(self.spaces, 'w1', last)
             self.assertIn('needs=0', run.call_args.args[0])
             self.spaces[1]['tokens']['phase'] = 'needs-decision'
-            self.needs.publish(self.spaces, last)
+            self.needs.publish(self.spaces, 'w1', last)
             self.assertIn('needs=1', run.call_args.args[0])
 
     def test_published_counts_expire_if_the_reporter_stops(self):
         with patch.object(self.needs.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0)) as run:
-            self.needs.publish(self.spaces, {})
+            self.needs.publish(self.spaces, 'w1', {})
             args = run.call_args.args[0]
             self.assertIn('--ttl-ms', args)
             self.assertEqual(args[args.index('--ttl-ms') + 1], '180000')
@@ -539,7 +539,7 @@ class PublisherTests(unittest.TestCase):
         self.spaces[0]['worktree'] = None
         self.spaces[1]['worktree'] = None
         with patch.object(self.needs.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0)) as run:
-            self.needs.publish(self.spaces, {})
+            self.needs.publish(self.spaces, 'w1', {})
             self.assertIn('needs=0', run.call_args.args[0])
         with patch.object(self.needs, 'project_for_label', return_value='double-holo'):
             self.assertIn('(not grouped)', '\n'.join(self.needs.draw(self.spaces, 'w1')))
@@ -551,12 +551,75 @@ class PublisherTests(unittest.TestCase):
             Path(home, 'double-holo-7-local').mkdir()
             self.assertNotIn('Fictional decision', '\n'.join(self.needs.draw(self.spaces, 'w1')))
 
-    def test_failed_publication_is_not_cached_as_success(self):
+    def test_heartbeat_uses_elapsed_success_time_and_retries_failed_writes(self):
+        last, now, writes = {}, [0.0], []
+        def cli(args, **kwargs):
+            writes.append((now[0], args))
+        with (patch.object(self.needs.time, 'monotonic', side_effect=lambda: now[0]),
+              patch.object(self.needs.time, 'time', return_value=17),
+              patch.object(self.needs.subprocess, 'run', side_effect=cli) as run):
+            self.needs.publish(self.spaces, 'w1', last)
+            for tick in range(1, 25):  # 5 s sleep + latency misses each wall-clock window
+                now[0] = tick * 5.2
+                self.needs.publish(self.spaces, 'w1', last)
+            self.assertEqual([round(t, 1) for t, _ in writes], [0, 62.4, 124.8])
+            now[0] = 130
+            self.spaces[1]['agent_status'] = 'idle'
+            self.needs.publish(self.spaces, 'w1', last)
+            self.assertIn('needs=0', writes[-1][1])
+            self.assertEqual(writes[-1][0], 130)
+            saved = dict(last)
+            now[0] = 190
+            run.side_effect = subprocess.CalledProcessError(1, 'herdr')
+            with self.assertRaises(subprocess.CalledProcessError):
+                self.needs.publish(self.spaces, 'w1', last)
+            self.assertEqual(last, saved)
+            now[0] = 195
+            run.side_effect = cli
+            self.needs.publish(self.spaces, 'w1', last)
+            self.assertEqual(writes[-1][0], 195)
+
+    def test_each_publisher_only_writes_its_bound_heading(self):
+        self.spaces.append({'workspace_id': 'w4', 'label': '◆ orchard',
+                            'worktree': {'repo_key': 'other', 'is_linked_worktree': False}})
+        with patch.object(self.needs.subprocess, 'run') as run:
+            for wid, count in (('w1', 'needs=1'), ('w4', 'needs=0')):
+                self.needs.publish(self.spaces, wid, {})
+                self.assertEqual(run.call_args.args[0][3], wid)
+                self.assertIn(count, run.call_args.args[0])
+            self.assertEqual(run.call_count, 2)
+            run.reset_mock()
+            for wid in ('', 'absent', 'w2'):
+                self.needs.publish(self.spaces, wid, {})
+            self.spaces[0]['worktree']['is_linked_worktree'] = True
+            self.needs.publish(self.spaces, 'w1', {})
+            run.assert_not_called()
+
+    def test_failed_first_publication_is_retried(self):
         last = {}
-        with (patch.object(self.needs.subprocess, 'run', side_effect=subprocess.CalledProcessError(1, 'herdr')),
-              self.assertRaises(subprocess.CalledProcessError)):
-            self.needs.publish(self.spaces, last)
-        self.assertNotIn('w1', last)
+        with patch.object(self.needs.subprocess, 'run') as run:
+            run.side_effect = OSError('unavailable')
+            with self.assertRaises(OSError):
+                self.needs.publish(self.spaces, 'w1', last)
+            self.assertEqual(last, {})
+            run.side_effect = None
+            self.needs.publish(self.spaces, 'w1', last)
+            self.assertIn('needs=1', run.call_args.args[0])
+            self.assertEqual(run.call_count, 2)
+
+    def test_main_draws_panel_and_error_when_publication_fails(self):
+        with (patch.dict(os.environ, {'HERDR_WORKSPACE_ID': 'w1'}),
+              patch.object(self.needs, 'herdr', return_value={'workspaces': self.spaces}),
+              patch.object(self.needs, 'project_for_label', return_value='double-holo'),
+              patch.object(self.needs.subprocess, 'run', side_effect=OSError('unavailable')),
+              patch.object(self.needs.time, 'sleep', side_effect=KeyboardInterrupt),
+              patch('builtins.print') as output,
+              self.assertRaises(KeyboardInterrupt)):
+            self.needs.main()
+        panel = output.call_args.args[0]
+        self.assertIn('Fictional decision', panel)
+        self.assertIn('publish failed:', panel)
+        self.assertIn('unavailable', panel)
 
 
 class TransportTests(unittest.TestCase):

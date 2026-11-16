@@ -2,7 +2,7 @@
 """Live project summary in a "◆ <project>" heading pane.
 
 Every 5 s it:
-- publishes `needs` on each ◆ heading (lanes in its worktree group that are blocked
+- publishes `needs` on its own ◆ heading (lanes in its worktree group that are blocked
   or report phase=needs-decision), which the sidebar shows as the red count;
 - draws this project's numbered/coord lanes, grouped or not, with state, phase and
   task. Longest matching ~/<project>-local folder owns each label. The summary can
@@ -54,21 +54,22 @@ def project_for_label(label):
                 if label == project or label.startswith(project + "-")), key=len, default=None)
 
 
-def publish(spaces, last):
+def publish(spaces, me, last):
     for head in spaces:
         wt = head.get("worktree") or {}
-        if not head["label"].startswith("◆ ") or wt.get("is_linked_worktree", False):
+        if head["workspace_id"] != me or not head["label"].startswith("◆ ") or wt.get("is_linked_worktree", False):
             continue
         # New headings have no provenance until their first linked lane opens.
         repo = wt.get("repo_key")
         n = sum(1 for w in spaces if repo and (w.get("worktree") or {}).get("repo_key") == repo
                 and w["worktree"]["is_linked_worktree"] and needs_you(w))
-        if last.get(head["workspace_id"]) != n or int(time.time()) % 60 < 5:
+        previous, succeeded = last.get(me, (None, 0))
+        if previous != n or time.monotonic() - succeeded >= 60:
             subprocess.run(["herdr", "workspace", "report-metadata", head["workspace_id"],
                             "--source", "projects", "--token", f"needs={n}",
                             "--ttl-ms", "180000"],
                            capture_output=True, timeout=5, check=True)
-            last[head["workspace_id"]] = n
+            last[me] = (n, time.monotonic())
 
 
 def draw(spaces, me):
@@ -76,7 +77,7 @@ def draw(spaces, me):
     head = next((w for w in spaces if w["workspace_id"] == me), None)
     project = head["label"][2:] if head and head["label"].startswith("◆ ") else None
     if not project:
-        return [f"{DIM}Not in a ◆ heading pane; publishing counts only.{OFF}"]
+        return [f"{DIM}Not in a ◆ heading pane; not publishing counts.{OFF}"]
     repo = ((head or {}).get("worktree") or {}).get("repo_key")
     lanes = [w for w in spaces if re.fullmatch(re.escape(project) + r"-(coord|\d+)", w["label"])
              and project_for_label(w["label"]) == project]
@@ -109,13 +110,18 @@ def main():
     me = os.environ.get("HERDR_WORKSPACE_ID", "")
     last = {}
     while True:
+        publish_error = []
         try:
             spaces = herdr("workspace", "list")["workspaces"]
-            publish(spaces, last)
+            try:
+                publish(spaces, me, last)
+            except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
+                publish_error = [f"{RED}{time.strftime('%H:%M:%S')} publish failed: {error}{OFF}"]
             lines = draw(spaces, me)
         except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
             # Keep going on CLI/read failures, but make the failure visible.
             lines = [f"{RED}{time.strftime('%H:%M:%S')} read failed: {error}{OFF}"]
+        lines += publish_error
         print("\033[H\033[2J" + "\n".join(lines), end="", flush=True)
         time.sleep(5)
 
