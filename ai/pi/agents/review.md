@@ -1,7 +1,7 @@
 ---
 description: Independent cross-family reviewer
 display_name: Review
-model: github-copilot/claude-opus-5.5
+model: github-copilot/mai-code-2
 thinking: high
 tools: read, bash, grep, find, ls, codemode
 prompt_mode: append

@@ -125,7 +125,7 @@ const prompts: PermissionUiPromptEvent[] = [];
 const decisions: PermissionDecisionEvent[] = [];
 const childIds = new Map<string, string>();
 const childModels = new Map<string, string>();
-const expectedModels: Record<string, string> = { rush: "gpt-6-luna", smart: "gpt-6.1-sol", inspector: "gpt-6.1-sol", deep: "gpt-6-astra", review: "claude-opus-5.5" };
+const expectedModels: Record<string, string> = { rush: "gpt-6-luna", smart: "gpt-6.1-sol", inspector: "gpt-6.1-sol", deep: "gpt-6-astra", review: "mai-code-2" };
 let runningChild: string | undefined;
 let service: SubagentsService | undefined;
 let serial = 0;

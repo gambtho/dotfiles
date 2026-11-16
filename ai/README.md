@@ -12,6 +12,10 @@ Pi connects directly to the GitHub Copilot subscription; no model proxy is requi
 - Select an enabled model with `/model`; Ctrl+S saves the highlighted model as the startup default.
 - Keep OAuth credentials in `~/.pi/agent/auth.json`. Never commit or link that file.
 
+### Machine-local MAI-Code-2 entries
+
+Until Pi's native catalog includes them, hosts need machine-local `mai-code-2` and `mai-code-2-flash` entries under `providers.github-copilot.models` in `~/.pi/agent/models.json`. These owner-managed entries are not installed by `make ai` or versioned here; use verified model definitions, not edits to the generated `models-store.json` catalog. The `review` child uses `github-copilot/mai-code-2`, not Flash. Check `pi --list-models mai-code-2` and a throwaway subagent's actual resolved model before using the role. Start a fresh Pi session after adding entries if the running session's registry does not see them; an unavailable model is a blocker, not permission to fall back to Opus or the author's family.
+
 ### Astra override retirement
 
 The tested Pi 1.1.0 catalog provides `github-copilot/gpt-6-astra` natively through `openai-responses` with a 1M context window. The old authored transport override is retired. On the first successful migration, the installer backs up runtime `models.json`, removes only the Copilot `gpt-6-astra` entry, and preserves other models, providers, and root metadata. It removes the file only if the result is empty. An owner-only `dotfiles-migrations.json` receipt prevents later deliberate overrides from being removed again. Invalid JSON, foreign links, and concurrent changes fail without claiming completion.
@@ -57,7 +61,9 @@ Interactive browser automation remains opt-in rather than a default dependency.
 | `smart` | GitHub Copilot GPT-6.1 Sol | medium | Investigation and implementation subtasks; startup default |
 | `inspector` | GitHub Copilot GPT-6.1 Sol | medium | Ordinary read-oriented review and routine specialist analysis |
 | `deep` | GitHub Copilot GPT-6 Astra | high | Architecture, security, diagnosis, and broad analysis |
-| `review` | GitHub Copilot Claude Opus 5.5 | high | Independent cross-family second opinions |
+| `review` | GitHub Copilot MAI-Code-2 | high | Independent cross-family second opinions |
+
+The named `review` child is separate from the retained main-session `review` mode, which still selects Claude Opus 5.5. Its existing chat compaction override is unchanged. Review workflows treat MAI as a distinct family: GPT/Gemini/Grok use the MAI `review` child; Claude/MAI use the GPT `deep` child. Always verify the resolved model's family, including explicit overrides.
 
 Each `subagent` invocation supplies one self-contained `prompt`, a 3–5 word `description`, and a `subagent_type`. Parallel work uses sibling calls with `run_in_background: true`; record each returned ID and poll with `get_subagent_result({ agent_id, wait: false })`. An explicit `model` is reserved for a user request or deliberate cross-family review.
 

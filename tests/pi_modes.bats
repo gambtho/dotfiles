@@ -126,9 +126,9 @@ JS
   [ "$status" -eq 0 ]
 }
 
-@test "Pi named agents match the tracked mode routing" {
+@test "Pi implementation agents match the tracked mode routing" {
   local agent expected_model expected_thinking actual
-  for agent in rush smart deep review; do
+  for agent in rush smart deep; do
     expected_model=$(jq -r --arg agent "$agent" \
       '"\(.modes[$agent].provider)/\(.modes[$agent].modelId)"' "$MODES")
     expected_thinking=$(jq -r --arg agent "$agent" \
@@ -142,6 +142,13 @@ JS
       <<<"$actual"
     [ "$status" -eq 0 ]
   done
+}
+
+@test "Pi review child uses MAI independently of the retained chat mode" {
+  local actual
+  actual=$(agent_frontmatter review)
+  run jq -e '.model == "github-copilot/mai-code-2" and .thinking == "high" and .prompt_mode == "append"' <<<"$actual"
+  [ "$status" -eq 0 ]
 }
 
 @test "Pi inspector uses standard reasoning with deep-equivalent restrictions" {
@@ -487,6 +494,29 @@ JS
   run grep -F 'description' "$prompt"
   [ "$status" -eq 0 ]
   run grep -F 'one foreground `subagent` call' "$prompt"
+  [ "$status" -eq 0 ]
+}
+
+@test "review workflows distinguish MAI and verify resolved model families" {
+  run python3 - "$REPO_ROOT" <<'PY'
+from pathlib import Path
+import sys
+
+skills = Path(sys.argv[1]) / "ai/marketplace/plugins/my/skills"
+for name in ("second-opinion-core", "adversarial-review"):
+    text = (skills / name / "SKILL.md").read_text()
+    for phrase in (
+        "Current model is GPT/Gemini/Grok: use `subagent_type: review`",
+        "Current model is Claude/MAI: use `subagent_type: deep`",
+        "MAI is its own family, distinct from GPT, Claude, Gemini and Grok",
+        "same-family", "cannot resolve", "actual resolved model", "unknown",
+    ):
+        assert phrase in text, (name, phrase)
+    assert "Claude Opus 5.5" not in text, name
+adversarial = (skills / "adversarial-review/SKILL.md").read_text()
+assert "B's family must differ from A's" in adversarial
+assert "return INCOMPLETE" in adversarial
+PY
   [ "$status" -eq 0 ]
 }
 
