@@ -274,11 +274,13 @@ class LocalObservationsTests(unittest.TestCase):
 
     def test_other_du_errors_stay_unknown(self):
         for err in (f"du: cannot access '{self.root}/gone': No such file or directory\n",
+                    f"du: {self.root}/private\nname: Permission denied\n",
                     f"du: {self.root}/a: Permission denied\ndu: fts_read: Input/output error\n", ''):
             with self.subTest(err=err):
                 line = self.project_line('mixed', {'budget_gib': 2}, f'{1024**2}\t{self.root}\n', 1, err=err)
                 self.assertIn('unknown', line)
                 self.assertNotIn('KiB', line)
+                self.assertNotIn(str(self.root), line)
         line = self.project_line('fatal', {}, f'{1024**2}\t{self.root}\n', 2, err=f"du: {self.root}/a: Permission denied\n")
         self.assertIn('unknown', line)
 
@@ -291,12 +293,15 @@ class LocalObservationsTests(unittest.TestCase):
         timeouts = []
         def read(argv, **kwargs):
             timeouts.append(kwargs['timeout'])
-            return f'1\t{self.root}\n'
+            self.assertLessEqual(kwargs['budget'].remaining(), 120)
+            return f'1\t{self.root}\n', 0
         self.settings(disk={'projects': [{'name': 'big', 'path': str(self.root), 'timeout_seconds': 90},
                                          {'name': 'default', 'path': str(self.root / 'other')}]})
         with patch.object(self.m, 'run_read', side_effect=read):
-            self.collect('disk_observations')
+            text, _ = self.collect('disk_observations')
         self.assertEqual(timeouts, [90, 20])
+        for name in ('big', 'default'):
+            self.assertIn(f'Project {name}: 1 KiB', text)
 
     def test_project_config_rejects_malformed_entries(self):
         for projects in ({}, [None], [{'name': 'x'}], [{'name': '', 'path': '.'}],

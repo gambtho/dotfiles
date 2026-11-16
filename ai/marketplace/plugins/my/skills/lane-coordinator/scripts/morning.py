@@ -282,7 +282,9 @@ def run_read(argv, *, timeout, budget, environment=None, denials=None):
             if process.returncode == 0 or (process.returncode == 1 and errors
                                            and all(denials.fullmatch(line) for line in errors)):
                 return b''.join(output).decode('utf-8'), len(errors) if process.returncode else 0
-            error_bytes = bytearray(next((line for line in errors if not denials.fullmatch(line)), '').encode())
+            # Do not echo stderr here: an unmatched line may be a fragment of an unreadable path.
+            raise ObservationError(f'command failure: exited {process.returncode} with errors other than '
+                                   'permission denials; coverage unknown')
         if process.returncode:
             raise ObservationError(command_failure(error_bytes, f'read command exited {process.returncode}'))
         return b''.join(output).decode('utf-8')
