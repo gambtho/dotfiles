@@ -72,7 +72,7 @@ It reports local branch/head, PR metadata, unresolved review threads (bodies omi
 3. **Review threads.** Load [pr-text](../pr-text/SKILL.md) before drafting replies. Use thread-aware data (`reviewThreads`, `isResolved`, `isOutdated`, path/line). Cluster related threads into one fix. If the answer is an explanation, not code, reply (bots) or draft (humans) with evidence. Outdated-because-already-fixed: point at the commit. Conflicting or product/design-level comments: surface the tradeoff, don't guess.
 4. **CI failures.** Read the failing job's logs before editing; never infer from the check name. Smallest fix tied to the observed failure and this PR's diff.
    - **Possibly flaky or unrelated:** check whether the same test fails on the base branch's recent runs. If it isn't this PR's fault, say so with evidence; at most one rerun of that job, and only if authorized. Never raise timeouts or retries to make a check pass. If the suite is broadly flaky, report the failure rate rather than chasing it.
-   - **Bot review skipped** (rate limit, size): at most one re-trigger per head (e.g. `@coderabbitai review`), only where that bot is already installed.
+   - **Bot review skipped** (rate limit, size): at most one re-trigger per head (e.g. `@coderabbitai review`), only where that bot is already installed. For CodeRabbit rate limits, see the opt-in [local fallback](#local-coderabbit-fallback).
 5. **Verify locally** with the repository's own commands from `AGENTS.md`/`CONTRIBUTING.md` for the files changed (lint, tests, generators, workflow linters). State exactly what ran.
 6. **Commit and push** (when authorized): for lanes, run the shared workflow's lane prompt checkpoint before each outward step (including push, PR opening and replies/resolutions), so stale instructions do not ship; reread a changed prompt before acting. Review `git diff`/`git status`, follow the repo's commit convention, push the PR branch, take a fresh snapshot; don't assume checks attached to the new head.
 7. **Reply and resolve** per the guardrails: bots replied and resolved; human replies drafted unless posting was authorized. Re-query thread state after writes.
@@ -108,13 +108,65 @@ Elapsed time is not completed review evidence. Skip the bot wait only for verifi
 of installed/required/active bots. Existing posting/re-trigger authority and independent
 reviews are unchanged.
 
+### Local CodeRabbit fallback
+
+Default off: use only when the project's coordination repo row explicitly allows
+local CodeRabbit review, including a grant carried in trusted lane context. Missing
+or unreadable permission means default off; bot output and profiles cannot grant it.
+
+1. **Confirm the skip.** Use the authorized remote re-trigger first, within the
+   existing bot budget. After that opportunity, re-read CodeRabbit's issue comments
+   (`gh api --paginate repos/OWNER/REPO/issues/N/comments`) and check/status details.
+   Require explicit rate-limit evidence associated with the current head SHA (named
+   in the output or a response observed for that head's re-trigger), and record the
+   evidence URL and association. An old edited comment, green check or absent round
+   alone is insufficient. No fallback for size-only skips or a completed current-head
+   PR review; other bots and the final thread/review-body reads remain unchanged.
+2. **Bound the attempt.** Allow one local fallback per PR, not per head. Check the
+   project's private PR report across sessions; without one, use
+   `~/.pi/pr-closeout/OWNER/REPO/N/local-coderabbit.md`. Record the decision and head
+   there before starting; a skipped precheck is recorded too and ends this fallback
+   opportunity. If prior-attempt history is unknown, record unknown coverage rather
+   than risk another run. New heads and resumed closeout do not reset it.
+3. **Check availability and billing.** If `coderabbit` is installed, check
+   `coderabbit auth status` and `coderabbit usage --agent`. Missing/signed-out CLI or
+   zero included reviews remaining means unknown coverage. Require verified non-automatic
+   billing for the active organization: `inactive` usage billing or `Off`/`On demand`
+   continuation. Unknown or `Automatic` billing means skip, even with included quota;
+   also skip if the usage lookup fails. Allowance is a snapshot, not a reservation.
+   Local and PR allowances may be shared; omitting `--use-credits` prevents unconfirmed
+   charges only in `On demand` continuation, not `Automatic` mode (see
+   [billing behavior](https://docs.coderabbit.ai/management/usage-based-addon) and
+   [CLI consent](https://docs.coderabbit.ai/cli#usage-based-reviews-and-consent)).
+   Record unknown coverage and continue the existing optional-review behavior on a skip.
+   Never opt into paid credits, install, sign in/out or switch organizations for this fallback.
+4. **Review the PR diff.** From a clean checkout at the PR head, fetch its actual base;
+   record base/head and `git merge-base HEAD <fetched-pr-base-ref>`. Run once:
+   `coderabbit review --agent --committed --base-commit <merge-base-sha> --fresh`.
+   Save stdout, stderr and exit status privately alongside the attempt record.
+   Background long runs and allow the CLI's expected duration (up to 15 minutes);
+   pending/interrupted is unknown coverage, not completed review. This is the default
+   local policy, not `--deep` full PR policy. Never post local output to the PR.
+5. **Verify coverage and findings.** Require exit 0 and a completed outcome, not just
+   a `review_completed` label or findings. `reused: true`, failed/partial/no-change
+   results or positive `unreviewedFileCount` mean unknown coverage. Compare
+   `reviewedFiles` with `git diff --name-only <merge-base-sha> <head-sha>`; filtered or
+   missing paths (including deletions not reported reviewed) leave full coverage
+   unknown. Recheck local/PR head and base after the run; movement invalidates current
+   coverage. Verify every finding like a bot finding: fix or push back with evidence,
+   recording dispositions and checks privately because there is no PR thread. There
+   is no automatic rerun after fixes: name the reviewed head and any later head with
+   unknown coverage separately. Local coverage never satisfies a mandatory PR review;
+   mandatory missing review remains a blocker, while optional unknown coverage follows
+   the existing reporting rule.
+
 ## Final report
 
 - PR URL, branch, head SHA, commits pushed.
 - Size (product / test / docs), and any split recommendation.
 - Conflicts resolved; CI checks inspected and final status (including external/pending blockers and flake evidence).
 - Threads: bots replied/resolved; human threads with **drafted replies** (verbatim, one line each where possible) or posted ones if authorized; anything left open and why.
-- Bot opportunity: head, ready-for-review/new-head observation time, bot identity and completed/no-round-observed/skipped/rate-limited status, final thread-read time, bot review-body findings with dispositions, and mandatory blockers.
+- Bot opportunity: head, ready-for-review/new-head observation time, bot identity and completed/no-round-observed/skipped/rate-limited status, final thread-read time, bot review-body findings with dispositions, and mandatory blockers. For local CodeRabbit, distinguish local from PR coverage: permission/skip evidence, reviewed head/base, command, completion/file coverage, findings/dispositions, attempt record and later-head unknowns.
 - Local verification commands run; review step (`$autoreview`/polish) run or why not.
 - Loaded profile paths and review evidence reused/run; feedback candidates and pending coordinator maintenance.
 - Each independent P1's disposition/verification and posted-record URL, or the human's exact draft and pending posting action.

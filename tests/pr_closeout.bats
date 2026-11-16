@@ -50,6 +50,44 @@ PY
   [ "$status" -eq 0 ]
 }
 
+@test "closeout bounds the opt-in local CodeRabbit rate-limit fallback" {
+  run python3 - "$SKILL_DIR/SKILL.md" <<'PY'
+from pathlib import Path
+import sys
+text = Path(sys.argv[1]).read_text()
+assert "[local fallback](#local-coderabbit-fallback)" in text
+local = " ".join(text.split("### Local CodeRabbit fallback\n", 1)[1].split("## Final report", 1)[0].split())
+for clause in ("repo row", "trusted lane context", "default off", "re-trigger first",
+               "issues/N/comments", "check/status", "head SHA", "evidence URL",
+               "one local fallback per PR", "across sessions", "before starting",
+               "coderabbit auth status", "coderabbit usage --agent", "remaining",
+               "git merge-base", "--agent --committed --base-commit <merge-base-sha> --fresh",
+               "reviewedFiles", "git diff --name-only", "exit", "reused", "unreviewedFileCount",
+               "unknown coverage", "--use-credits", "Never post local output",
+               "no automatic rerun", "later head", "mandatory", "pending"):
+    assert clause in local, clause
+report = " ".join(text.split("## Final report\n", 1)[1].split())
+for clause in ("local CodeRabbit", "reviewed head", "dispositions"):
+    assert clause in report, clause
+PY
+  [ "$status" -eq 0 ]
+}
+
+@test "local CodeRabbit requires verified non-automatic billing even with included quota" {
+  run python3 - "$SKILL_DIR/SKILL.md" <<'PY'
+from pathlib import Path
+import sys
+text = " ".join(Path(sys.argv[1]).read_text().split())
+for clause in ("Require verified non-automatic billing", "`inactive` usage billing",
+               "`On demand` continuation", "Unknown or `Automatic` billing means skip",
+               "usage lookup fails", "snapshot, not a reservation",
+               "Never opt into paid credits"):
+    assert clause in text, clause
+assert "the single attempt may proceed without" not in text
+PY
+  [ "$status" -eq 0 ]
+}
+
 # Stub gh for a PR whose head is the test checkout's HEAD. Tests set CHECKS (gh pr checks
 # JSON) and COMMITS: the PR's last commit before and after the check reads ("-" fails a read).
 stub_pr_snapshot() {
