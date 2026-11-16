@@ -105,10 +105,10 @@ The binding needs a `claude` executable path, and the project-local
 `lanes/claude-lane-settings.json` is delivered create-only and passed with `--settings`;
 without it the command refuses. That file adds to the host user's own Claude settings,
 it does not replace them. The host must already trust the project-local folder; the
-command never answers a trust or other dialog. It reads Herdr's agent status for about
-ten seconds after the single start: "blocked on Claude trust/dialog" (exit 1) is a stop
-to record and report, not something to answer or resend. A printed status or
-"readiness unconfirmed" still needs the lane's report. See the
+command never answers a trust or other dialog. After the single start it reads Herdr's
+agent status up to ten times, one second apart: "blocked on Claude trust/dialog" or
+"Claude did not start" (exit 1) is a stop to record and report, not something to answer
+or resend. A printed status or "readiness unconfirmed" still needs the lane's report. See the
 [README](https://github.com/gambtho/dotfiles/blob/main/tools/herdr/README.md#claude-code-lanes).
 
 ## Fetch before judging readiness

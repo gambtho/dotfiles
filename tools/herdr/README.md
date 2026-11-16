@@ -270,12 +270,14 @@ It passes no permission-mode or bypass flag. Claude must already trust `root` (a
 accepts that once on the host); the command never answers a trust or other dialog.
 
 After the single start, it reads the new pane's Herdr `agent_status` up to ten times,
-one second apart, and sends nothing. `blocked` means a trust or other dialog is waiting:
+one second between reads (each read has the usual 10-second limit), and sends nothing. `blocked` means a trust or other dialog is waiting:
 it exits 1 with "blocked on Claude trust/dialog"; inspect the pane, do not answer it or
 resend. `working`, `idle` or `done` from a pane Herdr identifies as Claude is printed
-as the observed status. Anything else still `unknown` at the end prints "readiness
-unconfirmed"; an unexpected status value exits 1 as uncertain. None of these proves
-task completion.
+as the observed status. If the status is still `unknown`, it reads the pane's processes
+once: a shell alone in the foreground means the start exited at once (for example a bad
+`claude` path or a missing settings file), and it exits 1 with "Claude did not start".
+Otherwise it prints "readiness unconfirmed". An unexpected status value exits 1 as
+uncertain. None of these proves task completion.
 
 Each external operation has a **10-second** outer limit, including connection time.
 Herdr's internal read-only discovery/probe may take longer; a cold call can therefore

@@ -55,6 +55,7 @@ class RemoteTests(unittest.TestCase):
         self.malformed = False
         self.statuses = ['working']
         self.agent = 'claude'
+        self.start_holds = False
         self.remote = load('remote')
         self.lane = load('lane')
         self.addCleanup(patch.stopall)
@@ -92,6 +93,7 @@ class RemoteTests(unittest.TestCase):
             p = {'workspace_id': wid, 'pane_id': wid + ':p1', 'terminal_id': 'term_' + wid}
             self.spaces.append(w)
             self.panes.append(p)
+            self.busy = self.busy and not self.start_holds
             if self.failure == ('workspace', 'create'):
                 raise ValueError('timed out; inspect, do not resend')
             return {'workspace': w, 'root_pane': None if self.malformed else p, 'already_open': False}
@@ -104,6 +106,7 @@ class RemoteTests(unittest.TestCase):
         if cmd[:2] in (['workspace', 'focus'], ['pane', 'run']):
             if self.failure == tuple(cmd[:2]):
                 raise ValueError('timed out; inspect, do not resend')
+            self.busy = self.busy or (cmd[1] == 'run' and self.start_holds)
             return {}
         self.fail_test(args)
 
@@ -555,13 +558,21 @@ class RemoteTests(unittest.TestCase):
 
     def test_claude_status_still_unknown_is_unconfirmed_after_bounded_polls(self):
         self.statuses = ['unknown']
+        self.start_holds = True  # the started command keeps the foreground
         text = self.start_claude()
         self.assertIn('Claude readiness unconfirmed', text)
         self.assertEqual(len(self.polls()), 11)
         self.assertEqual(len(self.sends()), 1)
 
+    def test_claude_start_that_exits_at_once_is_reported_not_started(self):
+        self.statuses = ['unknown']
+        with self.assertRaisesRegex(ValueError, 'Claude did not start'):
+            self.start_claude()
+        self.assertEqual(len(self.sends()), 1)
+
     def test_claude_status_from_other_agent_or_bad_value_is_not_readiness(self):
         self.agent = 'pi'
+        self.start_holds = True
         text = self.start_claude()
         self.assertIn('Claude readiness unconfirmed', text)
         for status in (None, 'starting'):

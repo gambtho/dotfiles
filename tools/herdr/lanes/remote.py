@@ -98,7 +98,7 @@ class Remote:
         self.targets = [self.root / p for p in ('AGENTS.md', 'lanes/COMMON-RULES.md',
                                                'lanes/' + self.sources[2].name, 'review-profile/learnings.md')]
         if agent == 'claude':
-            # Start permissions come only from the project's file; never start without it.
+            # Require the project's additional settings snapshot; never start without it.
             self.sources.append(self.local / SETTINGS)
             self.targets.append(self.root / SETTINGS)
         if len(set(self.targets)) != len(self.targets):
@@ -296,6 +296,13 @@ class Remote:
             if status != 'unknown' and pane.get('agent') == 'claude':
                 break
             status = 'unknown'
+        if status == 'unknown':
+            # A start that exited at once (bad executable, missing settings) leaves the shell alone.
+            info = self.api('pane', 'process-info', '--pane', pid)['process_info']
+            if (info['pane_id'] == pid and
+                    [p['pid'] for p in info['foreground_processes']] == [info['shell_pid']]):
+                raise ValueError('Claude did not start: the pane shell is idle again. Inspect the pane '
+                                 '(settings file, claude path); do not resend')
         print(f'{self.host}/{self.config["session"]}: {self.label} created (flat); five snapshots verified')
         if status != 'unknown':
             state = f'Claude status {status}; task completion unconfirmed'
