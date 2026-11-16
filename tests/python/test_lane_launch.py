@@ -60,6 +60,34 @@ tmustier/pi-queue-steer, worktree-guard.ts   │      ████      ██�
 ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 '''
 
+# Pi 1.5.2 pre-overlay capture excerpts, sampled every 250ms. Omit private
+# paths/session names and shorten resource lists; preserve the visible editor.
+PI_LOADING = '''
+ ▀▀█  v1.5.2
+ █▀ █ escape interrupt · ctrl+c/ctrl+d clear/exit · / commands · ! bash · ctrl+o more
+ Press ctrl+o to show full startup help and loaded resources.
+
+ Pi can explain its own features and look up its docs. Ask it how to use or extend Pi.
+
+────────────────────────────────────────────────────────────
+
+────────────────────────────────────────────────────────────
+'''
+PI_RESOURCES = PI_LOADING + '''
+[Context]
+  [global]/AGENTS.md, AGENTS.md
+[Skills]
+  adversarial-review, blindspot-pass, brainstorming, lane-coordinator, using-superpowers
+[Prompts]
+  /adversarial-review, /cold-read, /eod
+[Extensions]
+  permission-system:src, herdr-agent-state.ts, herdr-prompt-state.ts
+── smart ────────────────────────────────────────────────────
+
+────────────────────────────────────────────────────────────
+'''
+PI_EDITOR = '── smart ───────────────────\n\n───────────────────────────'
+
 # Source-reconstructed Pi 1.5.2 dist/core/project-trust.js and trust-manager.js;
 # dist/modes/interactive/components/extension-selector.js supplies the selector UI.
 TRUST_PROMPT = '''
@@ -275,6 +303,10 @@ elif a[:2] == ['agent', 'get']:
     agent = dict(s['agents'][0])
     if mode in ('welcome', 'dialog', 'read-fail', 'read-empty', 'read-json') and not s.get('read'):
         agent.update(agent_status='blocked', interactive_ready=False)
+    frames = json.loads(os.environ.get('FAKE_FRAMES', '[]'))
+    if frames:
+        frame = frames[min(s.get('frame', 0), len(frames) - 1)]
+        agent.update(agent_status=frame[0], interactive_ready=frame[1])
     reply('agent_info', agent=agent)
 elif a[:2] == ['agent', 'read']:
     assert a == ['agent', 'read', s['agents'][0]['pane_id'], '--source', 'visible', '--format', 'text']
@@ -294,6 +326,11 @@ elif a[:2] == ['agent', 'read']:
         text = ''
     elif mode == 'read-json':
         text = '{"result":{"type":"pane_read","read":{"text":"unknown"}}}'
+    frames = json.loads(os.environ.get('FAKE_FRAMES', '[]'))
+    if frames:
+        text = frames[min(s.get('frame', 0), len(frames) - 1)][2]
+        s['frame'] = s.get('frame', 0) + 1
+        save()
     print(text)
 elif a[:2] == ['agent', 'prompt']:
     assert a == ['agent', 'prompt', 'opaque-root', 'Read ' + os.environ['FAKE_PROMPT'] + ' and follow it.']
@@ -433,6 +470,90 @@ class LaunchFixture:
         self.assertNotIn('Traceback', result.stderr)
         if reason:
             self.assertIn(reason, result.stderr)
+
+
+class StartupReplayTests(LaunchFixture, unittest.TestCase):
+    def run_frames(self, frames):
+        spec = importlib.util.spec_from_file_location('startup_replay', SCRIPT)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        self.elapsed = 0
+        def sleep(seconds):
+            self.elapsed += seconds
+        clock = mock.Mock(monotonic=lambda: self.elapsed, sleep=sleep)
+        argv = [str(SCRIPT), '--requested', '--project', 'double-holo', '--lane', 'W12',
+                '--prompt', str(self.prompt), '--repo', str(self.repo), '--state', str(self.state),
+                '--session', 'intended']
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with (mock.patch.dict(os.environ, dict(self.env, FAKE_FRAMES=json.dumps(frames)), clear=True),
+              mock.patch.object(sys, 'argv', argv), mock.patch.object(module, 'time', clock),
+              contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr)):
+            code = module.main()
+        return subprocess.CompletedProcess(argv, code, stdout.getvalue(), stderr.getvalue())
+
+    def test_pre_overlay_frames_then_welcome_then_editor_submit_once(self):
+        for status in ('blocked', 'done'):
+            with self.subTest(welcome_status=status):
+                self.reset_fixture(json.loads(self.initial_live))
+                frames = [('unknown', None, PI_LOADING), ('idle', None, PI_RESOURCES),
+                          (status, True, PI_STARTUP),
+                          ('blocked', True, PI_EDITOR), ('done', True, PI_EDITOR)]
+                result = self.run_frames(frames)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(json.loads(self.receipt.read_text())['stage'], 'Submitted')
+                self.assertEqual(json.loads(self.live.read_text())['frame'], 5)
+                self.assertEqual(self.run_launch().returncode, 0)
+                for verb in (['agent', 'start'], ['agent', 'prompt']):
+                    self.assertEqual(len(self.mutations(verb)), 1)
+
+    def test_dialog_mid_startup_stops_without_another_poll(self):
+        for dialog in (TRUST_PROMPT, PERMISSION_PROMPT,
+                       PERMISSION_PROMPT.replace('Permission Required', 'Permission Required (Subagent)')):
+            with self.subTest(dialog=dialog.splitlines()[1]):
+                self.reset_fixture(json.loads(self.initial_live))
+                result = self.run_frames([('unknown', False, PI_LOADING),
+                    ('blocked', True, PI_STARTUP), ('done', True, PI_STARTUP + dialog),
+                    ('done', True, PI_EDITOR)])
+                self.assert_stopped(result, 'Startup blocked/unknown')
+                self.assertEqual(json.loads(self.live.read_text())['frame'], 3)
+                self.assertEqual(self.elapsed, 2)
+                self.assertEqual(self.mutations(['agent', 'prompt']), [])
+
+    def test_unknown_screens_use_only_the_original_bound(self):
+        for text in ('', 'Unrecognized startup screen', '{"result":{"type":"pane_read"}}'):
+            with self.subTest(text=text):
+                self.reset_fixture(json.loads(self.initial_live))
+                self.assert_stopped(self.run_frames([('done', True, text)]), 'Startup blocked/unknown')
+                self.assertEqual(self.elapsed, 30)
+                self.assertEqual(json.loads(self.receipt.read_text())['stage'], 'Starting')
+                self.assertEqual(self.mutations(['agent', 'prompt']), [])
+                self.assertEqual(self.run_launch().returncode, 0)
+                self.assertEqual(len(self.mutations(['agent', 'start'])), 1)
+
+    def test_late_overlay_gets_its_remaining_countdown_once(self):
+        frames = [('unknown', False, PI_LOADING)] * 29
+        frames += [('blocked', True, PI_STARTUP.replace('(26s)', '(30s)'))]
+        frames += [('blocked', True, f'Welcome back!\nPress any key to continue ({n}s)')
+                   for n in range(29, 0, -1)]
+        # Model metadata settling within the one-second dismissal allowance.
+        frames += [('blocked', True, PI_EDITOR), ('done', True, PI_EDITOR)]
+        result = self.run_frames(frames)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.elapsed, 60)
+        self.assertEqual(len(self.mutations(['agent', 'start'])), 1)
+        self.assertEqual(len(self.mutations(['agent', 'prompt'])), 1)
+
+    def test_frozen_or_disappearing_overlay_cannot_renew_the_deadline(self):
+        welcome = PI_STARTUP.replace('(26s)', '(30s)')
+        for tail in (welcome, 'Unknown screen after welcome'):
+            with self.subTest(tail=tail[:30]):
+                self.reset_fixture(json.loads(self.initial_live))
+                frames = [('unknown', False, PI_LOADING)] * 29
+                frames += [('blocked', True, welcome), ('done', True, tail)]
+                self.assert_stopped(self.run_frames(frames), 'Startup blocked/unknown')
+                self.assertEqual(self.elapsed, 60)
+                self.assertEqual(self.mutations(['agent', 'prompt']), [])
 
 
 class LaunchTests(LaunchFixture, unittest.TestCase):
