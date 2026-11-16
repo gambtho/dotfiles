@@ -21,6 +21,8 @@ workspace/Pi/alias (e.g. `double-holo-12`); existing names remain untouched.
 This depends on actual tools and the inherited
 Herdr session, not whether the coordinator is Pi or Claude Code. Claude app
 sessions without terminal tools use the manual handoff.
+A bound remote lane can run Claude Code instead of Pi with `lane --host <binding>
+--agent claude`; see [remote lanes](remote-lanes.md#claude-code-lanes).
 
 Background reviewers are read-only helpers, not lanes: say so in their prompt (no edits,
 commits, pushes or posts) and spot-check what they find.

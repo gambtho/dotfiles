@@ -314,7 +314,10 @@ def main():
     parser.add_argument('lane', help='<project>-<n|coord>, <project> heading, or <n|coord> from its local folder')
     parser.add_argument('prompt', nargs='?', default='', help='optional initial Pi prompt (new lanes only)')
     parser.add_argument('--host', help='saved remote binding in project-local/lane-hosts.json (flat numbered lanes)')
+    parser.add_argument('--agent', choices=('pi', 'claude'), help='agent to start in a --host lane (default: pi)')
     args = parser.parse_args()
+    if args.agent is not None and args.host is None:
+        parser.error('--agent requires --host')
     if args.host is not None and not args.host:
         parser.error('--host must not be empty')
     if args.host is not None and not args.prompt:
@@ -327,7 +330,7 @@ def main():
             assert spec is not None and spec.loader is not None
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
-            module.open_remote(args.lane, args.prompt, args.host, sys.modules[__name__])
+            module.open_remote(args.lane, args.prompt, args.host, sys.modules[__name__], args.agent or 'pi')
         else:
             open_lane(args.lane, args.prompt)
     except (ValueError, KeyError, TypeError, AttributeError, OSError, subprocess.SubprocessError) as error:

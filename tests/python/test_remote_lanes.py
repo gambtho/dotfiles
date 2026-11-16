@@ -53,6 +53,8 @@ class RemoteTests(unittest.TestCase):
         self.bad_snapshot = False
         self.failure = None
         self.malformed = False
+        self.statuses = ['working']
+        self.agent = 'claude'
         self.remote = load('remote')
         self.lane = load('lane')
         self.addCleanup(patch.stopall)
@@ -60,6 +62,7 @@ class RemoteTests(unittest.TestCase):
                                 'XDG_STATE_HOME': str(self.home / 'state')}).start()
         patch.object(self.remote.Remote, 'run', autospec=True, side_effect=self.run_boundary).start()
         patch.object(self.lane.time, 'sleep').start()
+        patch.object(self.remote.time, 'sleep').start()
 
     def write_config(self):
         (self.local / 'lane-hosts.json').write_text(json.dumps({'build': self.config}))
@@ -93,7 +96,8 @@ class RemoteTests(unittest.TestCase):
                 raise ValueError('timed out; inspect, do not resend')
             return {'workspace': w, 'root_pane': None if self.malformed else p, 'already_open': False}
         if cmd[:2] == ['pane', 'get']:
-            return {'pane': self.panes[-1]}
+            status = self.statuses.pop(0) if len(self.statuses) > 1 else self.statuses[0]
+            return {'pane': dict(self.panes[-1], agent_status=status, agent=self.agent)}
         if cmd[:2] == ['pane', 'process-info']:
             return {'process_info': {'pane_id': cmd[-1], 'shell_pid': 1,
                     'foreground_processes': [{'pid': 2 if self.busy else 1, 'name': 'fish'}]}}
@@ -148,6 +152,20 @@ class RemoteTests(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()) as output:
             self.remote.open_remote('orchard-7', 'task.md', 'build', self.lane)
         return output.getvalue()
+
+    def start_claude(self):
+        settings = self.local / 'lanes/claude-lane-settings.json'
+        settings.parent.mkdir(exist_ok=True)
+        if not settings.exists():
+            settings.write_text('{"permissions": {}}')
+        self.config['claude'] = '/bin/true'
+        self.write_config()
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            self.remote.open_remote('orchard-7', 'task.md', 'build', self.lane, 'claude')
+        return output.getvalue()
+
+    def polls(self):
+        return [c for c in self.calls if c[2:4] == ['pane', 'get']]
 
     def sends(self):
         return [c for c in self.calls if c[2:4] == ['pane', 'run']]
@@ -484,6 +502,82 @@ class RemoteTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.start()
         self.assertEqual(self.copies, [])
+
+
+    def test_claude_start_delivers_settings_create_only_and_starts_once(self):
+        del self.config['mise'], self.config['pi']
+        self.statuses = ['unknown', 'working']
+        text = self.start_claude()
+        self.assertEqual(self.copies[-1], ('claude-lane-settings.json', 'lanes/claude-lane-settings.json'))
+        self.assertEqual((self.root / 'lanes/claude-lane-settings.json').read_text(), '{"permissions": {}}')
+        self.assertEqual(len(self.sends()), 1)
+        command = shlex.split(self.sends()[0][-1])[-1]
+        tail = shlex.split(command.rsplit(' && ', 1)[1])
+        self.assertEqual(tail, ['/bin/true', '--settings', str(self.root / 'lanes/claude-lane-settings.json'),
+                                '--name', 'orchard-7', '--', f'Read {self.root / "lanes/task.md"} and follow it.'])
+        self.assertIn('test "$(hostname)"', command)
+        self.assertIn('&& test -f ' + str(self.root / 'lanes/claude-lane-settings.json') + ' && ', command)
+        self.assertIn('Claude status working', text)
+        self.assertIn('five snapshots verified', text)
+        os.utime(self.root / 'lanes/claude-lane-settings.json', ns=(1_000_000_000, 1_000_000_000))
+        self.remote.open_remote('orchard-8', 'task.md', 'build', self.lane, 'claude')
+        self.assertEqual((self.root / 'lanes/claude-lane-settings.json').stat().st_mtime_ns, 1_000_000_000)
+
+    def test_claude_missing_settings_or_executable_binding_refuses_before_remote_calls(self):
+        self.config['claude'] = '/bin/true'
+        self.write_config()
+        with self.assertRaisesRegex(ValueError, 'missing source.*claude-lane-settings.json'):
+            self.remote.open_remote('orchard-7', 'task.md', 'build', self.lane, 'claude')
+        (self.local / 'lanes').mkdir()
+        (self.local / 'lanes/claude-lane-settings.json').write_text('{}')
+        del self.config['claude']
+        self.write_config()
+        with self.assertRaisesRegex(ValueError, 'Cannot load binding'):
+            self.remote.open_remote('orchard-7', 'task.md', 'build', self.lane, 'claude')
+        self.assertEqual(self.calls, [])
+
+    def test_claude_different_remote_settings_refuse_before_any_delivery(self):
+        (self.root / 'lanes').mkdir()
+        (self.root / 'lanes/claude-lane-settings.json').write_text('{"permissions": {"allow": ["Bash"]}}')
+        with self.assertRaisesRegex(ValueError, 'claude-lane-settings.json exists with different bytes'):
+            self.start_claude()
+        self.assertEqual(self.copies, [])
+        self.assertFalse(any(c[2:4] == ['workspace', 'create'] for c in self.calls))
+
+    def test_claude_start_dialog_is_reported_blocked_and_never_answered(self):
+        self.statuses = ['unknown', 'unknown', 'blocked']  # pane verification, then two polls
+        with self.assertRaisesRegex(ValueError, 'blocked on Claude trust/dialog.*w2:p1|w2.*blocked on Claude'):
+            self.start_claude()
+        self.assertEqual(len(self.sends()), 1)
+        self.assertEqual(len(self.polls()), 3)
+        self.assertFalse(any(c[2] in ('agent',) or c[2:4] in (['pane', 'send-keys'], ['pane', 'send-text'])
+                             for c in self.calls if c[0] == '--machine'))
+
+    def test_claude_status_still_unknown_is_unconfirmed_after_bounded_polls(self):
+        self.statuses = ['unknown']
+        text = self.start_claude()
+        self.assertIn('Claude readiness unconfirmed', text)
+        self.assertEqual(len(self.polls()), 11)
+        self.assertEqual(len(self.sends()), 1)
+
+    def test_claude_status_from_other_agent_or_bad_value_is_not_readiness(self):
+        self.agent = 'pi'
+        text = self.start_claude()
+        self.assertIn('Claude readiness unconfirmed', text)
+        for status in (None, 'starting'):
+            with self.subTest(status=status):
+                self.spaces, self.panes, self.statuses = self.spaces[:1], self.panes[:1], ['unknown', status]
+                with self.assertRaisesRegex(ValueError, 'unexpected agent status'):
+                    self.remote.open_remote('orchard-9', 'task.md', 'build', self.lane, 'claude')
+        self.assertEqual(len(self.sends()), 3)
+
+    def test_agent_choice_requires_host_and_known_agent(self):
+        for argv in (['--agent', 'claude', 'orchard-7', 'task.md'],
+                     ['--host', 'build', '--agent', 'codex', 'orchard-7', 'task.md']):
+            with self.subTest(argv=argv):
+                result = subprocess.run([sys.executable, str(SOURCE / 'lane.py'), *argv],
+                                        capture_output=True, text=True, check=False)
+                self.assertEqual(result.returncode, 2)
 
 
 class TransportTests(unittest.TestCase):
