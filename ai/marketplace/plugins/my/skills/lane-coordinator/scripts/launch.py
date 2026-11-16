@@ -376,9 +376,10 @@ class Launch:
         return a
 
     def ready(self):
-        # Powerline footer's known 30-second welcome overlay dismisses itself.
+        # Allow startup lists/partial frames before the self-dismissing welcome.
         # Read the visible viewport, not scrollback containing stale welcome text.
         deadline = time.monotonic() + 30
+        welcome_seen = False
         while True:
             a = self.agent()
             text = call('agent', 'read', self.record['pane'], '--source', 'visible',
@@ -390,7 +391,13 @@ class Launch:
             welcome = 'Welcome back!' in text and re.search(r'Press any key to continue \(([0-9]|[12][0-9]|30)s\)', text)
             # Match prompt titles, not resource names or punctuation in startup help.
             dialog = re.search(r'(?m)^[ \t]*(?:Trust project folder\?|Permission Required(?: \(Subagent\))?)[ \t\r]*$', text)
-            if not welcome or dialog or time.monotonic() >= deadline:
+            now = time.monotonic()
+            if welcome and not welcome_seen:
+                # A late overlay gets its remaining countdown plus one second
+                # for dismissal. Anchor once: a frozen/repeated screen cannot renew it.
+                deadline = max(deadline, now + int(welcome[1]) + 1)
+                welcome_seen = True
+            if dialog or now >= deadline:
                 raise LaunchError('Startup blocked/unknown: user intervention or inspection required')
             time.sleep(1)
 
