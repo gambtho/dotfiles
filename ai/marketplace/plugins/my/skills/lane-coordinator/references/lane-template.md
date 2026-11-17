@@ -45,6 +45,7 @@ These review tools and `pr-text` ship with the package. Outside Pi, read `<resol
 and each skill's `<resolved skills dir>/<name>/SKILL.md` instead of its slash command.
 Coordinator: resolve those to the skill's bundled `references/harness-notes.md` and the package's
 `skills/` directory before delivery.
+Subscription-harness lanes: cross-family review via `<resolved scripts dir>/codex-review.sh` (Claude Code) or `claude-review.sh` (Codex).
 The requirements below are unchanged.
 
 1. <Audit/design: what to read and answer; local design/report path.> For new product
