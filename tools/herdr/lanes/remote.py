@@ -7,7 +7,11 @@ import shlex
 import signal
 import stat
 import subprocess
+import time
 from pathlib import Path
+
+AGENT_KEYS = {'pi': ('mise', 'pi'), 'claude': ('claude',)}
+SETTINGS = 'lanes/claude-lane-settings.json'
 
 # Executed in the selected host's Python, never written to its filesystem.
 INSPECT = '''import os, pathlib, sys
@@ -58,8 +62,8 @@ class FocusOnly(ValueError):
 
 
 class Remote:
-    def __init__(self, label, prompt, host, lane):
-        self.lane, self.label, self.host = lane, label, host
+    def __init__(self, label, prompt, host, lane, agent='pi'):
+        self.lane, self.label, self.host, self.agent = lane, label, host, agent
         self.stage, self.observed = 'preflight', ''
         project, number = lane.resolve(label)
         if not re.fullmatch(r'[a-z][a-z0-9_-]{0,31}', label) or not number.isdecimal():
@@ -68,8 +72,11 @@ class Remote:
             raise ValueError('invalid host key')
         self.local = Path.home() / f'{project}-local'
         binding_file = self.local / 'lane-hosts.json'
+        if agent not in AGENT_KEYS:
+            raise ValueError(f'unsupported agent: {agent}')
+        self.tools = ('herdr', *AGENT_KEYS[agent])
         required = ('machine_id', 'saved_target', 'target', 'session', 'hostname', 'user', 'root',
-                    'herdr', 'mise', 'pi', 'transport', 'agents', 'rules', 'profile')
+                    'transport', 'agents', 'rules', 'profile', *self.tools)
         try:
             self.config = json.loads(binding_file.read_text())[host]
             for key in required:
@@ -82,7 +89,7 @@ class Remote:
                 raise ValueError(f'invalid {key} binding')
         if c['transport'] not in ('ssh', 'tailscale'):
             raise ValueError('transport must be ssh or tailscale')
-        for key in ('root', 'herdr', 'mise', 'pi'):
+        for key in ('root', *self.tools):
             if not Path(c[key]).is_absolute() or '..' in Path(c[key]).parts:
                 raise ValueError(f'{key} must be an absolute concrete path')
         self.root = Path(c['root'])
@@ -90,9 +97,18 @@ class Remote:
         self.sources = [Path(clean(p)) if Path(clean(p)).is_absolute() else self.local / p for p in sources]
         self.targets = [self.root / p for p in ('AGENTS.md', 'lanes/COMMON-RULES.md',
                                                'lanes/' + self.sources[2].name, 'review-profile/learnings.md')]
-        if len(set(self.targets)) != 4:
+        if agent == 'claude':
+            # Require the project's additional settings snapshot; never start without it.
+            self.sources.append(self.local / SETTINGS)
+            self.targets.append(self.root / SETTINGS)
+        if len(set(self.targets)) != len(self.targets):
             raise ValueError('prompt basename conflicts with another delivery snapshot')
-        self.originals = [self.source(p) for p in self.sources]
+        try:
+            self.originals = [self.source(p) for p in self.sources]
+        except FileNotFoundError as error:
+            raise ValueError(f'missing source {error.filename}; nothing delivered or started') from error
+        # Prompt and settings are create-only: a running lane keeps what it started with.
+        self.create_only = [t for t in self.targets if t == self.targets[2] or t.name == Path(SETTINGS).name]
         self.prefix = (['tailscale', 'ssh'] if c['transport'] == 'tailscale' else
                        ['ssh', '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes',
                         '-o', 'ConnectTimeout=10'])
@@ -154,7 +170,7 @@ class Remote:
         self.catalog()
         self.stage = 'SSH host binding'
         c = self.config
-        info = json.loads(self.ssh(shlex.join(['python3', '-c', HOST, c['herdr'], c['mise'], c['pi']])))
+        info = json.loads(self.ssh(shlex.join(['python3', '-c', HOST, *(c[k] for k in self.tools)])))
         if (info['hostname'] != c['hostname'] or info['user'] != c['user']
                 or Path(info['home']) not in self.root.parents or info['tools'] is not True):
             raise ValueError('SSH host/user/home/tools binding mismatch')
@@ -189,11 +205,15 @@ class Remote:
         directories = [self.root, *(self.root / p for p in ('lanes', 'reports', 'review-profile'))]
         paths = [str(p) for p in (*directories, *self.targets)]
         self.ssh(shlex.join(['python3', '-c', INSPECT, *paths]))
-        self.stage = 'prompt destination check'
-        current = json.loads(self.ssh(shlex.join(['python3', '-c', PROMPT, str(self.targets[2])])))
-        if current is not None and current != self.originals[2][0].hex():
-            raise ValueError(f'prompt {self.targets[2].name} exists with different bytes; '
-                             'inputs unchanged; choose a different prompt filename')
+        for target in self.create_only:
+            self.stage = f'{target.name} destination check'
+            current = json.loads(self.ssh(shlex.join(['python3', '-c', PROMPT, str(target)])))
+            if current is not None and current != self.originals[self.targets.index(target)][0].hex():
+                if target != self.targets[2]:
+                    raise ValueError(f'{target.relative_to(self.root)} exists with different bytes; inputs '
+                                     'unchanged; inspect it on the host before starting a Claude lane')
+                raise ValueError(f'prompt {target.name} exists with different bytes; '
+                                 'inputs unchanged; choose a different prompt filename')
         self.stage = 'delivery directory creation'
         self.catalog()
         self.ssh(shlex.join(['mkdir', '-p', '--', *(str(p) for p in directories)]))
@@ -204,7 +224,7 @@ class Remote:
             self.stage = f'delivery {dst.relative_to(self.root)}'
             self.catalog()
             # The task path outlives startup admission; never refresh an existing prompt.
-            options = ['--ignore-existing'] if dst == self.targets[2] else []
+            options = ['--ignore-existing'] if dst in self.create_only else []
             self.run(['rsync', '-a', *options, '-e', shell, str(src),
                       self.config['target'] + ':' + str(dst)])
             self.stage = f'read-back {dst.relative_to(self.root)}'
@@ -241,19 +261,58 @@ class Remote:
         self.catalog()
         c = self.config
         prompt = f'Read {self.targets[2]} and follow it.'
+        if self.agent == 'claude':
+            settings = str(self.root / SETTINGS)
+            agent = ('test -f ' + shlex.quote(settings) + ' && ' +
+                     shlex.join([c['claude'], '--settings', settings, '--name', self.label, '--', prompt]))
+        else:
+            agent = shlex.join([c['mise'], 'exec', '--', c['pi'], '--name', self.label, '--', prompt])
         command = ('test "$(hostname)" = ' + shlex.quote(c['hostname']) +
                    ' && test "$(id -un)" = ' + shlex.quote(c['user']) +
-                   ' && cd ' + shlex.quote(str(self.root)) + ' && ' +
-                   shlex.join([c['mise'], 'exec', '--', c['pi'], '--name', self.label, '--', prompt]))
+                   ' && cd ' + shlex.quote(str(self.root)) + ' && ' + agent)
         self.stage = 'pane run'
         self.api('pane', 'run', pid, shlex.join(['/bin/sh', '-c', command]))
+        if self.agent == 'claude':
+            self.observe(pid, workspace['workspace_id'])
+            return
         print(f'{self.host}/{c["session"]}: {self.label} created (flat); four snapshots verified')
         print(f'workspace={workspace["workspace_id"]} pane={pid}; startup command admitted once; '
               'Pi readiness unconfirmed')
 
+    def observe(self, pid, wid):
+        """Read-only status polls after the single start; never sends input."""
+        self.stage = 'Claude start observation'
+        status = 'unknown'
+        for attempt in range(10):
+            if attempt:
+                time.sleep(1)
+            pane = self.api('pane', 'get', pid)['pane']
+            status = pane['agent_status']
+            if status not in ('unknown', 'working', 'idle', 'done', 'blocked'):
+                raise ValueError(f'unexpected agent status {status!r}')
+            if status == 'blocked':
+                raise ValueError('blocked on Claude trust/dialog; do not answer it. Inspect the pane; '
+                                 'a person resolves trust before a new start')
+            if status != 'unknown' and pane.get('agent') == 'claude':
+                break
+            status = 'unknown'
+        if status == 'unknown':
+            # A start that exited at once (bad executable, missing settings) leaves the shell alone.
+            info = self.api('pane', 'process-info', '--pane', pid)['process_info']
+            if (info['pane_id'] == pid and
+                    [p['pid'] for p in info['foreground_processes']] == [info['shell_pid']]):
+                raise ValueError('Claude did not start: the pane shell is idle again. Inspect the pane '
+                                 '(settings file, claude path); do not resend')
+        print(f'{self.host}/{self.config["session"]}: {self.label} created (flat); five snapshots verified')
+        if status != 'unknown':
+            state = f'Claude status {status}; task completion unconfirmed'
+        else:
+            state = 'Claude readiness unconfirmed; inspect only'
+        print(f'workspace={wid} pane={pid}; startup command admitted once; {state}')
 
-def open_remote(label, prompt, host, lane):
-    remote = Remote(label, prompt, host, lane)
+
+def open_remote(label, prompt, host, lane, agent='pi'):
+    remote = Remote(label, prompt, host, lane, agent)
     remote.lock.parent.mkdir(parents=True, exist_ok=True)
     with remote.lock.open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)

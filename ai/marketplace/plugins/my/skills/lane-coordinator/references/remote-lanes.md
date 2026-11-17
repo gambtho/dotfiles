@@ -97,6 +97,20 @@ and returned IDs in STATE; an existing label is not proof of startup. On uncerta
 retry. A repeated command cannot resume partial startup; it only focuses an existing label.
 Keep the manual copy/start fallback above and the primary-first fetch below.
 
+### Claude Code lanes
+
+Pi is the default. For a lane whose prompt names Claude Code as its harness, add
+`--agent claude`: `lane --host <binding> --agent claude <project-N> <local-prompt-file>`.
+The binding needs a `claude` executable path, and the project-local
+`lanes/claude-lane-settings.json` is delivered create-only and passed with `--settings`;
+without it the command refuses. That file adds to the host user's own Claude settings,
+it does not replace them. The host must already trust the project-local folder; the
+command never answers a trust or other dialog. After the single start it reads Herdr's
+agent status up to ten times, one second apart: "blocked on Claude trust/dialog" or
+"Claude did not start" (exit 1) is a stop to record and report, not something to answer
+or resend. A printed status or "readiness unconfirmed" still needs the lane's report. See the
+[README](https://github.com/gambtho/dotfiles/blob/main/tools/herdr/README.md#claude-code-lanes).
+
 ## Fetch before judging readiness
 
 Name the required primary report explicitly (`W12-REPORT.md` here). Fetch it first,

@@ -171,7 +171,8 @@ lane --host build orchard-12 lanes/task.md
 
 Install with `make herdr-lanes` on the calling machine only. Remote creation is flat,
 not grouped, even if the host has project anchors. It needs a running compatible Herdr
-server, Linux SSH, Python 3, rsync and existing mise/Pi executables; it never installs,
+server, Linux SSH, Python 3, rsync and existing mise/Pi executables (or Claude Code;
+see [Claude Code lanes](#claude-code-lanes)); it never installs,
 updates or starts a server. Selecting a different machine in the TUI does not route
 CLI commands. Every remote API call uses the bound saved-machine ID.
 
@@ -243,6 +244,40 @@ New workspaces preserve focus and set the keyring opt-out before shell startup. 
 that new shell gets one `/bin/sh` startup command, with the hostname/user guard,
 absolute mise/Pi paths, native Pi `--name`, and the remote prompt path as initial argv.
 Command admission does not prove Pi/provider readiness or task completion.
+
+### Claude Code lanes
+
+Pi is the default. `--agent claude` starts Claude Code instead, on the same path:
+
+```sh
+lane --host build --agent claude orchard-12 lanes/task.md
+```
+
+The binding then needs `claude` (absolute path of the remote `claude` executable)
+instead of `mise` and `pi`. The project-local `lanes/claude-lane-settings.json` is a
+fifth input, delivered to `<root>/lanes/claude-lane-settings.json`. If it is missing the
+command refuses before any remote call. Like the prompt it is **create-only**: an
+existing remote copy with different bytes stops the launch before any delivery, and a
+matching copy is left unchanged, so running lanes keep the permissions they started with.
+To change it, update the project source and the host copy to the same bytes, with no
+Claude lane using it.
+
+The start command is `claude --settings <root>/lanes/claude-lane-settings.json --name
+<label> -- "Read <prompt> and follow it."`, after the same hostname/user guard, `cd`
+and a check that the delivered settings file still exists.
+`--settings` adds to the remote user's own Claude settings; it does not replace them.
+It passes no permission-mode or bypass flag. Claude must already trust `root` (a person
+accepts that once on the host); the command never answers a trust or other dialog.
+
+After the single start, it reads the new pane's Herdr `agent_status` up to ten times,
+one second between reads (each read has the usual 10-second limit), and sends nothing. `blocked` means a trust or other dialog is waiting:
+it exits 1 with "blocked on Claude trust/dialog"; inspect the pane, do not answer it or
+resend. `working`, `idle` or `done` from a pane Herdr identifies as Claude is printed
+as the observed status. If the status is still `unknown`, it reads the pane's processes
+once: a shell alone in the foreground means the start exited at once (for example a bad
+`claude` path or a missing settings file), and it exits 1 with "Claude did not start".
+Otherwise it prints "readiness unconfirmed". An unexpected status value exits 1 as
+uncertain. None of these proves task completion.
 
 Each external operation has a **10-second** outer limit, including connection time.
 Herdr's internal read-only discovery/probe may take longer; a cold call can therefore
