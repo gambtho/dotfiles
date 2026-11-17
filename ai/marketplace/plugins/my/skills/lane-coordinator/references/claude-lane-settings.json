@@ -1,0 +1,55 @@
+{
+  "permissions": {
+    "defaultMode": "auto",
+    "additionalDirectories": [
+      "<worktree-root>",
+      "<canonical-checkout>",
+      "<project-local>"
+    ],
+    "allow": [
+      "Read",
+      "Edit",
+      "Write",
+      "Glob",
+      "Grep",
+      "Bash(hostname)",
+      "Bash(whoami)",
+      "Bash(date:*)",
+      "Bash(git:*)",
+      "Bash(gh:*)",
+      "Bash(make:*)",
+      "Bash(python3:*)",
+      "Bash(bash:*)",
+      "Bash(sha256sum:*)",
+      "Bash(wc:*)",
+      "Bash(ls:*)",
+      "Bash(cat:*)",
+      "Bash(head:*)",
+      "Bash(tail:*)",
+      "Bash(sed -n:*)",
+      "Bash(grep:*)",
+      "Bash(rg:*)",
+      "Bash(find:*)",
+      "Bash(diff:*)",
+      "Bash(mkdir:*)",
+      "Bash(herdr workspace report-metadata:*)"
+    ],
+    "deny": [
+      "Bash(git push origin main:*)",
+      "Bash(git push origin HEAD:main:*)",
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "Bash(git push --mirror:*)",
+      "Bash(gh pr merge:*)",
+      "Bash(gh repo delete:*)",
+      "Bash(rm -rf:*)",
+      "Edit(<canonical-checkout>/**)",
+      "Edit(~/.claude/**)",
+      "Read(~/.ssh/**)",
+      "Read(~/.claude/.credentials.json)",
+      "Read(~/.codex/auth.json)",
+      "Read(~/.pi/agent/auth.json)",
+      "Read(~/.config/gh/hosts.yml)"
+    ]
+  }
+}

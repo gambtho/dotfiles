@@ -754,3 +754,105 @@ PY
     false
   }
 }
+
+@test "claude lane settings template is generic JSON with placeholders and credential denies" {
+  run python3 - "$SKILL_DIR" <<'PY'
+from pathlib import Path
+import json
+import sys
+
+skill = Path(sys.argv[1])
+raw = (skill / "references/claude-lane-settings.json").read_text()
+perms = json.loads(raw)["permissions"]
+assert perms["defaultMode"] == "auto"
+assert perms["additionalDirectories"] == ["<worktree-root>", "<canonical-checkout>", "<project-local>"]
+assert "Edit(<canonical-checkout>/**)" in perms["deny"]
+assert not [rule for rule in perms["deny"] if rule.startswith("Write(")]
+for secret in ("~/.ssh/**", "~/.claude/.credentials.json", "~/.codex/auth.json", "~/.config/gh/hosts.yml"):
+    assert f"Read({secret})" in perms["deny"], secret
+assert "Bash(gh pr merge:*)" in perms["deny"]
+assert "dotfiles" not in raw.lower()
+notes = (skill / "references/harness-notes.md").read_text()
+assert "## Subscription lanes (Claude Code, Codex)" in notes
+for name in ("codex-review.sh", "claude-review.sh"):
+    assert f"scripts/{name}" in notes, name
+PY
+  [ "$status" -eq 0 ] || {
+    echo "$output"
+    false
+  }
+}
+
+# Only the stubs and the tools the review scripts use, so a host's real reviewer never runs.
+review_path() {
+  local tool
+  mkdir -p "$TEST_ROOT/review-bin"
+  for tool in bash cat dirname; do
+    ln -sf "$(command -v "$tool")" "$TEST_ROOT/review-bin/$tool"
+  done
+  printf '%s' "$STUB_BIN:$TEST_ROOT/review-bin"
+}
+
+@test "review scripts reject bad arguments and missing reviewers without output files" {
+  printf 'review\n' >"$TEST_ROOT/prompt.md"
+  local reviewer_path
+  reviewer_path=$(review_path)
+  for script in codex-review.sh claude-review.sh; do
+    run bash "$SKILL_DIR/scripts/$script"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"usage: $script"* ]]
+    run bash "$SKILL_DIR/scripts/$script" "$TEST_ROOT/missing.md" "$TEST_ROOT/out"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"prompt file not readable"* ]]
+    run bash "$SKILL_DIR/scripts/$script" "$TEST_ROOT/prompt.md" "$TEST_ROOT/nodir/out"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"output directory missing"* ]]
+    ln -sf "$TEST_ROOT/prompt.md" "$TEST_ROOT/alias.stderr"
+    run bash "$SKILL_DIR/scripts/$script" "$TEST_ROOT/prompt.md" "$TEST_ROOT/alias"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"would overwrite the prompt"* ]]
+    # Not `run`: it warns on 127, which is the intended "command not found" status.
+    status=0
+    output=$(PATH="$reviewer_path" bash "$SKILL_DIR/scripts/$script" "$TEST_ROOT/prompt.md" "$TEST_ROOT/out" 2>&1) || status=$?
+    [ "$status" -eq 127 ]
+    [[ "$output" == *"not found on PATH"* ]]
+  done
+  assert_file_absent "$TEST_ROOT/out.exit"
+}
+
+@test "codex review reads the prompt from stdin to EOF, runs read-only and records output and exit" {
+  printf 'find bugs\n' >"$TEST_ROOT/prompt.md"
+  local reviewer_path
+  reviewer_path=$(review_path)
+  stub_command codex 'printf "%s\n" "$@" >"$TEST_ROOT/args"; cat >"$TEST_ROOT/stdin"; echo findings; echo warn >&2; exit 3'
+  PATH="$reviewer_path" run bash "$SKILL_DIR/scripts/codex-review.sh" "$TEST_ROOT/prompt.md" "$TEST_ROOT/out"
+  [ "$status" -eq 3 ]
+  [ "$output" = 3 ]
+  [ "$(cat "$TEST_ROOT/out.md")" = findings ]
+  [ "$(cat "$TEST_ROOT/out.stderr")" = warn ]
+  [ "$(cat "$TEST_ROOT/out.exit")" = 3 ]
+  [ "$(cat "$TEST_ROOT/stdin")" = "find bugs" ]
+  [ "$(cat "$TEST_ROOT/args")" = "$(printf '%s\n' exec --skip-git-repo-check --sandbox read-only -- -)" ]
+
+  rm "$STUB_BIN/codex"
+  stub_command mise 'printf "%s\n" "$@" >"$TEST_ROOT/args"; exit 0'
+  CODEX_REVIEW_MODEL=m1 PATH="$reviewer_path" run bash "$SKILL_DIR/scripts/codex-review.sh" "$TEST_ROOT/prompt.md" "$TEST_ROOT/out"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$TEST_ROOT/out.exit")" = 0 ]
+  [ "$(head -5 "$TEST_ROOT/args" | tr '\n' ' ')" = "exec -- codex exec --skip-git-repo-check " ]
+  grep -Fxq m1 "$TEST_ROOT/args"
+}
+
+@test "claude review sends the prompt on stdin with edit and shell tools disallowed" {
+  printf 'find bugs\n' >"$TEST_ROOT/prompt.md"
+  local reviewer_path
+  reviewer_path=$(review_path)
+  stub_command claude 'printf "%s\n" "$@" >"$TEST_ROOT/args"; cat >"$TEST_ROOT/stdin"; echo findings'
+  CLAUDE_REVIEW_MODEL=m2 PATH="$reviewer_path" run bash "$SKILL_DIR/scripts/claude-review.sh" "$TEST_ROOT/prompt.md" "$TEST_ROOT/out"
+  [ "$status" -eq 0 ]
+  [ "$output" = 0 ]
+  [ "$(cat "$TEST_ROOT/stdin")" = "find bugs" ]
+  [ "$(cat "$TEST_ROOT/out.md")" = findings ]
+  [ "$(cat "$TEST_ROOT/out.exit")" = 0 ]
+  [ "$(tr '\n' ' ' <"$TEST_ROOT/args")" = "-p --model m2 --disallowedTools Edit Write Bash NotebookEdit " ]
+}

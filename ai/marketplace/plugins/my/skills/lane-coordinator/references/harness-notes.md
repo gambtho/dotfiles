@@ -54,6 +54,60 @@ and `pr-text` (PR bodies, review comments/replies and issues).
   Use a verified capable lane/tool; otherwise report blocked (`INCOMPLETE` for
   adversarial review), not an equivalent pass. See [Claude Code subagents](https://code.claude.com/docs/en/sub-agents).
 
+## Subscription lanes (Claude Code, Codex)
+
+A lane can run on a Claude Code or Codex subscription instead of Pi. Its
+cross-family review then comes from the other CLI, through the bundled scripts.
+
+**Claude Code lane setup**, once per project and host:
+
+1. Copy [claude-lane-settings.json](claude-lane-settings.json) to the project-local
+   `lanes/claude-lane-settings.json`. Replace `<worktree-root>`, `<canonical-checkout>`
+   and `<project-local>` with the host's resolved paths. In `Edit(...)`/`Read(...)` rules write
+   `~/x` or `//abs/x`: a single leading `/` is relative to the settings file. Add the project's
+   own test commands to `allow` (`Bash(<tool>:*)`). Keep the credential `Read` denies. Don't
+   add `Write(...)` denies: Claude Code ignores them, and the `Edit` rules already cover writes.
+   The denies bind Claude's file tools and simple command prefixes, not what an allowed
+   `bash`/`python3` command or a reordered `git` command can do. Keep branch protection on
+   the server, and narrow those allows if the host holds secrets the lane must not read.
+   The template starts Claude in `auto` mode: allow rules run unchecked, deny rules block, and
+   anything else goes to Claude's auto-mode check instead of a prompt. An auto-mode refusal means
+   the lane stops or works around it, never that it asks for a bypass.
+2. Add the host's `claude` path to the project's binding and start with
+   `lane --host <binding> --agent claude …`; see [remote lanes](remote-lanes.md#claude-code-lanes).
+3. A person starts `claude` once in the host's project-local folder and accepts the trust
+   dialog. The launch never answers it.
+
+**Codex lane** (hand-started; `lane` has no Codex option). From the host's
+project-local folder:
+
+```sh
+codex -s workspace-write -a on-request --add-dir <worktree-root> \
+  --add-dir <canonical-checkout>/.git -c sandbox_workspace_write.network_access=true \
+  "Read <prompt> and follow it."
+```
+
+Network is on for git and gh; `on-request` asks the person only for steps outside the sandbox.
+
+**Cross-family review.** Resolve the script paths to this skill's `scripts/` before delivery.
+Each script writes `<out-prefix>.md`, `.stderr` and `.exit`, and exits with the reviewer's status:
+
+- Claude Code lanes: `bash <skill>/scripts/codex-review.sh <prompt-file> <out-prefix>`
+  (read-only sandbox, prompt on stdin from the file so it never waits; `codex` from PATH or mise;
+  optional `CODEX_REVIEW_MODEL`).
+- Codex lanes: `bash <skill>/scripts/claude-review.sh <prompt-file> <out-prefix>`
+  (no edit or shell tools; prompt on stdin; optional `CLAUDE_REVIEW_MODEL`).
+
+A nonzero exit is a blocker to report, not a reason to switch reviewers.
+
+**Lessons from pilot lanes:**
+
+- Write the report before saying ready.
+- Run long checks and CI waits in the background with output and exit-code files.
+  While it waits, a Claude Code lane shows Herdr `idle`; that is not a finished lane.
+- A lane that needs one more path (for example SSH config) gets it for that lane only.
+  Private keys stay denied.
+
 ## Shell pitfalls (zsh)
 
 - `path` is tied to `$PATH`: never use it as a variable name (`read id path` breaks every
