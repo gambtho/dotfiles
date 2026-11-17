@@ -5,18 +5,20 @@ load test_helper
 # Probes go into a private copy of the current working tree, never the real
 # checkout, so parallel suites cannot see them. The copy keeps current bytes and
 # ignore rules: tracked files stay tracked, untracked ones stay untracked.
+# Discovery reads only paths that resolve to regular files, so links are copied
+# as their targets' content and dangling links, which it skips, are left out.
 make_discovery_checkout() {
   CHECKOUT="$TEST_ROOT/checkout"
   mkdir -p "$CHECKOUT"
   git -C "$REPO_ROOT" ls-files -z --cached --others --exclude-standard |
     (cd "$REPO_ROOT" && while IFS= read -r -d '' path; do
-      [[ -f "$path" || -L "$path" ]] && printf '%s\0' "$path"
+      [[ ! -f "$path" ]] || printf '%s\0' "$path"
     done) |
-    (cd "$REPO_ROOT" && tar --null -T - -cf -) | tar -xf - -C "$CHECKOUT"
+    (cd "$REPO_ROOT" && tar -h --null -T - -cf -) | tar -xf - -C "$CHECKOUT"
   git -C "$CHECKOUT" init -q
   git -C "$REPO_ROOT" ls-files -z --cached |
     (cd "$CHECKOUT" && while IFS= read -r -d '' path; do
-      [[ -f "$path" || -L "$path" ]] && printf '%s\0' "$path"
+      [[ ! -f "$path" ]] || printf '%s\0' "$path"
     done) | git -C "$CHECKOUT" add -f --pathspec-from-file=- --pathspec-file-nul
 }
 
