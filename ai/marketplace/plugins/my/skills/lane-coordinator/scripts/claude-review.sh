@@ -15,6 +15,12 @@ if [[ ! -f "$prompt" || ! -r "$prompt" ]]; then
   echo "claude-review.sh: prompt file not readable: $prompt" >&2
   exit 2
 fi
+for suffix in md stderr exit; do
+  if [[ "$prompt" -ef "$out.$suffix" ]]; then
+    echo "claude-review.sh: output $out.$suffix would overwrite the prompt" >&2
+    exit 2
+  fi
+done
 if [[ ! -d "$(dirname -- "$out")" ]]; then
   echo "claude-review.sh: output directory missing: $(dirname -- "$out")" >&2
   exit 2

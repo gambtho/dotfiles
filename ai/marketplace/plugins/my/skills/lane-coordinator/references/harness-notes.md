@@ -93,7 +93,8 @@ Network is on for git and gh; `on-request` asks the person only for steps outsid
 Each script writes `<out-prefix>.md`, `.stderr` and `.exit`, and exits with the reviewer's status:
 
 - Claude Code lanes: `bash <skill>/scripts/codex-review.sh <prompt-file> <out-prefix>`
-  (read-only sandbox, stdin closed; `codex` from PATH or mise; optional `CODEX_REVIEW_MODEL`).
+  (read-only sandbox, prompt on stdin from the file so it never waits; `codex` from PATH or mise;
+  optional `CODEX_REVIEW_MODEL`).
 - Codex lanes: `bash <skill>/scripts/claude-review.sh <prompt-file> <out-prefix>`
   (no edit or shell tools; prompt on stdin; optional `CLAUDE_REVIEW_MODEL`).
 

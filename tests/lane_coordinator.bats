@@ -807,6 +807,10 @@ review_path() {
     run bash "$SKILL_DIR/scripts/$script" "$TEST_ROOT/prompt.md" "$TEST_ROOT/nodir/out"
     [ "$status" -eq 2 ]
     [[ "$output" == *"output directory missing"* ]]
+    ln -sf "$TEST_ROOT/prompt.md" "$TEST_ROOT/alias.stderr"
+    run bash "$SKILL_DIR/scripts/$script" "$TEST_ROOT/prompt.md" "$TEST_ROOT/alias"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"would overwrite the prompt"* ]]
     # Not `run`: it warns on 127, which is the intended "command not found" status.
     status=0
     output=$(PATH="$reviewer_path" bash "$SKILL_DIR/scripts/$script" "$TEST_ROOT/prompt.md" "$TEST_ROOT/out" 2>&1) || status=$?
@@ -816,7 +820,7 @@ review_path() {
   assert_file_absent "$TEST_ROOT/out.exit"
 }
 
-@test "codex review closes stdin, runs read-only and records output and exit" {
+@test "codex review reads the prompt from stdin to EOF, runs read-only and records output and exit" {
   printf 'find bugs\n' >"$TEST_ROOT/prompt.md"
   local reviewer_path
   reviewer_path=$(review_path)
@@ -827,8 +831,8 @@ review_path() {
   [ "$(cat "$TEST_ROOT/out.md")" = findings ]
   [ "$(cat "$TEST_ROOT/out.stderr")" = warn ]
   [ "$(cat "$TEST_ROOT/out.exit")" = 3 ]
-  [ ! -s "$TEST_ROOT/stdin" ]
-  [ "$(cat "$TEST_ROOT/args")" = "$(printf '%s\n' exec --skip-git-repo-check --sandbox read-only -- 'find bugs')" ]
+  [ "$(cat "$TEST_ROOT/stdin")" = "find bugs" ]
+  [ "$(cat "$TEST_ROOT/args")" = "$(printf '%s\n' exec --skip-git-repo-check --sandbox read-only -- -)" ]
 
   rm "$STUB_BIN/codex"
   stub_command mise 'printf "%s\n" "$@" >"$TEST_ROOT/args"; exit 0'
