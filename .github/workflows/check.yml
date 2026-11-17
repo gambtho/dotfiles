@@ -9,8 +9,23 @@ permissions:
   contents: read
 
 jobs:
-  validate:
+  # Each leg runs part of `make check` (or the installed-Pi gates) on its own
+  # runner; `validate` below passes only when every leg passed.
+  checks:
+    name: ${{ matrix.suite }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - suite: static
+            targets: syntax lint validate
+          - suite: bats
+            targets: test
+          - suite: python
+            targets: python-test
+          - suite: pi-runtime
+            targets: pi-security-gate pi-runtime-test
     steps:
       - uses: actions/checkout@v4
         with:
@@ -19,7 +34,7 @@ jobs:
         with:
           node-version: "26"
       - name: Install shell tooling
-        run: sudo apt-get update && sudo apt-get install -y bats python3-jsonschema ripgrep shellcheck shfmt zsh
+        run: sudo apt-get update && sudo apt-get install -y bats parallel python3-jsonschema ripgrep shellcheck shfmt zsh
       - name: Install pinned yq
         shell: bash
         run: |
@@ -70,19 +85,25 @@ jobs:
           JS
           cat "$RUNNER_TEMP/pi-candidates.json"
       - name: Run checks
-        run: make check
-      - name: Validate the installed Pi permission pipeline
-        shell: bash
-        run: |
-          set -euo pipefail
-          libexec/validate-pi-security-runtime \
-            --package-root "$RUNNER_TEMP/pi-security-gate/lib/node_modules/@gotgenes/pi-permission-system" \
-            --pi-package-root "$PI_TEST_HOST_ROOT"
-      - name: Exercise the native Codemode and child permission pipeline
-        run: make pi-runtime-test
+        env:
+          CHECK_TARGETS: ${{ matrix.targets }}
+        # Word splitting is intended: one leg can run several Make targets.
+        run: make $CHECK_TARGETS
       - name: Record tested Pi candidate identities
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: pi-candidates
+          name: pi-candidates-${{ matrix.suite }}
           path: ${{ runner.temp }}/pi-candidates.json
+
+  validate:
+    needs: checks
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every check leg to pass
+        env:
+          CHECKS_RESULT: ${{ needs.checks.result }}
+        run: |
+          echo "checks: $CHECKS_RESULT"
+          test "$CHECKS_RESULT" = success

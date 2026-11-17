@@ -130,24 +130,66 @@ setup() {
     printf "{\"name\":\"@narumitw/pi-lsp\",\"version\":\"0.49.9\"}\n" >"$lsp/package.json"
     printf "provision\n" >>"$TEST_ROOT/ci-events"
   '
+  # Gate targets run the real Makefile recipe against the fixture's stub validator.
+  REAL_MAKE=$(command -v make)
+  export REAL_MAKE FIXTURE_ROOT="$fixture" MAKEFILE_UNDER_TEST="$REPO_ROOT/Makefile"
   stub_command make '
     [[ -f "$PI_TEST_HOST_ROOT/dist/index.js" ]] || { printf "SDK host not provisioned before checks\n" >&2; exit 84; }
     [[ "$(command -v pi)" == "$RUNNER_TEMP/pi-security-gate/bin/pi" ]] || { printf "selected Pi executable not on PATH before checks\n" >&2; exit 86; }
-    case "$*" in
-      check) printf "check\n" >>"$TEST_ROOT/ci-events" ;;
-      pi-runtime-test)
-        [[ -f "$PI_TEST_PERMISSION_ROOT/package.json" && -f "$PI_TEST_SUBAGENTS_ROOT/package.json" && -f "$PI_TEST_LSP_ROOT/package.json" ]] || exit 87
-        printf "native\n" >>"$TEST_ROOT/ci-events"
-        exit "${CI_NATIVE_FAIL:-0}" ;;
-      *) exit 84 ;;
-    esac
+    for target in "$@"; do
+      case "$target" in
+        syntax | lint | validate | test | python-test) printf "%s\n" "$target" >>"$TEST_ROOT/ci-events" ;;
+        pi-security-gate) "$REAL_MAKE" -s -C "$FIXTURE_ROOT" -f "$MAKEFILE_UNDER_TEST" pi-security-gate || exit ;;
+        pi-runtime-test)
+          [[ -f "$PI_TEST_PERMISSION_ROOT/package.json" && -f "$PI_TEST_SUBAGENTS_ROOT/package.json" && -f "$PI_TEST_LSP_ROOT/package.json" ]] || exit 87
+          printf "native\n" >>"$TEST_ROOT/ci-events"
+          [[ "${CI_NATIVE_FAIL:-0}" == 0 ]] || exit "$CI_NATIVE_FAIL" ;;
+        *) exit 84 ;;
+      esac
+    done
   '
   printf '%s\n' '#!/usr/bin/env bash' \
     '[[ "$*" == *"--package-root $RUNNER_TEMP/"* && "$*" == *"--pi-package-root $PI_TEST_HOST_ROOT"* ]] || exit 85' \
     'printf "gate\n" >>"$TEST_ROOT/ci-events"' \
     'exit "${CI_GATE_FAIL:-0}"' >"$fixture/libexec/validate-pi-security-runtime"
   chmod +x "$fixture/libexec/validate-pi-security-runtime"
-  local failure
+
+  # Together the legs run every make check target plus both installed-Pi gates.
+  local legs check_targets target
+  legs=$(jq -r '.jobs.checks.strategy.matrix.include[] | "\(.suite)=\(.targets)"' "$steps")
+  check_targets=$(sed -n 's/^check: *//p' "$REPO_ROOT/Makefile")
+  for target in $check_targets pi-security-gate pi-runtime-test; do
+    printf '%s\n' "$legs" | cut -d= -f2 | tr ' ' '\n' | grep -Fxq "$target"
+  done
+
+  replay_leg() {
+    unset PI_TEST_HOST_ROOT PI_TEST_PERMISSION_ROOT PI_TEST_SUBAGENTS_ROOT PI_TEST_LSP_ROOT
+    rm -f "$TEST_ROOT/ci-events"
+    printf '' >"$GITHUB_ENV"
+    printf '' >"$GITHUB_PATH"
+    CHECK_TARGETS=$1 run bash -c '
+      set -euo pipefail
+      cd "$1"
+      while IFS= read -r block; do
+        bash -e -c "$(printf "%s" "$block" | base64 --decode)"
+        set -a; source "$GITHUB_ENV"; set +a
+        while IFS= read -r directory; do export PATH="$directory:$PATH"; done <"$GITHUB_PATH"
+      done < <(jq -r '\''.jobs.checks.steps[] | select(has("run") and .name != "Install shell tooling") | .run | @base64'\'' "$2")
+    ' _ "$fixture" "$steps"
+  }
+
+  local leg suite targets
+  export CI_GATE_FAIL=0 CI_NATIVE_FAIL=0 CI_PI_VERSION=1.1.0
+  while IFS= read -r leg; do
+    suite=${leg%%=*} targets=${leg#*=}
+    replay_leg "$targets"
+    [ "$status" -eq 0 ]
+    [ "$(<"$TEST_ROOT/ci-events")" = "$(printf 'provision\n%s' "$(printf '%s\n' $targets | sed 's/^pi-security-gate$/gate/; s/^pi-runtime-test$/native/')")" ]
+  done <<<"$legs"
+
+  local failure gate_leg
+  gate_leg=$(printf '%s\n' "$legs" | sed -n 's/^pi-runtime=//p')
+  [ "$gate_leg" = "pi-security-gate pi-runtime-test" ]
   for failure in 0 43 44 1.2.3 2.0.0 0.9.0 1.0.9 NaN.1.0 1.NaN.0 .1.0 2..0 2 2.1e2.0 0x2.1.0 2.-1.0 2.Infinity.0 2.+1.0 9007199254740992.1.0 2.9007199254740992.0 "" "2. .0"; do
     export CI_GATE_FAIL=0 CI_NATIVE_FAIL=0 CI_PI_VERSION=1.1.0
     if [[ "$failure" == 43 ]]; then export CI_GATE_FAIL=43; fi
@@ -163,30 +205,39 @@ setup() {
         failure=1
         ;;
     esac
-    unset PI_TEST_HOST_ROOT PI_TEST_PERMISSION_ROOT PI_TEST_SUBAGENTS_ROOT PI_TEST_LSP_ROOT
-    rm -f "$TEST_ROOT/ci-events"
-    printf '' >"$GITHUB_ENV"
-    printf '' >"$GITHUB_PATH"
-    run bash -c '
-      set -euo pipefail
-      cd "$1"
-      while IFS= read -r block; do
-        bash -e -c "$(printf "%s" "$block" | base64 --decode)"
-        set -a; source "$GITHUB_ENV"; set +a
-        while IFS= read -r directory; do export PATH="$directory:$PATH"; done <"$GITHUB_PATH"
-      done < <(jq -r '\''.jobs.validate.steps[] | select(has("run") and .name != "Install shell tooling") | .run | @base64'\'' "$2")
-    ' _ "$fixture" "$steps"
-    if [[ "$failure" == 0 ]]; then
-      [ "$status" -eq 0 ]
-      [ "$(<"$TEST_ROOT/ci-events")" = $'provision\ncheck\ngate\nnative' ]
-      jq -e --arg version "$CI_PI_VERSION" '.pi.version == $version and .permission.version == "30.0.0" and .subagents.version == "23.4.0" and .lsp.version == "0.49.9"' "$RUNNER_TEMP/pi-candidates.json"
-    else
-      [ "$status" -eq "$failure" ]
-      if [[ "$failure" == 1 ]]; then
+    replay_leg "$gate_leg"
+    case "$failure" in
+      0)
+        [ "$status" -eq 0 ]
+        [ "$(<"$TEST_ROOT/ci-events")" = $'provision\ngate\nnative' ]
+        jq -e --arg version "$CI_PI_VERSION" '.pi.version == $version and .permission.version == "30.0.0" and .subagents.version == "23.4.0" and .lsp.version == "0.49.9"' "$RUNNER_TEMP/pi-candidates.json"
+        ;;
+      43)
+        # make reports the failed gate recipe; native checks never start.
+        [ "$status" -ne 0 ]
+        [ "$(<"$TEST_ROOT/ci-events")" = $'provision\ngate' ]
+        ;;
+      44)
+        [ "$status" -eq 44 ]
+        [ "$(<"$TEST_ROOT/ci-events")" = $'provision\ngate\nnative' ]
+        ;;
+      1)
+        [ "$status" -eq 1 ]
         [[ "$output" == *"Pi SDK 1.1+ required; resolved $CI_PI_VERSION"* ]]
         [ "$(<"$TEST_ROOT/ci-events")" = provision ]
-      fi
-    fi
+        ;;
+    esac
+  done
+
+  # The required summary passes only when every leg passed.
+  [ "$(jq -r '.jobs.validate.needs' "$steps")" = checks ]
+  [ "$(jq -r '.jobs.validate.if' "$steps")" = 'always()' ]
+  [ "$(jq -r '.jobs.validate.steps[0].env.CHECKS_RESULT' "$steps")" = '${{ needs.checks.result }}' ]
+  local summary result
+  summary=$(jq -r '.jobs.validate.steps[0].run' "$steps")
+  for result in success failure cancelled skipped ""; do
+    CHECKS_RESULT=$result run bash -e -c "$summary"
+    if [[ "$result" == success ]]; then [ "$status" -eq 0 ]; else [ "$status" -ne 0 ]; fi
   done
 }
 

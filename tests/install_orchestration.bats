@@ -244,11 +244,11 @@ SCRIPT
     exit 1'
   yq -o=json '.' "$REPO_ROOT/.github/workflows/check.yml" >"$steps"
   local install_index check_index script
-  install_index=$(jq -r '.jobs.validate.steps | to_entries[] | select(.value.name == "Install pinned yq") | .key' "$steps")
-  check_index=$(jq -r '.jobs.validate.steps | to_entries[] | select(.value.name == "Run checks") | .key' "$steps")
+  install_index=$(jq -r '.jobs.checks.steps | to_entries[] | select(.value.name == "Install pinned yq") | .key' "$steps")
+  check_index=$(jq -r '.jobs.checks.steps | to_entries[] | select(.value.name == "Run checks") | .key' "$steps")
   [ -n "$install_index" ]
   [ "$install_index" -lt "$check_index" ]
-  script=$(jq -r '.jobs.validate.steps[] | select(.name == "Install pinned yq") | .run' "$steps")
+  script=$(jq -r '.jobs.checks.steps[] | select(.name == "Install pinned yq") | .run' "$steps")
 
   run env PATH="$PATH" RUNNER_TEMP="$TEST_ROOT/runner" GITHUB_PATH="$TEST_ROOT/github-path" YQ_TEST_PAYLOAD="$payload" \
     bash -c 'cd "$1"; bash -c "$2"' _ "$fixture" "$script"

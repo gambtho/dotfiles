@@ -464,11 +464,11 @@ class MorningTests(unittest.TestCase):
         if not hasattr(os, 'fork'):
             self.skipTest('POSIX process groups')
         pid_file = self.root / 'pid'
-        code = ('import os,time,pathlib; p=os.fork(); '
-                f'pathlib.Path({str(pid_file)!r}).write_text(str(p)) if p else None; '
-                'time.sleep(10) if not p else None')
+        # A shell starts the descendant within milliseconds, well inside the
+        # timeout under test; interpreter startup could not reliably fit.
         with self.assertRaises(self.m.ObservationError):
-            self.m.run_read([sys.executable, '-c', code], timeout=.2, budget=self.m.Budget())
+            self.m.run_read(['/bin/sh', '-c', 'sleep 10 & printf %s "$!" >"$1"', 'sh', str(pid_file)],
+                            timeout=.2, budget=self.m.Budget())
         child = int(pid_file.read_text())
         proc = pathlib.Path(f'/proc/{child}/stat')
         deadline = time.monotonic() + 1

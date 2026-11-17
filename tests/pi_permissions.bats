@@ -1157,6 +1157,18 @@ make_permission_runtime_fixture() {
   [[ "$output" == *"fixture metadata: 30.0.0"* ]]
 }
 
+# Every evaluator fixture finds its Pi host here; the discovery test probes it.
+permission_fixture_host() {
+  source "$REPO_ROOT/libexec/lib/pi-runtime.sh"
+  resolve_pi_runtime "$HOST_PI" "${PI_TEST_HOST_ROOT:-}"
+  PERMISSION_FIXTURE_HOST="$PI_RUNTIME_PACKAGE_ROOT"
+}
+
+@test "permission fixture resolves its Pi host" {
+  permission_fixture_host
+  [ -f "$PERMISSION_FIXTURE_HOST/package.json" ]
+}
+
 @test "permission fixture discovers user-level managed Pi and honors a host root without Pi on PATH" {
   source "$REPO_ROOT/libexec/lib/pi-runtime.sh"
   resolve_pi_runtime "${HOST_PI:-}" "${PI_TEST_HOST_ROOT:-}"
@@ -1167,9 +1179,9 @@ make_permission_runtime_fixture() {
   mkdir -p "$user_bin"
   ln -s "$RUNTIME_AGENT/bin/pi" "$user_bin/pi"
 
-  PATH="$user_bin:$PATH" PI_TEST_HOST_ROOT="" run bats --filter '^actual used evaluator modules exports' "$BATS_TEST_FILENAME"
+  PATH="$user_bin:$PATH" PI_TEST_HOST_ROOT="" run bats --filter '^permission fixture resolves its Pi host$' "$BATS_TEST_FILENAME"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"ok 1 actual used evaluator modules exports"* ]]
+  [[ "$output" == *"ok 1 permission fixture resolves its Pi host"* ]]
   [ ! -e "$TEST_ROOT/launcher-executed" ]
 
   local no_pi_path="$TEST_ROOT/no-pi-bin"
@@ -1179,11 +1191,11 @@ make_permission_runtime_fixture() {
   done
   PATH="$no_pi_path" run command -v pi
   [ "$status" -ne 0 ]
-  PATH="$no_pi_path" PI_TEST_HOST_ROOT="$host" run bats --filter '^actual used evaluator modules exports' "$BATS_TEST_FILENAME"
+  PATH="$no_pi_path" PI_TEST_HOST_ROOT="$host" run bats --filter '^permission fixture resolves its Pi host$' "$BATS_TEST_FILENAME"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"ok 1 actual used evaluator modules exports"* ]]
+  [[ "$output" == *"ok 1 permission fixture resolves its Pi host"* ]]
 
-  PATH="$no_pi_path" PI_TEST_HOST_ROOT="" run bats --filter '^actual used evaluator modules exports' "$BATS_TEST_FILENAME"
+  PATH="$no_pi_path" PI_TEST_HOST_ROOT="" run bats --filter '^permission fixture resolves its Pi host$' "$BATS_TEST_FILENAME"
   [ "$status" -ne 0 ]
   [[ "$output" == *"Pi executable not found on PATH"* ]]
   [[ "$output" != *"# skip"* ]]
@@ -1192,43 +1204,58 @@ make_permission_runtime_fixture() {
   [[ "$output" == *"ok 1 Pi runtime baselines are valid JSON"* ]]
 }
 
-@test "actual used evaluator modules exports and session approval fail closed in owned copies" {
-  source "$REPO_ROOT/libexec/lib/pi-runtime.sh"
-  resolve_pi_runtime "$HOST_PI" "${PI_TEST_HOST_ROOT:-}"
-  local host="$PI_RUNTIME_PACKAGE_ROOT" source_root fixture version module damage
+# One evaluator case per test so Bats can run the slow validator cases in parallel.
+assert_owned_evaluator_case() {
+  local damage=$1 host source_root fixture version module
+  permission_fixture_host
+  host=$PERMISSION_FIXTURE_HOST
   source_root="${PI_TEST_PERMISSION_ROOT:-${host%/install/releases/*}/npm/node_modules/@gotgenes/pi-permission-system}"
   version=$(jq -r .version "$source_root/package.json")
-  for damage in healthy missing-module used-export session-approval; do
-    fixture="$TEST_ROOT/evaluator-$damage"
-    cp -a "$source_root" "$fixture"
-    if [[ ! -d "$fixture/node_modules" ]]; then ln -s "$(dirname "$(dirname "$source_root")")" "$fixture/node_modules"; fi
-    local layout=''
-    [[ ! -d "$fixture/src/policy" ]] || layout=policy/
+  fixture="$TEST_ROOT/evaluator-$damage"
+  cp -a "$source_root" "$fixture"
+  if [[ ! -d "$fixture/node_modules" ]]; then ln -s "$(dirname "$(dirname "$source_root")")" "$fixture/node_modules"; fi
+  local layout=''
+  [[ ! -d "$fixture/src/policy" ]] || layout=policy/
+  case "$damage" in
+    missing-module) rm "$fixture/src/${layout}permission-resolver.ts" ;;
+    used-export) printf 'export {};\n' >"$fixture/src/${layout}permission-manager.ts" ;;
+    session-approval)
+      module="$fixture/src/session-rules.ts"
+      [[ ! -d "$fixture/src/session" ]] || module="$fixture/src/session/session-rules.ts"
+      python3 -c 'from pathlib import Path; import sys; p=Path(sys.argv[1]); s=p.read_text(); assert "recordSessionApproval(" in s; p.write_text(s.replace("recordSessionApproval(", "brokenSessionApproval(", 1))' "$module"
+      ;;
+  esac
+  run bash "$REPO_ROOT/libexec/validate-pi-security-runtime" --package-root "$fixture" --pi-package-root "$host" --python /usr/bin/python3
+  if [[ "$damage" == healthy ]]; then
+    printf '%s\n' "$output"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'real approval recorded and reused'* ]]
+  else
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"incompatible permission evaluator $version at $fixture"* ]]
+    [[ "$output" == *'selected evaluator behavior failed'* ]]
     case "$damage" in
-      missing-module) rm "$fixture/src/${layout}permission-resolver.ts" ;;
-      used-export) printf 'export {};\n' >"$fixture/src/${layout}permission-manager.ts" ;;
-      session-approval)
-        module="$fixture/src/session-rules.ts"
-        [[ ! -d "$fixture/src/session" ]] || module="$fixture/src/session/session-rules.ts"
-        python3 -c 'from pathlib import Path; import sys; p=Path(sys.argv[1]); s=p.read_text(); assert "recordSessionApproval(" in s; p.write_text(s.replace("recordSessionApproval(", "brokenSessionApproval(", 1))' "$module"
-        ;;
+      missing-module) [[ "$output" == *permission-resolver* ]] ;;
+      used-export) [[ "$output" == *PermissionManager* ]] ;;
+      session-approval) [[ "$output" == *recordSessionApproval* ]] ;;
     esac
-    run bash "$REPO_ROOT/libexec/validate-pi-security-runtime" --package-root "$fixture" --pi-package-root "$host" --python /usr/bin/python3
-    if [[ "$damage" == healthy ]]; then
-      printf '%s\n' "$output"
-      [ "$status" -eq 0 ]
-      [[ "$output" == *'real approval recorded and reused'* ]]
-    else
-      [ "$status" -ne 0 ]
-      [[ "$output" == *"incompatible permission evaluator $version at $fixture"* ]]
-      [[ "$output" == *'selected evaluator behavior failed'* ]]
-      case "$damage" in
-        missing-module) [[ "$output" == *permission-resolver* ]] ;;
-        used-export) [[ "$output" == *PermissionManager* ]] ;;
-        session-approval) [[ "$output" == *recordSessionApproval* ]] ;;
-      esac
-    fi
-  done
+  fi
+}
+
+@test "actual used evaluator modules exports and session approval pass in a healthy owned copy" {
+  assert_owned_evaluator_case healthy
+}
+
+@test "actual used evaluator fails closed in an owned copy missing a module" {
+  assert_owned_evaluator_case missing-module
+}
+
+@test "actual used evaluator fails closed in an owned copy missing a used export" {
+  assert_owned_evaluator_case used-export
+}
+
+@test "actual used evaluator fails closed in an owned copy with broken session approval" {
+  assert_owned_evaluator_case session-approval
 }
 
 @test "Pi runtime validator fails clearly when bundled jiti is absent" {

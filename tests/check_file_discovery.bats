@@ -2,27 +2,46 @@
 
 load test_helper
 
+# Probes go into a private copy of the current working tree, never the real
+# checkout, so parallel suites cannot see them. The copy keeps current bytes and
+# ignore rules: tracked files stay tracked, untracked ones stay untracked.
+make_discovery_checkout() {
+  CHECKOUT="$TEST_ROOT/checkout"
+  mkdir -p "$CHECKOUT"
+  git -C "$REPO_ROOT" ls-files -z --cached --others --exclude-standard |
+    (cd "$REPO_ROOT" && while IFS= read -r -d '' path; do
+      [[ -f "$path" || -L "$path" ]] && printf '%s\0' "$path"
+    done) |
+    (cd "$REPO_ROOT" && tar --null -T - -cf -) | tar -xf - -C "$CHECKOUT"
+  git -C "$CHECKOUT" init -q
+  git -C "$REPO_ROOT" ls-files -z --cached |
+    (cd "$CHECKOUT" && while IFS= read -r -d '' path; do
+      [[ -f "$path" || -L "$path" ]] && printf '%s\0' "$path"
+    done) | git -C "$CHECKOUT" add -f --pathspec-from-file=- --pathspec-file-nul
+}
+
 setup() {
   setup_dotfiles_test
-  UNTRACKED_FILE="$REPO_ROOT/bin/example-check-script-$BATS_TEST_NUMBER"
-  IGNORED_DIR="$REPO_ROOT/bin/.opencode"
+  make_discovery_checkout
+  UNTRACKED_FILE="$CHECKOUT/bin/example-check-script-$BATS_TEST_NUMBER"
+  IGNORED_DIR="$CHECKOUT/bin/.opencode"
   IGNORED_FILE="$IGNORED_DIR/project-$BATS_TEST_NUMBER.sh"
   mkdir -p "$IGNORED_DIR"
   printf '#!/usr/bin/env bash\ntrue\n' >"$UNTRACKED_FILE"
   printf '#!/usr/bin/env bash\nfalse\n' >"$IGNORED_FILE"
 
-  DIRECT_SH_FILE="$REPO_ROOT/bin/probe-direct-sh-$BATS_TEST_NUMBER"
-  SPACED_SHELL_FILE="$REPO_ROOT/bin/probe-spaced-shell-$BATS_TEST_NUMBER"
-  ENV_SPLIT_SHELL_FILE="$REPO_ROOT/bin/probe-env-split-shell-$BATS_TEST_NUMBER"
-  CUSTOM_SHELL_FILE="$REPO_ROOT/bin/probe-custom-shell-$BATS_TEST_NUMBER"
-  ENV_CUSTOM_SHELL_FILE="$REPO_ROOT/bin/probe-env-custom-shell-$BATS_TEST_NUMBER"
-  PYTHON_FILE="$REPO_ROOT/bin/probe-python-$BATS_TEST_NUMBER"
-  ENV_SEPARATOR_PYTHON_FILE="$REPO_ROOT/bin/probe-env-separator-python-$BATS_TEST_NUMBER"
-  ENV_IGNORE_PYTHON_FILE="$REPO_ROOT/bin/probe-env-ignore-python-$BATS_TEST_NUMBER"
-  ENV_ASSIGN_PYTHON_FILE="$REPO_ROOT/bin/probe-env-assign-python-$BATS_TEST_NUMBER"
-  FISH_FILE="$REPO_ROOT/bin/probe-fish-$BATS_TEST_NUMBER"
-  UNKNOWN_FILE="$REPO_ROOT/bin/probe-unknown-$BATS_TEST_NUMBER"
-  EMPTY_FILE="$REPO_ROOT/bin/probe-empty-$BATS_TEST_NUMBER"
+  DIRECT_SH_FILE="$CHECKOUT/bin/probe-direct-sh-$BATS_TEST_NUMBER"
+  SPACED_SHELL_FILE="$CHECKOUT/bin/probe-spaced-shell-$BATS_TEST_NUMBER"
+  ENV_SPLIT_SHELL_FILE="$CHECKOUT/bin/probe-env-split-shell-$BATS_TEST_NUMBER"
+  CUSTOM_SHELL_FILE="$CHECKOUT/bin/probe-custom-shell-$BATS_TEST_NUMBER"
+  ENV_CUSTOM_SHELL_FILE="$CHECKOUT/bin/probe-env-custom-shell-$BATS_TEST_NUMBER"
+  PYTHON_FILE="$CHECKOUT/bin/probe-python-$BATS_TEST_NUMBER"
+  ENV_SEPARATOR_PYTHON_FILE="$CHECKOUT/bin/probe-env-separator-python-$BATS_TEST_NUMBER"
+  ENV_IGNORE_PYTHON_FILE="$CHECKOUT/bin/probe-env-ignore-python-$BATS_TEST_NUMBER"
+  ENV_ASSIGN_PYTHON_FILE="$CHECKOUT/bin/probe-env-assign-python-$BATS_TEST_NUMBER"
+  FISH_FILE="$CHECKOUT/bin/probe-fish-$BATS_TEST_NUMBER"
+  UNKNOWN_FILE="$CHECKOUT/bin/probe-unknown-$BATS_TEST_NUMBER"
+  EMPTY_FILE="$CHECKOUT/bin/probe-empty-$BATS_TEST_NUMBER"
   printf '#!/bin/sh\ntrue\n' >"$DIRECT_SH_FILE"
   printf '#!  /usr/bin/zsh -f\ntrue\n' >"$SPACED_SHELL_FILE"
   printf '#!/usr/bin/env -S bash -e\ntrue\n' >"$ENV_SPLIT_SHELL_FILE"
@@ -45,7 +64,7 @@ setup() {
   # tools/dev/ is gone (design §13 step 8) and the discovery rules were never
   # keyed on it (libexec/list-check-files matches tools/*), so one set covers
   # the same predicate.
-  TOOL_PROBE_DIR="$REPO_ROOT/tools/herdr"
+  TOOL_PROBE_DIR="$CHECKOUT/tools/herdr"
   TOOL_SUB_DIR="$TOOL_PROBE_DIR/probe-lib-$BATS_TEST_NUMBER"
   TOOL_INSTALL_FILE="$TOOL_PROBE_DIR/probe-install-$BATS_TEST_NUMBER.sh"
   TOOL_EXEC_FILE="$TOOL_PROBE_DIR/probe-exec-$BATS_TEST_NUMBER"
@@ -64,25 +83,9 @@ setup() {
   printf '[Unit]\nDescription=probe\n' >"$TOOL_UNIT_FILE"
 }
 
-teardown() {
-  rm -f -- "$UNTRACKED_FILE" "$IGNORED_FILE" \
-    "$DIRECT_SH_FILE" "$SPACED_SHELL_FILE" "$ENV_SPLIT_SHELL_FILE" \
-    "$CUSTOM_SHELL_FILE" "$ENV_CUSTOM_SHELL_FILE" "$PYTHON_FILE" \
-    "$ENV_SEPARATOR_PYTHON_FILE" "$ENV_IGNORE_PYTHON_FILE" "$ENV_ASSIGN_PYTHON_FILE" \
-    "$FISH_FILE" \
-    "$UNKNOWN_FILE" "$EMPTY_FILE" \
-    "$TOOL_INSTALL_FILE" "$TOOL_EXEC_FILE" "$TOOL_SUB_FILE" "$TOOL_ZSH_FILE" \
-    "$TOOL_YAML_FILE" "$TOOL_CONF_FILE" "$TOOL_UNIT_FILE"
-  rmdir "$IGNORED_DIR" 2>/dev/null || true
-  rmdir "$TOOL_SUB_DIR" 2>/dev/null || true
-  # rmdir, not rm -r: the real installer lives here, so the directory is not
-  # empty and must survive the suite untouched.
-  rmdir "$TOOL_PROBE_DIR" 2>/dev/null || true
-}
-
 list_files() {
   local class="$1"
-  run bash -c '"$1/libexec/list-check-files" "$2" | tr "\0" "\n"' _ "$REPO_ROOT" "$class"
+  run bash -c 'cd "$3" && "$1/libexec/list-check-files" "$2" | tr "\0" "\n"' _ "$REPO_ROOT" "$class" "$CHECKOUT"
 }
 
 @test "bash discovery includes tracked and untracked source but excludes ignored state" {
@@ -91,8 +94,8 @@ list_files() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"bin/dot-install"* ]]
   [[ "$output" == *"libexec/common.sh"* ]]
-  [[ "$output" == *"${UNTRACKED_FILE#"$REPO_ROOT/"}"* ]]
-  [[ "$output" != *"${IGNORED_FILE#"$REPO_ROOT/"}"* ]]
+  [[ "$output" == *"${UNTRACKED_FILE#"$CHECKOUT/"}"* ]]
+  [[ "$output" != *"${IGNORED_FILE#"$CHECKOUT/"}"* ]]
   [[ "$output" != *"core/shell/zshrc.symlink"* ]]
 }
 
@@ -160,7 +163,7 @@ list_files() {
   for class in bash shellcheck shfmt; do
     list_files "$class"
     [ "$status" -eq 0 ]
-    [[ "$output" == *"${DIRECT_SH_FILE#"$REPO_ROOT/"}"* ]]
+    [[ "$output" == *"${DIRECT_SH_FILE#"$CHECKOUT/"}"* ]]
   done
 }
 
@@ -169,7 +172,7 @@ list_files() {
   for class in bash shellcheck shfmt; do
     list_files "$class"
     [ "$status" -eq 0 ]
-    [[ "$output" == *"${SPACED_SHELL_FILE#"$REPO_ROOT/"}"* ]]
+    [[ "$output" == *"${SPACED_SHELL_FILE#"$CHECKOUT/"}"* ]]
   done
 }
 
@@ -178,7 +181,7 @@ list_files() {
   for class in bash shellcheck shfmt; do
     list_files "$class"
     [ "$status" -eq 0 ]
-    [[ "$output" == *"${ENV_SPLIT_SHELL_FILE#"$REPO_ROOT/"}"* ]]
+    [[ "$output" == *"${ENV_SPLIT_SHELL_FILE#"$CHECKOUT/"}"* ]]
   done
 }
 
@@ -187,11 +190,11 @@ list_files() {
   for class in bash shellcheck shfmt; do
     list_files "$class"
     [ "$status" -eq 0 ]
-    [[ "$output" != *"${PYTHON_FILE#"$REPO_ROOT/"}"* ]]
-    [[ "$output" != *"${ENV_SEPARATOR_PYTHON_FILE#"$REPO_ROOT/"}"* ]]
-    [[ "$output" != *"${ENV_IGNORE_PYTHON_FILE#"$REPO_ROOT/"}"* ]]
-    [[ "$output" != *"${ENV_ASSIGN_PYTHON_FILE#"$REPO_ROOT/"}"* ]]
-    [[ "$output" != *"${FISH_FILE#"$REPO_ROOT/"}"* ]]
+    [[ "$output" != *"${PYTHON_FILE#"$CHECKOUT/"}"* ]]
+    [[ "$output" != *"${ENV_SEPARATOR_PYTHON_FILE#"$CHECKOUT/"}"* ]]
+    [[ "$output" != *"${ENV_IGNORE_PYTHON_FILE#"$CHECKOUT/"}"* ]]
+    [[ "$output" != *"${ENV_ASSIGN_PYTHON_FILE#"$CHECKOUT/"}"* ]]
+    [[ "$output" != *"${FISH_FILE#"$CHECKOUT/"}"* ]]
     [[ "$output" != *"libexec/validate-pi-permission-config"* ]]
   done
 }
@@ -201,10 +204,10 @@ list_files() {
   for class in bash shellcheck shfmt; do
     list_files "$class"
     [ "$status" -eq 0 ]
-    [[ "$output" == *"${CUSTOM_SHELL_FILE#"$REPO_ROOT/"}"* ]]
-    [[ "$output" == *"${ENV_CUSTOM_SHELL_FILE#"$REPO_ROOT/"}"* ]]
-    [[ "$output" == *"${UNKNOWN_FILE#"$REPO_ROOT/"}"* ]]
-    [[ "$output" == *"${EMPTY_FILE#"$REPO_ROOT/"}"* ]]
+    [[ "$output" == *"${CUSTOM_SHELL_FILE#"$CHECKOUT/"}"* ]]
+    [[ "$output" == *"${ENV_CUSTOM_SHELL_FILE#"$CHECKOUT/"}"* ]]
+    [[ "$output" == *"${UNKNOWN_FILE#"$CHECKOUT/"}"* ]]
+    [[ "$output" == *"${EMPTY_FILE#"$CHECKOUT/"}"* ]]
   done
 }
 
@@ -215,8 +218,8 @@ list_files() {
   [[ "$output" == *"bin/dot-install"* ]]
   [[ "$output" == *"libexec/common.sh"* ]]
   [[ "$output" == *"ai/pi/install.sh"* ]]
-  [[ "$output" == *"${UNTRACKED_FILE#"$REPO_ROOT/"}"* ]]
-  [[ "$output" != *"${IGNORED_FILE#"$REPO_ROOT/"}"* ]]
+  [[ "$output" == *"${UNTRACKED_FILE#"$CHECKOUT/"}"* ]]
+  [[ "$output" != *"${IGNORED_FILE#"$CHECKOUT/"}"* ]]
 }
 
 @test "shfmt discovery includes the shared Bats helper" {
@@ -288,9 +291,9 @@ list_files() {
   for class in bash shellcheck shfmt; do
     list_files "$class"
     [ "$status" -eq 0 ]
-    [[ "$output" == *"${TOOL_INSTALL_FILE#"$REPO_ROOT/"}"* ]]
-    [[ "$output" == *"${TOOL_EXEC_FILE#"$REPO_ROOT/"}"* ]]
-    [[ "$output" == *"${TOOL_SUB_FILE#"$REPO_ROOT/"}"* ]]
+    [[ "$output" == *"${TOOL_INSTALL_FILE#"$CHECKOUT/"}"* ]]
+    [[ "$output" == *"${TOOL_EXEC_FILE#"$CHECKOUT/"}"* ]]
+    [[ "$output" == *"${TOOL_SUB_FILE#"$CHECKOUT/"}"* ]]
   done
 }
 
@@ -305,16 +308,16 @@ list_files() {
   for class in bash shellcheck shfmt; do
     list_files "$class"
     [ "$status" -eq 0 ]
-    [[ "$output" != *"${TOOL_ZSH_FILE#"$REPO_ROOT/"}"* ]]
-    [[ "$output" != *"${TOOL_YAML_FILE#"$REPO_ROOT/"}"* ]]
-    [[ "$output" != *"${TOOL_CONF_FILE#"$REPO_ROOT/"}"* ]]
-    [[ "$output" != *"${TOOL_UNIT_FILE#"$REPO_ROOT/"}"* ]]
+    [[ "$output" != *"${TOOL_ZSH_FILE#"$CHECKOUT/"}"* ]]
+    [[ "$output" != *"${TOOL_YAML_FILE#"$CHECKOUT/"}"* ]]
+    [[ "$output" != *"${TOOL_CONF_FILE#"$CHECKOUT/"}"* ]]
+    [[ "$output" != *"${TOOL_UNIT_FILE#"$CHECKOUT/"}"* ]]
     [[ "$output" != *"tools/you-should-use.zsh"* ]]
     [[ "$output" != *"tools/commit.msg.example"* ]]
   done
 
   list_files zsh
   [ "$status" -eq 0 ]
-  [[ "$output" == *"${TOOL_ZSH_FILE#"$REPO_ROOT/"}"* ]]
-  [[ "$output" != *"${TOOL_SUB_FILE#"$REPO_ROOT/"}"* ]]
+  [[ "$output" == *"${TOOL_ZSH_FILE#"$CHECKOUT/"}"* ]]
+  [[ "$output" != *"${TOOL_SUB_FILE#"$CHECKOUT/"}"* ]]
 }

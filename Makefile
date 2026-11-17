@@ -1,4 +1,4 @@
-.PHONY: install bootstrap update relink ai ai-check ai-heeler ai-heeler-check ai-heeler-setup automations automations-check automation-run pins pins-check pins-update check syntax lint test python-test pi-runtime-test validate
+.PHONY: install bootstrap update relink ai ai-check ai-heeler ai-heeler-check ai-heeler-setup automations automations-check automation-run pins pins-check pins-update check syntax lint test python-test pi-runtime-test pi-security-gate validate
 
 # ── Main targets ──────────────────────────────────────────────────────────────
 
@@ -115,6 +115,10 @@ validate: ## Validate AI config structure (agents, commands, skills)
 
 # ── Verification ───────────────────────────────────────────────────────────────
 
+# Bats and Python suites run JOBS at a time (CPU count by default); JOBS=1 runs
+# them one by one. Bats needs GNU parallel for --jobs and runs serially without it.
+JOBS ?= $(shell getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)
+
 check: syntax lint test python-test validate
 
 syntax:
@@ -126,13 +130,23 @@ lint:
 	@bash -o pipefail -c 'libexec/list-check-files shfmt | xargs -0 shfmt -d -i 2 -ci'
 
 test:
-	bats tests
+	@if [ "$(JOBS)" -gt 1 ] && command -v parallel >/dev/null 2>&1; then \
+		echo "bats --jobs $(JOBS) tests"; bats --jobs $(JOBS) tests; \
+	else \
+		[ "$(JOBS)" -le 1 ] || echo "GNU parallel not found; running Bats serially"; \
+		echo "bats tests"; bats tests; \
+	fi
 
 python-test:
-	python3 -m unittest discover -s tests/python -p 'test_*.py'
+	python3 libexec/run-python-tests tests/python --jobs $(JOBS)
 
 pi-runtime-test: ## Exercise selected installed Pi/permission/subagents/LSP packages without paid providers
 	node --test tests/pi_extension_runtime.test.mjs tests/pi_native_packages.test.mjs tests/pi_settings_publication.test.mjs
+
+pi-security-gate: ## Validate the permission pipeline (PI_TEST_PERMISSION_ROOT/PI_TEST_HOST_ROOT or installed Pi)
+	libexec/validate-pi-security-runtime \
+		$(if $(PI_TEST_PERMISSION_ROOT),--package-root "$(PI_TEST_PERMISSION_ROOT)") \
+		$(if $(PI_TEST_HOST_ROOT),--pi-package-root "$(PI_TEST_HOST_ROOT)")
 
 # ── Help ──────────────────────────────────────────────────────────────────────
 

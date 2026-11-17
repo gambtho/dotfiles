@@ -408,7 +408,8 @@ exactly. It never advances the lockfile itself.
 
 Run `make check` before pushing changes. Installer tests use temporary home
 directories and stubbed commands, so they verify behavior without changing the
-developer machine.
+developer machine. Bats and Python suites run in parallel, one job per CPU
+(Bats needs GNU `parallel`); `make check JOBS=1` runs them one at a time.
 
 ## Migrating an Existing Installation
 

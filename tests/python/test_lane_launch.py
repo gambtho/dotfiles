@@ -451,6 +451,27 @@ class LaunchFixture:
             '--state', str(self.state), '--session', 'intended', *extra],
             env=environment, text=True, capture_output=True, cwd=self.root, check=False)
 
+    def run_in_process(self, mode='', env=None):
+        # The launcher's own clock is faked, so its real 30 s startup bound
+        # costs no wall time; the fake Herdr still runs as a subprocess.
+        spec = importlib.util.spec_from_file_location('startup_replay', SCRIPT)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        self.elapsed = 0
+        def sleep(seconds):
+            self.elapsed += seconds
+        clock = mock.Mock(monotonic=lambda: self.elapsed, sleep=sleep)
+        argv = [str(SCRIPT), '--requested', '--project', 'double-holo', '--lane', 'W12',
+                '--prompt', str(self.prompt), '--repo', str(self.repo), '--state', str(self.state),
+                '--session', 'intended']
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with (mock.patch.dict(os.environ, dict(self.env, FAKE_MODE=mode, **(env or {})), clear=True),
+              mock.patch.object(sys, 'argv', argv), mock.patch.object(module, 'time', clock),
+              contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr)):
+            code = module.main()
+        return subprocess.CompletedProcess(argv, code, stdout.getvalue(), stderr.getvalue())
+
     def calls(self):
         p = self.root / 'calls.jsonl'
         return [json.loads(line) for line in p.read_text().splitlines()] if p.exists() else []
@@ -474,23 +495,7 @@ class LaunchFixture:
 
 class StartupReplayTests(LaunchFixture, unittest.TestCase):
     def run_frames(self, frames):
-        spec = importlib.util.spec_from_file_location('startup_replay', SCRIPT)
-        assert spec is not None and spec.loader is not None
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        self.elapsed = 0
-        def sleep(seconds):
-            self.elapsed += seconds
-        clock = mock.Mock(monotonic=lambda: self.elapsed, sleep=sleep)
-        argv = [str(SCRIPT), '--requested', '--project', 'double-holo', '--lane', 'W12',
-                '--prompt', str(self.prompt), '--repo', str(self.repo), '--state', str(self.state),
-                '--session', 'intended']
-        stdout, stderr = io.StringIO(), io.StringIO()
-        with (mock.patch.dict(os.environ, dict(self.env, FAKE_FRAMES=json.dumps(frames)), clear=True),
-              mock.patch.object(sys, 'argv', argv), mock.patch.object(module, 'time', clock),
-              contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr)):
-            code = module.main()
-        return subprocess.CompletedProcess(argv, code, stdout.getvalue(), stderr.getvalue())
+        return self.run_in_process(env={'FAKE_FRAMES': json.dumps(frames)})
 
     def test_pre_overlay_frames_then_welcome_then_editor_submit_once(self):
         for status in ('blocked', 'done'):
@@ -783,7 +788,13 @@ class LaunchTests(LaunchFixture, unittest.TestCase):
                 self.state.write_text(initial_state)
                 self.receipt.unlink(missing_ok=True)
                 (self.root / 'calls.jsonl').write_text('')
-                result = self.run_launch(mode)
+                if mode in ('read-empty', 'read-json'):
+                    # Unrecognized screens stop only at the 30 s startup bound.
+                    result = self.run_in_process(mode)
+                    self.assertEqual(self.elapsed, 30)
+                    self.assertNotIn('Unsupported Herdr', result.stderr)
+                else:
+                    result = self.run_launch(mode)
                 self.assertEqual(result.returncode, 2)
                 self.assertIn('Launch stopped:', result.stderr)
                 self.assertIn(reason, result.stderr)
