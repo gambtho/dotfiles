@@ -764,7 +764,7 @@ import sys
 skill = Path(sys.argv[1])
 raw = (skill / "references/claude-lane-settings.json").read_text()
 perms = json.loads(raw)["permissions"]
-assert perms["defaultMode"] == "acceptEdits"
+assert perms["defaultMode"] == "auto"
 assert perms["additionalDirectories"] == ["<worktree-root>", "<canonical-checkout>", "<project-local>"]
 assert "Edit(<canonical-checkout>/**)" in perms["deny"]
 assert not [rule for rule in perms["deny"] if rule.startswith("Write(")]

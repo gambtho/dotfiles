@@ -70,6 +70,9 @@ cross-family review then comes from the other CLI, through the bundled scripts.
    The denies bind Claude's file tools and simple command prefixes, not what an allowed
    `bash`/`python3` command or a reordered `git` command can do. Keep branch protection on
    the server, and narrow those allows if the host holds secrets the lane must not read.
+   The template starts Claude in `auto` mode: allow rules run unchecked, deny rules block, and
+   anything else goes to Claude's auto-mode check instead of a prompt. An auto-mode refusal means
+   the lane stops or works around it, never that it asks for a bypass.
 2. Add the host's `claude` path to the project's binding and start with
    `lane --host <binding> --agent claude …`; see [remote lanes](remote-lanes.md#claude-code-lanes).
 3. A person starts `claude` once in the host's project-local folder and accepts the trust
