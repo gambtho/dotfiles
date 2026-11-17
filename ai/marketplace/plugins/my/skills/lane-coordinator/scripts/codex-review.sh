@@ -3,6 +3,7 @@
 # Usage: codex-review.sh <prompt-file> <out-prefix>
 # Writes <out-prefix>.md, .stderr and .exit, prints the exit code and exits with it.
 # Finds codex on PATH, else through mise. Stdin is closed: codex otherwise waits on it.
+# `--` keeps a prompt that starts with `-` (or front matter `---`) from parsing as options.
 # Optional: CODEX_REVIEW_MODEL selects the model; unset uses codex's default.
 set -uo pipefail
 
@@ -31,7 +32,7 @@ model_args=()
 [[ -n "${CODEX_REVIEW_MODEL:-}" ]] && model_args=(-m "$CODEX_REVIEW_MODEL")
 
 "${codex_cmd[@]}" exec --skip-git-repo-check --sandbox read-only ${model_args[@]+"${model_args[@]}"} \
-  "$(cat -- "$prompt")" </dev/null >"$out.md" 2>"$out.stderr"
+  -- "$(cat -- "$prompt")" </dev/null >"$out.md" 2>"$out.stderr"
 status=$?
 echo "$status" >"$out.exit"
 echo "$status"

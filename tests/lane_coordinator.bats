@@ -828,7 +828,7 @@ review_path() {
   [ "$(cat "$TEST_ROOT/out.stderr")" = warn ]
   [ "$(cat "$TEST_ROOT/out.exit")" = 3 ]
   [ ! -s "$TEST_ROOT/stdin" ]
-  [ "$(cat "$TEST_ROOT/args")" = "$(printf '%s\n' exec --skip-git-repo-check --sandbox read-only 'find bugs')" ]
+  [ "$(cat "$TEST_ROOT/args")" = "$(printf '%s\n' exec --skip-git-repo-check --sandbox read-only -- 'find bugs')" ]
 
   rm "$STUB_BIN/codex"
   stub_command mise 'printf "%s\n" "$@" >"$TEST_ROOT/args"; exit 0'

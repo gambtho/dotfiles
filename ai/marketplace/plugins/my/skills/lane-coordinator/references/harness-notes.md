@@ -63,9 +63,13 @@ cross-family review then comes from the other CLI, through the bundled scripts.
 
 1. Copy [claude-lane-settings.json](claude-lane-settings.json) to the project-local
    `lanes/claude-lane-settings.json`. Replace `<worktree-root>`, `<canonical-checkout>`
-   and `<project-local>` with the host's resolved paths (`~/` is fine). Add the project's
+   and `<project-local>` with the host's resolved paths. In `Edit(...)`/`Read(...)` rules write
+   `~/x` or `//abs/x`: a single leading `/` is relative to the settings file. Add the project's
    own test commands to `allow` (`Bash(<tool>:*)`). Keep the credential `Read` denies. Don't
    add `Write(...)` denies: Claude Code ignores them, and the `Edit` rules already cover writes.
+   The denies bind Claude's file tools and simple command prefixes, not what an allowed
+   `bash`/`python3` command or a reordered `git` command can do. Keep branch protection on
+   the server, and narrow those allows if the host holds secrets the lane must not read.
 2. Add the host's `claude` path to the project's binding and start with
    `lane --host <binding> --agent claude …`; see [remote lanes](remote-lanes.md#claude-code-lanes).
 3. A person starts `claude` once in the host's project-local folder and accepts the trust
