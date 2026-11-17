@@ -40,6 +40,20 @@ class RunPythonTestsTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn('Ran 4 tests in 3 classes', result.stdout)
 
+    def test_same_module_and_class_name_in_a_package_runs_once_each(self):
+        body = '''
+            import unittest
+            class Base(unittest.TestCase):
+                def test_one(self): pass
+        '''
+        self.module('test_alpha', body)
+        (self.root / 'pkg').mkdir()
+        (self.root / 'pkg' / '__init__.py').write_text('')
+        self.module('pkg/test_alpha', body)
+        result = self.run_suite()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('Ran 2 tests in 2 classes', result.stdout)
+
     def test_failing_class_fails_the_run_and_shows_its_output(self):
         self.module('test_mixed', '''
             import unittest

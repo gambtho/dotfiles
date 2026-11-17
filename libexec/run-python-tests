@@ -44,7 +44,7 @@ def run_unit(start: str, module: str, cls: str) -> tuple[int, str, float]:
     began = time.monotonic()
     result = subprocess.run(
         [sys.executable, '-m', 'unittest', 'discover', '-s', start, '-t', start,
-         '-p', f"{module.rpartition('.')[2]}.py", '-k', f'{module}.{cls}.'],
+         '-p', f"{module.rpartition('.')[2]}.py", '-k', f'{module}.{cls}.*'],
         stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, check=False)
     return result.returncode, result.stdout, time.monotonic() - began
 
