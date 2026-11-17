@@ -5,7 +5,7 @@
 # Finds codex on PATH, else through mise. Stdin is closed: codex otherwise waits on it.
 # `--` keeps a prompt that starts with `-` (or front matter `---`) from parsing as options.
 # Optional: CODEX_REVIEW_MODEL selects the model; unset uses codex's default.
-set -uo pipefail
+set -euo pipefail
 
 if [[ $# -ne 2 ]]; then
   echo "usage: codex-review.sh <prompt-file> <out-prefix>" >&2
@@ -29,11 +29,13 @@ else
   exit 127
 fi
 model_args=()
-[[ -n "${CODEX_REVIEW_MODEL:-}" ]] && model_args=(-m "$CODEX_REVIEW_MODEL")
+status=0
+if [[ -n "${CODEX_REVIEW_MODEL:-}" ]]; then
+  model_args=(-m "$CODEX_REVIEW_MODEL")
+fi
 
 "${codex_cmd[@]}" exec --skip-git-repo-check --sandbox read-only ${model_args[@]+"${model_args[@]}"} \
-  -- "$(cat -- "$prompt")" </dev/null >"$out.md" 2>"$out.stderr"
-status=$?
+  -- "$(cat -- "$prompt")" </dev/null >"$out.md" 2>"$out.stderr" || status=$?
 echo "$status" >"$out.exit"
 echo "$status"
 exit "$status"
