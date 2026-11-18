@@ -141,8 +141,13 @@ use the project folder.
   in COORDINATION.md. Write the host and brief reason in its `Host:` line and STATE row's
   `What / report` cell; local is the fallback when no row matches. For another host, follow
   [remote lanes](references/remote-lanes.md); the coordinator remains the single STATE writer.
-- Next number: the highest `W<n>` in `lanes/` or STATE.md, plus one. One file per lane
-  from [lane-template.md](references/lane-template.md). Use the single-line
+- Next number: highest `W<n>` in `lanes/` or STATE.md, plus one. Use
+  [lane-template.md](references/lane-template.md), or the optional
+  [light-process template](references/light-process-template.md) for fast-moving internal
+  repos with project-authorized lighter process, to avoid oversized prompts/reports.
+  Set a per-lane elapsed-time budget: on expiry, stop new work and report pending checks,
+  reviews and resume conditions, not ready; this prevents open-ended closeout.
+  Use the single-line
   handoff: local `lane <project>-<n> "Read <path> and follow it."` when installed,
   otherwise plain Read (see [local handoff](references/herdr-launch.md#manual-pi-handoff)).
   Remote: to remove manual transfer overhead, use `lane --host <binding> <project>-<n>
@@ -155,9 +160,13 @@ use the project folder.
   STATE.md; preserve filenames/numbering and all existing names. Honor explicit
   naming overrides that satisfy Herdr's alias constraints; use the approved label in
   both handoff commands. Reject invalid names or collisions, never truncate or invent suffixes.
-- Follow the project's AGENTS.md and each repo's contribution rules for authority,
-  worktrees, PR ownership, sequencing, size, conflicts and publication. Use the repo
-  row's WIP limit. Keep the owner responsible end to end; no extra "merge captain".
+- Before handoff or launch, check the prompt against project AGENTS.md, COMMON-RULES
+  and repo rules: worktree location, publication authority and stop conditions. Fix prompt
+  contradictions first; rule changes need their owner's approval, to avoid preventable stops.
+  State standing authority for in-scope repairs and routine sandbox approvals within the
+  project's grant; name allowed paths/actions, never blanket approval. List real stops:
+  guarantee weakening, uncovered product decisions, publication beyond the grant.
+  Retain stricter project stops, WIP limits and end-to-end PR ownership.
 - Maintain a project-local `lanes/COMMON-RULES.md` using the shared workflow section
   of [common-rules-template.md](references/common-rules-template.md). Every lane,
   including a solitary lane, reads it with its prompt and AGENTS.md. Name its resolved
