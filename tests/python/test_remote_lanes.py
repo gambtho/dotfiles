@@ -366,7 +366,7 @@ class RemoteTests(unittest.TestCase):
         self.assertEqual(self.copies, [])
 
     def test_explicit_empty_host_never_dispatches_local(self):
-        with (patch.object(sys, 'argv', ['lane', '--host', '', 'orchard-7', 'task.md']),
+        with (patch.object(sys, 'argv', ['herdr-lane', '--host', '', 'orchard-7', 'task.md']),
               patch.object(self.lane, 'open_lane') as local,
               self.assertRaises(SystemExit) as failure):
             self.lane.main()

@@ -4,6 +4,7 @@ import importlib.util
 import itertools
 import json
 import os
+import re
 import shlex
 import socket
 import subprocess
@@ -623,6 +624,23 @@ class PublisherTests(unittest.TestCase):
 
 
 class TransportTests(unittest.TestCase):
+    def test_help_and_argument_errors_use_public_command_even_from_source(self):
+        for args, status in ((['--help'], 0), (['--unknown-option'], 2)):
+            with self.subTest(args=args):
+                result = subprocess.run([sys.executable, str(SOURCE / 'lane.py'), *args],
+                                        capture_output=True, text=True, check=False)
+                self.assertEqual(result.returncode, status)
+                self.assertIn('usage: herdr-lane ', result.stdout + result.stderr)
+                self.assertNotIn('usage: lane.py', result.stdout + result.stderr)
+
+    def test_runtime_error_uses_public_command(self):
+        lane = load('lane', 'lane.py')
+        with (patch.object(sys, 'argv', ['herdr-lane', 'orchard-7']),
+              patch.object(lane, 'open_lane', side_effect=ValueError('example failure')),
+              patch('sys.stderr') as stderr):
+            self.assertEqual(lane.main(), 1)
+            self.assertEqual(stderr.write.call_args_list[0].args, ('herdr-lane: example failure',))
+
     def test_cli_failure_keeps_diagnostic_without_echoing_prompt(self):
         lane = load('lane', 'lane.py')
         error = subprocess.CalledProcessError(1, ['herdr', 'pane', 'run', 'w1:p1', 'PRIVATE PROMPT'],
@@ -635,7 +653,7 @@ class TransportTests(unittest.TestCase):
     def test_malformed_nested_api_value_fails_without_traceback(self):
         lane = load('lane', 'lane.py')
         with (tempfile.TemporaryDirectory() as home, patch.dict(os.environ, {'HOME': home}),
-              patch.object(sys, 'argv', ['lane', 'orchard-7']),
+              patch.object(sys, 'argv', ['herdr-lane', 'orchard-7']),
               patch.object(lane, 'herdr', return_value={'workspaces': [
                   {'workspace_id': 'w1', 'label': 'other', 'worktree': 'bad'}]})):
             Path(home, 'orchard-local').mkdir()
@@ -662,11 +680,32 @@ class TransportTests(unittest.TestCase):
 
 
 class BindingTests(unittest.TestCase):
+    def test_docs_and_popup_never_recommend_the_retired_command(self):
+        root = SOURCE.parents[2]
+        migration_warning = ('Do not run another installer that writes `~/.local/bin/lane` '
+                             'while `make herdr-lanes` runs.')
+        self.assertIn(migration_warning, (root / 'tools/herdr/README.md').read_text())
+        docs = subprocess.run(['git', 'ls-files', '-z', '*.md'], cwd=root,
+                              capture_output=True, text=True, check=True).stdout.split('\0')
+        retired = re.compile(r'`lane(?:\s|`)|/bin/lane\b')
+        for name in filter(None, [*docs, 'tools/herdr/config.toml.template']):
+            shell = False
+            for number, line in enumerate((root / name).read_text().splitlines(), 1):
+                # The migration warning names the retired path, not an invocation.
+                if name == 'tools/herdr/README.md' and line == migration_warning:
+                    continue
+                if line.startswith('```'):
+                    shell = line.strip() in ('```sh', '```bash', '```shell')
+                with self.subTest(path=name, line=number):
+                    self.assertIsNone(retired.search(line), line)
+                    if shell:
+                        self.assertIsNone(re.match(r'\s*(?:\$\s+)?lane(?:\s|$)', line), line)
+
     def test_installed_popup_passes_label_and_prompt_without_evaluation(self):
         config = tomllib.loads((SOURCE.parent / 'config.toml.template').read_text())
         command = next(c['command'] for c in config['keys']['command'] if c['key'] == 'prefix+shift+l')
         with tempfile.TemporaryDirectory() as home:
-            lane = Path(home, '.local/bin/lane')
+            lane = Path(home, '.local/bin/herdr-lane')
             lane.parent.mkdir(parents=True)
             lane.write_text('#!/bin/sh\nprintf "<%s>\\n" "$@"\n')
             lane.chmod(0o700)
@@ -678,7 +717,7 @@ class BindingTests(unittest.TestCase):
         config = tomllib.loads((SOURCE.parent / 'config.toml.template').read_text())
         command = next(c['command'] for c in config['keys']['command'] if c['key'] == 'prefix+shift+l')
         with tempfile.TemporaryDirectory() as home:
-            executable = Path(home, '.local/bin/lane')
+            executable = Path(home, '.local/bin/herdr-lane')
             executable.parent.mkdir(parents=True)
             executable.write_text('#!/usr/bin/env python3\nimport json,os,sys\nfrom pathlib import Path\nPath(os.environ["HOME"],"args.json").write_text(json.dumps(sys.argv[1:]))\n')
             executable.chmod(0o700)
@@ -686,7 +725,7 @@ class BindingTests(unittest.TestCase):
                            capture_output=True, env={**os.environ, 'HOME': home}, check=True)
             args = json.loads(Path(home, 'args.json').read_text())
             lane = load('lane', 'lane.py')
-            with patch.object(sys, 'argv', ['lane', *args]), patch.object(lane, 'open_lane') as opened:
+            with patch.object(sys, 'argv', ['herdr-lane', *args]), patch.object(lane, 'open_lane') as opened:
                 self.assertEqual(lane.main(), 0)
                 opened.assert_called_once_with('orchard-7', '-review')
 

@@ -47,7 +47,7 @@ herdr-config-refresh: ## Back up and replace Herdr config with reviewed defaults
 herdr-dashboard: ## Install and register an opt-in project dashboard pane (no pane opened)
 	bash tools/herdr/install.sh --install-dashboard
 
-herdr-lanes: ## Install the opt-in lane command and its runtime copies (no plugins)
+herdr-lanes: ## Install the opt-in herdr-lane command and its runtime copies (no plugins)
 	bash tools/herdr/install.sh --install-lanes
 
 # ── AI tools ──────────────────────────────────────────────────────────────────

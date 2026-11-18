@@ -416,7 +416,7 @@ lanes_fixture() {
   run make -n -C "$REPO_ROOT" herdr-lanes
   [ "$status" -eq 0 ]
   [[ "$output" == *"bash tools/herdr/install.sh --install-lanes"* ]]
-  [ ! -e "$HOME/.local/bin/lane" ]
+  [ ! -e "$HOME/.local/bin/herdr-lane" ]
 }
 
 @test "lanes installs executable copied content and stable public links without Herdr" {
@@ -432,7 +432,7 @@ lanes_fixture() {
   [[ "$version" == "$TEST_ROOT/data with spaces/dotfiles/.herdr-lanes-"* ]]
   [ -d "$version" ]
   [ ! -L "$version" ]
-  assert_symlink_target "$TEST_ROOT/bin with spaces/lane" "$destination/lane.py"
+  assert_symlink_target "$TEST_ROOT/bin with spaces/herdr-lane" "$destination/lane.py"
   for file in lane.py needs.py dashboard-open.py remote.py; do
     [ -f "$version/$file" ]
     [ ! -L "$version/$file" ]
@@ -442,7 +442,7 @@ lanes_fixture() {
   [ "$(stat -c %a "$destination/needs.py")" = 644 ]
   [ "$(stat -c %a "$destination/dashboard-open.py")" = 644 ]
   rm -rf "$TEST_ROOT/source"
-  run "$TEST_ROOT/bin with spaces/lane"
+  run "$TEST_ROOT/bin with spaces/herdr-lane"
   [ "$status" -eq 0 ]
   [ "$output" = "installed lane fixture" ]
   [ ! -e "$TEST_ROOT/bin with spaces/herdr" ]
@@ -458,7 +458,100 @@ lanes_fixture() {
   ' _ "$REPO_ROOT"
   [ "$status" -eq 0 ]
   [ -L "$HOME/.local/share/dotfiles/herdr-lanes" ]
-  assert_symlink_target "$HOME/.local/bin/lane" "$HOME/.local/share/dotfiles/herdr-lanes/lane.py"
+  assert_symlink_target "$HOME/.local/bin/herdr-lane" "$HOME/.local/share/dotfiles/herdr-lanes/lane.py"
+  [ ! -e "$HOME/.local/bin/lane" ]
+  [[ "$output" == *"No legacy lane command"* ]]
+}
+
+@test "lanes removes only its owned legacy symlink, including dangling links and XDG paths with spaces" {
+  lanes_fixture
+  local data
+  for data in "$HOME/.local/share" "$TEST_ROOT/data with spaces"; do
+    ln -s "$data/dotfiles/herdr-lanes/lane.py" "$TEST_ROOT/bin/lane"
+    source_installer XDG_DATA_HOME="$data" bash -c '
+      source "$1/tools/herdr/install.sh"
+      DOTFILES_ROOT="$TEST_ROOT/source"
+      main --install-lanes
+    ' _ "$REPO_ROOT"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Removed legacy lane symlink"* ]]
+    [ ! -L "$TEST_ROOT/bin/lane" ]
+    assert_symlink_target "$TEST_ROOT/bin/herdr-lane" "$data/dotfiles/herdr-lanes/lane.py"
+    cmp "$TEST_ROOT/source/tools/herdr/lanes/lane.py" "$data/dotfiles/herdr-lanes/lane.py"
+  done
+}
+
+@test "lanes preserves regular files, directories and foreign legacy symlinks" {
+  lanes_fixture
+  local kind target legacy="$TEST_ROOT/bin/lane"
+  for kind in file directory foreign lookalike traversal; do
+    target="$TEST_ROOT/foreign-product"
+    case "$kind" in
+      file) printf 'product command\n' >"$legacy" ;;
+      directory)
+        mkdir "$legacy"
+        printf 'keep\n' >"$legacy/sentinel"
+        ;;
+      foreign) ln -s "$target" "$legacy" ;;
+      lookalike)
+        target="$XDG_DATA_HOME/dotfiles/herdr-lanes-foreign/lane.py"
+        ln -s "$target" "$legacy"
+        ;;
+      traversal)
+        target="$XDG_DATA_HOME/dotfiles/herdr-lanes/../foreign/lane.py"
+        ln -s "$target" "$legacy"
+        ;;
+    esac
+    source_installer bash -c '
+      source "$1/tools/herdr/install.sh"
+      DOTFILES_ROOT="$TEST_ROOT/source"
+      main --install-lanes
+    ' _ "$REPO_ROOT"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Preserved legacy lane path"* ]]
+    case "$kind" in
+      file) [ "$(<"$legacy")" = 'product command' ] ;;
+      directory) [ "$(<"$legacy/sentinel")" = keep ] ;;
+      *) assert_symlink_target "$legacy" "$target" ;;
+    esac
+    rm -rf "$legacy"
+  done
+}
+
+@test "lanes preserves a foreign relative legacy target under a symlinked command directory" {
+  lanes_fixture
+  local foreign="$TEST_ROOT/elsewhere/share/dotfiles/herdr-lanes"
+  mkdir -p "$HOME/.local" "$TEST_ROOT/elsewhere/bin" "$foreign"
+  printf 'foreign product\n' >"$foreign/lane.py"
+  ln -s "$TEST_ROOT/elsewhere/bin" "$HOME/.local/bin"
+  ln -s '../share/dotfiles/herdr-lanes/lane.py' "$HOME/.local/bin/lane"
+  source_installer XDG_DATA_HOME= HERDR_INSTALL_DIR= bash -c '
+    source "$1/tools/herdr/install.sh"
+    DOTFILES_ROOT="$TEST_ROOT/source"
+    main --install-lanes
+  ' _ "$REPO_ROOT"
+  [ "$status" -eq 0 ]
+  assert_symlink_target "$HOME/.local/bin/lane" '../share/dotfiles/herdr-lanes/lane.py'
+  [[ "$output" == *"Preserved legacy lane path"* ]]
+  [ "$(<"$foreign/lane.py")" = 'foreign product' ]
+  assert_symlink_target "$HOME/.local/bin/herdr-lane" "$HOME/.local/share/dotfiles/herdr-lanes/lane.py"
+}
+
+@test "lanes preserves the owned legacy command if new executable publication fails" {
+  lanes_fixture
+  local legacy="$TEST_ROOT/bin/lane" destination="$XDG_DATA_HOME/dotfiles/herdr-lanes"
+  ln -s "$destination/lane.py" "$legacy"
+  source_installer bash -c '
+    source "$1/tools/herdr/install.sh"
+    DOTFILES_ROOT="$TEST_ROOT/source"
+    publish_staged_file() { return 77; }
+    main --install-lanes
+  ' _ "$REPO_ROOT"
+  [ "$status" -eq 77 ]
+  assert_symlink_target "$legacy" "$destination/lane.py"
+  [ -x "$legacy" ]
+  [ ! -L "$TEST_ROOT/bin/herdr-lane" ]
+  [[ "$output" != *"Removed legacy"* ]]
 }
 
 @test "lanes replaces existing symlinks without writing through their targets" {
@@ -466,14 +559,14 @@ lanes_fixture() {
   mkdir -p "$XDG_DATA_HOME/dotfiles" "$TEST_ROOT/untouched"
   printf 'keep\n' >"$TEST_ROOT/untouched/sentinel"
   ln -s "$TEST_ROOT/untouched" "$XDG_DATA_HOME/dotfiles/herdr-lanes"
-  ln -s "$TEST_ROOT/untouched" "$TEST_ROOT/bin/lane"
+  ln -s "$TEST_ROOT/untouched" "$TEST_ROOT/bin/herdr-lane"
   source_installer bash -c '
     source "$1/tools/herdr/install.sh"
     DOTFILES_ROOT="$TEST_ROOT/source"
     main --install-lanes
   ' _ "$REPO_ROOT"
   [ "$status" -eq 0 ]
-  assert_symlink_target "$TEST_ROOT/bin/lane" "$XDG_DATA_HOME/dotfiles/herdr-lanes/lane.py"
+  assert_symlink_target "$TEST_ROOT/bin/herdr-lane" "$XDG_DATA_HOME/dotfiles/herdr-lanes/lane.py"
   cmp "$TEST_ROOT/source/tools/herdr/lanes/lane.py" "$XDG_DATA_HOME/dotfiles/herdr-lanes/lane.py"
   [ "$(find "$TEST_ROOT/untouched" -mindepth 1 | wc -l)" -eq 1 ]
   [ "$(<"$TEST_ROOT/untouched/sentinel")" = keep ]
@@ -483,7 +576,7 @@ lanes_fixture() {
   lanes_fixture
   local path kind
   mkdir -p "$XDG_DATA_HOME/dotfiles"
-  for path in "$TEST_ROOT/bin/lane" "$XDG_DATA_HOME/dotfiles/herdr-lanes"; do
+  for path in "$TEST_ROOT/bin/herdr-lane" "$XDG_DATA_HOME/dotfiles/herdr-lanes"; do
     for kind in file directory; do
       if [ "$kind" = file ]; then
         printf 'keep\n' >"$path"
@@ -505,7 +598,7 @@ lanes_fixture() {
         [ "$(<"$path/sentinel")" = keep ]
         rm -r "$path"
       fi
-      [ ! -L "$TEST_ROOT/bin/lane" ]
+      [ ! -L "$TEST_ROOT/bin/herdr-lane" ]
       [ ! -L "$XDG_DATA_HOME/dotfiles/herdr-lanes" ]
       [ "$(find "$XDG_DATA_HOME/dotfiles" -mindepth 1 | wc -l)" -eq 0 ]
     done
@@ -579,7 +672,7 @@ lanes_fixture() {
   ' _ "$REPO_ROOT"
   [ "$status" -eq 73 ]
   [ "$(find "$XDG_DATA_HOME/dotfiles" -mindepth 1 | wc -l)" -eq 0 ]
-  [ ! -L "$TEST_ROOT/bin/lane" ]
+  [ ! -L "$TEST_ROOT/bin/herdr-lane" ]
 }
 
 @test "lanes failed data link publication preserves old links and removes staging" {
@@ -602,8 +695,8 @@ lanes_fixture() {
   ' _ "$REPO_ROOT"
   [ "$status" -eq 77 ]
   [ "$(readlink "$XDG_DATA_HOME/dotfiles/herdr-lanes")" = "$(<"$TEST_ROOT/previous-link")" ]
-  assert_symlink_target "$TEST_ROOT/bin/lane" "$XDG_DATA_HOME/dotfiles/herdr-lanes/lane.py"
-  run find "$XDG_DATA_HOME/dotfiles" "$TEST_ROOT/bin" -name '.lanes.*' -o -name '.lanes-link.*' -o -name '.lane-link.*'
+  assert_symlink_target "$TEST_ROOT/bin/herdr-lane" "$XDG_DATA_HOME/dotfiles/herdr-lanes/lane.py"
+  run find "$XDG_DATA_HOME/dotfiles" "$TEST_ROOT/bin" -name '.lanes.*' -o -name '.lanes-link.*' -o -name '.herdr-lane-link.*'
   [ -z "$output" ]
 }
 
@@ -614,7 +707,7 @@ lanes_fixture() {
     main --install-lanes
   ' _ "$REPO_ROOT"
   [ "$status" -eq 0 ]
-  run "$TEST_ROOT/bin/lane" --host fictional orchard-7 task.md
+  run "$TEST_ROOT/bin/herdr-lane" --host fictional orchard-7 task.md
   [ "$status" -eq 1 ]
   [[ "$output" == *"lane-hosts.json"* ]]
   [[ "$output" != *"Traceback"* ]]
@@ -632,6 +725,6 @@ lanes_fixture() {
   ' _ "$REPO_ROOT"
   [ "$status" -eq 0 ]
   [ ! -e "$TEST_ROOT/plugin-calls" ]
-  [ ! -e "$TEST_ROOT/bin/lane" ]
+  [ ! -e "$TEST_ROOT/bin/herdr-lane" ]
   [ ! -e "$XDG_DATA_HOME/dotfiles/herdr-lanes" ]
 }

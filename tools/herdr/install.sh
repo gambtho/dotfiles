@@ -272,7 +272,7 @@ install_dashboard() {
 install_lanes() {
   local source="$DOTFILES_ROOT/tools/herdr/lanes"
   local root="${XDG_DATA_HOME:-$HOME/.local/share}/dotfiles" digest version destination path
-  local lane="$HERDR_INSTALL_DIR/lane"
+  local lane="$HERDR_INSTALL_DIR/herdr-lane" legacy="$HERDR_INSTALL_DIR/lane" target managed
   destination="$root/herdr-lanes"
   # Refuse both public-path conflicts before publishing either link.
   for path in "$destination" "$lane"; do
@@ -301,12 +301,32 @@ install_lanes() {
   # the version-directory rename above, this Linux installer requires mv -T.
   command mv -Tf -- "$STAGED_LINK" "$destination"
   STAGED_LINK=""
-  STAGED_LINK=$(mktemp "$HERDR_INSTALL_DIR/.lane-link.XXXXXX")
+  STAGED_LINK=$(mktemp "$HERDR_INSTALL_DIR/.herdr-lane-link.XXXXXX")
   rm -f -- "$STAGED_LINK"
   ln -s "$destination/lane.py" "$STAGED_LINK"
   publish_staged_file "$STAGED_LINK" "$lane"
   STAGED_LINK=""
   log_success "Lane runtime copy installed at $destination; command at $lane."
+
+  # Retire only our old link, after publishing its replacement. Normalize dots
+  # without following the runtime-directory symlink (or requiring a live target).
+  if [[ -L "$legacy" ]]; then
+    target=$(readlink -- "$legacy")
+    # Relative targets are based at the link's physical containing directory.
+    [[ "$target" == /* ]] || target="$(cd -P -- "$HERDR_INSTALL_DIR" && pwd -P)/$target"
+    managed=$(realpath -ms -- "$destination")
+    case "$(realpath -ms -- "$target")" in
+      "$managed/"*)
+        rm -- "$legacy"
+        log_info "Removed legacy lane symlink at $legacy."
+        ;;
+      *) log_info "Preserved legacy lane path at $legacy: not a managed runtime symlink." ;;
+    esac
+  elif [[ -e "$legacy" ]]; then
+    log_info "Preserved legacy lane path at $legacy: not a managed runtime symlink."
+  else
+    log_info "No legacy lane command at $legacy."
+  fi
 }
 
 report_plan() {

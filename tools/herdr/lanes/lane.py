@@ -305,12 +305,12 @@ def open_locked(project, number, prompt, lock):
         herdr('pane', 'run', pane, command)
     except (ValueError, KeyError, TypeError, AttributeError, OSError) as error:
         raise ValueError(f'{pane}: launch incomplete or uncertain: {error}; inspect this pane, '
-                         'do not resend; rerunning lane only focuses it') from error
+                         'do not resend; rerunning herdr-lane only focuses it') from error
     print(f'{label} open under {heading_label}' + ('; Pi prompt submitted once' if prompt else ''))
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(prog='herdr-lane', description=__doc__)
     parser.add_argument('lane', help='<project>-<n|coord>, <project> heading, or <n|coord> from its local folder')
     parser.add_argument('prompt', nargs='?', default='', help='optional initial Pi prompt (new lanes only)')
     parser.add_argument('--host', help='saved remote binding in project-local/lane-hosts.json (flat numbered lanes)')
@@ -334,7 +334,7 @@ def main():
         else:
             open_lane(args.lane, args.prompt)
     except (ValueError, KeyError, TypeError, AttributeError, OSError, subprocess.SubprocessError) as error:
-        print(f'lane: {error}', file=sys.stderr)
+        print(f'herdr-lane: {error}', file=sys.stderr)
         return 1
     return 0
 
