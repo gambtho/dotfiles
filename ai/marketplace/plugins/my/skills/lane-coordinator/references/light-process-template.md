@@ -13,9 +13,11 @@ Stop: guarantee weakening, uncovered product decisions, publication beyond grant
 <stricter project stops>. Pick reversible in-scope defaults to avoid routine relays.
 Budget: <elapsed minutes from start>; on expiry stop new work, report pending work and
 resume conditions, not ready, to prevent unbounded closeout.
-Checks: <exact repo commands>; CI must pass at the PR head.
-Review: <required method>; follow closeout's bounded bot round and final thread/body read.
+Checks/review: <exact repo commands and required review method>. For PRs, require
+head-matched CI, closeout's bounded bot round and final thread/body read. LOCAL delivery
+reports checks/blockers without publishing, to avoid a nonexistent-PR gate.
 Public text: short, plain; no private identities or paths.
-Report/handoff: one <report path>, at most ~40 lines, serving as the handoff to avoid
-evidence-file sprawl: PR/head/CI, base/worktree, changed rules, checks, review/profile
+Report/handoff: one <report path>, at most ~40 lines, using [handoff-template.md](handoff-template.md)
+before closing/long pause, to avoid evidence-file sprawl: PR/head/CI, base/worktree,
+changed rules, checks, review/profile
 identities and dispositions, blockers/resume conditions, follow-up issue drafts.

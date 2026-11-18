@@ -103,10 +103,10 @@ A nonzero exit is a blocker to report, not a reason to switch reviewers.
 **Lessons from pilot lanes:**
 
 - Write the report before saying ready.
-- Run long checks with output and exit-code files. Claude lanes must foreground-poll
-  background work (checks, CI, reviews) until it finishes; never end the turn with it
-  running, to prevent false Herdr idle/ready status. Use bounded polls (at most ~9 minutes
-  each), not larger timeouts.
+- Run long checks with output and exit-code files. Claude lanes foreground-poll background
+  checks/CI/reviews to prevent false Herdr idle/ready status. At lane-budget expiry,
+  report pending work and park, not ready; retain stricter project wait rules. Otherwise
+  never end with work running. Bound polls to ~9 minutes, not larger timeouts.
 - A lane that needs one more path (for example SSH config) gets it for that lane only.
   Private keys stay denied.
 
