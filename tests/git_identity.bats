@@ -1135,11 +1135,14 @@ setup_map_boot() {
 }
 
 run_map_setup() {
+  # File-backed input cannot SIGPIPE when setup returns without reading.
+  local answers_file="$TEST_ROOT/map-answers"
+  printf '%b' "$1" >"$answers_file"
   run env BOOTSTRAP_SOURCE_ONLY=1 HOME="$HOME" bash -c "
     source '$REPO_ROOT/libexec/bootstrap'
     NON_INTERACTIVE=false
     DOTFILES_ROOT='$MAPBOOT'
-    printf '%b' '$1' | setup_identity_map
+    setup_identity_map < '$answers_file'
   "
 }
 
@@ -1252,11 +1255,14 @@ setup_sec_boot() {
 }
 
 run_sec_setup() {
+  # File-backed input cannot SIGPIPE when setup returns without reading.
+  local answers_file="$TEST_ROOT/secondary-answers"
+  printf '%b' "$1" >"$answers_file"
   run env BOOTSTRAP_SOURCE_ONLY=1 HOME="$HOME" bash -c "
     source '$REPO_ROOT/libexec/bootstrap'
     NON_INTERACTIVE=${2:-false}
     DOTFILES_ROOT='$SECBOOT'
-    printf '%b' '$1' | setup_secondary_identity
+    setup_secondary_identity < '$answers_file'
   "
 }
 
