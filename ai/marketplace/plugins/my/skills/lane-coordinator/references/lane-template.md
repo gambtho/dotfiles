@@ -14,8 +14,8 @@ Coordinator: record host/reason in STATE's `What / report` cell. Remote lanes ne
 verified hostname/user, host alias, roots and report return command; put the guard first.
 Resolve paths/authority/profiles via [remote lanes](remote-lanes.md).
 Handoff: [local](herdr-launch.md#manual-pi-handoff) installed
-`lane <project>-<n> "Read <path> and follow it."`, otherwise plain Read; bound remote:
-`lane --host <binding> <project>-<n> <prompt>`, replacing the remote Read-only fallback.
+`herdr-lane <project>-<n> "Read <path> and follow it."`, otherwise plain Read; bound remote:
+`herdr-lane --host <binding> <project>-<n> <prompt>`, replacing the remote Read-only fallback.
 Use [bindings](remote-lanes.md#explicit-remote-command); manual copy/start needs an unbound
 host and a reason in Hosts.
 

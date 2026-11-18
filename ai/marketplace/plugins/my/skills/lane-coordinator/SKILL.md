@@ -148,9 +148,9 @@ use the project folder.
   Set a per-lane elapsed-time budget: on expiry, stop new work and report pending checks,
   reviews and resume conditions, not ready; this prevents open-ended closeout.
   Use the single-line
-  handoff: local `lane <project>-<n> "Read <path> and follow it."` when installed,
+  handoff: local `herdr-lane <project>-<n> "Read <path> and follow it."` when installed,
   otherwise plain Read (see [local handoff](references/herdr-launch.md#manual-pi-handoff)).
-  Remote: to remove manual transfer overhead, use `lane --host <binding> <project>-<n>
+  Remote: to remove manual transfer overhead, use `herdr-lane --host <binding> <project>-<n>
   <prompt>` from the project-local folder for bound hosts, where installed and authorized;
   this replaces that reference's remote Read-only rule. [Manual copy/start](references/remote-lanes.md#explicit-copy-and-manual-startup)
   is for unbound hosts whose Hosts row explains why; see [bindings](references/remote-lanes.md#explicit-remote-command).
@@ -222,7 +222,7 @@ use the project folder.
 
 Preparing a prompt never launches it, including in a Claude app session: this keeps
 handoff separate from launch permission. On explicit "start W<n>" for a remote lane, the coordinator
-may run `lane --host <binding> <project>-<n> <prompt>` once from the project-local folder,
+may run `herdr-lane --host <binding> <project>-<n> <prompt>` once from the project-local folder,
 where installed and project-authorized. Record the launch in STATE; never retry,
 and inspect only if delivery/startup is uncertain. See [remote lanes](references/remote-lanes.md)
 for bindings, snapshots and endpoint checks. Local launches require shell/tool access

@@ -72,13 +72,13 @@ use this order (the examples use the fictional project `orchard`):
 
    A fresh config installed from the template already has this row. If validation
    fails, correct the reviewed copy or restore the printed backup; do not reload.
-3. Run `lane orchard` to create the heading, Git anchor and needs publisher without
+3. Run `herdr-lane orchard` to create the heading, Git anchor and needs publisher without
    changing focus. Verify the publisher is running in the heading pane. If shell
    startup blocks it, finish startup and run the publisher command printed by the
    error there; do not resend a lane prompt or start Pi in the heading.
 4. Close the old project coordinator, wherever it runs, before starting its replacement.
    This is a manual handover; the helper does not detect coordinators on other hosts.
-5. Run `lane orchard-coord`. A new coordinator goes first within its local group
+5. Run `herdr-lane orchard-coord`. A new coordinator goes first within its local group
    and opens a shell in `~/orchard-local`; **no harness starts without a prompt**.
 6. In that coordinator shell, start the chosen harness yourself: for example,
    `pi --name orchard-coord`, or `claude` for Claude Code. The workspace label and
@@ -89,19 +89,35 @@ use this order (the examples use the fictional project `orchard`):
 
 `make herdr-lanes` installs copied Python tools under
 `${XDG_DATA_HOME:-$HOME/.local/share}/dotfiles/herdr-lanes` and links
-`~/.local/bin/lane` to the installed copy. Like the dashboard, installs are
+`~/.local/bin/herdr-lane` to the installed copy. Like the dashboard, installs are
 content-addressed and published atomically; older copies remain for running
 publishers. First-use creation is serialized per project; an anchor with no HEAD
 retries its initial empty commit without overriding signing or hooks.
 No repository checkout is used at runtime, `bin/` stays unchanged,
-and `libexec/` never goes on PATH. An existing regular file at `lane` is not replaced.
+and `libexec/` never goes on PATH. An existing regular file at `herdr-lane` is not replaced.
 `HERDR_INSTALL_DIR` can override the command directory; the default popup assumes
-`~/.local/bin/lane`.
+`~/.local/bin/herdr-lane`.
+
+After updating this checkout, run `make herdr-lanes` on each host to migrate.
+Do not run another installer that writes `~/.local/bin/lane` while `make herdr-lanes` runs.
+If `HERDR_INSTALL_DIR` overrides the command directory, serialize installers writing
+its old **lane** path instead. Ownership is checked sequentially; competing
+installers are not coordinated and no lock is taken.
+
+The install removes the old **lane** command only when it is a symlink into
+`${XDG_DATA_HOME:-$HOME/.local/share}/dotfiles/herdr-lanes/`, and only after
+publishing the new command. Regular files, directories and links pointing elsewhere
+are left alone, so another product can own that name. The installer reports whether
+the legacy command was removed, preserved or absent. No old-name alias is installed.
+If an existing popup uses the old command, change just its executable path to
+`~/.local/bin/herdr-lane` in a reviewed config copy, then use the
+[config refresh, check and reload procedure](#explicit-preference-refresh) above; installing
+the command does not overwrite your config.
 
 ```sh
-lane orchard-12 "Read /absolute/orchard-local/lanes/task.md and follow it."
+herdr-lane orchard-12 "Read /absolute/orchard-local/lanes/task.md and follow it."
 # From ~/orchard-local, shorthand also works:
-lane 13
+herdr-lane 13
 ```
 
 Projects are existing `~/<project>-local` folders. The longest matching folder
@@ -141,7 +157,7 @@ python3 -B "${XDG_DATA_HOME:-$HOME/.local/share}/dotfiles/herdr-lanes/needs.py"
 ```
 
 Run it in the heading, not a lane or operator shell: it uses that pane's workspace
-identity. Re-running `lane orchard` only finds the existing heading; it does not
+identity. Re-running `herdr-lane orchard` only finds the existing heading; it does not
 restart its publisher. Never restart a server just to apply preferences.
 
 For config undo, restore the exact backup printed by the refresh, run
@@ -163,10 +179,10 @@ stay focus-only. Remote lanes remain flat. Grouped child dragging is still upstr
 
 ## Manual remote lanes
 
-`lane --host` starts a numbered lane on an already-enrolled saved Herdr machine:
+`herdr-lane --host` starts a numbered lane on an already-enrolled saved Herdr machine:
 
 ```sh
-lane --host build orchard-12 lanes/task.md
+herdr-lane --host build orchard-12 lanes/task.md
 ```
 
 Install with `make herdr-lanes` on the calling machine only. Remote creation is flat,
@@ -250,7 +266,7 @@ Command admission does not prove Pi/provider readiness or task completion.
 Pi is the default. `--agent claude` starts Claude Code instead, on the same path:
 
 ```sh
-lane --host build --agent claude orchard-12 lanes/task.md
+herdr-lane --host build --agent claude orchard-12 lanes/task.md
 ```
 
 The binding then needs `claude` (absolute path of the remote `claude` executable)

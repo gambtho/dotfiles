@@ -160,11 +160,11 @@ Re-run the **same invocation** only to reconcile; it does not mean "try again".
 
 ## Manual Pi handoff
 
-For a local lane, use `lane` only when its resolved target is the installed
+For a local lane, use `herdr-lane` only when its resolved target is the installed
 dotfiles `herdr-lanes/lane.py`, not another same-named tool. Hand over:
 
 ```sh
-lane double-holo-12 "Read /absolute/project-local/lanes/W12-approved-task.md and follow it."
+herdr-lane double-holo-12 "Read /absolute/project-local/lanes/W12-approved-task.md and follow it."
 ```
 
 Shell-quote the prompt so its absolute path is passed literally, without expansion.
@@ -177,7 +177,7 @@ instruction in the heading. For a numbered-lane shell failure with no submission
 finish startup, change to `~/<project>-local`, start Pi manually, then paste the
 approved Read instruction into that idle Pi. Never blindly resend or relaunch.
 
-Without installed `lane`, and always for remote lanes, use only:
+Without installed `herdr-lane`, and always for remote lanes, use only:
 
 ```text
 Read /absolute/project-local/lanes/W12-approved-task.md and follow it.

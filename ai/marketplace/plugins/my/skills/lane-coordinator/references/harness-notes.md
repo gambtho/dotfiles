@@ -21,7 +21,7 @@ workspace/Pi/alias (e.g. `double-holo-12`); existing names remain untouched.
 This depends on actual tools and the inherited
 Herdr session, not whether the coordinator is Pi or Claude Code. Claude app
 sessions without terminal tools use the manual handoff.
-A bound remote lane can run Claude Code instead of Pi with `lane --host <binding>
+A bound remote lane can run Claude Code instead of Pi with `herdr-lane --host <binding>
 --agent claude`; see [remote lanes](remote-lanes.md#claude-code-lanes).
 
 Background reviewers are read-only helpers, not lanes: say so in their prompt (no edits,
@@ -74,11 +74,11 @@ cross-family review then comes from the other CLI, through the bundled scripts.
    anything else goes to Claude's auto-mode check instead of a prompt. An auto-mode refusal means
    the lane stops or works around it, never that it asks for a bypass.
 2. Add the host's `claude` path to the project's binding and start with
-   `lane --host <binding> --agent claude …`; see [remote lanes](remote-lanes.md#claude-code-lanes).
+   `herdr-lane --host <binding> --agent claude …`; see [remote lanes](remote-lanes.md#claude-code-lanes).
 3. A person starts `claude` once in the host's project-local folder and accepts the trust
    dialog. The launch never answers it.
 
-**Codex lane** (hand-started; `lane` has no Codex option). From the host's
+**Codex lane** (hand-started; `herdr-lane` has no Codex option). From the host's
 project-local folder:
 
 ```sh

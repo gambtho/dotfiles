@@ -65,15 +65,15 @@ For a bound host, hand over the resolved command from the project-local folder
 instead of manual copy/start or a plain Read line:
 
 ```sh
-lane --host build project-12 lanes/task.md
+herdr-lane --host build project-12 lanes/task.md
 ```
 
 For lanes on the coordinator's own host, the handoff is
-`lane <project>-<n> "Read <path> and follow it."`; without local command support, use plain Read.
+`herdr-lane <project>-<n> "Read <path> and follow it."`; without local command support, use plain Read.
 
 ## Explicit remote command
 
-For a bound host, `lane --host <binding> <project-N> <local-prompt-file>` is the normal
+For a bound host, `herdr-lane --host <binding> <project-N> <local-prompt-file>` is the normal
 start path, where installed and project-authorized: it removes manual transfer overhead,
 delivers the four approved snapshots with byte read-back and creates a flat remote workspace.
 The private project-local `lane-hosts.json` [format](https://github.com/gambtho/dotfiles/blob/main/tools/herdr/README.md#manual-remote-lanes)
@@ -100,7 +100,7 @@ Keep the manual copy/start fallback above and the primary-first fetch below.
 ### Claude Code lanes
 
 Pi is the default. For a lane whose prompt names Claude Code as its harness, add
-`--agent claude`: `lane --host <binding> --agent claude <project-N> <local-prompt-file>`.
+`--agent claude`: `herdr-lane --host <binding> --agent claude <project-N> <local-prompt-file>`.
 The binding needs a `claude` executable path, and the project-local
 `lanes/claude-lane-settings.json` is delivered create-only and passed with `--settings`;
 without it the command refuses. That file adds to the host user's own Claude settings,
