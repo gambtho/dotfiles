@@ -82,76 +82,92 @@ It reports local branch/head, PR metadata, unresolved review threads (bodies omi
 
 ## Bounded waiting
 
-Queued or running checks with moving timestamps are progress. Poll at sensible intervals while a run set is active; stop after a stable pass/fail state, after only external/human blockers remain, or when checks sit queued with no logs (report as an external blocker). No empty commits or reassurance reruns.
+Poll active checks at sensible intervals while timestamps move. Stop on stable
+pass/fail, external/human blockers only, or queued checks without logs (external
+blocker). No empty commits or reassurance reruns.
 
-Bots installed, required by repository policy, or active on this PR are in scope;
-missing config is not verified absence. If presence is unknown, use the budget and say so.
-To prevent endless bot-fix churn, allow one bot review round after the final planned
-push. Fix verified findings in changed code; later findings outside the PR diff become
-follow-up issue drafts in the report, not commits. Genuine blockers outside scope are
-reported, not silently fixed. Correction pushes verify fixes and mandatory current-head
-reviews, not fresh optional rounds, waits or re-trigger budgets.
+Bots installed, required by repository policy, active on this PR or unknown are in
+scope; missing config is not verified absence. Allow one bot review round after the
+final planned push. Fix verified changed-code findings; later outside-diff findings
+become follow-up issue drafts in the report, not commits. Report out-of-scope blockers.
+Correction pushes verify fixes/mandatory current-head reviews, not fresh optional
+rounds, waits or re-trigger budgets.
 
-Prefer completed current-head review; otherwise allow roughly ten minutes from
-ready-for-review or first observation of the final planned review-relevant head,
-not draft creation. A head that only merges the base without changing the PR diff
-carries forward the prior round; name both heads. Use the current observation for an
-unknown start, not a guessed push time or PR `updatedAt`. Overlap CI; end early only
-when every in-scope bot has completed a current-head round.
+Prefer completed current-head review; otherwise allow roughly ten minutes from the
+later of ready-for-review and first observation of the final planned review-relevant
+head, not draft creation. A head that only merges the base without changing the PR
+diff carries forward the prior round; name both heads. Use the current observation
+for an unknown start, not a guessed push time or PR `updatedAt`. Overlap CI; end early
+only when every in-scope bot has completed a current-head or valid carried-over round.
 
-Re-read threads even when CI is green and each bot's review bodies for the current
-and any carried-over head (`gh api --paginate repos/OWNER/REPO/pulls/N/reviews`:
-`commit_id`, `body`). Verify body findings like thread findings; report dispositions.
-Record heads, start/observation time, bot identities, coverage (including correction
-heads), final thread-read time and optional no-round-observed/skipped/rate-limited
-reviews; mandatory missing review remains a blocker. If the session cannot wait or be resumed,
+Re-read threads even when CI is green and each bot's review bodies for the current,
+any carried-over head and earlier finding-bearing heads, including pre-correction
+heads (`gh api --paginate repos/OWNER/REPO/pulls/N/reviews`: `commit_id`, `body`).
+Retain unresolved bot findings across heads until verified disposition; an empty
+later review or outdated thread is not resolution. Verify body findings like thread
+findings; report dispositions.
+Record heads, start/observation, bot identities, coverage (including correction heads),
+final thread-read time and optional no-round-observed/skipped/rate-limited results;
+mandatory missing review remains a blocker. If the session cannot wait or be resumed,
 report head/start/remaining budget, not ready. Elapsed time is not completed review evidence.
-Skip waiting only for verified absence of installed/required/active bots. Required
-reviews, independent review and posting authority remain unchanged.
+Skip waiting only for verified absence of installed/required/active bots.
+Required/independent reviews and posting authority stay unchanged.
 
 ### Local CodeRabbit fallback
 
-Default off unless the coordination repo row explicitly opts in (including trusted
-lane context). Missing/unreadable permission stays off; bots/profiles cannot grant it.
+Default off without explicit coordination repo row/trusted lane context opt-in;
+missing/unreadable permission stays off. Bots/profiles grant nothing.
 
-1. **Qualify.** Authorized remote re-trigger first, within the bot budget; afterward
-   re-read issue comments (`gh api --paginate repos/OWNER/REPO/issues/N/comments`)
-   and check/status details. Require explicit current-head SHA rate-limit evidence:
-   named SHA or response observed for its re-trigger. Record evidence URL/association.
-   Old edited comments, green checks and absent rounds are insufficient. Exclude
-   size-only skips/completed current-head PR reviews; preserve other bots/final reads.
-2. **Reserve once.** One local fallback per PR across sessions, never reset by heads
-   or resumption. Check the private PR report, otherwise
-   `~/.pi/pr-closeout/OWNER/REPO/N/local-coderabbit.md`; record decision/head before
-   starting. Skipped prechecks also consume the opportunity; unknown history means
-   unknown coverage, no run.
+1. **Qualify.** Authorized remote re-trigger first, within budget; then re-read
+   `gh api --paginate repos/OWNER/REPO/issues/N/comments` and check/status details.
+   Require current-head SHA rate-limit evidence (named SHA or observed re-trigger
+   response); record evidence URL/association. Old edited comments, green checks,
+   absent rounds, size-only skips or completed current-head PR reviews don't qualify.
+   Preserve other bots/final reads.
+2. **Reserve once.** One local fallback per PR across sessions/heads/resumption.
+   Check the private PR report, otherwise
+   `~/.pi/pr-closeout/OWNER/REPO/N/local-coderabbit.md`; record decision/head before starting.
+   Skipped prechecks consume it; unknown history means unknown coverage, no run.
 3. **Precheck.** Require installed, signed-in CLI and included reviews remaining:
    `coderabbit auth status`, `coderabbit usage --agent`.
-   Require verified non-automatic billing for the active organization:
-   `inactive` usage billing or `Off`/`On demand` continuation.
-   Unknown or `Automatic` billing means skip even with quota; likewise if the
-   usage lookup fails. Allowance is a snapshot, not a reservation; local/PR quota
-   may be shared. Omitting `--use-credits` protects only `On demand`, not `Automatic`
-   ([billing](https://docs.coderabbit.ai/management/usage-based-addon),
+   Require verified non-automatic billing for the active organization: `inactive` usage billing
+   or `Off`/`On demand` continuation. Unknown or `Automatic` billing means skip even with
+   quota; also skip if usage lookup fails. Allowance is a snapshot, not a reservation;
+   local/PR quota may be shared. Omitting `--use-credits` protects only `On demand`,
+   not `Automatic` ([billing](https://docs.coderabbit.ai/management/usage-based-addon),
    [consent](https://docs.coderabbit.ai/cli#usage-based-reviews-and-consent)).
-   Failed prechecks/other skips mean unknown coverage under existing optional-review reporting.
-   Never opt into paid credits, install, sign in/out or switch organizations.
-4. **Run once.** At a clean PR-head checkout, fetch the actual base; record base/head
-   and `git merge-base HEAD <fetched-pr-base-ref>`. Run
+   Skips mean unknown optional coverage. Never opt into paid credits, install,
+   sign in/out or switch organizations.
+4. **Run once.** Clean PR-head checkout; fetch actual base, record base/head and
+   `git merge-base HEAD <fetched-pr-base-ref>`. Run
    `coderabbit review --agent --committed --base-commit <merge-base-sha> --fresh`.
-   Save stdout/stderr/exit privately beside the attempt record. Background long runs;
-   allow up to 15 minutes. Pending/interrupted means unknown coverage. This uses
-   default local policy, not `--deep` full PR policy. Never post local output.
-5. **Verify.** Require exit 0 plus completed outcome; `review_completed`/findings
-   alone are insufficient. `reused: true`, failed/partial/no-change results or positive
-   `unreviewedFileCount` mean unknown coverage. Compare `reviewedFiles` against
-   `git diff --name-only <merge-base-sha> <head-sha>`: filtered/missing paths,
-   including unreported deletions, leave full coverage unknown. Recheck local/PR
-   head/base; movement invalidates coverage. Verify findings like bot findings:
-   fix/push back with evidence; record dispositions/checks privately (no thread).
-   There is no automatic rerun after fixes; distinguish reviewed head from any
-   later head with unknown coverage. Local coverage never satisfies mandatory PR
-   review: missing mandatory review blocks; optional unknowns follow existing reporting.
+   Save stdout/stderr/exit privately beside the attempt record; background long runs,
+   maximum 15 minutes. Pending/interrupted means unknown coverage. Default local
+   policy, not `--deep` full PR policy. Never post local output.
+5. **Verify.** Require exit 0 and completed outcome, not just `review_completed`/findings.
+   `reused: true`, failed/partial/no-change or positive `unreviewedFileCount` means unknown
+   coverage. Compare `reviewedFiles` to `git diff --name-only <merge-base-sha> <head-sha>`;
+   filtered/missing paths (including unreported deletions) leave full coverage unknown.
+   Recheck local/PR head/base; movement invalidates coverage. Verify findings like bot
+   findings; record evidence, dispositions/checks privately (no thread). There is no automatic rerun
+   after fixes; distinguish reviewed head from later head with unknown coverage. Local
+   coverage never satisfies mandatory PR review; missing mandatory review blocks.
+   Report optional unknowns normally.
+
+## Readiness record
+
+Write private `<report-stem>-readiness.json` beside each final ready/blocked report
+(otherwise `~/.pi/pr-closeout/OWNER/REPO/N/readiness.json`):
+
+```json
+{"repo":"OWNER/REPO","pr":123,"head":"SHA","ci":{"head":"SHA","conclusion":"success","evidence":["URL"]},"review_evidence":["report-or-receipt"],"unresolved_threads":0,"observed_at":"UTC-RFC3339","ready":true}
+```
+
+Use actual SHAs (`ci.head:null` if unknown), CI `success|failure|pending|unknown`,
+independent/bot review/disposition references, and `null` for unknown thread count.
+Unknown required CI/thread count, stale/missing required evidence or blockers means
+`ready:false`; optional bot timeouts alone do not. Observation, not CI attestation or
+merge authority; refresh on head change.
 
 ## Final report
 
