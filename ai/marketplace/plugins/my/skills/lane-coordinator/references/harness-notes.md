@@ -7,8 +7,8 @@ report a capability blocker rather than silently skipping or replacing them.
 | Job | Claude Code | Pi |
 |---|---|---|
 | Read-only background reviewer | Agent tool with a self-contained prompt and `run_in_background: true` | `subagent_type: deep` or `review`, `run_in_background: true`; poll with `get_subagent_result({ agent_id, wait: false })` |
-| Wait for CI without polling by hand | Background shell: `gh pr checks <n> -R <repo> --watch` | Same command in a background shell if available; otherwise check on return |
-| Wait for the bot-review budget | Background shell for the remaining budget (`sleep <seconds>`), which re-invokes the session when it exits; overlap with the CI watch | Same command in a background shell if available; otherwise park with head, start time and remaining budget as the stop/resume line, not ready |
+| Wait for CI | `gh pr checks <n> -R <repo> --watch`; foreground-poll background jobs (below) | Background shell if available; otherwise check on return |
+| Wait for the bot-review budget | Foreground bounded wait for the remaining budget; overlap CI | Background shell if available; otherwise park with head, start time and remaining budget as the stop/resume line, not ready |
 | Reminders | Session-only cron (say they end with the session); STATE.md "Upcoming" for anything longer | STATE.md "Upcoming" |
 | Human attention on a lane state change | `PushNotification` when available; keep its presence check (it skips an active terminal). Informational only, never an approval channel. | No equivalent callable push tool is available in this Pi setup; keep the reply and STATE record, without a substitute transport. |
 | Durable facts about people and preferences | Auto-memory, one fact per file; STATE.md stays the source of truth for lanes | `session_query` for missing context from a known session file; record durable facts in COORDINATION.md |
@@ -103,8 +103,10 @@ A nonzero exit is a blocker to report, not a reason to switch reviewers.
 **Lessons from pilot lanes:**
 
 - Write the report before saying ready.
-- Run long checks and CI waits in the background with output and exit-code files.
-  While it waits, a Claude Code lane shows Herdr `idle`; that is not a finished lane.
+- Run long checks with output and exit-code files. Claude lanes foreground-poll background
+  checks/CI/reviews to prevent false Herdr idle/ready status. At lane-budget expiry,
+  report pending work and park, not ready; retain stricter project wait rules. Otherwise
+  never end with work running. Bound polls to ~9 minutes, not larger timeouts.
 - A lane that needs one more path (for example SSH config) gets it for that lane only.
   Private keys stay denied.
 

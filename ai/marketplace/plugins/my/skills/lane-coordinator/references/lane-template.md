@@ -5,21 +5,19 @@ PR from a freshly fetched `origin/<base>`). Read the project's AGENTS.md, its sh
 workflow at `<resolved project path>/lanes/COMMON-RULES.md`, the repo's own AGENTS.md
 and contribution guide, and any effort rules named below; follow them. Use the shared
 workflow's prompt-hash and addressed-note checkpoints before acting and reporting ready.
-Coordinator: verify that workflow and its [messaging reference](messaging.md) are readable on
-the recipient host before delivery. Publication follows COORDINATION.md's authority table;
-without permission there, draft exact public text. State any publication hold explicitly.
+Coordinator: verify workflow/[messaging](messaging.md) readability on the recipient host.
+Publication follows COORDINATION.md; otherwise draft exact text. Name publication holds.
 
 Host: <chosen host>: <brief reason matched against Hosts `Use for`; local if no row matches>.
 For remote lanes, inbox coverage and note delivery follow messaging.md's host rules.
-Coordinator: to avoid an implicit local choice, record the same host/reason in STATE's
-`What / report` cell. For remote lanes, include the host alias, verified OS hostname/user,
-project/checkout/worktree roots and report source/return command. Use [remote lanes](remote-lanes.md)
-to put the host/user guard first and resolve paths and authority/profile references before delivery.
-Coordinator: use the [local handoff](herdr-launch.md#manual-pi-handoff): installed
-`lane <project>-<n> "Read <path> and follow it."`, otherwise plain Read. For remote lanes,
-use `lane --host <binding> <project>-<n> <prompt>` for bound hosts to avoid manual transfer,
-instead of that reference's remote Read-only fallback. Follow [bindings](remote-lanes.md#explicit-remote-command)
-for setup/authority; manual copy/start is for an unbound host whose Hosts row explains why.
+Coordinator: record host/reason in STATE's `What / report` cell. Remote lanes need
+verified hostname/user, host alias, roots and report return command; put the guard first.
+Resolve paths/authority/profiles via [remote lanes](remote-lanes.md).
+Handoff: [local](herdr-launch.md#manual-pi-handoff) installed
+`lane <project>-<n> "Read <path> and follow it."`, otherwise plain Read; bound remote:
+`lane --host <binding> <project>-<n> <prompt>`, replacing the remote Read-only fallback.
+Use [bindings](remote-lanes.md#explicit-remote-command); manual copy/start needs an unbound
+host and a reason in Hosts.
 
 ## Session identity (private)
 
@@ -41,20 +39,16 @@ infrastructure-only. What's in, what's explicitly out.>
 
 ## Steps
 
-These review tools and `pr-text` ship with the package. Outside Pi, read `<resolved harness-notes path>`
-and each skill's `<resolved skills dir>/<name>/SKILL.md` instead of its slash command.
-Coordinator: resolve those to the skill's bundled `references/harness-notes.md` and the package's
-`skills/` directory before delivery.
-Subscription-harness lanes: cross-family review via `<resolved scripts dir>/codex-review.sh` (Claude Code) or `claude-review.sh` (Codex).
-The requirements below are unchanged.
+Review tools and `pr-text` ship together. Outside Pi, read `<resolved harness-notes path>`
+and `<resolved skills dir>/<name>/SKILL.md`; coordinator resolves bundled paths before delivery.
+Cross-family subscription review: `<resolved scripts dir>/codex-review.sh` (Claude Code)
+or `claude-review.sh` (Codex); requirements unchanged.
 
-1. <Audit/design: what to read and answer; local design/report path.> For new product
-   work follow the shared workflow's design-before-plan, independent design review,
-   human approval, then plan-with-design review sequence. For audit-only work, write
-   the assigned report and stop for approval. Include a size estimate and PR split
-   above these defaults: internal repos ~1k hand-written product lines; flag tests
-   above ~1.5× product. External repos ~1k changed lines in total. Use COORDINATION.md's
-   internal-repo list; otherwise treat the repo as external. The project's own rule wins.
+1. <Audit/design inputs and report path.> New product: shared design-before-plan,
+   independent design review, human approval, paired plan review. Audit-only: report
+   and stop for approval. Estimate size/split: internal ~1k hand-written product lines;
+   flag tests above ~1.5× product; external ~1k changed lines in total. Use COORDINATION.md's
+   internal list; otherwise treat as external. The project's own rule wins.
    Do not re-gate work whose design/scope is already approved; name that approval.
 2. <Implement the approved executable plan tasks: plan path, Task N IDs, owned files,
    dependencies, verified repo/profile/alias location. A decision brief must be converted
@@ -66,16 +60,19 @@ The requirements below are unchanged.
    named uncovered risk or explicit request; record their focus and verdict. Complete
    closeout's bounded bot opportunity and final thread and review-body read
    before reporting a PR ready.
-   Open the PR with a short body per COORDINATION.md's authority table (unless this
-   prompt says to stop first). For an approved PR, report CI/threads/readiness at the
-   exact head; for local or deliberately draft work, report only that status/blockers.
+   Open a short-body PR per COORDINATION.md unless held. Report exact-head CI/threads/
+   readiness for approved PRs; LOCAL/draft work reports only its status/blockers.
 
 ## Rules
 
 - You own source/test implementation and CI-fix loops for this assignment. The
   coordinator assigns, starts authorized lanes, verifies reports and maintains state;
   launch/publication permission does not authorize source takeover or a shadow worker.
-- Only edit your scope's files; report anything outside it instead of changing it.
+- Standing authority: <in-scope repairs; exact publication/sandbox approval grant>.
+  Stop for guarantee weakening, uncovered product decisions, publication beyond grant
+  and stricter project stops; this avoids routine approval relays.
+- Budget: <elapsed minutes>; on expiry stop new work and report pending work/resume
+  conditions, not ready, to prevent endless closeout. Report out-of-scope work.
 - Resolve Git policy from project AGENTS.md, the COORDINATION.md repo row and repo rules;
   ask on conflict. A method grants no push authority. The shared workflow carries the
   no-policy Git fallback, LOCAL delivery, PR size/sequencing/body, replies, privacy and
@@ -89,29 +86,21 @@ The requirements below are unchanged.
 
 ## Report
 
-Return one consolidated readiness report at `<local report path>`, or ONE batched
-real blocker. Start with the exact PR/head, ready or blocked, the next person's action
-and any unverified risk. Keep this decision summary to at most ten lines at the top;
-put evidence below. Include delivery mode (LOCAL/PR), worktree/branch/head, changed
-paths, exact checks/results/limits, PR number and CI for that head when applicable,
-and remaining decisions. Confirm the approved outcome in the human's current workflow:
-what the change gives the human and why existing mechanisms do not already cover it.
-State infrastructure-only delivery and unverified outcomes plainly; no mandatory demo gate.
+Return one consolidated report at `<local report path>` or ONE batched real blocker.
+Top summary (at most ten lines): PR/head/CI, ready or blocked, next action/owner, unverified
+risk. Below: delivery mode (LOCAL/PR), base/worktree/branch, changed paths, exact checks,
+results/limits and decisions. Confirm the human's current workflow: what the change gives the human
+and why existing mechanisms do not already cover it. Mark infrastructure-only/unverified
+outcomes; no mandatory demo gate.
 List bulky outputs: path, size, safe to delete when; say none or mark unknowns.
-Before calling a PR ready, local HEAD, remote PR head, tested revision and CI revision
-must all match. Include reusable review evidence
-(base, head provenance, scope, content identity, profile identity, model and dispositions)
-so the coordinator can check freshness, blockers and the delta without redoing review.
-For a PR, include closeout's bot-opportunity evidence from its final report.
-The user's "W<n> ready" means stopped and needing an action, not a completion verdict.
-The coordinator reads the report and opens its reply with the next action and its owner.
-For an owned local coordinator, an optional ready nudge follows the
-[once-only pointer rules](messaging.md#optional-once-only-local-pointers); record its outcome
-here, never in STATE.
-Manual sessions are not automatically monitored. Escalate only genuinely new material
-scope/data/security/product choices, shared/destructive operations or actions outside
-authority. Exact public text/publication and production/provider approvals still apply.
-Before closing or pausing for long, write `W<n>-HANDOFF.md` from the handoff template
-in the same location as the lane's report, following the project's AGENTS.md
-(e.g. `reports/W<n>-HANDOFF.md`); absent a rule, use the project folder.
-A parked lane has a stop/resume line: all current resume conditions and who decides (a person, or none if automatic), first resume action and report path.
+Ready requires local HEAD = remote PR head = tested revision = CI revision. Include
+reusable review evidence (base, head provenance, scope, content/profile identities,
+model, dispositions) and closeout's bot-opportunity evidence.
+"W<n> ready" requests an action, not a completion verdict; coordinator replies action/owner first.
+Optional local ready nudge: [once-only pointers](messaging.md#optional-once-only-local-pointers);
+record here, never STATE. Manual sessions are not monitored.
+Escalate new material choices, shared/destructive operations or actions outside authority;
+public/production/provider approval limits remain.
+Before closing/long pause, write `W<n>-HANDOFF.md` in the same location as the lane's report
+(e.g. `reports/W<n>-HANDOFF.md`), per project AGENTS.md; otherwise use the project folder.
+Parked stop/resume line: all current resume conditions and who decides (a person, or none if automatic), first action, report.
