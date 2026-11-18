@@ -338,13 +338,14 @@ reports. Keep profiles concise and evidence-linked.
 
 ## When something merges
 
-When the user says "merged #N", verify it. Before calling a lane ready for its next
-phase, compare approved tasks required for that phase with shipped implementation; merged
-prerequisites alone do not complete its own tasks. Mark unverified completion unknown.
-Then list every lane #N unblocks or conflicts with, each with its paste-ready next instruction,
-and update STATE.md. Do the same when a lane closes: what it frees up, and whether the
-critical path changed. Respect each decision's scope when rebuilding the critical path;
-do not make route-specific dependencies global.
+Verify reported merges. Before next-phase readiness, compare approved tasks required
+for that phase with shipped implementation; merged prerequisites alone do not complete
+its own tasks. Mark unverified completion unknown.
+Count the effort's remaining approved tasks; list post-merge leftovers (worktrees,
+sandboxes, idle workspaces).
+List every lane #N unblocks or conflicts with, each with paste-ready next instructions;
+update STATE.md. On lane closure, list what it frees and critical-path changes.
+Respect each decision's scope; do not make route-specific dependencies global.
 
 ## Maintenance
 
@@ -412,8 +413,8 @@ with its undo, decide keep or delete explicitly. Recording and demo lanes follow
 
 ## Outward text
 
-Follow [writing-rules.md](references/writing-rules.md) for PR bodies, GitHub comments,
-reviews and chat messages.
+Load [pr-text](../pr-text/SKILL.md); follow [writing-rules.md](references/writing-rules.md)
+for PR bodies, GitHub comments, reviews and chat messages.
 - **PR bodies** follow the project's authority table in COORDINATION.md. Where it says lanes open
   PRs directly, lanes write short bodies and open the PR; don't route PR text through the
   user, and don't rewrite bodies unless something is actually wrong.
