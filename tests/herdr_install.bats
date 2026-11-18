@@ -518,6 +518,25 @@ lanes_fixture() {
   done
 }
 
+@test "lanes preserves a foreign relative legacy target under a symlinked command directory" {
+  lanes_fixture
+  local foreign="$TEST_ROOT/elsewhere/share/dotfiles/herdr-lanes"
+  mkdir -p "$HOME/.local" "$TEST_ROOT/elsewhere/bin" "$foreign"
+  printf 'foreign product\n' >"$foreign/lane.py"
+  ln -s "$TEST_ROOT/elsewhere/bin" "$HOME/.local/bin"
+  ln -s '../share/dotfiles/herdr-lanes/lane.py' "$HOME/.local/bin/lane"
+  source_installer XDG_DATA_HOME= HERDR_INSTALL_DIR= bash -c '
+    source "$1/tools/herdr/install.sh"
+    DOTFILES_ROOT="$TEST_ROOT/source"
+    main --install-lanes
+  ' _ "$REPO_ROOT"
+  [ "$status" -eq 0 ]
+  assert_symlink_target "$HOME/.local/bin/lane" '../share/dotfiles/herdr-lanes/lane.py'
+  [[ "$output" == *"Preserved legacy lane path"* ]]
+  [ "$(<"$foreign/lane.py")" = 'foreign product' ]
+  assert_symlink_target "$HOME/.local/bin/herdr-lane" "$HOME/.local/share/dotfiles/herdr-lanes/lane.py"
+}
+
 @test "lanes preserves the owned legacy command if new executable publication fails" {
   lanes_fixture
   local legacy="$TEST_ROOT/bin/lane" destination="$XDG_DATA_HOME/dotfiles/herdr-lanes"

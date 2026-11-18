@@ -312,7 +312,8 @@ install_lanes() {
   # without following the runtime-directory symlink (or requiring a live target).
   if [[ -L "$legacy" ]]; then
     target=$(readlink -- "$legacy")
-    [[ "$target" == /* ]] || target="$HERDR_INSTALL_DIR/$target"
+    # Relative targets are based at the link's physical containing directory.
+    [[ "$target" == /* ]] || target="$(cd -P -- "$HERDR_INSTALL_DIR" && pwd -P)/$target"
     managed=$(realpath -ms -- "$destination")
     case "$(realpath -ms -- "$target")" in
       "$managed/"*)
