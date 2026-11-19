@@ -727,7 +727,10 @@ class BindingTests(unittest.TestCase):
         self.assertIn(migration_warning, (root / 'tools/herdr/README.md').read_text())
         docs = subprocess.run(['git', 'ls-files', '-z', '*.md'], cwd=root,
                               capture_output=True, text=True, check=True).stdout.split('\0')
-        retired = re.compile(r'`lane(?:\s|`)|/bin/lane\b')
+        developerlanes_command = (r'(?:--host|setup|doctor|diagnose|debug|reconnect|recovery|usage|connect|machine|'
+                                  r'devbox|theme|demo|init|new|start|instruct|instruction-status|retire|answer|'
+                                  r'status|report|inbox|dashboard|host|listen)\b')
+        retired = re.compile(rf'`lane\s+(?!{developerlanes_command})[^`]+`|/bin/lane\b')
         for name in filter(None, [*docs, 'tools/herdr/config.toml.template']):
             shell = False
             for number, line in enumerate((root / name).read_text().splitlines(), 1):
@@ -739,7 +742,8 @@ class BindingTests(unittest.TestCase):
                 with self.subTest(path=name, line=number):
                     self.assertIsNone(retired.search(line), line)
                     if shell:
-                        self.assertIsNone(re.match(r'\s*(?:\$\s+)?lane(?:\s|$)', line), line)
+                        self.assertIsNone(
+                            re.match(rf'\s*(?:\$\s+)?lane\s+(?!{developerlanes_command})', line), line)
 
     def test_installed_popup_passes_label_and_prompt_without_evaluation(self):
         config = tomllib.loads((SOURCE.parent / 'config.toml.template').read_text())
