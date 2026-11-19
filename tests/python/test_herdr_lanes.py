@@ -41,6 +41,7 @@ class ToolFixture(unittest.TestCase):
         self.calls = []
         self.busy = False
         self.adopt = False
+        self.claude_status = 'working'
         patch.object(self.lane, 'herdr', side_effect=self.api).start()
         patch.object(self.lane.time, 'sleep').start()
         for project in ('orchard', 'double', 'double-holo'):
@@ -73,6 +74,11 @@ class ToolFixture(unittest.TestCase):
             if args[:2] == ('worktree', 'open'):
                 result['already_open'] = True if '--label' not in args else self.adopt
             return result
+        if args[:2] == ('pane', 'get'):
+            pane = args[-1]
+            return {'pane': {'pane_id': pane, 'workspace_id': pane.split(':', 1)[0],
+                             'terminal_id': 'term-example', 'agent': 'claude',
+                             'agent_status': self.claude_status}}
         if args[:2] == ('pane', 'process-info'):
             return {'process_info': {'pane_id': args[-1], 'shell_pid': 100,
                     'foreground_process_group_id': 100,
@@ -139,6 +145,32 @@ class LaneTests(ToolFixture):
         self.assertEqual(command, ['cd', str(self.home / 'double-holo-local'),
                                    '&&', 'pi', '--name', 'double-holo-12', '--', prompt])
         self.assertTrue((self.home / '.lane-anchors/double-holo-lanes/12/.git').is_file())
+
+    def test_local_claude_uses_project_settings_and_observes_startup_without_input(self):
+        settings = self.home / 'double-holo-local/lanes/claude-lane-settings.json'
+        settings.parent.mkdir()
+        settings.write_text('{"permissions": {}}')
+        self.lane.open_lane('double-holo-12', 'Read task and follow it.', 'claude')
+        command = shlex.split(self.sends()[-1][-1])
+        self.assertEqual(command, ['cd', str(self.home / 'double-holo-local'), '&&',
+                                   'claude', '--settings', str(settings), '--name', 'double-holo-12',
+                                   '--', 'Read task and follow it.'])
+        self.assertEqual(len([c for c in self.calls if c[:2] == ('pane', 'get')]), 1)
+
+    def test_local_claude_dialog_is_reported_without_answering(self):
+        settings = self.home / 'double-holo-local/lanes/claude-lane-settings.json'
+        settings.parent.mkdir()
+        settings.write_text('{"permissions": {}}')
+        self.claude_status = 'blocked'
+        with self.assertRaisesRegex(ValueError, 'trust/dialog'):
+            self.lane.open_lane('double-holo-12', 'Task', 'claude')
+        self.assertEqual(len(self.sends()), 2)  # heading publisher plus one lane start
+        self.assertFalse(any(c[:2] in (('pane', 'send-keys'), ('pane', 'send-text')) for c in self.calls))
+
+    def test_local_claude_missing_settings_refuses_before_workspace_creation(self):
+        with self.assertRaisesRegex(ValueError, 'claude-lane-settings.json'):
+            self.lane.open_lane('double-holo-12', 'Task', 'claude')
+        self.assertEqual(self.calls, [])
 
     def test_lane_opt_out_is_set_before_its_shell_starts_and_group_attachment(self):
         self.space('◆ orchard')
@@ -632,6 +664,14 @@ class TransportTests(unittest.TestCase):
                 self.assertEqual(result.returncode, status)
                 self.assertIn('usage: herdr-lane ', result.stdout + result.stderr)
                 self.assertNotIn('usage: lane.py', result.stdout + result.stderr)
+
+    def test_local_agent_option_reaches_local_dispatch(self):
+        lane = load('lane', 'lane.py')
+        with (patch.object(sys, 'argv', ['herdr-lane', '--agent', 'claude',
+                                         'orchard-7', 'Task']),
+              patch.object(lane, 'open_lane') as opened):
+            self.assertEqual(lane.main(), 0)
+            opened.assert_called_once_with('orchard-7', 'Task', 'claude')
 
     def test_runtime_error_uses_public_command(self):
         lane = load('lane', 'lane.py')

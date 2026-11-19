@@ -582,8 +582,8 @@ class RemoteTests(unittest.TestCase):
                     self.remote.open_remote('orchard-9', 'task.md', 'build', self.lane, 'claude')
         self.assertEqual(len(self.sends()), 3)
 
-    def test_agent_choice_requires_host_and_known_agent(self):
-        for argv in (['--agent', 'claude', 'orchard-7', 'task.md'],
+    def test_agent_choice_rejects_unknown_agents(self):
+        for argv in (['--agent', 'codex', 'orchard-7', 'task.md'],
                      ['--host', 'build', '--agent', 'codex', 'orchard-7', 'task.md']):
             with self.subTest(argv=argv):
                 result = subprocess.run([sys.executable, str(SOURCE / 'lane.py'), *argv],

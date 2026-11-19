@@ -69,7 +69,8 @@ herdr-lane --host build project-12 lanes/task.md
 ```
 
 For lanes on the coordinator's own host, the handoff is
-`herdr-lane <project>-<n> "Read <path> and follow it."`; without local command support, use plain Read.
+`herdr-lane <project>-<n> "Read <path> and follow it."` (add `--agent claude` for
+Claude Code); without local command support, use plain Read.
 
 ## Explicit remote command
 

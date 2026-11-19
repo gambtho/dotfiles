@@ -13,15 +13,15 @@ For remote lanes, inbox coverage and note delivery follow messaging.md's host ru
 Coordinator: record host/reason in STATE's `What / report` cell. Remote lanes need
 verified hostname/user, host alias, roots and report return command; put the guard first.
 Resolve paths/authority/profiles via [remote lanes](remote-lanes.md).
-Handoff: [local](herdr-launch.md#manual-pi-handoff) installed
-`herdr-lane <project>-<n> "Read <path> and follow it."`, otherwise plain Read; bound remote:
+Handoff: [local](herdr-launch.md#manual-local-handoff) installed
+`herdr-lane [--agent claude] <project>-<n> "Read <path> and follow it."`, otherwise plain Read; bound remote:
 `herdr-lane --host <binding> <project>-<n> <prompt>`, replacing the remote Read-only fallback.
 Use [bindings](remote-lanes.md#explicit-remote-command); manual copy/start needs an unbound
 host and a reason in Hosts.
 
 ## Session identity (private)
 
-New workspace label, Pi name and live Herdr alias: `<project-slug>-<lane-number>`
+New workspace label, agent name and live Herdr alias: `<project-slug>-<lane-number>`
 (e.g. `double-holo-12` for W12), unless the user explicitly overrides with a valid,
 unique name. Full lane/task identity stays in this file and STATE.md; filenames and
 numbering are unchanged. Never rename existing sessions/workspaces/aliases.
