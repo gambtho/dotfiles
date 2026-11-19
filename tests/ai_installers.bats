@@ -661,6 +661,7 @@ JS
   [[ "$output" == *"$agent_dir/agents/review.md"* ]]
   [[ "$output" == *"$agent_dir/extensions/herdr-agent-state.ts"* ]]
   [[ "$output" == *"$agent_dir/extensions/herdr-prompt-state.ts"* ]]
+  [[ "$output" == *"$agent_dir/extensions/lane-native-editor.ts"* ]]
   [[ "$output" == *"$agent_dir/extensions/worktree-guard.ts"* ]]
   [[ "$output" == *"$agent_dir/extensions/pi-permission-system/config.json"* ]]
   [[ "$output" != *"$agent_dir/sandbox.json"* ]]
@@ -709,6 +710,8 @@ JSON
     "$REPO_ROOT/ai/pi/extensions/herdr-agent-state.ts"
   assert_symlink_target "$HOME/.pi/agent/extensions/herdr-prompt-state.ts" \
     "$REPO_ROOT/ai/pi/extensions/herdr-prompt-state.ts"
+  assert_symlink_target "$HOME/.pi/agent/extensions/lane-native-editor.ts" \
+    "$REPO_ROOT/ai/pi/extensions/lane-native-editor.ts"
   assert_symlink_target "$HOME/.pi/agent/extensions/worktree-guard.ts" \
     "$REPO_ROOT/ai/pi/extensions/worktree-guard.ts"
 

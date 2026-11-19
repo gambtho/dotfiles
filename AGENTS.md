@@ -23,6 +23,7 @@ ai/
     extensions/
       herdr-agent-state.ts    # Herdr agent lifecycle state bridge
       herdr-prompt-state.ts   # Herdr prompt state bridge
+      lane-native-editor.ts   # Restores Pi's native frame for lane sessions
       worktree-guard.ts       # Blocks direct writes in primary checkouts
     install.sh                # Managed Pi configuration and native extension update
   marketplace/plugins/my/    # Local personal Pi package
