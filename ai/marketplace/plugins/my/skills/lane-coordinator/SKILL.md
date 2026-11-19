@@ -149,7 +149,9 @@ use the project folder.
 - Before telling a lane what another lane will deliver ("PR6 adds lift"), read that
   lane's plan file. Don't infer scope from a PR number.
 - To avoid local winning by omission, match the lane against each Hosts row's `Use for`
-  in COORDINATION.md. Write the host and brief reason in its `Host:` line and STATE row's
+  in COORDINATION.md. A row whose `Worker` is `lane` opts that host and project into
+  developerlanes; every other row keeps the existing local, `herdr-lane` or manual path.
+  Write the host, worker choice and brief reason in its `Host:` line and STATE row's
   `What / report` cell; local is the fallback when no row matches. For another host, follow
   [remote lanes](references/remote-lanes.md); the coordinator remains the single STATE writer.
 - Next number: highest `W<n>` in `lanes/` or STATE.md, plus one. Use
@@ -164,7 +166,9 @@ use the project folder.
   Prefix local or bound-remote starts with `--agent claude` when the approved lane names Claude Code.
   Remote: to remove manual transfer overhead, use `herdr-lane --host <binding> <project>-<n>
   <prompt>` from the project-local folder for bound hosts, where installed and authorized;
-  this replaces that reference's remote Read-only rule. [Manual copy/start](references/remote-lanes.md#explicit-copy-and-manual-startup)
+  this replaces that reference's remote Read-only rule. A host/project row whose `Worker`
+  is `lane` instead uses the [developerlanes worker](references/remote-lanes.md#developerlanes-worker-opt-in)
+  command with the prompt and approved inputs. [Manual copy/start](references/remote-lanes.md#explicit-copy-and-manual-startup)
   is for unbound hosts whose Hosts row explains why; see [bindings](references/remote-lanes.md#explicit-remote-command).
   Don't add `/name` or `--name`.
   Default new workspace labels, agent names and live Herdr aliases to
@@ -234,10 +238,10 @@ use the project folder.
 
 Preparing a prompt never launches it, including in a Claude app session: this keeps
 handoff separate from launch permission. On explicit "start W<n>" for a remote lane, the coordinator
-may run `herdr-lane --host <binding> <project>-<n> <prompt>` once from the project-local folder,
-where installed and project-authorized. Record the launch in STATE; never retry,
-and inspect only if delivery/startup is uncertain. See [remote lanes](references/remote-lanes.md)
-for bindings, snapshots and endpoint checks. Local launches require shell/tool access
+may run the row's one approved start path once: `herdr-lane --host <binding> <project>-<n> <prompt>`,
+or the developerlanes command when `Worker: lane`. Record the request/launch in STATE; never retry a
+start, and use `launch-status` for an uncertain developerlanes result. See [remote lanes](references/remote-lanes.md)
+for inputs, bindings, snapshots and endpoint checks. Local launches require shell/tool access
 inside the intended Herdr session (`HERDR_ENV=1`); otherwise return the handoff
 without claiming a launch.
 
@@ -255,8 +259,9 @@ permission. A Herdr workspace is not an isolated Git worktree.
 
 A lane returns one consolidated readiness report or ONE batched real blocker.
 "W12 ready" means stopped for an action (merge, reply, close or decide), not done.
-Read the report; fetch a remote lane's named reports first. Failed/offline fetch
-means unknown, not ready. Manual sessions are not automatically monitored.
+Read the report; fetch a remote lane's named reports first. A `Worker: lane` task uses
+`lane --host <host> report <task>` before any retire/cleanup. Failed/offline fetch means
+unknown, not ready. Manual sessions are not automatically monitored.
 STATE.md tracks next actions, owners and notification attempts.
 
 Approved LOCAL delivery includes authorized setup/verification, safe in-scope

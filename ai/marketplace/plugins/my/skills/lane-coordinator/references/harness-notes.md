@@ -24,7 +24,11 @@ sessions without terminal tools use the manual handoff.
 A local lane can run Claude Code instead of Pi with
 `herdr-lane --agent claude <project>-<n> "Read <path> and follow it."`. A bound
 remote lane uses `herdr-lane --host <binding> --agent claude`; both require the
-project-local Claude settings file. See [remote lanes](remote-lanes.md#claude-code-lanes).
+project-local Claude settings file. A Hosts row marked `Worker: lane` is different:
+use developerlanes for start, status, steering and report fetch, as documented in
+[remote lanes](remote-lanes.md#developerlanes-worker-opt-in). Its worker enrollment pins
+the harness, so do not add a client-side agent flag. See [remote lanes](remote-lanes.md#claude-code-lanes)
+for the unchanged Herdr path.
 
 Background reviewers are read-only helpers, not lanes: say so in their prompt (no edits,
 commits, pushes or posts) and spot-check what they find.

@@ -8,6 +8,46 @@ coordinator may run the remote lane command once from the project-local folder,
 where installed and project-authorized.
 Record the launch in STATE; no retry, and inspect only on uncertain delivery/startup.
 
+## Developerlanes worker (opt-in)
+
+A Hosts row whose `Worker` is `lane` opts **that host for that project** into
+developerlanes. Everything else keeps today's Herdr/manual path. The coordinator verifies
+the saved host/worker enrollment and the project allowlist before using any command below;
+this row grants no new publication, answer or launch authority.
+
+On explicit start authority, include the approved context as inert `--input` files:
+
+```sh
+lane --host <host> start <lane-project> --prompt <lane-file> --input <AGENTS.md> --input <COMMON-RULES.md> [--input <review-profile>]
+```
+
+Run it once and record the request/creation ID in STATE. If the result is interrupted,
+unreachable or uncertain, run only `lane --host <host> launch-status <lane-project>
+--request-id <request-id>` (or the original creation ID); never submit a second start.
+`Submitted` proves delivery to the native launcher, not task completion or readiness.
+
+For live state and attention, use `lane --host <host> status <lane-project>` and the
+inbox instead of Herdr snapshots. A fresh `done` is still only a reason to inspect the
+report. For a running task, send approved owner steering with
+`lane --host <host> instruct <task> "<text>"` instead of publishing an inbox note and
+asking for a paste. Record the instruction UUID and outcome: `Sent` is delivered once,
+`Held` means wait; do not send a replacement. After the task becomes idle, rerun
+the exact original `instruct` command to reconcile and advance that same saved ID;
+this is not a second instruction. `instruction-status` is lookup-only and may not
+advance delivery. `Refused` stops for identity/dialog inspection. Uncertain or
+`Recording`/`Sending` results are inspect-only; never send a replacement instruction
+or answer a trust/permission dialog through the API.
+The human answers question cards; the coordinator never calls `lane answer` for them.
+
+Fetch the lane's primary report and optional handoff before retirement or cleanup with
+`lane --host <host> report <task>`. Capture that formatted stdout as private fetched evidence
+under the project's report folder; do not treat a displayed remote path as a local copy.
+Read the returned content/revision before judging it; a failed, stale or unsafe report
+remains unknown. Then apply
+the existing report verification, approval, retire/close and cleanup rules unchanged.
+Readiness still requires the exact PR head/CI/thread checks in the skill; developerlanes'
+checked-ready holds are useful evidence where present, not a replacement for those rules.
+
 ## Bind the host and prepare inputs
 
 To avoid incomplete remote setup, each remote Hosts row in COORDINATION.md needs a

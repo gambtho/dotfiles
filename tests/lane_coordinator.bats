@@ -691,6 +691,47 @@ PY
   }
 }
 
+@test "developerlanes workers are explicit and preserve the Herdr fallback" {
+  run python3 - "$SKILL_DIR" <<'PY'
+from pathlib import Path
+import sys
+
+skill = Path(sys.argv[1])
+refs = skill / "references"
+main = " ".join((skill / "SKILL.md").read_text().split())
+remote = " ".join((refs / "remote-lanes.md").read_text().split())
+coordination = " ".join((refs / "coordination-template.md").read_text().split())
+lane = " ".join((refs / "lane-template.md").read_text().split())
+messaging = " ".join((refs / "messaging.md").read_text().split())
+
+for text in (main, remote, lane):
+    assert "Worker: `lane`" in text or "`Worker` is `lane`" in text or "Worker |" in text
+assert "lane --host <host> start <lane-project> --prompt <lane-file> --input <AGENTS.md> --input <COMMON-RULES.md>" in remote
+for phrase in ("launch-status", "lane --host <host> status <lane-project>",
+               "lane --host <host> instruct <task>", "lane --host <host> report <task>",
+               "The human answers", "Held", "Refused"):
+    assert phrase in remote, phrase
+assert "before retirement or cleanup" in remote
+assert "Everything else keeps" in remote and "herdr-lane" in remote
+assert "| Worker |" in coordination
+assert "`lane`" in coordination and "opt in" in coordination.lower()
+assert "without `lane` keeps" in lane
+assert "lane --host <host> instruct" in messaging
+assert "human answers" in messaging.lower()
+
+lane_template = (refs / "lane-template.md").read_text()
+import re
+goals = re.findall(r"(?m)^#{1,2} Goal[ \t]*\r?\n(?:\r?\n)*([^\r\n]+)", lane_template)
+assert len(goals) == 1 and goals[0].strip(), goals
+assert "rerun the exact original `instruct` command" in remote
+assert "instruction-status" in remote and "lookup-only" in remote
+PY
+  [ "$status" -eq 0 ] || {
+    echo "$output"
+    false
+  }
+}
+
 @test "remote rsync example passes user at host without an unsupported login flag" {
   command -v rsync >/dev/null || skip "rsync unavailable for transport example"
   run python3 - "$SKILL_DIR/references/remote-lanes.md" <<'PY'

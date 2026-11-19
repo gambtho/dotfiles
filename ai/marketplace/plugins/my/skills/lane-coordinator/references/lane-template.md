@@ -1,3 +1,6 @@
+# Goal
+<one single line describing the approved user outcome or infrastructure-only delivery>.
+
 # W<n> — <repo>: <short title>
 
 You are an implementation lane in `<owner/repo>` (checkout `<path>`; a new worktree per
@@ -9,15 +12,18 @@ Coordinator: verify workflow/[messaging](messaging.md) readability on the recipi
 Publication follows COORDINATION.md; otherwise draft exact text. Name publication holds.
 
 Host: <chosen host>: <brief reason matched against Hosts `Use for`; local if no row matches>.
-For remote lanes, inbox coverage and note delivery follow messaging.md's host rules.
-Coordinator: record host/reason in STATE's `What / report` cell. Remote lanes need
+A host/project whose `Worker` is `lane` uses developerlanes launch/status/instruct/report;
+without `lane` keeps the existing Herdr/manual transport. For remote lanes, inbox
+coverage and note delivery follow messaging.md's host rules. Coordinator: record
+host/worker/reason in STATE's `What / report` cell. Remote lanes need
 verified hostname/user, host alias, roots and report return command; put the guard first.
 Resolve paths/authority/profiles via [remote lanes](remote-lanes.md).
 Handoff: [local](herdr-launch.md#manual-local-handoff) installed
 `herdr-lane [--agent claude] <project>-<n> "Read <path> and follow it."`, otherwise plain Read; bound remote:
 `herdr-lane --host <binding> <project>-<n> <prompt>`, replacing the remote Read-only fallback.
-Use [bindings](remote-lanes.md#explicit-remote-command); manual copy/start needs an unbound
-host and a reason in Hosts.
+A host whose `Worker` is `lane` instead starts with the [developerlanes command](remote-lanes.md#developerlanes-worker-opt-in),
+including the selected inputs. Use [bindings](remote-lanes.md#explicit-remote-command);
+manual copy/start needs an unbound host and a reason in Hosts.
 
 ## Session identity (private)
 
