@@ -14,6 +14,7 @@ from pathlib import Path
 
 PIN = None  # local coordinator --session; set only after its context is verified
 RAW_SECONDS = 10
+CLAUDE_SETTINGS = Path('lanes/claude-lane-settings.json')
 
 
 def herdr(*args):
@@ -48,6 +49,33 @@ def fresh_pane(result, spaces, label):
         raise ValueError(f'workspace {wid}, pane {pane.get("pane_id")}: already open/adopted '
                          'or identity changed; sent nothing; do not resend')
     return pane['pane_id']
+
+
+def claude_argv(executable, label, prompt, settings):
+    return [executable, '--settings', str(settings), '--name', label, '--', prompt]
+
+
+def observe_claude(pane, call=None):
+    """Bounded read-only observation shared by local and remote Claude starts."""
+    call = herdr if call is None else call
+    for attempt in range(10):
+        if attempt:
+            time.sleep(1)
+        status = call('pane', 'get', pane)['pane']
+        state, agent = status['agent_status'], status.get('agent')
+        if state not in ('unknown', 'working', 'idle', 'done', 'blocked'):
+            raise ValueError(f'unexpected agent status {state!r}')
+        if state == 'blocked':
+            raise ValueError('blocked on Claude trust/dialog; do not answer it. Inspect the pane; '
+                             'a person resolves trust before a new start')
+        if state != 'unknown' and agent == 'claude':
+            return state
+    info = call('pane', 'process-info', '--pane', pane)['process_info']
+    if (info['pane_id'] == pane and
+            [p['pid'] for p in info['foreground_processes']] == [info['shell_pid']]):
+        raise ValueError('Claude did not start: the pane shell is idle again. Inspect the pane '
+                         '(settings file, claude path); do not resend')
+    return 'unknown'
 
 
 def wait_shell(pane, call=None):
@@ -218,23 +246,28 @@ def place_first(context, heading, workspace, pane):
         raise ValueError('coordinator placement not verified')
 
 
-def open_lane(label, prompt=''):
+def open_lane(label, prompt='', agent='pi'):
     global PIN
+    if agent not in ('pi', 'claude'):
+        raise ValueError(f'unsupported agent: {agent}')
     if (any(ord(c) < 32 or 127 <= ord(c) < 160 for c in label)
             or any((ord(c) < 32 and c != '\n') or 127 <= ord(c) < 160 for c in prompt)):
         raise ValueError('terminal control characters are not supported; sent nothing')
     project, number = resolve(label)
+    settings = Path.home() / f'{project}-local' / CLAUDE_SETTINGS
+    if agent == 'claude' and (settings.is_symlink() or not settings.is_file()):
+        raise ValueError(f'missing or non-regular Claude settings: {settings}; sent nothing')
     root = Path.home() / '.lane-anchors'
     root.mkdir(parents=True, exist_ok=True)
     with (root / f'.{project}.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         try:
-            return open_locked(project, number, prompt, lock)
+            return open_locked(project, number, prompt, lock, agent, settings)
         finally:
             PIN = None
 
 
-def open_locked(project, number, prompt, lock):
+def open_locked(project, number, prompt, lock, agent, settings):
     # Refresh the workspace list below only after taking the project lock.
     label = f'{project}-{number}' if number else project
     anchor = Path.home() / '.lane-anchors' / project
@@ -301,23 +334,27 @@ def open_locked(project, number, prompt, lock):
                                    created['root_pane']['terminal_id'])})
         command = f'cd {shlex.quote(str(workdir))}'
         if prompt:
-            command += f' && pi --name {shlex.quote(label)} -- {shlex.quote(prompt)}'
+            argv = (['pi', '--name', label, '--', prompt] if agent == 'pi' else
+                    claude_argv('claude', label, prompt, settings))
+            command += ' && ' + shlex.join(argv)
         herdr('pane', 'run', pane, command)
+        if prompt and agent == 'claude':
+            state = observe_claude(pane)
+            print(f'{label}: Claude status {state}; task completion unconfirmed')
     except (ValueError, KeyError, TypeError, AttributeError, OSError) as error:
         raise ValueError(f'{pane}: launch incomplete or uncertain: {error}; inspect this pane, '
                          'do not resend; rerunning herdr-lane only focuses it') from error
-    print(f'{label} open under {heading_label}' + ('; Pi prompt submitted once' if prompt else ''))
+    submitted = f'; {agent.capitalize()} prompt submitted once' if prompt else ''
+    print(f'{label} open under {heading_label}' + submitted)
 
 
 def main():
     parser = argparse.ArgumentParser(prog='herdr-lane', description=__doc__)
     parser.add_argument('lane', help='<project>-<n|coord>, <project> heading, or <n|coord> from its local folder')
-    parser.add_argument('prompt', nargs='?', default='', help='optional initial Pi prompt (new lanes only)')
+    parser.add_argument('prompt', nargs='?', default='', help='optional initial agent prompt (new lanes only)')
     parser.add_argument('--host', help='saved remote binding in project-local/lane-hosts.json (flat numbered lanes)')
-    parser.add_argument('--agent', choices=('pi', 'claude'), help='agent to start in a --host lane (default: pi)')
+    parser.add_argument('--agent', choices=('pi', 'claude'), default='pi', help='agent to start (default: pi)')
     args = parser.parse_args()
-    if args.agent is not None and args.host is None:
-        parser.error('--agent requires --host')
     if args.host is not None and not args.host:
         parser.error('--host must not be empty')
     if args.host is not None and not args.prompt:
@@ -330,9 +367,11 @@ def main():
             assert spec is not None and spec.loader is not None
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
-            module.open_remote(args.lane, args.prompt, args.host, sys.modules[__name__], args.agent or 'pi')
-        else:
+            module.open_remote(args.lane, args.prompt, args.host, sys.modules[__name__], args.agent)
+        elif args.agent == 'pi':
             open_lane(args.lane, args.prompt)
+        else:
+            open_lane(args.lane, args.prompt, args.agent)
     except (ValueError, KeyError, TypeError, AttributeError, OSError, subprocess.SubprocessError) as error:
         print(f'herdr-lane: {error}', file=sys.stderr)
         return 1

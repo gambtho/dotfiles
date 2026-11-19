@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Explicit, inherited-session-only Pi launch. No delivery retries or UI keys."""
+"""Explicit, inherited-session-only agent launch. No delivery retries or UI keys."""
 import argparse
 import fcntl
 import hashlib
@@ -203,12 +203,19 @@ def visible_idle(kind, screen):
     rows = screen.splitlines()
     if kind == 'pi':
         headers = [i for i, row in enumerate(rows) if re.fullmatch(r'─{2,}\s+\S.*\s+─{4,}', row.strip())]
+        plain = [i for i, row in enumerate(rows) if re.fullmatch(r'─{8,}', row.strip())]
         if headers:
             start = headers[-1]
-            end = next((i for i in range(start + 1, len(rows)) if re.fullmatch(r'─{8,}', rows[i].strip())), None)
+            end = next((i for i in plain if i > start), None)
             return end is not None and end > start + 1 and not any(row.strip() for row in rows[start + 1:end])
+        if len(plain) >= 2:
+            start, end = plain[-2:]
+            tail = [row.strip() for row in rows[end + 1:] if row.strip()]
+            return (end > start + 1 and not any(row.strip() for row in rows[start + 1:end])
+                    and len(tail) == 2 and ' • ' in tail[0] and tail[1].startswith('$'))
     elif kind == 'claude':
-        borders = [i for i, row in enumerate(rows) if re.fullmatch(r'─{8,}', row.strip())]
+        borders = [i for i, row in enumerate(rows)
+                   if re.fullmatch(r'─{8,}(?:\s+\S.*\s+─+)?', row.strip())]
         if len(borders) >= 2:
             inside = [row.strip() for row in rows[borders[-2] + 1:borders[-1]] if row.strip()]
             return len(inside) == 1 and re.fullmatch(r'❯(?:\s*|\s+Try "[^"\n]*")', inside[0]) is not None
@@ -359,16 +366,18 @@ class Launch:
             a = call('agent', 'get', self.record['pane'], kind='agent_info')['agent']
         a = mapping(a, 'agent')
         expected = {'pane_id': self.record['pane'], 'workspace_id': self.record['workspace'],
-                    'terminal_id': self.record['terminal'], 'name': self.record['name'], 'agent': 'pi'}
+                    'terminal_id': self.record['terminal'], 'name': self.record['name'],
+                    'agent': self.args.agent}
         if any(a.get(k) != v for k, v in expected.items()):
             raise LaunchError('Live agent identity differs from receipt; do not reuse')
         session = a.get('agent_session')
-        if not isinstance(session, dict) or session.get('agent') != 'pi':
-            raise LaunchError('Pi session identity is not available yet; no shell-only readiness')
+        if not isinstance(session, dict) or session.get('agent') != self.args.agent:
+            raise LaunchError(f'{self.args.agent.capitalize()} session identity is not available yet; '
+                              'no shell-only readiness')
         for key in ('source', 'kind', 'value'):
             string(session, key)
         if self.record.get('agent_session', session) != session:
-            raise LaunchError('Pi session changed since receipt; do not reuse')
+            raise LaunchError(f'{self.args.agent.capitalize()} session changed since receipt; do not reuse')
         if 'agent_session' not in self.record:
             # Pin first recognition, even when a dialog prevents reaching Ready.
             self.checkpoint(agent_session=session)
@@ -385,13 +394,15 @@ class Launch:
             text = call('agent', 'read', self.record['pane'], '--source', 'visible',
                         '--format', 'text', kind=None)
             if (a.get('interactive_ready') is True and a['agent_status'] in ('idle', 'done')
-                    and visible_idle('pi', text)):
+                    and visible_idle(self.args.agent, text)):
                 self.checkpoint('Ready', agent_session=a['agent_session'])
                 return
             welcome = 'Welcome back!' in text and re.search(r'Press any key to continue \(([0-9]|[12][0-9]|30)s\)', text)
             # Match prompt titles, not resource names or punctuation in startup help.
             dialog = re.search(r'(?m)^[ \t]*(?:Trust project folder\?|Permission Required(?: \(Subagent\))?)[ \t\r]*$', text)
             now = time.monotonic()
+            if self.args.agent == 'claude' and a['agent_status'] == 'blocked':
+                raise LaunchError('Claude startup blocked on trust/dialog; user inspection required, no input sent')
             if welcome and not welcome_seen:
                 # A late overlay gets its remaining countdown plus one second
                 # for dismissal. Anchor once: a frozen/repeated screen cannot renew it.
@@ -403,13 +414,20 @@ class Launch:
 
     def execute(self):
         args = self.args
-        identity = {'project': args.project, 'lane': args.lane,
+        identity = {'project': args.project, 'lane': args.lane, 'agent': args.agent,
                     'name': lane_name(args.project, args.lane, args.name),
                     'prompt': str(args.prompt), 'prompt_sha256': digest(args.prompt),
                     'repo': str(args.repo), 'state': str(args.state), 'context': self.context}
+        if args.agent == 'claude':
+            identity.update(claude_settings=str(args.settings),
+                            claude_settings_sha256=digest(args.settings))
         if self.path.exists():
             candidate = json.loads(self.path.read_text())
-            if candidate.get('version') not in (1, 2) or any(candidate.get(k) != v for k, v in identity.items()):
+            def matches(key, value):
+                # Pi receipts predate the explicit agent field.
+                return candidate.get(key, 'pi' if key == 'agent' else None) == value
+            if candidate.get('version') not in (1, 2) or any(
+                    not matches(key, value) for key, value in identity.items()):
                 raise LaunchError('Receipt identity/context/prompt differs; inspect without adopting or renaming')
             self.record = candidate
             if self.record['stage'] == 'Creating':
@@ -509,8 +527,11 @@ class Launch:
             # A Created receipt certifies agent start has not yet been attempted.
             self.checkpoint('Starting')
             try:
-                started = call('agent', 'start', identity['name'], '--kind', 'pi', '--pane', self.record['pane'],
-                               '--', '--name', identity['name'], kind='agent_started', timeout=35)
+                agent_args = (['--name', identity['name']] if args.agent == 'pi' else
+                              ['--settings', str(args.settings), '--name', identity['name']])
+                started = call('agent', 'start', identity['name'], '--kind', args.agent,
+                               '--pane', self.record['pane'], '--', *agent_args,
+                               kind='agent_started', timeout=35)
             except LaunchError as exc:
                 self.checkpoint(start_error=str(exc))
                 # Herdr exit 1 can mean not-ready or its own 30s readiness timeout,
@@ -522,6 +543,8 @@ class Launch:
         self.ready()
         if digest(args.prompt) != identity['prompt_sha256']:
             raise LaunchError('Prompt changed during startup; do not submit')
+        if args.agent == 'claude' and digest(args.settings) != identity['claude_settings_sha256']:
+            raise LaunchError('Claude settings changed during startup; do not submit')
         self.checkpoint('Submitting')
         result = call('agent', 'prompt', self.record['pane'], f'Read {args.prompt} and follow it.', kind='agent_prompted')
         self.agent(result['agent'])
@@ -555,6 +578,8 @@ def main():
     for flag in ('project', 'lane', 'prompt', 'repo', 'state', 'session'):
         parser.add_argument(f'--{flag}', required=True)
     parser.add_argument('--name', help='Explicit name override, subject to live alias constraints')
+    parser.add_argument('--agent', choices=('pi', 'claude'), default='pi',
+                        help='agent to start (default: pi)')
     args = parser.parse_args()
     launch = None
     try:
@@ -564,6 +589,9 @@ def main():
         context = inherited_context(args.session)
         for key in ('prompt', 'repo', 'state'):
             setattr(args, key, Path(getattr(args, key)).resolve(strict=True))
+        args.settings = args.prompt.parent / 'claude-lane-settings.json' if args.agent == 'claude' else None
+        if args.agent == 'claude' and (args.settings.is_symlink() or not args.settings.is_file()):
+            raise LaunchError(f'Missing or non-regular Claude settings: {args.settings}')
         if not args.repo.is_dir() or not args.prompt.is_file() or not args.prompt.read_text().strip():
             raise LaunchError('Source directory and nonempty approved prompt required')
         state_row(args.state.read_text(), args.lane)

@@ -14,15 +14,17 @@ report a capability blocker rather than silently skipping or replacing them.
 | Durable facts about people and preferences | Auto-memory, one fact per file; STATE.md stays the source of truth for lanes | `session_query` for missing context from a known session file; record durable facts in COORDINATION.md |
 | Worktree writes | Normal git worktrees | The worktree guard blocks writes in primary checkouts; use linked worktrees |
 
-For explicit Herdr launches and manual Pi conversation naming, follow
+For explicit Herdr launches and manual conversation naming, follow
 [herdr-launch.md](herdr-launch.md), including its deterministic helper when an
 approved prompt already exists. New names default to `project-slug-number` across
-workspace/Pi/alias (e.g. `double-holo-12`); existing names remain untouched.
+workspace/agent/alias (e.g. `double-holo-12`); existing names remain untouched.
 This depends on actual tools and the inherited
 Herdr session, not whether the coordinator is Pi or Claude Code. Claude app
 sessions without terminal tools use the manual handoff.
-A bound remote lane can run Claude Code instead of Pi with `herdr-lane --host <binding>
---agent claude`; see [remote lanes](remote-lanes.md#claude-code-lanes).
+A local lane can run Claude Code instead of Pi with
+`herdr-lane --agent claude <project>-<n> "Read <path> and follow it."`. A bound
+remote lane uses `herdr-lane --host <binding> --agent claude`; both require the
+project-local Claude settings file. See [remote lanes](remote-lanes.md#claude-code-lanes).
 
 Background reviewers are read-only helpers, not lanes: say so in their prompt (no edits,
 commits, pushes or posts) and spot-check what they find.
@@ -73,8 +75,10 @@ cross-family review then comes from the other CLI, through the bundled scripts.
    The template starts Claude in `auto` mode: allow rules run unchecked, deny rules block, and
    anything else goes to Claude's auto-mode check instead of a prompt. An auto-mode refusal means
    the lane stops or works around it, never that it asks for a bypass.
-2. Add the host's `claude` path to the project's binding and start with
-   `herdr-lane --host <binding> --agent claude …`; see [remote lanes](remote-lanes.md#claude-code-lanes).
+2. For a local lane, start with `herdr-lane --agent claude …`. For a remote lane,
+   add the host's `claude` path to the binding and start with
+   `herdr-lane --host <binding> --agent claude …`; see
+   [remote lanes](remote-lanes.md#claude-code-lanes).
 3. A person starts `claude` once in the host's project-local folder and accepts the trust
    dialog. The launch never answers it.
 

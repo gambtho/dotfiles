@@ -160,13 +160,14 @@ use the project folder.
   reviews and resume conditions, not ready; this prevents open-ended closeout.
   Use the single-line
   handoff: local `herdr-lane <project>-<n> "Read <path> and follow it."` when installed,
-  otherwise plain Read (see [local handoff](references/herdr-launch.md#manual-pi-handoff)).
+  otherwise plain Read (see [local handoff](references/herdr-launch.md#manual-local-handoff)).
+  Prefix local or bound-remote starts with `--agent claude` when the approved lane names Claude Code.
   Remote: to remove manual transfer overhead, use `herdr-lane --host <binding> <project>-<n>
   <prompt>` from the project-local folder for bound hosts, where installed and authorized;
   this replaces that reference's remote Read-only rule. [Manual copy/start](references/remote-lanes.md#explicit-copy-and-manual-startup)
   is for unbound hosts whose Hosts row explains why; see [bindings](references/remote-lanes.md#explicit-remote-command).
   Don't add `/name` or `--name`.
-  Default new workspace labels, Pi names and live Herdr aliases to
+  Default new workspace labels, agent names and live Herdr aliases to
   `<project-slug>-<lane-number>` (e.g. `double-holo-12`). Keep full W12/task identity in lane files and
   STATE.md; preserve filenames/numbering and all existing names. Honor explicit
   naming overrides that satisfy Herdr's alias constraints; use the approved label in
@@ -244,7 +245,7 @@ For a local lane, when an approved prompt exists and the user says "start W12", 
 the mechanical helper in [herdr-launch.md](references/herdr-launch.md) immediately after
 context/prompt/source verification, not another planning round or a manual handoff
 when eligible access exists. It reconciles live identity, groups with prepared project
-setup (reports flat when wholly absent), starts named Pi on the verified source pane, and submits once without
+setup (reports flat when wholly absent), starts the named selected agent on the verified source pane, and submits once without
 waiting for task completion. Its receipt is authoritative; uncertain delivery is
 inspect-only, never an automatic resend/replacement workspace. Never approve dialogs,
 control another client's focused pane, or infer implementation approval from launch

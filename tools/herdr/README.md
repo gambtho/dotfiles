@@ -122,9 +122,11 @@ herdr-lane 13
 
 Projects are existing `~/<project>-local` folders. The longest matching folder
 name wins, including dashed names. A lane suffix is a number or `coord`; a bare
-project name prepares only its heading without changing focus. A prompt starts
-Pi with `--name <project>-<n>` (or `<project>-coord` for a prompted coordinator),
-matching the workspace label. Without a prompt, only a shell is prepared.
+project name prepares only its heading without changing focus. A prompt starts Pi with `--name <project>-<n>` (or `<project>-coord` for a prompted
+coordinator), matching the workspace label. Add `--agent claude` before the label to
+start Claude Code instead; that local form requires a regular
+`~/<project>-local/lanes/claude-lane-settings.json`. Without a prompt, only a shell is
+prepared.
 Avoid folders whose names collide with lane labels (for example `orchard-12-local`).
 
 First use creates an empty Git anchor at `~/.lane-anchors/<project>`, detached
@@ -263,16 +265,20 @@ Command admission does not prove Pi/provider readiness or task completion.
 
 ### Claude Code lanes
 
-Pi is the default. `--agent claude` starts Claude Code instead, on the same path:
+Pi is the default. `--agent claude` starts Claude Code for either a local or bound
+remote lane:
 
 ```sh
+herdr-lane --agent claude orchard-12 "Read /absolute/orchard-local/lanes/task.md and follow it."
 herdr-lane --host build --agent claude orchard-12 lanes/task.md
 ```
 
-The binding then needs `claude` (absolute path of the remote `claude` executable)
-instead of `mise` and `pi`. The project-local `lanes/claude-lane-settings.json` is a
-fifth input, delivered to `<root>/lanes/claude-lane-settings.json`. If it is missing the
-command refuses before any remote call. Like the prompt it is **create-only**: an
+Both forms require the project-local `lanes/claude-lane-settings.json`; the local
+launcher refuses before creating a workspace when it is missing or non-regular and
+uses that same file with `--settings`. For a remote launch, the binding then needs
+`claude` (absolute path of the remote `claude` executable) instead of `mise` and `pi`.
+The settings file is a fifth input, delivered to `<root>/lanes/claude-lane-settings.json`.
+If it is missing the command refuses before any remote call. Like the prompt it is **create-only**: an
 existing remote copy with different bytes stops the launch before any delivery, and a
 matching copy is left unchanged, so running lanes keep the permissions they started with.
 To change it, update the project source and the host copy to the same bytes, with no

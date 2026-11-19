@@ -262,9 +262,9 @@ class Remote:
         c = self.config
         prompt = f'Read {self.targets[2]} and follow it.'
         if self.agent == 'claude':
-            settings = str(self.root / SETTINGS)
-            agent = ('test -f ' + shlex.quote(settings) + ' && ' +
-                     shlex.join([c['claude'], '--settings', settings, '--name', self.label, '--', prompt]))
+            settings = self.root / SETTINGS
+            agent = ('test -f ' + shlex.quote(str(settings)) + ' && ' +
+                     shlex.join(self.lane.claude_argv(c['claude'], self.label, prompt, settings)))
         else:
             agent = shlex.join([c['mise'], 'exec', '--', c['pi'], '--name', self.label, '--', prompt])
         command = ('test "$(hostname)" = ' + shlex.quote(c['hostname']) +
@@ -282,27 +282,7 @@ class Remote:
     def observe(self, pid, wid):
         """Read-only status polls after the single start; never sends input."""
         self.stage = 'Claude start observation'
-        status = 'unknown'
-        for attempt in range(10):
-            if attempt:
-                time.sleep(1)
-            pane = self.api('pane', 'get', pid)['pane']
-            status = pane['agent_status']
-            if status not in ('unknown', 'working', 'idle', 'done', 'blocked'):
-                raise ValueError(f'unexpected agent status {status!r}')
-            if status == 'blocked':
-                raise ValueError('blocked on Claude trust/dialog; do not answer it. Inspect the pane; '
-                                 'a person resolves trust before a new start')
-            if status != 'unknown' and pane.get('agent') == 'claude':
-                break
-            status = 'unknown'
-        if status == 'unknown':
-            # A start that exited at once (bad executable, missing settings) leaves the shell alone.
-            info = self.api('pane', 'process-info', '--pane', pid)['process_info']
-            if (info['pane_id'] == pid and
-                    [p['pid'] for p in info['foreground_processes']] == [info['shell_pid']]):
-                raise ValueError('Claude did not start: the pane shell is idle again. Inspect the pane '
-                                 '(settings file, claude path); do not resend')
+        status = self.lane.observe_claude(pid, self.api)
         print(f'{self.host}/{self.config["session"]}: {self.label} created (flat); five snapshots verified')
         if status != 'unknown':
             state = f'Claude status {status}; task completion unconfirmed'

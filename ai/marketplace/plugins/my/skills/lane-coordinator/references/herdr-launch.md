@@ -5,7 +5,8 @@ W12"**, with an approved prompt already present, verify context/prompt/source th
 run the helper below. Do not re-plan approved work or substitute manual instructions
 when eligible access exists. Without tools or eligible inherited context, give the
 short manual handoff. Never guess sockets, arrange SSH, switch sessions or steal focus.
-Other harnesses retain their manual fallback; this is only a Pi fast path.
+Other harnesses retain their manual fallback; this fast path supports Pi (default)
+and Claude Code when `--agent claude` is explicit.
 
 ## Identity and preflight
 
@@ -13,7 +14,7 @@ Other harnesses retain their manual fallback; this is only a Pi fast path.
   The source cwd must exist. The lane must still isolate in a linked Git worktree
   before source writes: a Herdr workspace provides terminal layout, not Git isolation.
 - Use the established project slug and numeric lane: `double-holo-12` for W12.
-  This is the default for **all three** new workspace labels, Pi names and live
+  This is the default for **all three** new workspace labels, agent names and live
   aliases. Full task descriptions and W12 identity stay in STATE.md/lane files;
   lane filenames/numbering do not change. Never rename an existing workspace,
   conversation, alias, public branch, commit or PR.
@@ -45,7 +46,14 @@ python3 <skill-dir>/scripts/launch.py --requested \
   --repo '/home/example/my repo' \
   --prompt '/home/example/double-holo-local/lanes/W12-approved-task.md' \
   --state '/home/example/double-holo-local/STATE.md'
+# Add --agent claude for Claude Code.
 ```
+
+Claude launches require a regular project-local
+`lanes/claude-lane-settings.json` beside the prompt. The helper records the settings
+path and digest, passes it through `--settings`, and stops before submission if the
+file changes during startup. This adds to the user's Claude settings; it does not
+replace them or approve a trust/theme dialog.
 
 `--requested` attests to the actual user launch request; it does not grant scope,
 publication or provider/production authority. Do not add it for "prepare W12".
@@ -57,7 +65,8 @@ setting it after a password prompt is already active is too late.
 
 With complete project heading/anchor setup, the helper creates an env-configured
 lane-checkout workspace, attaches grouping without focus, splits at the source repo,
-and closes only its owned temporary shell before starting Pi. No typed cd is needed.
+and closes only its owned temporary shell before starting the selected agent. No
+typed cd is needed.
 Wholly absent setup keeps today's flat launch and explicitly reports why; partial,
 broken or ambiguous setup stops before launch. A failed grouped operation never
 falls back to a second flat workspace. `--project` and lane number select grouping;
@@ -90,21 +99,22 @@ helper does not automatically detect every mixed pair. Stop before replacing a
 shared binary; rollback must restore old compatible config/state, not open newer
 state with an older binary.
 
-Deterministic fixtures exercise both accepted profiles. Isolated 0.9.5 server health
-has passed, but actual Pi startup/readiness, prompt delivery, client-focus behavior,
-bridge transitions and layout recovery are not certified for this upgrade. A
-snapshot passing this policy is not proof of those end-to-end behaviors.
+Deterministic fixtures exercise both accepted profiles. A disposable flat 0.9.5
+Claude launch has reached `Submitted`; Pi startup/readiness, client-focus behavior,
+bridge transitions and grouped layout recovery are not certified end to end. A
+snapshot passing this policy is not proof of those behaviors.
 
 One `W12-launch.json` is authoritative. It stores prompt hash, source cwd, name,
-inherited socket/session/caller fingerprint, returned opaque workspace/root-pane/
-terminal IDs, Pi session identity and checkpoint timestamps. `.launch.lock` serializes
+selected agent (Pi when absent in legacy receipts), Claude settings path/hash when
+used, inherited socket/session/caller fingerprint, returned opaque workspace/root-pane/
+terminal IDs, agent session identity and checkpoint timestamps. `.launch.lock` serializes
 helpers sharing that lanes directory. STATE gets one concise projection on exit;
 receipt checkpoints don't require extra model/tool rounds.
 
 Flow: reconcile existing receipt and live labels/aliases → persist **Creating** →
 create ONE workspace (and complete grouped topology if applicable) without focus → validate
-final source pane IDs and cwd → **Created** → persist **Starting** → start Pi with `--name`
-on that **exact returned pane** → verify recognized Pi/session and readiness →
+final source pane IDs and cwd → **Created** → persist **Starting** → start the selected
+agent with `--name` on that **exact returned pane** → verify recognized agent/session and readiness →
 **Ready** → persist **Submitting before sending** → submit the lane instruction ONCE,
 without `--wait` → **Submitted** → inspect working/blocked/unknown truthfully.
 No approval, key sending, force or other-session operations; only the new grouped temporary shell is closed.
@@ -124,11 +134,12 @@ by type, not raw content; no prompt or terminal text is copied. A successful sna
 cwd discrepancy and records `creation_cwd_confirmed: snapshot`. These observations do
 not authorize recovery from an existing **Creating** receipt.
 
-The helper only waits up to 30 seconds for the known Powerline welcome overlay
+For Pi, the helper waits up to 30 seconds for the known Powerline welcome overlay
 (`Welcome back!` plus `Press any key to continue (Ns)` in the **visible** viewport).
-It dismisses naturally; no Enter/approval is sent. Generic blocked status is not
-splash evidence. Trust/permission/question text stops for user intervention. Shell-only
-panes cannot be Ready. A successful submission/idle marker never proves lane completion.
+It dismisses naturally; no Enter/approval is sent. Claude startup reaches its recognized
+idle editor shape or reports `blocked`; trust/theme/folder dialogs are never answered.
+Trust/permission/question text stops for user intervention. Shell-only panes cannot be
+Ready. A successful submission/idle marker never proves lane completion.
 
 ## Interrupted launch / recovery
 
@@ -137,47 +148,53 @@ Grouped topology intents are inspect-only on interruption; retain both returned 
 even a failed Git command is not permission to retry automatically or discard the receipt.
 With explicit operator approval and verified never-started state, inspect exact IDs/group/cwd,
 create a missing source pane once, close only the verified shell-only temporary pane,
-then start named Pi manually in the source pane and submit once. Never edit/delete receipts.
+then start the receipt's named agent manually in the source pane and submit once.
+Never edit/delete receipts.
 An unfinished old flat receipt with grouping now present is inspect-only; lock contention stops.
 Re-run the **same invocation** only to reconcile; it does not mean "try again".
 - Existing live labels/aliases without a matching receipt, or STATE recording an old
   launch, stop before creation. Inspect and identify them; do not rename/adopt implicitly.
 - **Creating** without validated IDs is uncertain even if no match is visible. Inspect
   live workspaces; no automatic replacement workspace.
-- **Created** can start once. **Starting** only inspects an already recognized Pi;
-  a shell-only pane or startup failure is not permission to restart. A known welcome
-  overlay may finish naturally. **Ready** is revalidated before submission.
+- **Created** can start once. **Starting** only inspects the receipt's recognized agent;
+  a shell-only pane or startup failure is not permission to restart. A known Pi
+  welcome overlay may finish naturally. **Ready** is revalidated before submission.
 - **Submitting** means possibly delivered, including a crash after delivery, failed
   parse, nonzero exit or timeout. Inspect/report only; **never automatically resend**,
   even if the agent appears idle or no delivery was observed. Ask before any deliberate
   recovery/resubmission. **Submitted** is inspect-only on subsequent invocations too.
 - Receipt/live identity must match: inherited socket/caller fingerprint, workspace,
-  root pane/terminal, alias and Pi session. Restarts, stale IDs, changed prompts and
+  root pane/terminal, alias and agent session. Restarts, stale IDs, changed prompts/settings and
   mismatches stop. Old receipt formats are not migrated or silently overwritten.
 - On errors, preserve the receipt and last checkpoint. If STATE cannot be written,
   use the receipt and report that its summary needs updating. Never delete a receipt
   to get past uncertainty or automatically clear a dialog/terminate a pane.
 
-## Manual Pi handoff
+## Manual local handoff
 
 For a local lane, use `herdr-lane` only when its resolved target is the installed
 dotfiles `herdr-lanes/lane.py`, not another same-named tool. Hand over:
 
 ```sh
 herdr-lane double-holo-12 "Read /absolute/project-local/lanes/W12-approved-task.md and follow it."
+herdr-lane --agent claude double-holo-12 "Read /absolute/project-local/lanes/W12-approved-task.md and follow it."
 ```
+
+The Claude form requires `~/<project>-local/lanes/claude-lane-settings.json`. Both
+forms type one startup command. The Claude start is observed read-only and reports a
+blocked trust/dialog without answering it.
 
 Shell-quote the prompt so its absolute path is passed literally, without expansion.
 This opens under the project heading; an existing lane is only focused and never
 receives the prompt. Failed or uncertain invocations are inspect-only: use the
 pane named by the error and establish whether anything ran before taking action.
 For a heading-shell failure, restore only its `needs.py` publisher using the error's
-recovery command; no numbered lane exists yet. Never start Pi or paste the Read
+recovery command; no numbered lane exists yet. Never start an agent or paste the Read
 instruction in the heading. For a numbered-lane shell failure with no submission,
-finish startup, change to `~/<project>-local`, start Pi manually, then paste the
-approved Read instruction into that idle Pi. Never blindly resend or relaunch.
+finish startup, change to `~/<project>-local`, start the intended agent manually,
+then paste the approved Read instruction into that idle agent. Never blindly resend or relaunch.
 
-Without installed `herdr-lane`, and always for remote lanes, use only:
+Without installed local `herdr-lane`, and for an unbound remote lane, use only:
 
 ```text
 Read /absolute/project-local/lanes/W12-approved-task.md and follow it.

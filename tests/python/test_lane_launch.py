@@ -87,6 +87,8 @@ PI_RESOURCES = PI_LOADING + '''
 ────────────────────────────────────────────────────────────
 '''
 PI_EDITOR = '── smart ───────────────────\n\n───────────────────────────'
+PI_NATIVE_EDITOR = ('───────────────────────────\n\n───────────────────────────\n'
+                    '~/repo (main) • lane-7\n$0.000 (sub) (github-copilot) model')
 
 # Source-reconstructed Pi 1.5.2 dist/core/project-trust.js and trust-manager.js;
 # dist/modes/interactive/components/extension-selector.js supplies the selector UI.
@@ -278,24 +280,29 @@ elif a[:2] == ['agent', 'start']:
     if os.environ.get('FAKE_LOCK'):  # the project lock must be free before agent startup
         import fcntl
         fcntl.flock(open(os.environ['FAKE_LOCK'], 'r+'), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    kind = os.environ.get('FAKE_KIND', 'pi')
+    suffix = (['--settings', str(Path(os.environ['FAKE_PROMPT']).parent / 'claude-lane-settings.json')]
+              if kind == 'claude' else [])
+    suffix += ['--name', os.environ.get('FAKE_NAME', 'double-holo-12')]
     assert a == ['agent', 'start', os.environ.get('FAKE_NAME', 'double-holo-12'),
-                 '--kind', 'pi', '--pane', 'opaque-root', '--', '--name',
-                 os.environ.get('FAKE_NAME', 'double-holo-12')]
+                 '--kind', kind, '--pane', 'opaque-root', '--', *suffix]
     if mode == 'start-fail':
         sys.exit(1)
     p = next(p for p in s['panes'] if p['pane_id'] == 'opaque-root')
-    agent = dict(p, agent='pi', name=a[2], agent_status='done', interactive_ready=True,
-                 agent_session={'agent':'pi','source':'herdr:pi','kind':'path','value':'session-new'})
+    agent = dict(p, agent=kind, name=a[2], agent_status='done', interactive_ready=True,
+                 agent_session={'agent':kind,'source':'herdr:'+kind,'kind':'path','value':'session-new'})
     if mode == 'agent-status-list':
         agent['agent_status'] = []
     s['agents'] = [agent]
     save()
+    if os.environ.get('FAKE_CHANGE_SETTINGS'):
+        Path(os.environ['FAKE_PROMPT']).with_name('claude-lane-settings.json').write_text('{"changed": true}')
     if os.environ.get('FAKE_START_ERROR'):
         print(json.dumps({'id': 'cli:agent:start', 'error': {
             'code': os.environ['FAKE_START_ERROR'], 'message': 'DO NOT RECORD STDERR'}}), file=sys.stderr)
         sys.exit(1)
     reply('agent_started', agent=[] if mode == 'start-agent-list' else agent,
-          argv=['pi', '--name', a[2]])
+          argv=[kind, '--name', a[2]])
 elif a[:2] == ['agent', 'get']:
     assert a[2] == 'opaque-root'
     if not s['agents']:
@@ -317,7 +324,9 @@ elif a[:2] == ['agent', 'read']:
     s['read'] = True
     save()
     # Herdr 0.9.5 CLI emits plain text, not the socket API's pane_read envelope.
-    text = '── smart ───────────────────\n\n───────────────────────────'
+    text = ('───────────────────────────\n❯\n───────────────────────────' if
+            s['agents'][0].get('agent') == 'claude' else
+            '── smart ───────────────────\n\n───────────────────────────')
     if mode in ('welcome', 'ready-welcome') and not was_read:
         text = os.environ.get('FAKE_SCREEN', 'Welcome back!\nPress any key to continue (1s)')
     elif mode in ('dialog', 'ready-dialog'):
@@ -361,12 +370,19 @@ class SendGuardTests(unittest.TestCase):
         pi = '── smart ───────────────────\n\n───────────────────────────\n ↳ last request'
         claude = '───────────────────────────\n❯\n───────────────────────────\nauto mode on'
         self.assertTrue(self.module.visible_idle('pi', pi))
+        self.assertTrue(self.module.visible_idle('pi', PI_NATIVE_EDITOR))
         self.assertTrue(self.module.visible_idle('claude', claude))
+        self.assertTrue(self.module.visible_idle('claude',
+            '──────────────────────────── proof-999 ─\n❯\u00a0Try "fix errors"\n'
+            '─────────────────────────────────────────────\n⏵⏵ auto mode on'))
         for kind, screen in [('pi', pi+TRUST_PROMPT), ('pi', pi+PERMISSION_PROMPT),
                              ('pi', PI_STARTUP), ('pi', '┌─┐\n│status│\n└─┘\n'+pi),
                              ('pi', '┏━━┓\n┃ x┃\n┗━━┛\n'+pi),
                              ('pi', '╔══╗\n║ x║\n╚══╝\n'+pi),
                              ('pi', pi.replace('\n\n','\ntyped\n')),
+                             ('pi', PI_NATIVE_EDITOR.replace('\n\n','\ntyped\n')),
+                             ('pi', '───────────────────────────\n\n───────────────────────────\nordinary output'),
+                             ('pi', PI_NATIVE_EDITOR + '\nunknown dialog text'),
                              ('claude', claude.replace('❯','❯ 1. Yes')), ('claude','shell $')]:
             with self.subTest(kind=kind, screen=screen):
                 self.assertFalse(self.module.visible_idle(kind, screen))
@@ -580,6 +596,41 @@ class LaunchTests(LaunchFixture, unittest.TestCase):
         for verb in (['workspace', 'create'], ['agent', 'start'], ['agent', 'prompt']):
             self.assertEqual(len(self.mutations(verb)), 1)
         self.assertFalse((self.root / 'SENTINEL').exists())
+
+    def test_claude_start_uses_project_settings_and_submits_once(self):
+        settings = self.prompt.parent / 'claude-lane-settings.json'
+        settings.write_text('{"permissions": {}}')
+        result = self.run_launch(extra=('--agent', 'claude'), env={'FAKE_KIND': 'claude'})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        receipt = json.loads(self.receipt.read_text())
+        self.assertEqual((receipt['agent'], receipt['stage']), ('claude', 'Submitted'))
+        start = self.mutations(['agent', 'start'])[0]
+        self.assertEqual(start, ['agent', 'start', 'double-holo-12', '--kind', 'claude',
+                                 '--pane', 'opaque-root', '--', '--settings', str(settings),
+                                 '--name', 'double-holo-12'])
+        self.assertEqual(len(self.mutations(['agent', 'prompt'])), 1)
+
+    def test_claude_settings_change_during_start_stops_before_submission(self):
+        (self.prompt.parent / 'claude-lane-settings.json').write_text('{"permissions": {}}')
+        result = self.run_launch(extra=('--agent', 'claude'),
+                                 env={'FAKE_KIND': 'claude', 'FAKE_CHANGE_SETTINGS': '1'})
+        self.assert_stopped(result, 'settings changed')
+        self.assertEqual(json.loads(self.receipt.read_text())['stage'], 'Ready')
+        self.assertEqual(self.mutations(['agent', 'prompt']), [])
+
+    def test_claude_dialog_stops_without_prompt_or_ui_keys(self):
+        (self.prompt.parent / 'claude-lane-settings.json').write_text('{"permissions": {}}')
+        result = self.run_launch('dialog', extra=('--agent', 'claude'), env={'FAKE_KIND': 'claude'})
+        self.assert_stopped(result, 'trust/dialog')
+        self.assertEqual(json.loads(self.receipt.read_text())['stage'], 'Starting')
+        self.assertEqual(len(self.mutations(['agent', 'start'])), 1)
+        self.assertEqual(self.mutations(['agent', 'prompt']), [])
+
+    def test_claude_missing_settings_refuses_before_herdr_calls(self):
+        result = self.run_launch(extra=('--agent', 'claude'), env={'FAKE_KIND': 'claude'})
+        self.assert_stopped(result, 'claude-lane-settings.json')
+        self.assertEqual(self.calls(), [])
+        self.assertFalse(self.receipt.exists())
 
     def test_override_and_alias_collision(self):
         result = self.run_launch(extra=('--name', 'custom_lane'), env={'FAKE_NAME':'custom_lane'})
