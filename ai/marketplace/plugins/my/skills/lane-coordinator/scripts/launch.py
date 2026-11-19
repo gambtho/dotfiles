@@ -203,10 +203,16 @@ def visible_idle(kind, screen):
     rows = screen.splitlines()
     if kind == 'pi':
         headers = [i for i, row in enumerate(rows) if re.fullmatch(r'─{2,}\s+\S.*\s+─{4,}', row.strip())]
+        plain = [i for i, row in enumerate(rows) if re.fullmatch(r'─{8,}', row.strip())]
         if headers:
             start = headers[-1]
-            end = next((i for i in range(start + 1, len(rows)) if re.fullmatch(r'─{8,}', rows[i].strip())), None)
+            end = next((i for i in plain if i > start), None)
             return end is not None and end > start + 1 and not any(row.strip() for row in rows[start + 1:end])
+        if len(plain) >= 2:
+            start, end = plain[-2:]
+            tail = [row.strip() for row in rows[end + 1:] if row.strip()]
+            return (end > start + 1 and not any(row.strip() for row in rows[start + 1:end])
+                    and len(tail) == 2 and ' • ' in tail[0] and tail[1].startswith('$'))
     elif kind == 'claude':
         borders = [i for i, row in enumerate(rows)
                    if re.fullmatch(r'─{8,}(?:\s+\S.*\s+─+)?', row.strip())]

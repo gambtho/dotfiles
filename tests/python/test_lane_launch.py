@@ -87,6 +87,8 @@ PI_RESOURCES = PI_LOADING + '''
 ────────────────────────────────────────────────────────────
 '''
 PI_EDITOR = '── smart ───────────────────\n\n───────────────────────────'
+PI_NATIVE_EDITOR = ('───────────────────────────\n\n───────────────────────────\n'
+                    '~/repo (main) • lane-7\n$0.000 (sub) (github-copilot) model')
 
 # Source-reconstructed Pi 1.5.2 dist/core/project-trust.js and trust-manager.js;
 # dist/modes/interactive/components/extension-selector.js supplies the selector UI.
@@ -368,6 +370,7 @@ class SendGuardTests(unittest.TestCase):
         pi = '── smart ───────────────────\n\n───────────────────────────\n ↳ last request'
         claude = '───────────────────────────\n❯\n───────────────────────────\nauto mode on'
         self.assertTrue(self.module.visible_idle('pi', pi))
+        self.assertTrue(self.module.visible_idle('pi', PI_NATIVE_EDITOR))
         self.assertTrue(self.module.visible_idle('claude', claude))
         self.assertTrue(self.module.visible_idle('claude',
             '──────────────────────────── proof-999 ─\n❯\u00a0Try "fix errors"\n'
@@ -377,6 +380,9 @@ class SendGuardTests(unittest.TestCase):
                              ('pi', '┏━━┓\n┃ x┃\n┗━━┛\n'+pi),
                              ('pi', '╔══╗\n║ x║\n╚══╝\n'+pi),
                              ('pi', pi.replace('\n\n','\ntyped\n')),
+                             ('pi', PI_NATIVE_EDITOR.replace('\n\n','\ntyped\n')),
+                             ('pi', '───────────────────────────\n\n───────────────────────────\nordinary output'),
+                             ('pi', PI_NATIVE_EDITOR + '\nunknown dialog text'),
                              ('claude', claude.replace('❯','❯ 1. Yes')), ('claude','shell $')]:
             with self.subTest(kind=kind, screen=screen):
                 self.assertFalse(self.module.visible_idle(kind, screen))
