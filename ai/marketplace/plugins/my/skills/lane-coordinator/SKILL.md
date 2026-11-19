@@ -123,8 +123,10 @@ For every coherent update:
    lanes), close only its own Herdr workspace, matched by its launch receipt or its
    exactly one current workspace at the recorded label. Recheck idle or done status
    immediately before close; leave working, blocked, unknown or ambiguous identity open.
-   Run `herdr workspace close <id>` locally or through the recorded remote binding,
-   then record success in the archive line. A timeout/error or changed status is
+   Run `herdr workspace close <id>` locally or through the recorded remote binding.
+   The status check and close are not atomic, so work can resume in that window; the
+   pre-check does not protect against concurrent input. After a confirmed close, record
+   success in the archive line. A timeout/error or changed status is
    inspect-only: do not retry automatically or record closure until reconciled. This is
    not a deletion; do not close a coordinator's own workspace, another project's/person's,
    or any uncertain identity. Worktree, branch, sandbox and file deletion rules are unchanged.

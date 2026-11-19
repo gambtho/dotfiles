@@ -140,8 +140,10 @@ Fetch first. Only after the lane is closed and its report and handoff are presen
 the project's report location, use the recorded SSH binding to close the lane's own
 workspace with `herdr workspace close <id>`. Match the launch receipt or exactly one
 current workspace at the recorded label, and recheck Herdr status idle or done
-immediately before close. Working, blocked, unknown, ambiguous identity or a changed
-status means leave it open and say so. Never close the coordinator's own workspace or
+immediately before close. The status check and close are not atomic, so work can resume
+in that window; the pre-check does not guard against concurrent input. Working, blocked,
+unknown, ambiguous identity or a changed status means leave it open and say so. Never
+close the coordinator's own workspace or
 one owned by another person/project. Record success in the archive line; this is not
 file, worktree, branch, sandbox, or receipt deletion, and none of those cleanup rules
 change. If the close itself is uncertain, inspect only, do not retry automatically,
