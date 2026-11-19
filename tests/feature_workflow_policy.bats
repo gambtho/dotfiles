@@ -25,6 +25,11 @@ setup() {
   [ "$status" -eq 1 ]
 }
 
+@test "lane-started Pi uses the native layout without changing interactive Pi" {
+  run node --experimental-strip-types --test "$REPO_ROOT/tests/pi_lane_native_editor.test.mjs"
+  [ "$status" -eq 0 ]
+}
+
 @test "personal skills advertise their automatic workflow phases" {
   run grep -F "Use proactively during discovery for non-trivial work" "$BLINDSPOT_SKILL"
   [ "$status" -eq 0 ]

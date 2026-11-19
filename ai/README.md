@@ -318,6 +318,7 @@ ai/
     extensions/
       herdr-agent-state.ts
       herdr-prompt-state.ts
+      lane-native-editor.ts
       worktree-guard.ts
     install.sh
     migrate-security-stack.sh
@@ -328,7 +329,7 @@ ai/
     skills/
 ```
 
-Immutable guidance, keybindings, named agents, and the three authored extensions are individual links. The installer owns these **six mutable runtime files** as regular machine-local files:
+Immutable guidance, keybindings, named agents, and the four authored extensions are individual links. The installer owns these **six mutable runtime files** as regular machine-local files:
 
 | Tracked baseline | Runtime destination | Routine install behavior |
 |---|---|---|
