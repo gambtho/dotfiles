@@ -81,6 +81,8 @@ test("lane-started Pi rejects custom editors but keeps ordinary sessions unchang
   assert.ok(lane.ui.widget("other"), "a lane keeps unrelated widgets");
   assert.ok(lane.ui.getEditorText(), "a lane briefly blocks startup welcome overlays");
   assert.equal(lane.ui.actualEditorText(), "", "the startup guard must not create a visible draft");
+  lane.input("\u001b[6;20;10t");
+  assert.ok(lane.ui.getEditorText(), "terminal protocol replies must keep the welcome guard active");
   lane.input("R");
   assert.equal(lane.ui.getEditorText(), "", "the startup guard ends when lane input begins");
   lane.ui.setEditorComponent(late);

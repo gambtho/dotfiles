@@ -30,6 +30,10 @@ type ExtensionApi = {
   on(event: "session_start", listener: (event: unknown, ctx: SessionStartContext) => void): void;
 };
 
+function isTerminalCellSizeResponse(data: string): boolean {
+  return data.startsWith("\u001b[6;") && /^6;\d+;\d+t$/.test(data.slice(2));
+}
+
 export function isLaneSession(
   name: string | undefined,
   env: Readonly<Record<string, string | undefined>> = process.env,
@@ -81,7 +85,9 @@ export default function installLaneNativeEditor(pi: ExtensionApi): void {
         unsubscribe?.();
       };
       ctx.ui.getEditorText = guardedGetEditorText;
-      unsubscribe = ctx.ui.onTerminalInput(restoreEditorText);
+      unsubscribe = ctx.ui.onTerminalInput((data) => {
+        if (!isTerminalCellSizeResponse(data)) restoreEditorText();
+      });
     }
   });
 }
