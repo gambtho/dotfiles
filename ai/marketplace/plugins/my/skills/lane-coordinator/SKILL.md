@@ -118,7 +118,18 @@ For every coherent update:
    safe to delete, using the lane report/handoff; link pending cleanup from the
    archive and keep its decision under **Needs the human** until decided. Delete
    only after the human approves that exact list; project authority still applies.
-   Unknown safety or size is not deletion-ready.
+   Unknown safety or size is not deletion-ready. After closure, when the lane's report
+   and handoff are already in the project's report location (fetch first for remote
+   lanes), close only its own Herdr workspace, matched by its launch receipt or its
+   exactly one current workspace at the recorded label. Recheck idle or done status
+   immediately before close; leave working, blocked, unknown or ambiguous identity open.
+   Run `herdr workspace close <id>` locally or through the recorded remote binding.
+   The status check and close are not atomic, so work can resume in that window; the
+   pre-check does not protect against concurrent input. After a confirmed close, record
+   success in the archive line. A timeout/error or changed status is
+   inspect-only: do not retry automatically or record closure until reconciled. This is
+   not a deletion; do not close a coordinator's own workspace, another project's/person's,
+   or any uncertain identity. Worktree, branch, sandbox and file deletion rules are unchanged.
 6. **A decision** names its scope in one line of about 25 words or fewer, plus a pointer
    to its full record (session file, lane report or archive). Decisions that are done, superseded or now in
    the project's rule files leave STATE in the same update. Keep about 10 at most;

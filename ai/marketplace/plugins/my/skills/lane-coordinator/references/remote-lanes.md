@@ -128,7 +128,23 @@ Read the host's named primary against the fetched copy before judging its curren
 A failed/offline fetch or unconfirmed currency is **unknown** even if older local
 reports exist; a ready badge is not delivery. No delete flag, manifest, validator,
 receipt or staging folder.
+
 Use [normal report verification](../SKILL.md#handle-a-lane-report): refresh GitHub at
 the exact PR head, match remote working/pushed/tested/CI revisions and read current
 threads/review bodies. Reuse matching review evidence; a transfer timestamp alone
 proves neither completion nor readiness.
+
+## Close a closed remote lane workspace
+
+Fetch first. Only after the lane is closed and its report and handoff are present in
+the project's report location, use the recorded SSH binding to close the lane's own
+workspace with `herdr workspace close <id>`. Match the launch receipt or exactly one
+current workspace at the recorded label, and recheck Herdr status idle or done
+immediately before close. The status check and close are not atomic, so work can resume
+in that window; the pre-check does not guard against concurrent input. Working, blocked,
+unknown, ambiguous identity or a changed status means leave it open and say so. Never
+close the coordinator's own workspace or
+one owned by another person/project. Record success in the archive line; this is not
+file, worktree, branch, sandbox, or receipt deletion, and none of those cleanup rules
+change. If the close itself is uncertain, inspect only, do not retry automatically,
+and record closure unknown until reconciled.

@@ -474,6 +474,32 @@ PY
   [ "$status" -eq 0 ]
 }
 
+@test "coordinator closes only a verified idle closed lane workspace" {
+  run python3 - "$SKILL_DIR" <<'PY'
+from pathlib import Path
+import sys
+
+skill = Path(sys.argv[1])
+text = " ".join((skill / "SKILL.md").read_text().split())
+closing = " ".join(text.split("5. **Closing a lane**", 1)[1].split("6. **A decision**", 1)[0].split())
+for phrase in ("launch receipt or its exactly one current workspace", "report and handoff are already in the project's report location",
+               "idle or done", "working, blocked, unknown or ambiguous identity", "immediately before close",
+               "herdr workspace close <id>", "status check and close are not atomic", "record success in the archive line", "inspect-only",
+               "do not retry automatically or record closure until reconciled", "not a deletion",
+               "do not close a coordinator's own workspace",
+               "Worktree, branch, sandbox and file deletion rules are unchanged"):
+    assert phrase in closing, phrase
+remote = " ".join((skill / "references/remote-lanes.md").read_text().lower().split())
+for phrase in ("fetch first", "recorded ssh binding", "lane's own workspace", "launch receipt or exactly one",
+               "idle or done", "immediately before close", "status check and close are not atomic",
+               "working, blocked, unknown, ambiguous identity",
+               "report and handoff", "record success", "inspect only", "do not retry automatically",
+               "closure unknown until reconciled"):
+    assert phrase in remote, phrase
+PY
+  [ "$status" -eq 0 ]
+}
+
 @test "state template remains consumable by the launch projection" {
   run python3 - "$SKILL_DIR" <<'PY'
 import importlib.util
