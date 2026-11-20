@@ -98,6 +98,12 @@ thread/review-body reads.
 - Return one consolidated shared readiness report or ONE batched real blocker. The user can signal "W<n> ready"; the
   coordinator reads it directly. Manual sessions are not automatically monitored. Escalate new material choices,
   shared/destructive operations and actions outside authority, not routine authorized LOCAL steps.
+- So a covered question does not wait on the human, the coordinator may answer your question card when an existing
+  decision or standing rule already covers it: publish within the repository's PR rules, continue within approved scope,
+  fix in-scope review findings, routine sandbox approvals. Its note cites the rule; check the citation, and ask again
+  if it does not fit. A covered answer adds no publication or other authority. Never covered: design approvals, merges, deploys or live cloud changes, deletions beyond the
+  cleanup rule, text addressed to people, scope or cost changes, credentials or sign-ins. Those and anything unclear
+  go to the human.
 
 ### Scope and evidence
 

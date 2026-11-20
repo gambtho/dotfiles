@@ -25,6 +25,9 @@ Run it once and record the request/creation ID in STATE. If the result is interr
 unreachable or uncertain, run only `lane --host <host> launch-status <lane-project>
 --request-id <request-id>` (or the original creation ID); never submit a second start.
 `Submitted` proves delivery to the native launcher, not task completion or readiness.
+A fresh start after a set-aside reuses the prompt file with a new ID,
+`lane --host <host> start … --creation-id <new UUID>`; do not rename the prompt file to
+force a new start, which leaves two copies of one prompt.
 
 For live state and attention, use `lane --host <host> status <lane-project>` and the
 inbox instead of Herdr snapshots. A fresh `done` is still only a reason to inspect the
@@ -37,7 +40,11 @@ this is not a second instruction. `instruction-status` is lookup-only and may no
 advance delivery. `Refused` stops for identity/dialog inspection. Uncertain or
 `Recording`/`Sending` results are inspect-only; never send a replacement instruction
 or answer a trust/permission dialog through the API.
-The human answers question cards; the coordinator never calls `lane answer` for them.
+The human answers question cards; the coordinator calls `lane answer` only for a
+[covered answer](covered-answers.md). A remote answer binds to the card cached by the
+last status read, so run `lane --host <host> status <lane-project>` immediately before
+`lane --host <host> answer`. Confirm the refreshed card and choice still match the cited
+rule; if the card changed, stop and read it again before answering.
 
 Fetch the lane's primary report and optional handoff before retirement or cleanup with
 `lane --host <host> report <task>`. Capture that formatted stdout as private fetched evidence

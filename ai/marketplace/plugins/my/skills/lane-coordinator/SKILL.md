@@ -278,6 +278,8 @@ scope still apply: no arbitrary resource/config changes or test bypasses. Escala
 only new material scope/data/security/product choices, shared/destructive operations,
 or actions outside authority; public text/publication and production/provider actions
 retain their exact approval requirements.
+To avoid parking a lane on an answer already given, answer its question card yourself only
+under [covered answers](references/covered-answers.md); anything unclear goes to the human.
 
 1. **Read the summary first.** Require a decision summary of at most ten lines at the
    top: PR/head and CI at that head, ready or blocked, and the human's next action.
@@ -333,6 +335,8 @@ retain their exact approval requirements.
    ```text
    W<n> needs <action> from <owner>.
    ```
+   **Re-check first:** before this line says a PR or lane waits on the human, re-observe
+   its state now, as the stale-reminder rule above requires; an earlier message is not evidence.
    When a lane nudge, inbox note or status read reveals a human action, send this line
    via [the harness tool](references/harness-notes.md): one notification per lane state change.
    Record the attempt or skip in STATE; never repeat an unchanged item. Include lane id, action

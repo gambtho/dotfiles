@@ -32,8 +32,8 @@ A project/host whose COORDINATION.md Hosts row marks `Worker: lane` instead uses
 `lane --host <host> status <project>` and the lane inbox; do not substitute a Herdr
 snapshot. Send owner context to a running task with `lane --host <host> instruct <task>
 "<text>"` and record Sent/Held/Refused or uncertain; this replaces inbox-file plus paste
-pointers, not human gates. The human answers question cards; the coordinator never
-answers one. If the wrapper needs approval, use the already-approved native `herdr api snapshot`
+pointers, not human gates. The human answers question cards; the coordinator
+answers one only as a [covered answer](covered-answers.md). If the wrapper needs approval, use the already-approved native `herdr api snapshot`
 read and apply the same filter; do not broaden permissions or ask the human to carry status.
 
 Live blocked/working/unknown wins over a stale ready token. A ready token on idle/done is
