@@ -304,6 +304,14 @@ retain their exact approval requirements.
    [closeout's bounded waiting](../pr-closeout/SKILL.md#bounded-waiting); do not make
    the human relay or babysit that wait. Look up evidence missing from a prompt that
    predates this rule directly before asking the lane for it.
+   Treat local CodeRabbit as the standing default for every lane and coordinator,
+   unless the project records an explicit project opt-out. A verified current-head
+   Copilot failure/quota, GitHub-side `gh` API rate limit or review bot rate-limit/skip
+   notice qualifies; require the observed response or URL. The lane never stalls for a
+   human Copilot request: follow `pr-closeout`'s local fallback. If safe local auth,
+   included quota or billing is unavailable, require the different model family
+   independent-review fallback instead, and `review round: local CodeRabbit CLI` or the
+   independent fallback reason in the report and PR body.
 4. **Check size and scope.** Split additions by kind:
    `gh pr view <n> -R <repo> --json files --jq '[.files[]|{p:.path,a:.additions}]|{tests:(map(select(.p|test("_test\\.|\\.(test|spec)\\.|(^|/)tests?/|test_")))|map(.a)|add // 0),docs:(map(select(.p|test("\\.md$")))|map(.a)|add // 0),product:(map(select(.p|test("_test\\.|\\.(test|spec)\\.|(^|/)tests?/|test_|\\.md$")|not))|map(.a)|add // 0)}'`.
    Flag tests above ~1.5× product unless each test is a distinct safety invariant, and
