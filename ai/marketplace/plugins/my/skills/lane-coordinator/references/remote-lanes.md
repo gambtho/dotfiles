@@ -43,7 +43,8 @@ or answer a trust/permission dialog through the API.
 The human answers question cards; the coordinator calls `lane answer` only for a
 [covered answer](covered-answers.md). A remote answer binds to the card cached by the
 last status read, so run `lane --host <host> status <lane-project>` immediately before
-`lane --host <host> answer`; a stale read can answer a card the lane has since replaced.
+`lane --host <host> answer`. Confirm the refreshed card and choice still match the cited
+rule; if the card changed, stop and read it again before answering.
 
 Fetch the lane's primary report and optional handoff before retirement or cleanup with
 `lane --host <host> report <task>`. Capture that formatted stdout as private fetched evidence

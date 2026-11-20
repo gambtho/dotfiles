@@ -7,7 +7,7 @@ covers the answer. This applies a recorded answer; it grants nothing new and is 
 
 Covered, when the cited rule or decision says so:
 
-- publish within the repository's PR rules;
+- publish within the repository's PR rules, where the project's authority table lets lanes publish;
 - continue within approved scope;
 - fix in-scope review findings;
 - routine sandbox approvals inside the project's grant.
@@ -27,7 +27,7 @@ The human always answers:
 - scope or cost changes;
 - credentials and sign-ins.
 
-Anything unclear goes to the human: a rule that only nearly fits, an inferred decision,
+Anything unclear goes to the human: no publication grant, a rule that only nearly fits, an inferred decision,
 or a card that mixes a covered part with one of the items above. Tool-permission, trust
 and sign-in dialogs are not question cards; nobody answers them through the lane API.
 

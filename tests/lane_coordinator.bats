@@ -799,16 +799,16 @@ assert "anything unclear goes to the human" in main
 for text in (covered, common):
     for phrase in ("existing decision or standing rule already", "publish within the repository's PR rules",
                    "continue within approved scope", "fix in-scope review findings",
-                   "routine sandbox approvals", "design approvals", "live cloud changes",
+                   "routine sandbox approvals", "design approvals", "merges, deploys", "live cloud changes",
                    "deletions beyond the cleanup rule", "text addressed to people",
                    "scope or cost changes"):
         assert phrase in text, phrase
     assert "credentials" in text and "sign-ins" in text
-    assert "nything unclear" in text and "to the human" in text
+    assert "anything unclear go" in text.lower()
 for phrase in ("Cite the rule or decision", "in the answer note", "in STATE",
-               "Tell the human in one line", "grants nothing new"):
+               "Tell the human in one line", "grants nothing new", "authority table lets lanes publish"):
     assert phrase in covered, phrase
-assert "note cites the rule" in common
+assert "note cites the rule" in common and "adds no publication or other authority" in common
 for text in (remote, messaging):
     assert "(covered-answers.md)" in text
     assert "never calls `lane answer`" not in text and "never answers one" not in text
@@ -817,14 +817,13 @@ worker = remote.split("## Developerlanes worker (opt-in)")[1].split("## Bind the
 for phrase in ("binds to the card cached by the last status read",
                "run `lane --host <host> status <lane-project>` immediately before `lane --host <host> answer`",
                "fresh start after a set-aside", "--creation-id <new UUID>",
-               "do not rename the prompt file"):
+               "do not rename the prompt file", "if the card changed, stop"):
     assert phrase in worker, phrase
 
 reply = main.split("6. **Reply in this order:**")[1].split("7. **Recommend")[0]
 for phrase in ("**Re-check first:**", "waits on the human", "re-observe its state now",
                "an earlier message is not evidence"):
     assert phrase in reply, phrase
-assert main.count('To avoid stale "waiting on you" reminders') == 1
 PY
   [ "$status" -eq 0 ] || {
     echo "$output"

@@ -101,7 +101,7 @@ thread/review-body reads.
 - So a covered question does not wait on the human, the coordinator may answer your question card when an existing
   decision or standing rule already covers it: publish within the repository's PR rules, continue within approved scope,
   fix in-scope review findings, routine sandbox approvals. Its note cites the rule; check the citation, and ask again
-  if it does not fit. Never covered: design approvals, merges, deploys or live cloud changes, deletions beyond the
+  if it does not fit. A covered answer adds no publication or other authority. Never covered: design approvals, merges, deploys or live cloud changes, deletions beyond the
   cleanup rule, text addressed to people, scope or cost changes, credentials or sign-ins. Those and anything unclear
   go to the human.
 
