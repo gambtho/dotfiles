@@ -66,7 +66,11 @@ thread/review-body reads.
 ### Worktrees and pull requests
 
 - Work in your own fresh worktree from a freshly fetched base. Never edit another lane's worktree.
-- You own your PR end to end: keep it current with its base, answer its review threads, and keep CI green.
+- You own your PR end to end: keep it current under the repository's merge policy, answer its review threads, and keep CI green.
+  Lanes detect or record merge-queue status from project or repository policy; do not assume it. With a
+  merge queue, remain queue-ready (green PR-head checks, no conflicts, threads answered) and merge
+  the base only for a real conflict. Without a merge queue, a later overlapping PR merges the base
+  and passes CI on the combined head before merge.
 - Small PRs, one theme each. Follow `pr-closeout` for scoped review/finalization, preserving publication approval
   and reusing valid review evidence.
 - Load the `pr-text` skill when writing PR bodies, review comments/replies and issues.
