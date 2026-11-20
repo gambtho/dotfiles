@@ -782,6 +782,56 @@ PY
   }
 }
 
+@test "coordinator answers only covered question cards and re-checks before replying" {
+  run python3 - "$SKILL_DIR" <<'PY'
+from pathlib import Path
+import sys
+
+skill = Path(sys.argv[1])
+refs = skill / "references"
+read = lambda path: " ".join(path.read_text().split())
+main, covered = read(skill / "SKILL.md"), read(refs / "covered-answers.md")
+remote, common, messaging = (read(refs / name) for name in
+                             ("remote-lanes.md", "common-rules-template.md", "messaging.md"))
+
+assert "[covered answers](references/covered-answers.md)" in main
+assert "anything unclear goes to the human" in main
+for text in (covered, common):
+    for phrase in ("existing decision or standing rule already", "publish within the repository's PR rules",
+                   "continue within approved scope", "fix in-scope review findings",
+                   "routine sandbox approvals", "design approvals", "live cloud changes",
+                   "deletions beyond the cleanup rule", "text addressed to people",
+                   "scope or cost changes"):
+        assert phrase in text, phrase
+    assert "credentials" in text and "sign-ins" in text
+    assert "nything unclear" in text and "to the human" in text
+for phrase in ("Cite the rule or decision", "in the answer note", "in STATE",
+               "Tell the human in one line", "grants nothing new"):
+    assert phrase in covered, phrase
+assert "note cites the rule" in common
+for text in (remote, messaging):
+    assert "(covered-answers.md)" in text
+    assert "never calls `lane answer`" not in text and "never answers one" not in text
+
+worker = remote.split("## Developerlanes worker (opt-in)")[1].split("## Bind the host")[0]
+for phrase in ("binds to the card cached by the last status read",
+               "run `lane --host <host> status <lane-project>` immediately before `lane --host <host> answer`",
+               "fresh start after a set-aside", "--creation-id <new UUID>",
+               "do not rename the prompt file"):
+    assert phrase in worker, phrase
+
+reply = main.split("6. **Reply in this order:**")[1].split("7. **Recommend")[0]
+for phrase in ("**Re-check first:**", "waits on the human", "re-observe its state now",
+               "an earlier message is not evidence"):
+    assert phrase in reply, phrase
+assert main.count('To avoid stale "waiting on you" reminders') == 1
+PY
+  [ "$status" -eq 0 ] || {
+    echo "$output"
+    false
+  }
+}
+
 @test "remote rsync example passes user at host without an unsupported login flag" {
   command -v rsync >/dev/null || skip "rsync unavailable for transport example"
   run python3 - "$SKILL_DIR/references/remote-lanes.md" <<'PY'
