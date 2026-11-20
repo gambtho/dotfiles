@@ -33,6 +33,21 @@ the package. Outside Pi, read `<resolved harness-notes path>` and each skill's `
 Claude Code lanes get cross-family review from `bash <resolved scripts dir>/codex-review.sh <prompt> <out-prefix>`,
 Codex lanes from `claude-review.sh` there; on failure, stop and report.
 
+### Standing review fallback
+
+Local CodeRabbit is a standing default for every lane and coordinator unless the project
+records an explicit project opt-out. Qualify it from observed evidence at the current-head:
+a Copilot review request fails or reports exhausted quota, a GitHub CLI `gh` API request is
+rate limited, or a review bot reports a rate-limit/skip notice. Record the response or URL;
+do not infer it from an absent review. The lane never stalls asking a human to request
+Copilot. Follow `pr-closeout`'s one local fallback per PR, billing/auth prechecks and
+coverage checks: run `coderabbit review --agent` only with verified safe billing and no
+sign-in, install, organization switch or paid-credit opt-in. Never post local output or fix
+unverified findings. Record `review round: local CodeRabbit CLI (reason)` in the report and
+PR body. If local prechecks or the run cannot complete, use one independent review by a
+different model family and say so instead. Preserve mandatory-review blockers and final
+thread/review-body reads.
+
 ### Design, then plan
 
 - New product work starts with a short design, before any plan: the user value, which repo owns it, which existing

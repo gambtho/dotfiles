@@ -39,6 +39,25 @@ PY
   [ "$status" -eq 0 ]
 }
 
+@test "every lane defaults to local review after verified GitHub rate limits" {
+  run python3 - "$SKILL_DIR" <<'PY'
+from pathlib import Path
+import sys
+skill = Path(sys.argv[1])
+common = " ".join((skill / "references/common-rules-template.md").read_text().split())
+coordinator = " ".join((skill / "SKILL.md").read_text().split())
+for text in (common, coordinator):
+    for clause in ("standing default", "explicit project opt-out", "Copilot",
+                   "quota", "review bot", "current-head", "never stalls",
+                   "different model family", "review round: local CodeRabbit CLI"):
+        assert clause in text, clause
+for clause in ("coderabbit review --agent", "Never post local output",
+               "billing", "one local fallback per PR"):
+    assert clause in common, clause
+PY
+  [ "$status" -eq 0 ]
+}
+
 @test "lane checkpoints reread changed prompts and distinguish evidence from inference" {
   run python3 - "$SKILL_DIR" "$REPO_ROOT" <<'PY'
 from pathlib import Path

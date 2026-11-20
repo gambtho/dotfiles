@@ -50,24 +50,26 @@ PY
   [ "$status" -eq 0 ]
 }
 
-@test "closeout bounds the opt-in local CodeRabbit rate-limit fallback" {
+@test "closeout defaults local CodeRabbit fallback for verified review rate limits" {
   run python3 - "$SKILL_DIR/SKILL.md" <<'PY'
 from pathlib import Path
 import sys
 text = Path(sys.argv[1]).read_text()
 assert "[local fallback](#local-coderabbit-fallback)" in text
-local = " ".join(text.split("### Local CodeRabbit fallback\n", 1)[1].split("## Final report", 1)[0].split())
-for clause in ("repo row", "trusted lane context", "Default off", "re-trigger first",
-               "issues/N/comments", "check/status", "head SHA", "evidence URL",
+local = " ".join(text.split("### Local CodeRabbit fallback\n", 1)[1].split("## Readiness record", 1)[0].split())
+for clause in ("Default on", "explicit project opt-out", "Copilot", "quota",
+               "`gh` API rate limit", "review bot", "current-head", "evidence URL",
                "One local fallback per PR", "across sessions", "before starting",
                "coderabbit auth status", "coderabbit usage --agent", "remaining",
                "git merge-base", "--agent --committed --base-commit <merge-base-sha> --fresh",
                "reviewedFiles", "git diff --name-only", "exit", "reused", "unreviewedFileCount",
                "unknown coverage", "--use-credits", "Never post local output",
-               "no automatic rerun", "later head", "mandatory", "Pending"):
+               "no automatic rerun", "later head", "mandatory", "Pending",
+               "different model family", "review round: local CodeRabbit CLI", "PR body"):
     assert clause in local, clause
+assert "Default off" not in local
 report = " ".join(text.split("## Final report\n", 1)[1].split())
-for clause in ("local CodeRabbit", "reviewed head", "dispositions"):
+for clause in ("local CodeRabbit", "reviewed head", "dispositions", "review round:"):
     assert clause in report, clause
 PY
   [ "$status" -eq 0 ]
