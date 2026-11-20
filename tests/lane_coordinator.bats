@@ -186,6 +186,37 @@ PY
   [ "$status" -eq 0 ]
 }
 
+@test "coordinator carries remote evidence lessons and queue-aware overlap guidance" {
+  run python3 - "$SKILL_DIR" <<'PY'
+from pathlib import Path
+import sys
+
+skill = Path(sys.argv[1])
+coordinator = " ".join((skill / "SKILL.md").read_text().split())
+common = " ".join((skill / "references/common-rules-template.md").read_text().split())
+closeout = " ".join((skill.parent / "pr-closeout/SKILL.md").read_text().split())
+
+for phrase in ("deliver every named input to the target host", "host paths verified to exist"):
+    assert phrase in coordinator, phrase
+for phrase in ("uniqueness or identity assumption", "tested by a lane"):
+    assert phrase in coordinator, phrase
+for phrase in ("recorded environment limits", "recorded facts"):
+    assert phrase in coordinator, phrase
+for phrase in ("decisions in force", "explicit `no X`"):
+    assert phrase in coordinator, phrase
+
+for text in (coordinator, common, closeout):
+    for phrase in ("merge queue", "combined head", "queue-ready"):
+        assert phrase in text, (phrase, text[:80])
+assert "detect or record merge-queue status" in common
+assert "only for a real conflict" in common
+assert "do not assume it" in common
+assert "local HEAD = remote PR head = tested revision = CI revision" in coordinator
+assert "without a merge queue" in closeout
+PY
+  [ "$status" -eq 0 ]
+}
+
 @test "closeout shares one cross-family report-only attack review with polish" {
   run python3 - "$PACKAGE_DIR/skills" <<'PY'
 from pathlib import Path

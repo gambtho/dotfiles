@@ -177,8 +177,9 @@ use the project folder.
   naming overrides that satisfy Herdr's alias constraints; use the approved label in
   both handoff commands. Reject invalid names or collisions, never truncate or invent suffixes.
 - Before handoff or launch, check the prompt against project AGENTS.md, COMMON-RULES
-  and repo rules: worktree location, publication authority and stop conditions. Fix prompt
-  contradictions first; rule changes need their owner's approval, to avoid preventable stops.
+  and repo rules: worktree location, publication authority and stop conditions. For a
+  remote lane, deliver every named input to the target host, or use only host paths verified to exist.
+  Fix prompt contradictions first; rule changes need their owner's approval, to avoid preventable stops.
   State standing authority for in-scope repairs and routine sandbox approvals within the
   project's grant; name allowed paths/actions, never blanket approval. List real stops:
   guarantee weakening, uncovered product decisions, publication beyond the grant.
@@ -203,8 +204,9 @@ use the project folder.
   ancestry (`gh api repos/<o>/<r>/compare/<base>...<head>`). Don't guess commit ranges.
 - To avoid relaying unverified guesses as facts, mark claims about another lane, host,
   person or project in prompts, reports, handoffs and coordinator replies **observed**
-  (command or source) or **inferred**, separate from the user's words. Re-observe an
-  inferred claim before making it a blocker, instruction or **Needs the human** item.
+  (command or source) or **inferred**, separate from the user's words. A uniqueness or
+  identity assumption stays inferred until tested by a lane; do not base a design on it.
+  Re-observe an inferred claim before making it a blocker, instruction or **Needs the human** item.
   Our issue/plan text is not the user's requirement; when it disagrees with their decision, fix it.
 - To avoid cutting the wrong outcome, confirm the user-visible goal before proposing
   descopes; trivially fixable setup (such as a fork) is a task, not a risk.
@@ -212,13 +214,16 @@ use the project folder.
   how the UI and the human's workflow work before proposing UI changes.
 - To avoid stale "waiting on you" reminders, re-observe cheap evidence before repeating
   a pending item: processes, file times, Git and PR state; never copy your earlier message
-  as evidence. Before advising action or sending an instruction, check its lane, PR and
-  current owner against the latest report; refresh live PR/head/CI and session state the advice relies on.
-  An open lane is not a running session; use a current runtime/user observation or say unknown.
+  as evidence. Before handing anyone a command, check the project's recorded environment
+  limits and recorded facts. Before advising action or sending an instruction, check its
+  lane, PR and current owner against the latest report; refresh live PR/head/CI and session
+  state the advice relies on. An open lane is not a running session; use a current runtime/user
+  observation or say unknown.
   After a rule or ownership change, reconcile affected prompts and STATE.md in the same
   approved update; mark old instructions superseded, without rewriting history.
 - Non-trivial work: audit or design first, stop for the user's OK, then one PR at a time.
-  For new product work, use the shared workflow's design-before-plan sequence,
+  Before approving a plan or design, compare it with the decisions in force, especially an
+  explicit `no X`. For new product work, use the shared workflow's design-before-plan sequence,
   independent design/paired-plan reviews and closeout's one independent review phase;
   specialists only for a named uncovered risk or explicit request. Repository-required reviews remain.
   Don't re-gate work that already has an approved design.
@@ -286,7 +291,10 @@ retain their exact approval requirements.
 3. **Verify before calling ready.** Inspect `gh pr view <n> -R <repo> --json
    state,headRefOid,mergeable,files,statusCheckRollup` and the delta's relevant diff/code.
    Require **local HEAD = remote PR head = tested revision = CI revision**, with required
-   checks passing on that revision and no unresolved blockers. Check closeout's snapshot
+   checks passing on that revision and no unresolved blockers. Detect or record merge queue
+   status from repository policy; never assume a queue. With one, readiness is queue-ready;
+   with no queue, overlapping PRs require the later PR's CI at a combined head before merge.
+   Check closeout's snapshot
    blockers `staleCheckRevision` and `checkRevisionUnknown`, not just a green rollup.
    Confirm scope and the approved outcome against the human's current workflow;
    say what the change gives the human and why existing mechanisms do not already cover it.
@@ -317,8 +325,10 @@ retain their exact approval requirements.
    Flag tests above ~1.5× product unless each test is a distinct safety invariant, and
    flag new scripts or tools outside the lane's goal.
 5. **Check interactions.** List other open PRs touching the same files, commands or
-   flags. Recommend a merge order and say which lane absorbs the conflict (usually the
-   one that owns the rename or the broader change).
+   flags. A textual no-conflict check is not combined-head CI: in a merge queue, require
+   queue-ready status; without one, the later PR merges the base and passes CI first.
+   Recommend a merge order and say which lane absorbs the conflict (usually the one that
+   owns the rename or the broader change).
 6. **Reply in this order:** first line names the action and owner, not a "done/not done" verdict:
    ```text
    W<n> needs <action> from <owner>.
