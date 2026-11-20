@@ -65,7 +65,8 @@ for clause in ("Default on", "explicit project opt-out", "Copilot", "quota",
                "reviewedFiles", "git diff --name-only", "exit", "reused", "unreviewedFileCount",
                "unknown coverage", "--use-credits", "Never post local output",
                "no automatic rerun", "later head", "mandatory", "Pending",
-               "different model family", "review round: local CodeRabbit CLI", "PR body"):
+               "different model family", "review round: local CodeRabbit CLI", "PR body",
+               "15-minute limit", "transport error"):
     assert clause in local, clause
 assert "Default off" not in local
 report = " ".join(text.split("## Final report\n", 1)[1].split())

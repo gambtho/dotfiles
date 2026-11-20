@@ -149,9 +149,10 @@ project opt-out. Bots and profiles grant no publication, billing or auth permiss
    policy, not `--deep` full PR policy. Never post local output. Do not stall for human
    Copilot or billing/auth setup when this fallback qualifies. Record
    `review round: local CodeRabbit CLI (reason)` in the report and PR body.
-5. **Fallback.** If local prechecks fail or the CLI cannot complete because auth,
-   included quota or safe billing is unavailable, run the normal one independent
-   review by a different model family under the shared review contract. Say why local
+5. **Fallback.** If local prechecks fail, or the CLI cannot complete because auth,
+   included quota or safe billing is unavailable, it hits the 15-minute limit, or a
+   transport error/interruption occurs, run the normal one independent review by a
+   different model family under the shared review contract. Say why local
    CodeRabbit could not run; record `review round: independent review by a different
    model family (reason)` in the report and PR body. This is not a second local run.
 6. **Verify.** Require exit 0 and completed outcome, not just `review_completed`/findings.
