@@ -18,15 +18,19 @@ this row grants no new publication, answer or launch authority.
 On explicit start authority, include the approved context as inert `--input` files:
 
 ```sh
-lane --host <host> start <lane-project> --prompt <lane-file> --input <AGENTS.md> --input <COMMON-RULES.md> [--input <review-profile>]
+lane --host <host> start <lane-project> --prompt <lane-file> --label "<project> W<n>" --by <project>-coord --input <AGENTS.md> --input <COMMON-RULES.md> [--input <review-profile>]
 ```
+
+Pass `--label "<project> W<n>"` and `--by <project>-coord` on every `lane start`, local
+or `--host`. Both are display-only: they show in status, Herdr, the inbox and Teams, and
+grant nothing. `lane status --by <project>-coord` lists one coordinator's tasks.
 
 Run it once and record the request/creation ID in STATE. If the result is interrupted,
 unreachable or uncertain, run only `lane --host <host> launch-status <lane-project>
 --request-id <request-id>` (or the original creation ID); never submit a second start.
 `Submitted` proves delivery to the native launcher, not task completion or readiness.
 A fresh start after a set-aside reuses the prompt file with a new ID,
-`lane --host <host> start … --creation-id <new UUID>`; do not rename the prompt file to
+`lane --host <host> start … --label … --by … --creation-id <new UUID>`; do not rename the prompt file to
 force a new start, which leaves two copies of one prompt.
 
 For live state and attention, use `lane --host <host> status <lane-project>` and the
