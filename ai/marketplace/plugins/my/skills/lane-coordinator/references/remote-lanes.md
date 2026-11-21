@@ -29,9 +29,9 @@ Run it once and record the request/creation ID in STATE. If the result is interr
 unreachable or uncertain, run only `lane --host <host> launch-status <lane-project>
 --request-id <request-id>` (or the original creation ID); never submit a second start.
 `Submitted` proves delivery to the native launcher, not task completion or readiness.
-A fresh start after a set-aside reuses the prompt file with a new ID,
-`lane --host <host> start … --label … --by … --creation-id <new UUID>`; do not rename the prompt file to
-force a new start, which leaves two copies of one prompt.
+A fresh start after a set-aside reuses the prompt file with a new ID:
+`lane --host <host> start … --label "<project> W<n>" --by <project>-coord --creation-id <new UUID>`;
+do not rename the prompt file to force a new start, which leaves two copies of one prompt.
 
 For live state and attention, use `lane --host <host> status <lane-project>` and the
 inbox instead of Herdr snapshots. A fresh `done` is still only a reason to inspect the
