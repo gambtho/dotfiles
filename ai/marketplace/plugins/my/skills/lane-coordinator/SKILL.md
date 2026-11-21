@@ -244,7 +244,8 @@ use the project folder.
 Preparing a prompt never launches it, including in a Claude app session: this keeps
 handoff separate from launch permission. On explicit "start W<n>" for a remote lane, the coordinator
 may run the row's one approved start path once: `herdr-lane --host <binding> <project>-<n> <prompt>`,
-or the developerlanes command when `Worker: lane`. Record the request/launch in STATE; never retry a
+or the developerlanes command when `Worker: lane`. Only that `lane start` takes
+`--label "<project> W<n>" --by <project>-coord`, and it always does. Record the request/launch in STATE; never retry a
 start, and use `launch-status` for an uncertain developerlanes result. See [remote lanes](references/remote-lanes.md)
 for inputs, bindings, snapshots and endpoint checks. Local launches require shell/tool access
 inside the intended Herdr session (`HERDR_ENV=1`); otherwise return the handoff
