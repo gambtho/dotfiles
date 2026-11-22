@@ -34,7 +34,7 @@ A fresh start after a set-aside reuses the prompt file with a new ID:
 do not rename the prompt file to force a new start, which leaves two copies of one prompt.
 
 For live state and attention, use `lane --host <host> status <lane-project>` and the
-inbox instead of Herdr snapshots. A fresh `done` is still only a reason to inspect the
+lane inbox instead of Herdr snapshots. A fresh `done` is still only a reason to inspect the
 report. For a running task, send approved owner steering with
 `lane --host <host> instruct <task> "<text>"` instead of publishing an inbox note and
 asking for a paste. Record the instruction UUID and outcome: `Sent` is delivered once,
@@ -45,10 +45,12 @@ advance delivery. `Refused` stops for identity/dialog inspection. Uncertain or
 `Recording`/`Sending` results are inspect-only; never send a replacement instruction
 or answer a trust/permission dialog through the API.
 The human answers question cards; the coordinator calls `lane answer` only for a
-[covered answer](covered-answers.md). A remote answer binds to the card cached by the
+[covered answer](covered-answers.md), with `--by <coordinator-id>` and `--expected-hash`.
+A remote answer binds to the card cached by the
 last status read, so run `lane --host <host> status <lane-project>` immediately before
-`lane --host <host> answer`. Confirm the refreshed card and choice still match the cited
-rule; if the card changed, stop and read it again before answering.
+`lane --host <host> answer`, and pass that row's `card.sha256`. Confirm the refreshed card
+and choice still match the cited rule; if the card changed, stop and read it again before
+answering. A remote answer is recorded as the enrolled owner's, relayed by the `--by` name.
 
 Fetch the lane's primary report and optional handoff before retirement or cleanup with
 `lane --host <host> report <task>`. Capture that formatted stdout as private fetched evidence

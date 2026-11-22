@@ -818,6 +818,31 @@ for phrase in ("Cite the rule or decision", "in the answer note", "in STATE",
                "Tell the human in one line", "grants nothing new", "authority table lets lanes publish"):
     assert phrase in covered, phrase
 assert "note cites the rule" in common and "adds no publication or other authority" in common
+for phrase in ("under `approvers` in the project's lane `config.json`", "An unlisted gate is owner only",
+               "Always pass `--by`; never answer as the owner", "relay only what the owner already decided",
+               "do not retry without it"):
+    assert phrase in covered, phrase
+command = covered.split("`lane answer <task> <key>")[1].split("`")[0]
+for flag in ("--by <coordinator-id>", "--expected-hash <card sha256>", "--note"):
+    assert flag in command, flag
+assert "the gate lists you as an approver" in main and "lists it as an approver for that gate" in common
+for phrase in ("--by <coordinator-id>", "`--expected-hash`", "`card.sha256`",
+               "recorded as the enrolled owner's, relayed by the `--by` name"):
+    assert phrase in remote, phrase
+for text in (main, messaging):
+    rule = text.split("every Hosts row is `Worker: lane`")[1].split("[")[0]
+    for phrase in ("replace the Herdr snapshot", "inbox notes and `send.py`", "notes already published",
+                   "Herdr-only hosts keep them"):
+        assert phrase in rule, phrase
+    if text is main:
+        for phrase in ("`lane status`", "`lane instruct`", "`lane report`"):
+            assert phrase in rule, phrase
+assert "lane --host <host> report <task>" in messaging and "On a Herdr host, if the wrapper" in messaging
+assert "on a Herdr-only host, the messaging contract's once-only `send.py`" in main
+assert "started by `lane` skips the note checkpoint and ready nudge" in common
+assert "read only notes its prompt names" in common
+assert "ready nudge (Herdr hosts only)" in read(refs / "lane-template.md")
+assert (skill / "scripts/send.py").is_file() and (skill / "scripts/messages.py").is_file()
 for text in (remote, messaging):
     assert "(covered-answers.md)" in text
     assert "never calls `lane answer`" not in text and "never answers one" not in text

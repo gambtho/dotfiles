@@ -28,12 +28,14 @@ a workspace, or pinned workspaces absent from this snapshot, appear separately a
 a recorded workspace ID is historical evidence, not a live observation.
 No terminal content is read.
 Remote/unbound or unobserved lanes remain unknown; a local snapshot is not remote coverage.
-A project/host whose COORDINATION.md Hosts row marks `Worker: lane` instead uses
-`lane --host <host> status <project>` and the lane inbox; do not substitute a Herdr
-snapshot. Send owner context to a running task with `lane --host <host> instruct <task>
-"<text>"` and record Sent/Held/Refused or uncertain; this replaces inbox-file plus paste
-pointers, not human gates. The human answers question cards; the coordinator
-answers one only as a [covered answer](covered-answers.md). If the wrapper needs approval, use the already-approved native `herdr api snapshot`
+A host whose COORDINATION.md Hosts row marks `Worker: lane` instead uses
+`lane --host <host> status <project>`, `lane --host <host> instruct <task> "<text>"`
+(record Sent/Held/Refused or uncertain) and `lane --host <host> report <task>`. When every
+Hosts row is `Worker: lane`, these replace the Herdr snapshot, the inbox notes and `send.py`
+for the whole project: skip the sections below, except to read notes already published.
+Herdr-only hosts keep them. Human gates are unchanged: the human answers question cards;
+the coordinator answers one only as a [covered answer](covered-answers.md).
+On a Herdr host, if the wrapper needs approval, use the already-approved native `herdr api snapshot`
 read and apply the same filter; do not broaden permissions or ask the human to carry status.
 
 Live blocked/working/unknown wins over a stale ready token. A ready token on idle/done is

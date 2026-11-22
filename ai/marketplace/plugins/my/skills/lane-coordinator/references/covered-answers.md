@@ -5,6 +5,12 @@ answer a lane's question card itself when an existing decision or standing rule 
 covers the answer. This applies a recorded answer; it grants nothing new and is never a
 `tom-decision`.
 
+The gate must also list the coordinator: answer only a card whose gate names the
+coordinator's ID under `approvers` in the project's lane `config.json`. An unlisted gate
+is owner only and goes to the human. Always pass `--by`; never answer as the owner.
+A remote answer is recorded as the owner's, relayed by that name: relay only what the
+owner already decided.
+
 Covered, when the cited rule or decision says so:
 
 - publish within the repository's PR rules, where the project's authority table lets lanes publish;
@@ -14,7 +20,9 @@ Covered, when the cited rule or decision says so:
 
 For each covered answer:
 
-1. Cite the rule or decision, with its source, in the answer note.
+1. Cite the rule or decision, with its source, in the answer note:
+   `lane answer <task> <key> --by <coordinator-id> --expected-hash <card sha256> --note "<rule, source>"`.
+   If `lane` refuses the answer or a flag, stop and tell the human; do not retry without it.
 2. Log the card, answer and cited rule in STATE.
 3. Tell the human in one line.
 
