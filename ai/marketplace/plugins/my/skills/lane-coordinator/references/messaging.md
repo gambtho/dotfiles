@@ -35,7 +35,7 @@ Hosts row is `Worker: lane`, these replace the Herdr snapshot, the inbox notes a
 for the whole project: skip the sections below, except to read notes already published.
 Herdr-only hosts keep them. Human gates are unchanged: the human answers question cards;
 the coordinator answers one only as a [covered answer](covered-answers.md).
-If the wrapper needs approval, use the already-approved native `herdr api snapshot`
+On a Herdr host, if the wrapper needs approval, use the already-approved native `herdr api snapshot`
 read and apply the same filter; do not broaden permissions or ask the human to carry status.
 
 Live blocked/working/unknown wins over a stale ready token. A ready token on idle/done is

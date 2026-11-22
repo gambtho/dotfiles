@@ -7,7 +7,9 @@ covers the answer. This applies a recorded answer; it grants nothing new and is 
 
 The gate must also list the coordinator: answer only a card whose gate names the
 coordinator's ID under `approvers` in the project's lane `config.json`. An unlisted gate
-is owner only and goes to the human. Never answer as the owner.
+is owner only and goes to the human. Always pass `--by`; never answer as the owner.
+A remote answer is recorded as the owner's, relayed by that name: relay only what the
+owner already decided.
 
 Covered, when the cited rule or decision says so:
 

@@ -34,7 +34,7 @@ A fresh start after a set-aside reuses the prompt file with a new ID:
 do not rename the prompt file to force a new start, which leaves two copies of one prompt.
 
 For live state and attention, use `lane --host <host> status <lane-project>` and the
-inbox instead of Herdr snapshots. A fresh `done` is still only a reason to inspect the
+lane inbox instead of Herdr snapshots. A fresh `done` is still only a reason to inspect the
 report. For a running task, send approved owner steering with
 `lane --host <host> instruct <task> "<text>"` instead of publishing an inbox note and
 asking for a paste. Record the instruction UUID and outcome: `Sent` is delivered once,

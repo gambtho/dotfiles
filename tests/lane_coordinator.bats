@@ -819,18 +819,26 @@ for phrase in ("Cite the rule or decision", "in the answer note", "in STATE",
     assert phrase in covered, phrase
 assert "note cites the rule" in common and "adds no publication or other authority" in common
 for phrase in ("under `approvers` in the project's lane `config.json`", "An unlisted gate is owner only",
-               "Never answer as the owner", "--by <coordinator-id> --expected-hash <card sha256> --note",
+               "Always pass `--by`; never answer as the owner", "relay only what the owner already decided",
                "do not retry without it"):
     assert phrase in covered, phrase
+command = covered.split("`lane answer <task> <key>")[1].split("`")[0]
+for flag in ("--by <coordinator-id>", "--expected-hash <card sha256>", "--note"):
+    assert flag in command, flag
 assert "the gate lists you as an approver" in main and "lists it as an approver for that gate" in common
-assert "--by <coordinator-id>" in remote and "`card.sha256`" in remote
+for phrase in ("--by <coordinator-id>", "`--expected-hash`", "`card.sha256`",
+               "recorded as the enrolled owner's, relayed by the `--by` name"):
+    assert phrase in remote, phrase
 for text in (main, messaging):
-    assert "every Hosts row is `Worker: lane`" in text
-    for phrase in ("Herdr snapshot", "inbox notes", "`send.py`", "keep them"):
-        assert phrase in text, phrase
+    rule = text.split("every Hosts row is `Worker: lane`")[1].split("[")[0]
+    for phrase in ("replace the Herdr snapshot", "inbox notes and `send.py`", "notes already published",
+                   "Herdr-only hosts keep them"):
+        assert phrase in rule, phrase
 for phrase in ("`lane status`", "`lane instruct`", "`lane report`"):
     assert phrase in main, phrase
-assert "lane --host <host> report <task>" in messaging and "read notes already published" in messaging
+assert "lane --host <host> report <task>" in messaging and "On a Herdr host, if the wrapper" in messaging
+assert "on a Herdr-only host, the messaging contract's once-only `send.py`" in main
+assert "started by `lane` is steered with `lane instruct` and has no notes to read" in common
 assert (skill / "scripts/send.py").is_file() and (skill / "scripts/messages.py").is_file()
 for text in (remote, messaging):
     assert "(covered-answers.md)" in text

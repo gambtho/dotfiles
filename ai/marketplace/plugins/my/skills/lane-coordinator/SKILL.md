@@ -25,13 +25,14 @@ for invocation and capability limits outside Pi.
 ## Attention and messages on every turn
 
 Before answering **every user message**, read this project's live lane status and your
-addressed coordinator inbox, not only on `coordinate` or morning sweeps. Use the one-shot
+addressed coordinator inbox, not only on `coordinate` or morning sweeps.
+When every Hosts row is `Worker: lane`, `lane status`, `lane instruct` and `lane report`
+replace the Herdr snapshot, inbox notes and `send.py`: read notes already published, then skip
+the Herdr steps in this section. Herdr-only hosts keep them: use the one-shot
 [local messaging helper and contract](references/messaging.md) for filtered Herdr metadata
-and immutable `reports/inbox/` notes; unknown/offline status is not a clean sweep. Live
+and immutable `reports/inbox/` notes. Unknown/offline status is not a clean sweep. Live
 working/blocked state beats stale ready metadata. Fetch reports and verify head/CI before
 advising action; status discovery never grants pane-input or publication authority.
-When every Hosts row is `Worker: lane`, `lane status`, `lane instruct` and `lane report`
-replace the Herdr snapshot, inbox notes and `send.py`; Herdr-only projects keep them.
 
 Notes have categories: `tom-decision` carries the human's verbatim words, timestamp and
 inspectable source; `coordinator-instruction` stays within approved scope; `fyi` is no action.
@@ -40,7 +41,7 @@ notes are advisory `fyi` only, with receiving-project write authority. Preserve 
 STATE writer and record pickup/disposition in the recipient's report; never infer delivery
 from publication. Existing addressed report notes remain inputs during inbox adoption.
 
-For an owned local idle Claude Code or Pi session, the messaging contract's once-only
+For an owned local idle Claude Code or Pi session on a Herdr-only host, the messaging contract's once-only
 `send.py` can deliver a note pointer or lane ready nudge after exact identity/no-dialog checks.
 Use verified ownership evidence, never a label guess or edited inherited context. Coordinator
 logs send intent/outcome in STATE as its single writer; lanes use their reports. Busy/unknown

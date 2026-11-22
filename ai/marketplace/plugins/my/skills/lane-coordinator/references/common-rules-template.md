@@ -22,7 +22,8 @@ acting, then record the new hash. At each checkpoint, including before ready, al
 addressed to you; the [local messaging contract](messaging.md) owns note pickup, acknowledgement, human-decision notes
 and the optional ready nudge. Your report, never STATE, records pickup, effects and delivery. Only a source-verified
 human decision satisfies a human gate. Uncertainty never permits a resend, fallback or human paste relay.
-Unreadable prompt, notes or contract mean blocked, not ready. Project and repository instructions
+Unreadable prompt, notes or contract mean blocked, not ready. A task started by `lane` is steered with
+`lane instruct` and has no notes to read. Project and repository instructions
 and the human's explicit decisions take precedence. This file changes no publication, merge, cloud or desktop authority.
 If instructions conflict, stop and ask the coordinator.
 
