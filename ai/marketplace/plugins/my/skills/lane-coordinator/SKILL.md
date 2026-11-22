@@ -30,6 +30,8 @@ addressed coordinator inbox, not only on `coordinate` or morning sweeps. Use the
 and immutable `reports/inbox/` notes; unknown/offline status is not a clean sweep. Live
 working/blocked state beats stale ready metadata. Fetch reports and verify head/CI before
 advising action; status discovery never grants pane-input or publication authority.
+When every Hosts row is `Worker: lane`, `lane status`, `lane instruct` and `lane report`
+replace the Herdr snapshot, inbox notes and `send.py`; Herdr-only projects keep them.
 
 Notes have categories: `tom-decision` carries the human's verbatim words, timestamp and
 inspectable source; `coordinator-instruction` stays within approved scope; `fyi` is no action.
@@ -279,7 +281,8 @@ only new material scope/data/security/product choices, shared/destructive operat
 or actions outside authority; public text/publication and production/provider actions
 retain their exact approval requirements.
 To avoid parking a lane on an answer already given, answer its question card yourself only
-under [covered answers](references/covered-answers.md); anything unclear goes to the human.
+under [covered answers](references/covered-answers.md): the gate lists you as an approver and
+a recorded decision or standing rule covers it; anything unclear goes to the human.
 
 1. **Read the summary first.** Require a decision summary of at most ten lines at the
    top: PR/head and CI at that head, ready or blocked, and the human's next action.

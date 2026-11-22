@@ -809,6 +809,20 @@ for phrase in ("Cite the rule or decision", "in the answer note", "in STATE",
                "Tell the human in one line", "grants nothing new", "authority table lets lanes publish"):
     assert phrase in covered, phrase
 assert "note cites the rule" in common and "adds no publication or other authority" in common
+for phrase in ("under `approvers` in the project's lane `config.json`", "An unlisted gate is owner only",
+               "Never answer as the owner", "--by <coordinator-id> --expected-hash <card sha256> --note",
+               "do not retry without it"):
+    assert phrase in covered, phrase
+assert "the gate lists you as an approver" in main and "lists it as an approver for that gate" in common
+assert "--by <coordinator-id>" in remote and "`card.sha256`" in remote
+for text in (main, messaging):
+    assert "every Hosts row is `Worker: lane`" in text
+    for phrase in ("Herdr snapshot", "inbox notes", "`send.py`", "keep them"):
+        assert phrase in text, phrase
+for phrase in ("`lane status`", "`lane instruct`", "`lane report`"):
+    assert phrase in main, phrase
+assert "lane --host <host> report <task>" in messaging and "read notes already published" in messaging
+assert (skill / "scripts/send.py").is_file() and (skill / "scripts/messages.py").is_file()
 for text in (remote, messaging):
     assert "(covered-answers.md)" in text
     assert "never calls `lane answer`" not in text and "never answers one" not in text

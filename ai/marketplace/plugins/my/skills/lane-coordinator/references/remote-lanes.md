@@ -41,10 +41,12 @@ advance delivery. `Refused` stops for identity/dialog inspection. Uncertain or
 `Recording`/`Sending` results are inspect-only; never send a replacement instruction
 or answer a trust/permission dialog through the API.
 The human answers question cards; the coordinator calls `lane answer` only for a
-[covered answer](covered-answers.md). A remote answer binds to the card cached by the
+[covered answer](covered-answers.md), with `--by <coordinator-id>` and `--expected-hash`.
+A remote answer binds to the card cached by the
 last status read, so run `lane --host <host> status <lane-project>` immediately before
-`lane --host <host> answer`. Confirm the refreshed card and choice still match the cited
-rule; if the card changed, stop and read it again before answering.
+`lane --host <host> answer`, and pass that row's `card.sha256`. Confirm the refreshed card
+and choice still match the cited rule; if the card changed, stop and read it again before
+answering. A remote answer is recorded as the enrolled owner's, relayed by the `--by` name.
 
 Fetch the lane's primary report and optional handoff before retirement or cleanup with
 `lane --host <host> report <task>`. Capture that formatted stdout as private fetched evidence
