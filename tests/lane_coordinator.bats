@@ -756,7 +756,16 @@ messaging = " ".join((refs / "messaging.md").read_text().split())
 
 for text in (main, remote, lane):
     assert "Worker: `lane`" in text or "`Worker` is `lane`" in text or "Worker |" in text
-assert "lane --host <host> start <lane-project> --prompt <lane-file> --input <AGENTS.md> --input <COMMON-RULES.md>" in remote
+assert 'lane --host <host> start <lane-project> --prompt <lane-file> --label "<project> W<n>" --by <project>-coord --input <AGENTS.md> --input <COMMON-RULES.md>' in remote
+import re as _re
+tagged = '--label "<project> W<n>" --by <project>-coord'
+assert tagged in main
+starts = [(path.name, line) for path in sorted(skill.rglob("*.md")) for line in path.read_text().splitlines()
+          if _re.search(r"(?<![\w-])lane (?:--host \S+ )?start\s+\S", line)]
+assert len(starts) >= 2, starts
+for name, line in starts:
+    assert tagged in line, (name, line)
+assert "lane status --by <project>-coord" in remote
 for phrase in ("launch-status", "lane --host <host> status <lane-project>",
                "lane --host <host> instruct <task>", "lane --host <host> report <task>",
                "The human answers", "Held", "Refused"):
