@@ -834,11 +834,14 @@ for text in (main, messaging):
     for phrase in ("replace the Herdr snapshot", "inbox notes and `send.py`", "notes already published",
                    "Herdr-only hosts keep them"):
         assert phrase in rule, phrase
-for phrase in ("`lane status`", "`lane instruct`", "`lane report`"):
-    assert phrase in main, phrase
+    if text is main:
+        for phrase in ("`lane status`", "`lane instruct`", "`lane report`"):
+            assert phrase in rule, phrase
 assert "lane --host <host> report <task>" in messaging and "On a Herdr host, if the wrapper" in messaging
 assert "on a Herdr-only host, the messaging contract's once-only `send.py`" in main
-assert "started by `lane` is steered with `lane instruct` and has no notes to read" in common
+assert "started by `lane` skips the note checkpoint and ready nudge" in common
+assert "read only notes its prompt names" in common
+assert "ready nudge (Herdr hosts only)" in read(refs / "lane-template.md")
 assert (skill / "scripts/send.py").is_file() and (skill / "scripts/messages.py").is_file()
 for text in (remote, messaging):
     assert "(covered-answers.md)" in text

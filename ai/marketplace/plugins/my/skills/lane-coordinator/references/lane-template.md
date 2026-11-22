@@ -103,7 +103,7 @@ Ready requires local HEAD = remote PR head = tested revision = CI revision. Incl
 reusable review evidence (base, head provenance, scope, content/profile identities,
 model, dispositions) and closeout's bot-opportunity evidence.
 "W<n> ready" requests an action, not a completion verdict; coordinator replies action/owner first.
-Optional local ready nudge: [once-only pointers](messaging.md#optional-once-only-local-pointers);
+Optional local ready nudge (Herdr hosts only): [once-only pointers](messaging.md#optional-once-only-local-pointers);
 record here, never STATE. Manual sessions are not monitored.
 Escalate new material choices, shared/destructive operations or actions outside authority;
 public/production/provider approval limits remain.
