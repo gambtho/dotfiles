@@ -240,7 +240,7 @@ unconfigured computer skips without network access. A configured computer report
 pending, offline, behind or unsafe state as an optional-phase warning, while other
 provisioning continues. Direct Make targets propagate nonzero attention status.
 Normal full install/update still requires stopped Pi because it changes other linked
-resources and packages. `make ai` remains Pi reconciliation only.
+resources and packages. `make ai` reconciles Pi and bootstraps the standalone Copilot CLI, but does not run the agent-knowledge ensure phase.
 
 | Action | Behavior |
 |---|---|
@@ -403,7 +403,7 @@ multi-file transaction; preserve backups and rerun after resolving contention.
 
 Permission publication uses best-effort compare-before-publish: it checks the runtime file identity before backup and again after backup immediately before the atomic rename. Because the permission-system UI writer shares no lock with the installer, an unavoidable race remains between the final check and rename; the extra check narrows but cannot eliminate it.
 
-The migration converts the old whole-extension link to a real directory, preserves unrelated extension entries, and publishes only the three authored links. It removes only exact managed Amp settings links and only the `.permissions` key from valid Amp state. The exact legacy Brave `brave-search` directory is moved intact below `disabled-skills`; sibling skills, mismatches, and collisions are preserved.
+The migration converts the old whole-extension link to a real directory, preserves unrelated extension entries, and publishes the four authored links. It removes only exact managed Amp settings links and only the `.permissions` key from valid Amp state. The exact legacy Brave `brave-search` directory is moved intact below `disabled-skills`; sibling skills, mismatches, and collisions are preserved.
 
 For native iPhone access to the actual default Herdr/Pi terminal, use the separate
 opt-in [Heeler setup](../tools/herdr/heeler/README.md):
