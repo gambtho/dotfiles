@@ -96,14 +96,15 @@ setup_github_cli_repository() {
   rm -f -- "$temporary"
   ((status == 0)) || return "$status"
   if [[ -f "$list" ]]; then
-    previous=$(<"$list") || return
+    previous=$(sudo cat -- "$list") || return
   fi
   printf 'deb [arch=%s signed-by=%s] https://cli.github.com/packages stable main\n' \
     "$(dpkg --print-architecture)" "$keyring" |
     sudo tee "$list" >/dev/null || return
   # Another file may already list GitHub's repository with a different keyring.
   # APT then refuses every source, so put back what was there and use that one.
-  if ! apt-cache policy >/dev/null; then
+  # Ask as root, so APT reads the same configuration as the update that follows.
+  if ! sudo apt-cache policy >/dev/null; then
     if [[ -n "$previous" ]]; then
       printf '%s\n' "$previous" | sudo tee "$list" >/dev/null || return
     else

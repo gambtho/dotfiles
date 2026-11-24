@@ -419,13 +419,14 @@ run_gh_package_setup() {
     APT_ETC=$ETC
     curl() { printf "curl %s\n" "${@: -3:1}" >>"$EVENTS"; printf "keyring\n" >"${@: -1}"; }
     dpkg() { printf "arm64\n"; }
-    apt-cache() { printf "apt-cache %s\n" "$*" >>"$EVENTS"; return "$APT_CACHE_STATUS"; }
     sudo() {
       local to="${@: -1}"
       case "$1" in
         install) printf "install %s\n" "${to#$ETC}" >>"$EVENTS"; mkdir -p "${to%/*}"; cp "${@: -2:1}" "$to" ;;
         tee) printf "tee %s\n" "${2#$ETC}" >>"$EVENTS"; cat >"$2" ;;
         rm) printf "rm %s\n" "${to#$ETC}" >>"$EVENTS"; rm -f -- "$to" ;;
+        cat) cat -- "$to" ;;
+        apt-cache) printf "%s\n" "$*" >>"$EVENTS"; return "$APT_CACHE_STATUS" ;;
         *) printf "%s\n" "$*" >>"$EVENTS" ;;
       esac
     }
