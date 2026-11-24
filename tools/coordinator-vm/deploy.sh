@@ -5,8 +5,9 @@
 #
 # The default is what-if, which changes nothing in Azure. The Git name and
 # email written into cloud-init come from this machine's global Git config.
-# The VM checks out this checkout's HEAD, so create needs HEAD to be on
-# origin/main: a commit GitHub does not serve would fail on first boot.
+# The VM clones the public repository and checks out this checkout's HEAD, so
+# create first fetches that repository's main and needs HEAD to be on it: a
+# commit GitHub does not serve there would fail on first boot.
 
 set -euo pipefail
 
@@ -15,6 +16,8 @@ usage() {
 }
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+# The same URL cloud-init.yaml clones.
+repository_url=https://github.com/gambtho/dotfiles.git
 mode=what-if
 subscription=""
 admin_user=""
@@ -76,9 +79,12 @@ if [[ ! "$git_name" =~ ^[A-Za-z0-9][A-Za-z0-9\ ._+-]*$ || ! "$git_email" =~ ^[A-
 fi
 
 revision=$(git -C "$here" rev-parse --verify 'HEAD^{commit}')
-if [[ "$mode" == create ]] && ! git -C "$here" merge-base --is-ancestor "$revision" origin/main; then
-  printf '%s\n' 'deploy.sh: create from a commit that is on origin/main; the VM clones it from GitHub.' >&2
-  exit 1
+if [[ "$mode" == create ]]; then
+  git -C "$here" fetch --quiet "$repository_url" main
+  if ! git -C "$here" merge-base --is-ancestor "$revision" FETCH_HEAD; then
+    printf 'deploy.sh: create from a commit that is on main of %s; the VM clones it from there.\n' "$repository_url" >&2
+    exit 1
+  fi
 fi
 
 work=$(mktemp -d)

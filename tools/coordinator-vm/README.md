@@ -61,8 +61,8 @@ them into cloud-init, because bootstrap needs a Git identity. cloud-init is
 stored with the VM and readable by anyone who can read the VM, so it holds no
 secrets.
 
-The VM checks out the commit your checkout is on, so `create` refuses a commit
-that is not on `origin/main`. On the VM, `~/.dotfiles` starts detached at that
+The VM checks out the commit your checkout is on, so `create` fetches the
+public repository's `main` and refuses a commit that is not on it. On the VM, `~/.dotfiles` starts detached at that
 commit; `git -C ~/.dotfiles switch main` when you want it to follow main.
 
 ## First boot

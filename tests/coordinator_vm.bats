@@ -19,14 +19,15 @@ write_public_key() {
   ssh-keygen -q -t ed25519 -N '' -C test -f "$TEST_ROOT/key"
 }
 
-# A checkout whose HEAD is on origin/main, or not, for the create check.
+# A checkout cloned from a stand-in for the public repository.
 make_checkout() {
+  export PUBLISHED="$TEST_ROOT/published"
   CHECKOUT="$TEST_ROOT/checkout"
+  git init -q -b main "$PUBLISHED"
+  git -C "$PUBLISHED" -c user.name=t -c user.email=t@example.com commit -q --allow-empty -m base
+  git clone -q "$PUBLISHED" "$CHECKOUT"
   mkdir -p "$CHECKOUT/tools"
   cp -R "$SRC" "$CHECKOUT/tools/coordinator-vm"
-  git -C "$CHECKOUT" init -q
-  git -C "$CHECKOUT" -c user.name=t -c user.email=t@example.com commit -q --allow-empty -m base
-  git -C "$CHECKOUT" update-ref refs/remotes/origin/main HEAD
   DEPLOY="$CHECKOUT/tools/coordinator-vm/deploy.sh"
 }
 
@@ -37,11 +38,16 @@ printf "%s\n" "$*" >>"$CALLS"
 for arg in "$@"; do
   case "$arg" in @*) cp "${arg#@}" "$TEST_ROOT/parameters.json" ;; esac
 done'
-  # Only the identity lookups are stubbed; everything else is real Git.
+  # The identity lookups are stubbed, and a fetch of the public URL reads the
+  # local stand-in instead. Everything else is real Git.
   stub_command git '
 case "$*" in
   *"--get user.name") printf "%s\n" "${GIT_NAME-Test Person}" ;;
   *"--get user.email") printf "%s\n" "${GIT_EMAIL-test@example.com}" ;;
+  *" fetch --quiet https://github.com/gambtho/dotfiles.git main")
+    printf "fetch\n" >>"$CALLS"
+    exec /usr/bin/git "$1" "$2" fetch --quiet "$PUBLISHED" main
+    ;;
   *) exec /usr/bin/git "$@" ;;
 esac'
   make_checkout
@@ -125,12 +131,13 @@ esac'
 @test "deploy previews by default and never creates unless asked" {
   stub_deploy_tools
   write_public_key
-  run bash "$DEPLOY" --subscription sub-id --admin-user admin --ssh-key "$TEST_ROOT/key.pub"
+  run bash "$DEPLOY" --subscription sub-id --admin-user coordinatoradmin --ssh-key "$TEST_ROOT/key.pub"
   [ "$status" -eq 0 ]
+  # No fetch and no second az call: a preview touches nothing.
   [ "$(wc -l <"$CALLS")" -eq 1 ]
   grep -q '^deployment sub what-if --subscription sub-id --location eastus2 ' "$CALLS"
   run jq -r '.parameters | .adminUsername.value, .location.value, (.adminSshPublicKey.value | split(" ")[0])' "$TEST_ROOT/parameters.json"
-  [ "$output" = $'admin\neastus2\nssh-ed25519' ]
+  [ "$output" = $'coordinatoradmin\neastus2\nssh-ed25519' ]
   run jq -r '.parameters.cloudInit.value' "$TEST_ROOT/parameters.json"
   [[ "$output" == *"name = Test Person"* ]]
   [[ "$output" == *"email = test@example.com"* ]]
@@ -141,21 +148,24 @@ esac'
 @test "deploy creates only when the mode says create" {
   stub_deploy_tools
   write_public_key
-  run bash "$DEPLOY" create --subscription sub-id --admin-user admin --ssh-key "$TEST_ROOT/key.pub" --location westus3
+  run bash "$DEPLOY" create --subscription sub-id --admin-user coordinatoradmin --ssh-key "$TEST_ROOT/key.pub" --location westus3
   [ "$status" -eq 0 ]
+  [ "$(head -n 1 "$CALLS")" = fetch ]
   grep -q '^deployment sub create --subscription sub-id --location westus3 ' "$CALLS"
+  # The script and cloud-init must name the same repository.
+  grep -Fq 'git clone https://github.com/gambtho/dotfiles.git ' "$SRC/cloud-init.yaml"
 }
 
-@test "deploy refuses to create from a commit that is not on origin/main" {
+@test "deploy refuses to create from a commit the public main does not have" {
   stub_deploy_tools
   write_public_key
   git -C "$CHECKOUT" -c user.name=t -c user.email=t@example.com commit -q --allow-empty -m unpublished
-  run bash "$DEPLOY" create --subscription sub-id --admin-user admin --ssh-key "$TEST_ROOT/key.pub"
+  run bash "$DEPLOY" create --subscription sub-id --admin-user coordinatoradmin --ssh-key "$TEST_ROOT/key.pub"
   [ "$status" -eq 1 ]
-  [[ "$output" == *"on origin/main"* ]]
-  [ ! -s "$CALLS" ]
+  [[ "$output" == *"on main of https://github.com/gambtho/dotfiles.git"* ]]
+  [ "$(cat "$CALLS")" = fetch ]
   # A preview from the same commit is still allowed.
-  run bash "$DEPLOY" what-if --subscription sub-id --admin-user admin --ssh-key "$TEST_ROOT/key.pub"
+  run bash "$DEPLOY" what-if --subscription sub-id --admin-user coordinatoradmin --ssh-key "$TEST_ROOT/key.pub"
   [ "$status" -eq 0 ]
 }
 
@@ -168,19 +178,19 @@ esac'
   ssh-keygen -q -t ecdsa -N '' -f "$TEST_ROOT/ecdsa"
   ssh-keygen -q -t rsa -b 1024 -N '' -f "$TEST_ROOT/short"
   for key in key truncated.pub ecdsa.pub short.pub; do
-    run bash "$DEPLOY" --subscription sub-id --admin-user admin --ssh-key "$TEST_ROOT/$key"
+    run bash "$DEPLOY" --subscription sub-id --admin-user coordinatoradmin --ssh-key "$TEST_ROOT/$key"
     [ "$status" -eq 1 ]
     [[ "$output" == *"is not one ED25519 or RSA"* ]]
   done
 
-  GIT_NAME='Bad: "name"' run bash "$DEPLOY" --subscription sub-id --admin-user admin --ssh-key "$TEST_ROOT/key.pub"
+  GIT_NAME='Bad: "name"' run bash "$DEPLOY" --subscription sub-id --admin-user coordinatoradmin --ssh-key "$TEST_ROOT/key.pub"
   [ "$status" -eq 1 ]
-  GIT_NAME='Alice @GIT_EMAIL@' run bash "$DEPLOY" --subscription sub-id --admin-user admin --ssh-key "$TEST_ROOT/key.pub"
+  GIT_NAME='Alice @GIT_EMAIL@' run bash "$DEPLOY" --subscription sub-id --admin-user coordinatoradmin --ssh-key "$TEST_ROOT/key.pub"
   [ "$status" -eq 1 ]
-  GIT_EMAIL='' run bash "$DEPLOY" --subscription sub-id --admin-user admin --ssh-key "$TEST_ROOT/key.pub"
+  GIT_EMAIL='' run bash "$DEPLOY" --subscription sub-id --admin-user coordinatoradmin --ssh-key "$TEST_ROOT/key.pub"
   [ "$status" -eq 1 ]
 
-  run bash "$DEPLOY" create --admin-user admin --ssh-key "$TEST_ROOT/key.pub"
+  run bash "$DEPLOY" create --admin-user coordinatoradmin --ssh-key "$TEST_ROOT/key.pub"
   [ "$status" -eq 2 ]
   [ ! -s "$CALLS" ]
 }
@@ -191,13 +201,14 @@ esac'
   cp "$SRC/provision.sh" "$SRC/coordinator-herdr.service" "$checkout/tools/coordinator-vm/"
   printf '#!/usr/bin/env bash\nprintf "bootstrap %%s global=%%s\\n" "$*" "${GIT_CONFIG_GLOBAL:-}" >>"$CALLS"\n' >"$checkout/libexec/bootstrap"
   printf '#!/usr/bin/env bash\nprintf "dot-install\\n" >>"$CALLS"\n' >"$checkout/bin/dot-install"
-  stub_command systemctl 'printf "systemctl %s\n" "$*" >>"$CALLS"'
+  stub_command systemctl 'printf "systemctl %s\n" "$*" >>"$CALLS"; [[ "$*" != *is-active* || ${HERDR_DOWN:-0} != 1 ]]'
+  stub_command sleep ':'
 
   # dot-install can succeed without Herdr; provisioning must not.
   run bash "$checkout/tools/coordinator-vm/provision.sh" "$TEST_ROOT/identity"
   [ "$status" -eq 1 ]
   [[ "$output" == *"Herdr was not installed"* ]]
-  ! grep -q systemctl "$CALLS"
+  [ "$(tail -n 1 "$CALLS")" = dot-install ]
 
   : >"$CALLS"
   mkdir -p "$HOME/.local/bin"
@@ -208,8 +219,13 @@ esac'
   [ "$(cat "$CALLS")" = "bootstrap --non-interactive --profile server global=$TEST_ROOT/identity
 dot-install
 systemctl --user daemon-reload
-systemctl --user enable --now coordinator-herdr.service" ]
+systemctl --user enable --now coordinator-herdr.service
+systemctl --user is-active --quiet coordinator-herdr.service" ]
   cmp "$SRC/coordinator-herdr.service" "$XDG_CONFIG_HOME/systemd/user/coordinator-herdr.service"
+
+  HERDR_DOWN=1 run bash "$checkout/tools/coordinator-vm/provision.sh" "$TEST_ROOT/identity"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"did not stay up"* ]]
 
   # A rerun after bootstrap wrote the local identity no longer needs the file.
   : >"$CALLS"
