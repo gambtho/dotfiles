@@ -34,12 +34,13 @@ invalidates the recommendation.
 Require the lane's bot opportunity and final thread and review-body read from
 [bounded waiting](../SKILL.md#bounded-waiting); do not make the human relay or babysit
 that wait. Local CodeRabbit is the standing default for every lane and coordinator unless
-the project records an explicit project opt-out: a verified current-head Copilot failure
-or quota, `gh` API rate limit or review bot rate-limit/skip notice qualifies, with the
-observed response or URL. The lane never stalls for a human Copilot request; without safe
+the project records an explicit project opt-out. It qualifies only as the
+[local fallback](../SKILL.md#local-coderabbit-fallback) says: a current-head rate limit or
+quota from a Copilot request, the `gh` API or a review bot, with the observed response or
+URL; a size-only skip does not. The lane never stalls for a human Copilot request; without safe
 local auth, included quota or billing, require one independent review by a different
 model family instead, and `review round: local CodeRabbit CLI` or the fallback reason in
-the report and PR body. See the [local fallback](../SKILL.md#local-coderabbit-fallback).
+the report and PR body.
 
 Confirm scope and the approved outcome against the human's current workflow: say what the
 change gives the human and why existing mechanisms do not already cover it. State

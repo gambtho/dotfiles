@@ -112,7 +112,7 @@ a replacement; a PR row without it means verify the PR yourself.
 
 1. **Try result first.** Done means tried: a product report's top line is `works`,
    `doesn't` or `not tried (why)`, and only a try moves an outcome row, never a merge. A
-   merged lane whose outcome is untried stays in STATE as `awaiting try`; agree with the
+   merged lane whose outcome is untried or stale stays in STATE as `awaiting try`; agree with the
    human each time who tries it and when, and record that owner.
 2. **Then readiness**, by [pr-closeout's coordinator check](../pr-closeout/references/coordinator-check.md):
    tested head = PR head = CI revision, size, overlaps and merge order.

@@ -33,7 +33,7 @@ try is over 7 days old.
 
 | ID | Who can do what, where | Status | Evidence (how tried, by whom; observed or the human's word) | Last tried |
 |---|---|---|---|---|
-| O1 | <who> can <do what> on <which setup> | works / partly / doesn't / untried | <evidence> | <date> |
+| O1 | <who> can <do what> on <which setup> | works / partly / doesn't / untried | <evidence> | <date time> |
 
 ## Critical path (required)
 
@@ -48,7 +48,7 @@ each decision's scope; do not make route-specific dependencies global.
 ## Open lanes
 
 Status, PR numbers without heads or CI, next actor and action, and report path. A merged
-lane whose outcome is untried stays here as `awaiting try` with its agreed owner; write
+lane whose outcome is untried or stale stays here as `awaiting try` with its agreed owner; write
 its PR as `#42 merged` so the drift check doesn't read it as still waiting. A parked
 lane's row holds all current resume conditions and who decides (a person, or none if automatic).
 
