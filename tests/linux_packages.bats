@@ -349,6 +349,121 @@ setup_asciinema_apt_fixture() {
   [ "$status" -ne 0 ]
 }
 
+# A fresh Ubuntu 24.04 offers gh 2.45 from its archive; with Ubuntu Pro, the
+# esm-apps repository offers a rebuild of it at priority 510.
+setup_gh_apt_fixture() {
+  command -v apt-cache >/dev/null || skip "APT policy fixtures require apt-cache"
+  export APT_FIXTURE="$TEST_ROOT/apt"
+  mkdir -p "$APT_FIXTURE/lists" "$APT_FIXTURE/empty" "$APT_FIXTURE/preferences.d"
+  : >"$APT_FIXTURE/status"
+  printf '%s\n' \
+    'deb [trusted=yes] http://archive.ubuntu.com/ubuntu noble universe' \
+    'deb [trusted=yes] https://cli.github.com/packages stable main' >"$APT_FIXTURE/sources.list"
+  gh_apt_fixture_source archive.ubuntu.com_ubuntu_dists_noble Ubuntu universe 2.45.0-1ubuntu0.3
+  gh_apt_fixture_source cli.github.com_packages_dists_stable GitHub main 2.83.1
+}
+
+gh_apt_fixture_with_esm() {
+  printf '%s\n' 'deb [trusted=yes] https://esm.ubuntu.com/apps/ubuntu noble-apps-security main' >>"$APT_FIXTURE/sources.list"
+  gh_apt_fixture_source esm.ubuntu.com_apps_ubuntu_dists_noble-apps-security UbuntuESMApps main 2.45.0-1ubuntu0.3+esm1
+  # The rule Ubuntu Pro installs as /etc/apt/preferences.d/ubuntu-pro-esm-apps.
+  printf 'Package: *\nPin: release o=UbuntuESMApps\nPin-Priority: 510\n' >"$APT_FIXTURE/preferences.d/ubuntu-pro-esm-apps"
+}
+
+gh_apt_fixture_source() {
+  local list="$APT_FIXTURE/lists/$1" origin="$2" component="$3" version="$4"
+  printf 'Origin: %s\nComponents: %s\nArchitectures: amd64\n' "$origin" "$component" >"${list}_Release"
+  printf 'Package: gh\nVersion: %s\nArchitecture: amd64\nMaintainer: Test <test@example.invalid>\nFilename: pool/gh.deb\nSize: 1\nDescription: test fixture\n' \
+    "$version" >"${list}_${component}_binary-amd64_Packages"
+}
+
+gh_candidate() {
+  local preferences="$1"
+  printf '%s\n' \
+    "Dir::State::status \"$APT_FIXTURE/status\";" \
+    "Dir::State::lists \"$APT_FIXTURE/lists\";" \
+    "Dir::Etc::sourcelist \"$APT_FIXTURE/sources.list\";" \
+    "Dir::Etc::sourceparts \"$APT_FIXTURE/empty\";" \
+    "Dir::Etc::preferences \"$preferences\";" \
+    "Dir::Etc::preferencesparts \"$APT_FIXTURE/preferences.d\";" \
+    'Dir::Cache::pkgcache "";' \
+    'Dir::Cache::srcpkgcache "";' \
+    'APT::Architecture "amd64";' >"$APT_FIXTURE/config"
+  LC_ALL=C apt-cache -c "$APT_FIXTURE/config" policy gh | awk '$1 == "Candidate:" { print $2 }'
+}
+
+@test "the gh pin takes GitHub's build with and without Ubuntu Pro esm-apps" {
+  local pin="$REPO_ROOT/platforms/linux/apt-preferences/gh-from-github"
+  setup_gh_apt_fixture
+
+  [ "$(gh_candidate "$pin")" = 2.83.1 ]
+
+  gh_apt_fixture_with_esm
+  # Without the pin, esm-apps holds the old build despite the newer version.
+  [ "$(gh_candidate /dev/null)" = 2.45.0-1ubuntu0.3+esm1 ]
+  [ "$(gh_candidate "$pin")" = 2.83.1 ]
+
+  # A machine that already has the old build upgrades to GitHub's.
+  printf 'Package: gh\nStatus: install ok installed\nVersion: 2.45.0-1ubuntu0.3+esm1\nArchitecture: amd64\nMaintainer: Test <test@example.invalid>\nDescription: test fixture\n' >"$APT_FIXTURE/status"
+  [ "$(gh_candidate "$pin")" = 2.83.1 ]
+}
+
+@test "Linux package setup publishes GitHub's gh repository and pin before APT runs" {
+  local events="$TEST_ROOT/events" published="$TEST_ROOT/published"
+  mkdir -p "$published"
+
+  run env INSTALL_SOURCE_ONLY=1 EVENTS="$events" PUBLISHED="$published" bash -c '
+    source "$1/bin/dot-install"
+    OS=Ubuntu
+    PROFILE=server
+    curl() {
+      printf "curl %s\n" "${@: -3:1}" >>"$EVENTS"
+      printf "keyring\n" >"${@: -1}"
+    }
+    dpkg() { printf "arm64\n"; }
+    sudo() {
+      case "$1" in
+        install) printf "install %s\n" "${@: -1}" >>"$EVENTS"; cp "${@: -2:1}" "$PUBLISHED/$(basename "${@: -1}")" ;;
+        tee) printf "tee %s\n" "$2" >>"$EVENTS"; cat >"$PUBLISHED/$(basename "$2")" ;;
+        *) printf "%s\n" "$*" >>"$EVENTS" ;;
+      esac
+    }
+    install_platform_packages
+  ' _ "$REPO_ROOT"
+
+  [ "$status" -eq 0 ]
+  [ "$(sed -n 1,4p "$events")" = "curl https://cli.github.com/packages/githubcli-archive-keyring.gpg
+install /etc/apt/keyrings/githubcli-archive-keyring.gpg
+tee /etc/apt/sources.list.d/github-cli.list
+install /etc/apt/preferences.d/gh-from-github" ]
+  [ "$(sed -n 5p "$events")" = "apt update -o DPkg::Lock::Timeout=600" ]
+  [ "$(<"$published/githubcli-archive-keyring.gpg")" = keyring ]
+  [ "$(<"$published/github-cli.list")" = "deb [arch=arm64 signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" ]
+  cmp "$REPO_ROOT/platforms/linux/apt-preferences/gh-from-github" "$published/gh-from-github"
+  grep '^apt install ' "$events" | grep -wq gh
+}
+
+@test "a failed gh keyring download stops package setup before APT" {
+  local events="$TEST_ROOT/events"
+
+  run env INSTALL_SOURCE_ONLY=1 EVENTS="$events" TMPDIR="$TEST_ROOT" bash -c '
+    source "$1/bin/dot-install"
+    OS=Ubuntu
+    PROFILE=server
+    curl() { : >"${@: -1}"; return 22; }
+    sudo() { printf "%s\n" "$*" >>"$EVENTS"; }
+    install_platform_packages
+  ' _ "$REPO_ROOT"
+
+  [ "$status" -eq 22 ]
+  [ ! -e "$events" ]
+  [ -z "$(find "$TEST_ROOT" -maxdepth 1 -name 'tmp.*')" ]
+}
+
+@test "macOS gets gh from the Brewfile" {
+  grep -Fxq 'brew "gh"' "$REPO_ROOT/platforms/macos/brewfile"
+}
+
 @test "Kubernetes repository follows the canonical channel pin" {
   run rg -n 'core:/stable:/\$\{?KUBERNETES_CHANNEL\}?' "$REPO_ROOT/work/install.sh"
   [ "$status" -eq 0 ]

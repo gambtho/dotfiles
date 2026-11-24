@@ -109,6 +109,13 @@ before installing or upgrading packages if no compatible APT candidate is
 available, including when a newer asciinema is already installed; it never
 silently downgrades. Other packages continue to receive normal distro upgrades.
 
+On every Linux profile, package provisioning adds GitHub's own `gh` repository
+(`/etc/apt/sources.list.d/github-cli.list`, keyring
+`/etc/apt/keyrings/githubcli-archive-keyring.gpg`) and pins `gh` to it with
+`/etc/apt/preferences.d/gh-from-github` (priority 600). Ubuntu's `gh` is far
+behind, and Ubuntu Pro's esm-apps pin (510) would otherwise keep it. An older
+`gh` is upgraded in the same run. macOS gets `gh` from the Brewfile.
+
 Linux provisioning also installs checksum-pinned Mike Farah `yq` into
 `~/.local/bin` as a required tools phase, using `config/versions.env`. This is not
 the Python/jq-wrapper package named `yq` in Ubuntu's APT repositories. macOS

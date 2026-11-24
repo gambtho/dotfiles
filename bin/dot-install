@@ -79,8 +79,31 @@ install_apt_packages() {
   sudo_apt apt autoclean -y >/dev/null
 }
 
+GITHUB_CLI_KEYRING=/etc/apt/keyrings/githubcli-archive-keyring.gpg
+
+# Ubuntu's own gh trails upstream by years, and Ubuntu Pro's esm-apps pin can
+# hold that build even when a newer one is available. Use GitHub's repository,
+# with the file names its install guide uses, and pin gh to it.
+setup_github_cli_repository() {
+  local temporary status=0
+  temporary=$(mktemp) || return
+  curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
+    --connect-timeout 10 --max-time 120 --retry 3 \
+    https://cli.github.com/packages/githubcli-archive-keyring.gpg --output "$temporary" &&
+    [[ -s "$temporary" ]] &&
+    sudo install -D -m 0644 "$temporary" "$GITHUB_CLI_KEYRING" || status=$?
+  rm -f -- "$temporary"
+  ((status == 0)) || return "$status"
+  printf 'deb [arch=%s signed-by=%s] https://cli.github.com/packages stable main\n' \
+    "$(dpkg --print-architecture)" "$GITHUB_CLI_KEYRING" |
+    sudo tee /etc/apt/sources.list.d/github-cli.list >/dev/null || return
+  sudo install -D -m 0644 "$DOTFILES_ROOT/platforms/linux/apt-preferences/gh-from-github" \
+    /etc/apt/preferences.d/gh-from-github
+}
+
 setup_package_repositories() {
   setup_wsl_tailscale_repository || return
+  setup_github_cli_repository || return
   [[ "$PROFILE" == work ]] || return 0
   WORK_INSTALL_SOURCE_ONLY=1 source "$DOTFILES_ROOT/work/install.sh"
   setup_work_apt_repositories
