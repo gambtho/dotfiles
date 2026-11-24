@@ -91,18 +91,33 @@ PY
   [ "$status" -eq 0 ]
 }
 
-@test "coordinator and lane entry points expose the shared inbox contract" {
+@test "skill points at the bundled coordinator instead of describing lane commands" {
   run python3 - "$SKILL_DIR" <<'PY'
 from pathlib import Path
+import re
 import sys
 
 skill = Path(sys.argv[1])
-for name in ('SKILL.md', 'references/common-rules-template.md', 'references/lane-template.md'):
-    source = skill / name
-    assert 'messaging.md' in source.read_text(), name
-coordinator = (skill / 'SKILL.md').read_text()
+raw = (skill / 'SKILL.md').read_text()
+coordinator = ' '.join(raw.split())
+pointer = ' '.join(raw.split('## Lane mechanics: read the bundled coordinator\n', 1)[1].split('\n## ', 1)[0].split())
+for phrase in ('`Worker: lane`', 'bundled with developerlanes and follow it',
+               'This skill does not describe those commands',
+               'resources/skills/lane-coordinator/SKILL.md', '`lane init` prints its full path',
+               'stop and tell the human', 'wins on commands', 'win on our habits', 'Neither file adds authority',
+               'references/legacy-herdr.md'):
+    assert phrase in pointer, phrase
 assert '**every user message**' in coordinator
-assert 'reports/inbox/' in coordinator
+assert len(raw.splitlines()) < 470, 'The skill holds habits; mechanics belong to the bundled coordinator'
+# Mechanics live in the bundled skill: the coordinator's own files carry no lane command lines.
+commands = re.compile(r'`lane (?:--host \S+ )?(?:start|status|instruct|answer|report|retire|cleanup|launch-status|inbox)\b')
+allowed = {'references/covered-answers.md': 1}
+for name in ('SKILL.md', 'references/remote-lanes.md', 'references/harness-notes.md',
+             'references/coordination-template.md', 'references/covered-answers.md'):
+    hits = commands.findall((skill / name).read_text())
+    assert len(hits) <= allowed.get(name, 0), (name, hits)
+for word in ('launch-status', '--creation-id', '--expected-hash', 'herdr-lane', 'send.py', 'reports/inbox/'):
+    assert word not in coordinator, word
 PY
   [ "$status" -eq 0 ]
 }
@@ -114,14 +129,14 @@ import sys
 
 skill = Path(sys.argv[1])
 assert (skill / 'scripts/send.py').is_file()
-contract = ' '.join((skill / 'references/messaging.md').read_text().split())
+contract = ' '.join((skill / 'references/legacy-herdr.md').read_text().split())
 for phrase in ('Claude Code and Pi', '--ownership', 'caller_agent', 'delivery/<id>.json',
                'no automatic fallback', 'never resend', 'single STATE writer'):
     assert phrase in contract, phrase
-for name in ('SKILL.md', 'references/common-rules-template.md', 'references/lane-template.md'):
+for name in ('references/common-rules-template.md', 'references/lane-template.md'):
     text = (skill / name).read_text()
     assert 'ready nudge' in text, name
-    assert 'messaging.md' in text, name
+    assert 'legacy-herdr.md' in text and 'messaging.md' not in text, name
 PY
   [ "$status" -eq 0 ]
 }
@@ -149,7 +164,7 @@ import sys
 
 skill = Path(sys.argv[1])
 reports = ' '.join((skill / 'SKILL.md').read_text().split('## Handle a lane report\n', 1)[1].split('\n## ', 1)[0].split())
-for phrase in ('lane nudge, inbox note or status read', 'one notification per lane state change',
+for phrase in ('status read or lane report', 'one notification per lane state change',
                'Record the attempt or skip in STATE', 'never repeat an unchanged item',
                'lane id, action and owner only', 'never request or accept approval',
                'clearly at the terminal', 'harness-notes.md'):
@@ -404,7 +419,7 @@ PY
   run grep -Fq '<lanes>/W<n>-HANDOFF.md' "$SKILL_DIR/references/lane-template.md"
   [ "$status" -eq 1 ]
   grep -Fq 'handoffs alongside reports' "$SKILL_DIR/SKILL.md"
-  grep -Fq 'including the handoff' "$SKILL_DIR/references/remote-lanes.md"
+  grep -Fq 'including the handoff' "$SKILL_DIR/references/legacy-herdr.md"
 }
 
 @test "routine prompt wrappers select the named routine with unchanged project arguments" {
@@ -531,7 +546,12 @@ import sys
 
 skill = Path(sys.argv[1])
 text = " ".join((skill / "SKILL.md").read_text().split())
-closing = " ".join(text.split("5. **Closing a lane**", 1)[1].split("6. **A decision**", 1)[0].split())
+step = text.split("5. **Closing a lane**", 1)[1].split("6. **A decision**", 1)[0]
+for phrase in ("in the bundled skill's order", "report and handoff are saved", "it is a deletion",
+               "references/legacy-herdr.md#close-a-closed-lanes-workspace"):
+    assert phrase in step, phrase
+legacy = (skill / "references/legacy-herdr.md").read_text()
+closing = " ".join(legacy.split("## Close a closed lane's workspace\n", 1)[1].split("\n## ", 1)[0].split())
 for phrase in ("launch receipt or its exactly one current workspace", "report and handoff are already in the project's report location",
                "idle or done", "working, blocked, unknown or ambiguous identity", "immediately before close",
                "herdr workspace close <id>", "status check and close are not atomic", "record success in the archive line", "inspect-only",
@@ -539,7 +559,7 @@ for phrase in ("launch receipt or its exactly one current workspace", "report an
                "do not close a coordinator's own workspace",
                "Worktree, branch, sandbox and file deletion rules are unchanged"):
     assert phrase in closing, phrase
-remote = " ".join((skill / "references/remote-lanes.md").read_text().lower().split())
+remote = " ".join(legacy.split("### Close a closed remote lane workspace\n", 1)[1].lower().split())
 for phrase in ("fetch first", "recorded ssh binding", "lane's own workspace", "launch receipt or exactly one",
                "idle or done", "immediately before close", "status check and close are not atomic",
                "working, blocked, unknown, ambiguous identity",
@@ -741,49 +761,66 @@ PY
   }
 }
 
-@test "developerlanes workers are explicit and preserve the Herdr fallback" {
+@test "lane workers are an explicit host choice with our habits and a frozen Herdr reference" {
   run python3 - "$SKILL_DIR" <<'PY'
 from pathlib import Path
+import re
 import sys
 
 skill = Path(sys.argv[1])
 refs = skill / "references"
-main = " ".join((skill / "SKILL.md").read_text().split())
-remote = " ".join((refs / "remote-lanes.md").read_text().split())
-coordination = " ".join((refs / "coordination-template.md").read_text().split())
-lane = " ".join((refs / "lane-template.md").read_text().split())
-messaging = " ".join((refs / "messaging.md").read_text().split())
+read = lambda path: " ".join(path.read_text().split())
+main, remote, lane = read(skill / "SKILL.md"), read(refs / "remote-lanes.md"), read(refs / "lane-template.md")
+coordination, common, legacy = (read(refs / name) for name in
+                                ("coordination-template.md", "common-rules-template.md", "legacy-herdr.md"))
 
 for text in (main, remote, lane):
-    assert "Worker: `lane`" in text or "`Worker` is `lane`" in text or "Worker |" in text
-assert 'lane --host <host> start <lane-project> --prompt <lane-file> --label "<project> W<n>" --by <project>-coord --input <AGENTS.md> --input <COMMON-RULES.md>' in remote
-import re as _re
+    assert "`Worker: lane`" in text or "`Worker` is `lane`" in text
 tagged = '--label "<project> W<n>" --by <project>-coord'
-assert tagged in main
-starts = [(path.name, line) for path in sorted(skill.rglob("*.md")) for line in path.read_text().splitlines()
-          if _re.search(r"(?<![\w-])lane (?:--host \S+ )?start\s+\S", line)]
-assert len(starts) >= 2, starts
-for name, line in starts:
-    assert tagged in line, (name, line)
-assert "lane status --by <project>-coord" in remote
-for phrase in ("launch-status", "lane --host <host> status <lane-project>",
-               "lane --host <host> instruct <task>", "lane --host <host> report <task>",
-               "The human answers", "Held", "Refused"):
+for text in (main, remote):
+    assert tagged in text
+    assert "`--input` files" in text
+for phrase in ("../SKILL.md#lane-mechanics-read-the-bundled-coordinator", "grants no new publication, answer or launch authority",
+               "saved host/worker enrollment", "Keep STATE, other lanes' context, credentials and session trees",
+               "only to hosts its Hosts table allows", "a displayed remote path is not a local copy",
+               "not a replacement", "(covered-answers.md)", "legacy-herdr.md#remote-lanes-on-herdr-hosts"):
     assert phrase in remote, phrase
-assert "before retirement or cleanup" in remote
-assert "Everything else keeps" in remote and "herdr-lane" in remote
 assert "| Worker |" in coordination
 assert "`lane`" in coordination and "opt in" in coordination.lower()
 assert "without `lane` keeps" in lane
-assert "lane --host <host> instruct" in messaging
-assert "human answers" in messaging.lower()
+
+# One frozen legacy file holds every Herdr-only path; the old files only point at it.
+raw_legacy = (refs / "legacy-herdr.md").read_text()
+header = raw_legacy.split("## Attention and notes on every turn")[0]
+assert "For projects whose hosts are not lane workers; no new changes." in header
+for heading in ("## Attention and notes on every turn", "## Handoff line and session names",
+                "## Start a lane on a Herdr host", "## Close a closed lane's workspace",
+                "## Explicit Herdr lane launch", "### Manual local handoff", "## Local messages and attention",
+                "### Optional once-only local pointers", "### Explicit remote command", "#### Claude Code lanes",
+                "### Fetch before judging readiness", "### Close a closed remote lane workspace"):
+    assert heading + "\n" in raw_legacy, heading
+for phrase in ("herdr-lane --host <binding>", "scripts/messages.py", "scripts/send.py", "scripts/launch.py",
+               "reports/inbox/", "herdr workspace close <id>"):
+    assert phrase in legacy, phrase
+for name in ("messaging.md", "herdr-launch.md"):
+    stub = (refs / name).read_text()
+    assert "legacy-herdr.md#" in stub and len(stub.splitlines()) <= 5, name
+for script in ("launch.py", "send.py", "messages.py", "morning.py", "codex-review.sh", "claude-review.sh"):
+    assert (skill / "scripts" / script).is_file(), script
+
+# Lanes write the readiness evidence file and mark observed or inferred claims.
+for phrase in ("`reports/<number>-evidence.json` next to its report", "with the file-write tool",
+               '"prompt_sha256"', '"ci_head"', '"ready_claimed_at"', "`lanes/<number>-launch.json`",
+               "not an approval", "re-observe an inferred claim"):
+    assert phrase in common, phrase
+for phrase in ("writes the evidence file the shared workflow describes", "readiness checks",
+               "**observed** (command or source) or **inferred**"):
+    assert phrase in lane, phrase
+assert "carries `readiness`" in main and "wrote no evidence file" in main and "verify the PR yourself" in main
 
 lane_template = (refs / "lane-template.md").read_text()
-import re
 goals = re.findall(r"(?m)^#{1,2} Goal[ \t]*\r?\n(?:\r?\n)*([^\r\n]+)", lane_template)
 assert len(goals) == 1 and goals[0].strip(), goals
-assert "rerun the exact original `instruct` command" in remote
-assert "instruction-status" in remote and "lookup-only" in remote
 PY
   [ "$status" -eq 0 ] || {
     echo "$output"
@@ -800,8 +837,7 @@ skill = Path(sys.argv[1])
 refs = skill / "references"
 read = lambda path: " ".join(path.read_text().split())
 main, covered = read(skill / "SKILL.md"), read(refs / "covered-answers.md")
-remote, common, messaging = (read(refs / name) for name in
-                             ("remote-lanes.md", "common-rules-template.md", "messaging.md"))
+common, messaging = (read(refs / name) for name in ("common-rules-template.md", "legacy-herdr.md"))
 
 assert "[covered answers](references/covered-answers.md)" in main
 assert "anything unclear goes to the human" in main
@@ -826,33 +862,12 @@ command = covered.split("`lane answer <task> <key>")[1].split("`")[0]
 for flag in ("--by <coordinator-id>", "--expected-hash <card sha256>", "--note"):
     assert flag in command, flag
 assert "the gate lists you as an approver" in main and "lists it as an approver for that gate" in common
-for phrase in ("--by <coordinator-id>", "`--expected-hash`", "`card.sha256`",
-               "recorded as the enrolled owner's, relayed by the `--by` name"):
-    assert phrase in remote, phrase
-for text in (main, messaging):
-    rule = text.split("every Hosts row is `Worker: lane`")[1].split("[")[0]
-    for phrase in ("replace the Herdr snapshot", "inbox notes and `send.py`", "notes already published",
-                   "Herdr-only hosts keep them"):
-        assert phrase in rule, phrase
-    if text is main:
-        for phrase in ("`lane status`", "`lane instruct`", "`lane report`"):
-            assert phrase in rule, phrase
-assert "lane --host <host> report <task>" in messaging and "On a Herdr host, if the wrapper" in messaging
-assert "on a Herdr-only host, the messaging contract's once-only `send.py`" in main
+for phrase in ("Read status immediately before answering", "pass that row's card hash",
+               "If the card changed since you matched it to the rule, stop"):
+    assert phrase in covered, phrase
+assert "On a Herdr host, if the wrapper" in messaging and "(covered-answers.md)" in messaging
 assert "started by `lane` skips the note checkpoint and ready nudge" in common
 assert "read only notes its prompt names" in common
-assert "ready nudge (Herdr hosts only)" in read(refs / "lane-template.md")
-assert (skill / "scripts/send.py").is_file() and (skill / "scripts/messages.py").is_file()
-for text in (remote, messaging):
-    assert "(covered-answers.md)" in text
-    assert "never calls `lane answer`" not in text and "never answers one" not in text
-
-worker = remote.split("## Developerlanes worker (opt-in)")[1].split("## Bind the host")[0]
-for phrase in ("binds to the card cached by the last status read",
-               "run `lane --host <host> status <lane-project>` immediately before `lane --host <host> answer`",
-               "fresh start after a set-aside", "--creation-id <new UUID>",
-               "do not rename the prompt file", "if the card changed, stop"):
-    assert phrase in worker, phrase
 
 reply = main.split("6. **Reply in this order:**")[1].split("7. **Recommend")[0]
 for phrase in ("**Re-check first:**", "waits on the human", "re-observe its state now",
@@ -867,7 +882,7 @@ PY
 
 @test "remote rsync example passes user at host without an unsupported login flag" {
   command -v rsync >/dev/null || skip "rsync unavailable for transport example"
-  run python3 - "$SKILL_DIR/references/remote-lanes.md" <<'PY'
+  run python3 - "$SKILL_DIR/references/legacy-herdr.md" <<'PY'
 from pathlib import Path
 import re
 import sys
@@ -903,7 +918,7 @@ PY
 }
 
 @test "remote fetch example fails when only supplementary evidence exists" {
-  python3 - "$SKILL_DIR/references/remote-lanes.md" "$TEST_ROOT/fetch.sh" <<'PY'
+  python3 - "$SKILL_DIR/references/legacy-herdr.md" "$TEST_ROOT/fetch.sh" <<'PY'
 from pathlib import Path
 import fnmatch
 import re
@@ -929,7 +944,7 @@ import sys
 
 skills = Path(sys.argv[1])
 refs = skills / "lane-coordinator/references"
-messaging = " ".join((refs / "messaging.md").read_text().split())
+messaging = " ".join((refs / "legacy-herdr.md").read_text().split())
 for phrase in ("disposition=<pending|applied", "tom-decision", "A stale prompt hash is rejected",
                "inspect-only", "it never writes STATE"):
     assert phrase in messaging, phrase

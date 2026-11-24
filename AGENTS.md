@@ -66,7 +66,7 @@ Pi authenticates directly to the GitHub Copilot subscription through `/login`. S
 - `polish-core` — shared engine behind `/polish`, including per-language idiom rules.
 - `blindspot-pass` — pre-implementation risk surface.
 - `implementation-plan` — evidence-based implementation plan.
-- `lane-coordinator` — coordinate lanes across harnesses: manual handoffs with user-owned session naming by default, explicit named Herdr launches only on request, STATE.md, verified reports, and approval-gated publication.
+- `lane-coordinator` — coordinate lanes across harnesses: our habits (STATE.md, lane prompts, verified reports, routines, approval-gated publication) around the developerlanes bundled coordinator, which owns the `lane` commands; Herdr-only paths are frozen in one legacy reference.
 - `change-explainer` — reviewer-facing completed-change write-up.
 - `pr-closeout` — drive a PR to merge-ready in any repository (project review profiles, bot vs human thread rules, flake discipline, size check).
 - `pr-text` — plain-language PR bodies, review comments/replies and issues.

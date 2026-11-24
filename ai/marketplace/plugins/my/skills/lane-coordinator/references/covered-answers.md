@@ -39,5 +39,5 @@ Anything unclear goes to the human: no publication grant, a rule that only nearl
 or a card that mixes a covered part with one of the items above. Tool-permission, trust
 and sign-in dialogs are not question cards; nobody answers them through the lane API.
 
-For a `Worker: lane` host, refresh the card first: see
-[developerlanes worker](remote-lanes.md#developerlanes-worker-opt-in).
+Read status immediately before answering and pass that row's card hash. If the card
+changed since you matched it to the rule, stop and read it again.
