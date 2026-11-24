@@ -355,7 +355,9 @@ MISE
 @test "shell files never hard-code a user's home directory" {
   # Comment lines may show example paths; code must use $HOME.
   run bash -c 'cd "$1" || exit 2
-    mapfile -d "" files < <(git ls-files -z -- "*.zsh" "*.sh" "*.bash" "*.symlink" bin)
+    files=()
+    while IFS= read -r -d "" file; do files+=("$file"); done \
+      < <(git ls-files -z -- "*.zsh" "*.sh" "*.bash" "*.symlink" bin)
     (( ${#files[@]} )) || exit 2
     grep -nE "(^|[^[:alnum:]._/-])/(home|Users)/[[:alnum:]._-]+" -- "${files[@]}" |
       grep -vE "^[^:]+:[0-9]+:[[:space:]]*#"' _ "$REPO_ROOT"
