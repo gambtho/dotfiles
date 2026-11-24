@@ -357,7 +357,7 @@ MISE
   run bash -c 'cd "$1" || exit 2
     mapfile -d "" files < <(git ls-files -z -- "*.zsh" "*.sh" "*.bash" "*.symlink" bin)
     (( ${#files[@]} )) || exit 2
-    grep -nE "(^|[^[:alnum:]._/-])/(home|Users)/[^/[:space:]]+/" -- "${files[@]}" |
+    grep -nE "(^|[^[:alnum:]._/-])/(home|Users)/[[:alnum:]._-]+" -- "${files[@]}" |
       grep -vE "^[^:]+:[0-9]+:[[:space:]]*#"' _ "$REPO_ROOT"
   [ "$status" -eq 1 ]
   [ -z "$output" ]

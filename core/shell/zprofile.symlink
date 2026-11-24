@@ -21,7 +21,7 @@ for d in "$HOME/.local/bin" "$HOME/bin"; do
 done
 # The gh identity shim must win over a mise shim, even when PATH already had it.
 if [[ -d "$HOME/.dotfiles/bin" ]]; then
-  path=("$HOME/.dotfiles/bin" ${path:#"$HOME/.dotfiles/bin"})
+  path=("$HOME/.dotfiles/bin" "${(@)path:#"$HOME/.dotfiles/bin"}")
 fi
 if [[ -d "$HOME/.pi/agent/bin" ]]; then
   PATH="$HOME/.pi/agent/bin:$PATH"

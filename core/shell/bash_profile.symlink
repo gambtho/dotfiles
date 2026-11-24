@@ -27,7 +27,8 @@ fi
 PATH=":$PATH:"
 PATH="${PATH//":$HOME/.dotfiles/bin:"/:}"
 PATH="${PATH#:}"
-PATH="$HOME/.dotfiles/bin:${PATH%:}"
+PATH="${PATH%:}"
+PATH="$HOME/.dotfiles/bin${PATH:+:$PATH}"
 # A managed Pi must win over an npm copy (including one supplied by mise).
 if [ -d "$HOME/.pi/agent/bin" ]; then
   PATH="$HOME/.pi/agent/bin:$PATH"
