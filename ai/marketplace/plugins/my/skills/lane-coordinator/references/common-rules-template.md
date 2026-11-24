@@ -105,8 +105,9 @@ thread/review-body reads.
   `{"lane": "<lane name>", "prompt_sha256": "<prompt hash>", "evidence": {"pr": "<HTTPS link>", "head": "<full PR head commit>",
   "ci": "<result>", "ci_head": "<exact tested commit>", "size": {"files": 0, "additions": 0, "deletions": 0},
   "ready_claimed_at": "<ISO 8601 time with timezone>"}}`. Copy the lane name and prompt hash from the launch receipt
-  `lanes/<number>-launch.json`; the worker's own RULES.md wins where it differs. State unknown or pending checks
-  honestly. The file asks nothing and is not an approval.
+  `lanes/<number>-launch.json`; the worker's own RULES.md wins where it differs. Set `ready_claimed_at` when you
+  claim ready and keep it fixed for that claim. State unknown or pending checks honestly. An older `lane` ignores the
+  file, so keep the same facts in your report. The file asks nothing and is not an approval.
 - So a covered question does not wait on the human, the coordinator may answer your question card when the project
   lists it as an approver for that gate and an existing decision or standing rule already covers it: publish within the repository's PR rules, continue within approved scope,
   fix in-scope review findings, routine sandbox approvals. Its note cites the rule; check the citation, and ask again

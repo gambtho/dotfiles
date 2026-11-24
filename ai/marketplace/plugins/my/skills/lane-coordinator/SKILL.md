@@ -27,24 +27,29 @@ for invocation and capability limits outside Pi.
 For every host whose Hosts row says `Worker: lane`, read the coordinator skill bundled
 with developerlanes and follow it for start, status, steering, answers, reports, retire,
 cleanup, launch lookup and restart. This skill does not describe those commands. The file
-is `resources/skills/lane-coordinator/SKILL.md` inside the installed `lanes` package;
-`lane init` prints its full path. Record the path in COORDINATION.md and read the file
-once per session; use `lane commands --json` and `lane help <command>` for flags. If you
-cannot read it, stop and tell the human; do not run `lane` commands from memory.
+is `resources/skills/lane-coordinator/SKILL.md` inside the `lanes` package that the `lane`
+on PATH runs from, not another copy on the machine; `lane init` prints its full path.
+Record the path in COORDINATION.md and read the file once per session; take flags from
+`lane`'s own help. If you cannot read it, or it or the installed `lane` does not cover an
+operation or flag named here, stop and tell the human; do not run `lane` commands from
+memory or drop the flag.
 
 The bundled skill wins on commands, IDs, exit codes and their order. This skill and the
 project's rule files win on our habits: `W<n>` prompt files and templates, STATE layout,
 the review pack, routines, the authority table and writing rules. Those are this
 project's own rules, not additions the bundled skill warns against. Neither file adds authority.
 
-Hosts that are not lane workers use the frozen
+A host that is not a lane worker uses the frozen
 [Herdr-only legacy reference](references/legacy-herdr.md): for projects whose hosts are
-not lane workers; no new changes.
+not lane workers; no new changes. Choose per Hosts row; a project can have both kinds.
 
 ## Attention on every turn
 
-Before answering **every user message**, read this project's live lane state as the
-bundled skill describes, not only on `coordinate` or morning sweeps. Unknown or offline
+Before answering **every user message**, read this project's live lane state, not only
+on `coordinate` or morning sweeps: lane workers as the bundled skill describes, each
+Herdr-only host and its addressed notes by the
+[legacy reference](references/legacy-herdr.md#attention-and-notes-on-every-turn). Notes
+already published stay inputs after a host moves to `lane`. Unknown or offline
 status is not a clean sweep. Live working/blocked state beats a stale ready claim. Read
 the report and verify head/CI before advising action; reading status never grants
 pane-input or publication authority. Cross-coordinator notes are advisory `fyi` only,
@@ -310,7 +315,7 @@ a recorded decision or standing rule covers it; anything unclear goes to the hum
    ```
    **Re-check first:** before this line says a PR or lane waits on the human, re-observe
    its state now, as the stale-reminder rule above requires; an earlier message is not evidence.
-   When a status read or lane report reveals a human action, send this line
+   When a lane nudge, inbox note or status read reveals a human action, send this line
    via [the harness tool](references/harness-notes.md): one notification per lane state change.
    Record the attempt or skip in STATE; never repeat an unchanged item. Include lane id, action
    and owner only; never request or accept approval through a notification. Skip when the human

@@ -104,10 +104,15 @@ pointer = ' '.join(raw.split('## Lane mechanics: read the bundled coordinator\n'
 for phrase in ('`Worker: lane`', 'bundled with developerlanes and follow it',
                'This skill does not describe those commands',
                'resources/skills/lane-coordinator/SKILL.md', '`lane init` prints its full path',
-               'stop and tell the human', 'wins on commands', 'win on our habits', 'Neither file adds authority',
+               'that the `lane` on PATH runs from', 'does not cover an operation or flag named here',
+               'Choose per Hosts row', 'stop and tell the human', 'wins on commands', 'win on our habits', 'Neither file adds authority',
                'references/legacy-herdr.md'):
     assert phrase in pointer, phrase
 assert '**every user message**' in coordinator
+attention = ' '.join(raw.split('## Attention on every turn\n', 1)[1].split('\n## ', 1)[0].split())
+for phrase in ('lane workers as the bundled skill describes', 'each Herdr-only host and its addressed notes',
+               'legacy-herdr.md#attention-and-notes-on-every-turn', 'Notes already published stay inputs'):
+    assert phrase in attention, phrase
 assert len(raw.splitlines()) < 470, 'The skill holds habits; mechanics belong to the bundled coordinator'
 # Mechanics live in the bundled skill: the coordinator's own files carry no lane command lines.
 commands = re.compile(r'`lane (?:--host \S+ )?(?:start|status|instruct|answer|report|retire|cleanup|launch-status|inbox)\b')
@@ -164,7 +169,7 @@ import sys
 
 skill = Path(sys.argv[1])
 reports = ' '.join((skill / 'SKILL.md').read_text().split('## Handle a lane report\n', 1)[1].split('\n## ', 1)[0].split())
-for phrase in ('status read or lane report', 'one notification per lane state change',
+for phrase in ('lane nudge, inbox note or status read', 'one notification per lane state change',
                'Record the attempt or skip in STATE', 'never repeat an unchanged item',
                'lane id, action and owner only', 'never request or accept approval',
                'clearly at the terminal', 'harness-notes.md'):
@@ -783,7 +788,8 @@ for text in (main, remote):
 for phrase in ("../SKILL.md#lane-mechanics-read-the-bundled-coordinator", "grants no new publication, answer or launch authority",
                "saved host/worker enrollment", "Keep STATE, other lanes' context, credentials and session trees",
                "only to hosts its Hosts table allows", "a displayed remote path is not a local copy",
-               "not a replacement", "(covered-answers.md)", "legacy-herdr.md#remote-lanes-on-herdr-hosts"):
+               "not a replacement", "(covered-answers.md)", "legacy-herdr.md#remote-lanes-on-herdr-hosts",
+               "fresh start after a set-aside reuses the same prompt file", "Do not rename it"):
     assert phrase in remote, phrase
 assert "| Worker |" in coordination
 assert "`lane`" in coordination and "opt in" in coordination.lower()
@@ -811,7 +817,8 @@ for script in ("launch.py", "send.py", "messages.py", "morning.py", "codex-revie
 # Lanes write the readiness evidence file and mark observed or inferred claims.
 for phrase in ("`reports/<number>-evidence.json` next to its report", "with the file-write tool",
                '"prompt_sha256"', '"ci_head"', '"ready_claimed_at"', "`lanes/<number>-launch.json`",
-               "not an approval", "re-observe an inferred claim"):
+               "not an approval", "re-observe an inferred claim", "keep it fixed for that claim",
+               "An older `lane` ignores the file"):
     assert phrase in common, phrase
 for phrase in ("writes the evidence file the shared workflow describes", "readiness checks",
                "**observed** (command or source) or **inferred**"):
