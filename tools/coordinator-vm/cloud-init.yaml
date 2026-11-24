@@ -1,0 +1,47 @@
+#cloud-config
+# First boot for the coordinator VM. No secrets here: Azure stores this text
+# with the VM and anyone who can read the VM can read it. Sign-ins are manual;
+# see README.md beside this file.
+#
+# deploy.sh replaces the two @...@ values with the Git identity of the person
+# who deploys. Everything else happens in provision.sh, from a fresh clone, so
+# the same steps can be rerun by hand.
+package_update: true
+package_upgrade: true
+apt:
+  sources:
+    azure-cli:
+      source: "deb [arch=amd64 signed-by=$KEY_FILE] https://packages.microsoft.com/repos/azure-cli/ $RELEASE main"
+      keyid: BC528686B50D79E339D3721CEB3E94ADBE1229CF
+      keyserver: keyserver.ubuntu.com
+    tailscale:
+      source: "deb [signed-by=$KEY_FILE] https://pkgs.tailscale.com/stable/ubuntu $RELEASE main"
+      keyid: 2596A99EAAB33821893C0A79458CA832957F5868
+      keyserver: keyserver.ubuntu.com
+packages:
+  - azure-cli
+  - ca-certificates
+  - curl
+  - git
+  - jq
+  - make
+  - pipx
+  - tailscale
+  - unattended-upgrades
+write_files:
+  - path: /etc/coordinator-vm/git-identity
+    permissions: "0644"
+    content: |
+      [user]
+        name = @GIT_NAME@
+        email = @GIT_EMAIL@
+runcmd:
+  # The admin account is the first ordinary user Azure creates.
+  - [sh, -c, 'loginctl enable-linger "$(id -nu 1000)"']
+  - - sh
+    - -c
+    - >-
+      sudo -H -u "$(id -nu 1000)" sh -c
+      'git clone https://github.com/gambtho/dotfiles.git "$HOME/.dotfiles" &&
+      bash "$HOME/.dotfiles/tools/coordinator-vm/provision.sh" /etc/coordinator-vm/git-identity'
+      > /var/log/coordinator-provision.log 2>&1

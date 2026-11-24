@@ -88,6 +88,10 @@ Pi authenticates directly to the GitHub Copilot subscription through `/login`. S
 
 `tools/automations/` holds three opt-in Monday reviews (`tooling-radar`, `dotfiles-health`, `lane-review`), run by `libexec/automation_run.py` from systemd user timers. Each opens a PR with a report and, where allowed, small fixes; none merges. The agent runs sandboxed with file tools only, and the runner does all publishing. `lane-review` reads private project data, so it publishes only to a verified private repository. See `tools/automations/README.md`. Keep the sandbox allowlist, per-automation fix lists, protected paths and secret scan in step with that README and the prompts.
 
+## Coordinator VM
+
+`tools/coordinator-vm/` holds the Azure template, cloud-init and first-boot runbook for one always-on VM that runs project coordinator sessions. `deploy.sh` previews with `what-if` by default; creating or changing Azure resources is the owner's decision. Keep secrets out of `cloud-init.yaml`, keep the VM without a public IP, inbound rule or role grant, and keep `tests/coordinator_vm.bats` in step.
+
 ## Adding resources
 
 For a skill, create `ai/marketplace/plugins/my/skills/<name>/SKILL.md` with valid `name` and `description` frontmatter, then add it to `package.json`.
