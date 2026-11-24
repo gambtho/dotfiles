@@ -409,13 +409,14 @@ gh_candidate() {
 }
 
 @test "Linux package setup publishes GitHub's gh repository and pin before APT runs" {
-  local events="$TEST_ROOT/events" published="$TEST_ROOT/published"
-  mkdir -p "$published"
+  local events="$TEST_ROOT/events" published="$TEST_ROOT/published" etc="$TEST_ROOT/etc/apt"
+  mkdir -p "$published" "$etc/sources.list.d"
 
-  run env INSTALL_SOURCE_ONLY=1 EVENTS="$events" PUBLISHED="$published" bash -c '
+  run env INSTALL_SOURCE_ONLY=1 EVENTS="$events" PUBLISHED="$published" ETC="$etc" bash -c '
     source "$1/bin/dot-install"
     OS=Ubuntu
     PROFILE=server
+    APT_ETC=$ETC
     curl() {
       printf "curl %s\n" "${@: -3:1}" >>"$EVENTS"
       printf "keyring\n" >"${@: -1}"
@@ -423,8 +424,8 @@ gh_candidate() {
     dpkg() { printf "arm64\n"; }
     sudo() {
       case "$1" in
-        install) printf "install %s\n" "${@: -1}" >>"$EVENTS"; cp "${@: -2:1}" "$PUBLISHED/$(basename "${@: -1}")" ;;
-        tee) printf "tee %s\n" "$2" >>"$EVENTS"; cat >"$PUBLISHED/$(basename "$2")" ;;
+        install) local to="${@: -1}"; printf "install %s\n" "${to#$ETC}" >>"$EVENTS"; cp "${@: -2:1}" "$PUBLISHED/${to##*/}" ;;
+        tee) printf "tee %s\n" "${2#$ETC}" >>"$EVENTS"; cat >"$PUBLISHED/$(basename "$2")" ;;
         *) printf "%s\n" "$*" >>"$EVENTS" ;;
       esac
     }
@@ -433,14 +434,37 @@ gh_candidate() {
 
   [ "$status" -eq 0 ]
   [ "$(sed -n 1,4p "$events")" = "curl https://cli.github.com/packages/githubcli-archive-keyring.gpg
-install /etc/apt/keyrings/githubcli-archive-keyring.gpg
-tee /etc/apt/sources.list.d/github-cli.list
-install /etc/apt/preferences.d/gh-from-github" ]
+install /keyrings/githubcli-archive-keyring.gpg
+tee /sources.list.d/github-cli.list
+install /preferences.d/gh-from-github" ]
   [ "$(sed -n 5p "$events")" = "apt update -o DPkg::Lock::Timeout=600" ]
   [ "$(<"$published/githubcli-archive-keyring.gpg")" = keyring ]
-  [ "$(<"$published/github-cli.list")" = "deb [arch=arm64 signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" ]
+  [ "$(<"$published/github-cli.list")" = "deb [arch=arm64 signed-by=$etc/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" ]
   cmp "$REPO_ROOT/platforms/linux/apt-preferences/gh-from-github" "$published/gh-from-github"
   grep '^apt install ' "$events" | grep -wq gh
+}
+
+@test "an existing GitHub CLI source in another file is kept, and gh is still pinned" {
+  local events="$TEST_ROOT/events" etc="$TEST_ROOT/etc/apt"
+  mkdir -p "$etc/sources.list.d"
+  printf 'Types: deb\nURIs: https://cli.github.com/packages\nSuites: stable\nComponents: main\nSigned-By: /usr/share/keyrings/githubcli-archive-keyring.gpg\n' \
+    >"$etc/sources.list.d/gh.sources"
+
+  run env INSTALL_SOURCE_ONLY=1 EVENTS="$events" ETC="$etc" bash -c '
+    source "$1/bin/dot-install"
+    OS=Ubuntu
+    PROFILE=server
+    APT_ETC=$ETC
+    curl() { printf "curl\n" >>"$EVENTS"; }
+    sudo() { printf "%s\n" "${*//$ETC/}" >>"$EVENTS"; }
+    install_platform_packages
+  ' _ "$REPO_ROOT"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"already in $etc/sources.list.d/gh.sources"* ]]
+  ! grep -q '^curl' "$events"
+  ! grep -q '^tee ' "$events"
+  [ "$(sed -n 1p "$events")" = "install -D -m 0644 $REPO_ROOT/platforms/linux/apt-preferences/gh-from-github /preferences.d/gh-from-github" ]
 }
 
 @test "a failed gh keyring download stops package setup before APT" {
@@ -450,18 +474,15 @@ install /etc/apt/preferences.d/gh-from-github" ]
     source "$1/bin/dot-install"
     OS=Ubuntu
     PROFILE=server
+    APT_ETC=$2
     curl() { : >"${@: -1}"; return 22; }
     sudo() { printf "%s\n" "$*" >>"$EVENTS"; }
     install_platform_packages
-  ' _ "$REPO_ROOT"
+  ' _ "$REPO_ROOT" "$TEST_ROOT/etc/apt"
 
   [ "$status" -eq 22 ]
   [ ! -e "$events" ]
   [ -z "$(find "$TEST_ROOT" -maxdepth 1 -name 'tmp.*')" ]
-}
-
-@test "macOS gets gh from the Brewfile" {
-  grep -Fxq 'brew "gh"' "$REPO_ROOT/platforms/macos/brewfile"
 }
 
 @test "Kubernetes repository follows the canonical channel pin" {

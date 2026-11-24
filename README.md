@@ -111,10 +111,13 @@ silently downgrades. Other packages continue to receive normal distro upgrades.
 
 On every Linux profile, package provisioning adds GitHub's own `gh` repository
 (`/etc/apt/sources.list.d/github-cli.list`, keyring
-`/etc/apt/keyrings/githubcli-archive-keyring.gpg`) and pins `gh` to it with
+`/etc/apt/keyrings/githubcli-archive-keyring.gpg`) and prefers it for `gh` with
 `/etc/apt/preferences.d/gh-from-github` (priority 600). Ubuntu's `gh` is far
 behind, and Ubuntu Pro's esm-apps pin (510) would otherwise keep it. An older
-`gh` is upgraded in the same run. macOS gets `gh` from the Brewfile.
+`gh` is upgraded once APT has fetched GitHub's index; if that fetch fails, the
+next `bin/dot-install` or `bin/dot-update` does it. A machine that already lists
+GitHub's repository in another source file keeps that entry. macOS gets `gh`
+from the Brewfile.
 
 Linux provisioning also installs checksum-pinned Mike Farah `yq` into
 `~/.local/bin` as a required tools phase, using `config/versions.env`. This is not
