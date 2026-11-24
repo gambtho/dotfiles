@@ -687,7 +687,7 @@ CASES
   printf '#!/bin/sh\necho RUNTIME_RAN\n' >"$shims/fixture-runtime"
   chmod +x "$shims/fixture-runtime"
 
-  run env INSTALL_SOURCE_ONLY=1 HOME="$HOME" bash -c '
+  run env INSTALL_SOURCE_ONLY=1 HOME="$HOME" MISE_DATA_DIR="${shims%/shims}" bash -c '
     source "$1/bin/dot-install"
     PROFILE=server
     bash() { :; }
