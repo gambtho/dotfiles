@@ -1,0 +1,228 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "description": "One always-on coordinator VM: no public IP on the VM, no inbound, encryption at host, identity without role grants."
+  },
+  "parameters": {
+    "location": { "type": "string" },
+    "resourceGroupName": { "type": "string", "defaultValue": "rg-coordinator" },
+    "vmName": { "type": "string", "defaultValue": "coordinator" },
+    "vmSize": { "type": "string", "defaultValue": "Standard_D4as_v5" },
+    "osDiskSizeGB": { "type": "int", "defaultValue": 128 },
+    "osDiskSku": { "type": "string", "defaultValue": "Premium_LRS", "allowedValues": ["Premium_LRS", "StandardSSD_LRS"] },
+    "adminUsername": { "type": "string" },
+    "adminSshPublicKey": { "type": "string" },
+    "cloudInit": { "type": "string", "metadata": { "description": "Rendered cloud-init text. It is readable by anyone who can read the VM, so it must hold no secrets." } }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Resources/resourceGroups",
+      "apiVersion": "2024-03-01",
+      "name": "[parameters('resourceGroupName')]",
+      "location": "[parameters('location')]"
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2024-03-01",
+      "name": "[concat(parameters('vmName'), '-resources')]",
+      "resourceGroup": "[parameters('resourceGroupName')]",
+      "dependsOn": [
+        "[subscriptionResourceId('Microsoft.Resources/resourceGroups', parameters('resourceGroupName'))]"
+      ],
+      "properties": {
+        "mode": "Incremental",
+        "expressionEvaluationOptions": { "scope": "inner" },
+        "parameters": {
+          "location": { "value": "[parameters('location')]" },
+          "vmName": { "value": "[parameters('vmName')]" },
+          "vmSize": { "value": "[parameters('vmSize')]" },
+          "osDiskSizeGB": { "value": "[parameters('osDiskSizeGB')]" },
+          "osDiskSku": { "value": "[parameters('osDiskSku')]" },
+          "adminUsername": { "value": "[parameters('adminUsername')]" },
+          "adminSshPublicKey": { "value": "[parameters('adminSshPublicKey')]" },
+          "cloudInit": { "value": "[parameters('cloudInit')]" }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "parameters": {
+            "location": { "type": "string" },
+            "vmName": { "type": "string" },
+            "vmSize": { "type": "string" },
+            "osDiskSizeGB": { "type": "int" },
+            "osDiskSku": { "type": "string" },
+            "adminUsername": { "type": "string" },
+            "adminSshPublicKey": { "type": "string" },
+            "cloudInit": { "type": "string" }
+          },
+          "variables": {
+            "nsgName": "[concat(parameters('vmName'), '-nsg')]",
+            "natIpName": "[concat(parameters('vmName'), '-nat-ip')]",
+            "natName": "[concat(parameters('vmName'), '-nat')]",
+            "vnetName": "[concat(parameters('vmName'), '-vnet')]",
+            "subnetName": "default",
+            "nicName": "[concat(parameters('vmName'), '-nic')]"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Network/networkSecurityGroups",
+              "apiVersion": "2024-05-01",
+              "name": "[variables('nsgName')]",
+              "location": "[parameters('location')]",
+              "properties": {
+                "securityRules": [
+                  {
+                    "name": "DenyAllInbound",
+                    "properties": {
+                      "description": "No inbound at all, including from inside the network. Access is outbound-initiated: Relay and Tailscale.",
+                      "priority": 100,
+                      "direction": "Inbound",
+                      "access": "Deny",
+                      "protocol": "*",
+                      "sourceAddressPrefix": "*",
+                      "sourcePortRange": "*",
+                      "destinationAddressPrefix": "*",
+                      "destinationPortRange": "*"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "type": "Microsoft.Network/publicIPAddresses",
+              "apiVersion": "2024-05-01",
+              "name": "[variables('natIpName')]",
+              "location": "[parameters('location')]",
+              "sku": { "name": "Standard" },
+              "properties": { "publicIPAllocationMethod": "Static", "publicIPAddressVersion": "IPv4" }
+            },
+            {
+              "type": "Microsoft.Network/natGateways",
+              "apiVersion": "2024-05-01",
+              "name": "[variables('natName')]",
+              "location": "[parameters('location')]",
+              "sku": { "name": "Standard" },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/publicIPAddresses', variables('natIpName'))]"
+              ],
+              "properties": {
+                "idleTimeoutInMinutes": 4,
+                "publicIpAddresses": [
+                  { "id": "[resourceId('Microsoft.Network/publicIPAddresses', variables('natIpName'))]" }
+                ]
+              }
+            },
+            {
+              "type": "Microsoft.Network/virtualNetworks",
+              "apiVersion": "2024-05-01",
+              "name": "[variables('vnetName')]",
+              "location": "[parameters('location')]",
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/networkSecurityGroups', variables('nsgName'))]",
+                "[resourceId('Microsoft.Network/natGateways', variables('natName'))]"
+              ],
+              "properties": {
+                "addressSpace": { "addressPrefixes": ["10.90.0.0/24"] },
+                "subnets": [
+                  {
+                    "name": "[variables('subnetName')]",
+                    "properties": {
+                      "addressPrefix": "10.90.0.0/26",
+                      "defaultOutboundAccess": false,
+                      "networkSecurityGroup": { "id": "[resourceId('Microsoft.Network/networkSecurityGroups', variables('nsgName'))]" },
+                      "natGateway": { "id": "[resourceId('Microsoft.Network/natGateways', variables('natName'))]" }
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "type": "Microsoft.Network/networkInterfaces",
+              "apiVersion": "2024-05-01",
+              "name": "[variables('nicName')]",
+              "location": "[parameters('location')]",
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetName'))]"
+              ],
+              "properties": {
+                "ipConfigurations": [
+                  {
+                    "name": "ipconfig1",
+                    "properties": {
+                      "privateIPAllocationMethod": "Dynamic",
+                      "subnet": { "id": "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('vnetName'), variables('subnetName'))]" }
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "type": "Microsoft.Compute/virtualMachines",
+              "apiVersion": "2024-07-01",
+              "name": "[parameters('vmName')]",
+              "location": "[parameters('location')]",
+              "identity": { "type": "SystemAssigned" },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/networkInterfaces', variables('nicName'))]"
+              ],
+              "properties": {
+                "hardwareProfile": { "vmSize": "[parameters('vmSize')]" },
+                "securityProfile": {
+                  "encryptionAtHost": true,
+                  "securityType": "TrustedLaunch",
+                  "uefiSettings": { "secureBootEnabled": true, "vTpmEnabled": true }
+                },
+                "storageProfile": {
+                  "imageReference": {
+                    "publisher": "Canonical",
+                    "offer": "ubuntu-24_04-lts",
+                    "sku": "server",
+                    "version": "latest"
+                  },
+                  "osDisk": {
+                    "name": "[concat(parameters('vmName'), '-os')]",
+                    "createOption": "FromImage",
+                    "diskSizeGB": "[parameters('osDiskSizeGB')]",
+                    "managedDisk": { "storageAccountType": "[parameters('osDiskSku')]" },
+                    "deleteOption": "Delete"
+                  }
+                },
+                "osProfile": {
+                  "computerName": "[parameters('vmName')]",
+                  "adminUsername": "[parameters('adminUsername')]",
+                  "customData": "[base64(parameters('cloudInit'))]",
+                  "linuxConfiguration": {
+                    "disablePasswordAuthentication": true,
+                    "ssh": {
+                      "publicKeys": [
+                        {
+                          "path": "[concat('/home/', parameters('adminUsername'), '/.ssh/authorized_keys')]",
+                          "keyData": "[parameters('adminSshPublicKey')]"
+                        }
+                      ]
+                    },
+                    "patchSettings": { "patchMode": "ImageDefault" }
+                  }
+                },
+                "networkProfile": {
+                  "networkInterfaces": [
+                    {
+                      "id": "[resourceId('Microsoft.Network/networkInterfaces', variables('nicName'))]",
+                      "properties": { "deleteOption": "Delete" }
+                    }
+                  ]
+                },
+                "diagnosticsProfile": { "bootDiagnostics": { "enabled": true } }
+              }
+            }
+          ],
+          "outputs": {
+            "vmId": { "type": "string", "value": "[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]" },
+            "privateIp": { "type": "string", "value": "[reference(resourceId('Microsoft.Network/networkInterfaces', variables('nicName')), '2024-05-01').ipConfigurations[0].properties.privateIPAddress]" }
+          }
+        }
+      }
+    }
+  ]
+}
