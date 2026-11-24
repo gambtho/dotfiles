@@ -44,10 +44,15 @@ done'
 case "$*" in
   *"--get user.name") printf "%s\n" "${GIT_NAME-Test Person}" ;;
   *"--get user.email") printf "%s\n" "${GIT_EMAIL-test@example.com}" ;;
-  *" fetch --quiet https://github.com/gambtho/dotfiles.git main")
-    printf "fetch\n" >>"$CALLS"
-    exec /usr/bin/git "$1" "$2" fetch --quiet "$PUBLISHED" main
+  *" ls-remote https://github.com/gambtho/dotfiles.git refs/heads/main")
+    printf "ls-remote\n" >>"$CALLS"
+    exec /usr/bin/git "$1" "$2" ls-remote "$PUBLISHED" refs/heads/main
     ;;
+  *" fetch --quiet --no-write-fetch-head https://github.com/gambtho/dotfiles.git main")
+    exec /usr/bin/git "$1" "$2" fetch --quiet --no-write-fetch-head "$PUBLISHED" main
+    ;;
+  # Anything else that would reach a network fails the test.
+  *" fetch "* | *" ls-remote "* | *" clone "* | *" pull "* | *" push "*) exit 97 ;;
   *) exec /usr/bin/git "$@" ;;
 esac'
   make_checkout
@@ -150,7 +155,7 @@ esac'
   write_public_key
   run bash "$DEPLOY" create --subscription sub-id --admin-user coordinatoradmin --ssh-key "$TEST_ROOT/key.pub" --location westus3
   [ "$status" -eq 0 ]
-  [ "$(head -n 1 "$CALLS")" = fetch ]
+  [ "$(head -n 1 "$CALLS")" = ls-remote ]
   grep -q '^deployment sub create --subscription sub-id --location westus3 ' "$CALLS"
   # The script and cloud-init must name the same repository.
   grep -Fq 'git clone https://github.com/gambtho/dotfiles.git ' "$SRC/cloud-init.yaml"
@@ -159,11 +164,13 @@ esac'
 @test "deploy refuses to create from a commit the public main does not have" {
   stub_deploy_tools
   write_public_key
+  # On the checkout's own origin/main, as in a fork, but not on the public main.
   git -C "$CHECKOUT" -c user.name=t -c user.email=t@example.com commit -q --allow-empty -m unpublished
+  git -C "$CHECKOUT" update-ref refs/remotes/origin/main HEAD
   run bash "$DEPLOY" create --subscription sub-id --admin-user coordinatoradmin --ssh-key "$TEST_ROOT/key.pub"
   [ "$status" -eq 1 ]
   [[ "$output" == *"on main of https://github.com/gambtho/dotfiles.git"* ]]
-  [ "$(cat "$CALLS")" = fetch ]
+  [ "$(cat "$CALLS")" = ls-remote ]
   # A preview from the same commit is still allowed.
   run bash "$DEPLOY" what-if --subscription sub-id --admin-user coordinatoradmin --ssh-key "$TEST_ROOT/key.pub"
   [ "$status" -eq 0 ]
@@ -201,7 +208,7 @@ esac'
   cp "$SRC/provision.sh" "$SRC/coordinator-herdr.service" "$checkout/tools/coordinator-vm/"
   printf '#!/usr/bin/env bash\nprintf "bootstrap %%s global=%%s\\n" "$*" "${GIT_CONFIG_GLOBAL:-}" >>"$CALLS"\n' >"$checkout/libexec/bootstrap"
   printf '#!/usr/bin/env bash\nprintf "dot-install\\n" >>"$CALLS"\n' >"$checkout/bin/dot-install"
-  stub_command systemctl 'printf "systemctl %s\n" "$*" >>"$CALLS"; [[ "$*" != *is-active* || ${HERDR_DOWN:-0} != 1 ]]'
+  stub_command systemctl 'printf "systemctl %s\n" "$*" >>"$CALLS"'
   stub_command sleep ':'
 
   # dot-install can succeed without Herdr; provisioning must not.
@@ -212,20 +219,19 @@ esac'
 
   : >"$CALLS"
   mkdir -p "$HOME/.local/bin"
-  printf '#!/bin/sh\n' >"$HOME/.local/bin/herdr"
+  printf '#!/bin/sh\n[ "${HERDR_DOWN:-0}" != 1 ]\n' >"$HOME/.local/bin/herdr"
   chmod +x "$HOME/.local/bin/herdr"
   run bash "$checkout/tools/coordinator-vm/provision.sh" "$TEST_ROOT/identity"
   [ "$status" -eq 0 ]
   [ "$(cat "$CALLS")" = "bootstrap --non-interactive --profile server global=$TEST_ROOT/identity
 dot-install
 systemctl --user daemon-reload
-systemctl --user enable --now coordinator-herdr.service
-systemctl --user is-active --quiet coordinator-herdr.service" ]
+systemctl --user enable --now coordinator-herdr.service" ]
   cmp "$SRC/coordinator-herdr.service" "$XDG_CONFIG_HOME/systemd/user/coordinator-herdr.service"
 
   HERDR_DOWN=1 run bash "$checkout/tools/coordinator-vm/provision.sh" "$TEST_ROOT/identity"
   [ "$status" -eq 1 ]
-  [[ "$output" == *"did not stay up"* ]]
+  [[ "$output" == *"did not answer"* ]]
 
   # A rerun after bootstrap wrote the local identity no longer needs the file.
   : >"$CALLS"

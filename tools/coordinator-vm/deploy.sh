@@ -80,8 +80,11 @@ fi
 
 revision=$(git -C "$here" rev-parse --verify 'HEAD^{commit}')
 if [[ "$mode" == create ]]; then
-  git -C "$here" fetch --quiet "$repository_url" main
-  if ! git -C "$here" merge-base --is-ancestor "$revision" FETCH_HEAD; then
+  # Compare with the commit the server names, not a ref another fetch in this
+  # checkout could move meanwhile.
+  published=$(git -C "$here" ls-remote "$repository_url" refs/heads/main | cut -f1)
+  git -C "$here" fetch --quiet --no-write-fetch-head "$repository_url" main
+  if [[ -z "$published" ]] || ! git -C "$here" merge-base --is-ancestor "$revision" "$published"; then
     printf 'deploy.sh: create from a commit that is on main of %s; the VM clones it from there.\n' "$repository_url" >&2
     exit 1
   fi

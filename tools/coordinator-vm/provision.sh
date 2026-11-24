@@ -43,11 +43,18 @@ mkdir -p "$unit_dir"
 install -m 0644 "$DOTFILES_ROOT/tools/coordinator-vm/coordinator-herdr.service" "$unit_dir/coordinator-herdr.service"
 systemctl --user daemon-reload
 systemctl --user enable --now coordinator-herdr.service
-# The unit counts as started once mise runs, before Herdr itself is up. A
-# server that died is restarting by now, which is not "active".
-sleep 5
-if ! systemctl --user is-active --quiet coordinator-herdr.service; then
-  printf '%s\n' 'provision.sh: coordinator-herdr.service did not stay up; see journalctl --user -u coordinator-herdr.service.' >&2
+# The unit counts as started once mise runs, before Herdr itself is up, so ask
+# the server.
+ready=false
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+  if "$HOME/.local/bin/herdr" workspace list >/dev/null 2>&1; then
+    ready=true
+    break
+  fi
+  sleep 2
+done
+if [[ "$ready" != true ]]; then
+  printf '%s\n' 'provision.sh: the Herdr server did not answer; see journalctl --user -u coordinator-herdr.service.' >&2
   exit 1
 fi
 
