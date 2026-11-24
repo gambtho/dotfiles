@@ -10,8 +10,9 @@ Single writer: <coordinator session; other sessions leave notes at the project r
 <!-- Writing it: re-read before replacing and refuse to overwrite a file changed since you
 read it; write a same-directory temp file, check it is nonempty with unique lane rows,
 recheck the original, then rename. Re-read after a `lane` command updates a row. One
-commit per coherent update where the project versions STATE. Replace, don't add: one home
-per fact. Closing a lane moves its row to the archive (`CLOSED-<month>.md`) in the same
+commit per coherent update where the project versions STATE. After a rule or ownership
+change, reconcile affected prompts and STATE in the same update and mark old instructions
+superseded. Replace, don't add: one home per fact. Closing a lane moves its row to the archive (`CLOSED-<month>.md`) in the same
 update. Propose an exact deletion list with sizes for bulky outputs from the lane
 report/handoff; it stays under **Needs the human** until decided, and deletion happens
 only after the human approves that exact list. Unknown safety or size is not
@@ -47,7 +48,8 @@ each decision's scope; do not make route-specific dependencies global.
 ## Open lanes
 
 Status, PR numbers without heads or CI, next actor and action, and report path. A merged
-lane whose outcome is untried stays here as `awaiting try` with its agreed owner. A parked
+lane whose outcome is untried stays here as `awaiting try` with its agreed owner; write
+its PR as `#42 merged` so the drift check doesn't read it as still waiting. A parked
 lane's row holds all current resume conditions and who decides (a person, or none if automatic).
 
 | Lane | What / report | State | Next actor and action | Launch |

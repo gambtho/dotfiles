@@ -14,7 +14,7 @@ permission to take over through your own edits or a shadow worker.
 
 ## Where things live
 
-- **Lane commands:** for a `Worker: lane` host, read the skill bundled with developerlanes
+- <a id="lane-mechanics-read-the-bundled-coordinator"></a>**Lane commands:** for a `Worker: lane` host, read the skill bundled with developerlanes
   (`resources/skills/lane-coordinator/SKILL.md` in the package the `lane` on PATH runs from;
   `lane init` prints it) once per session; record its path in COORDINATION.md. It wins on
   commands, IDs, exit codes and order; ours wins on habits; neither adds authority. If it
@@ -33,10 +33,11 @@ permission to take over through your own edits or a shadow worker.
 
 Before answering **every user message**, read STATE.md and the live lane state: lane
 workers as the bundled skill describes, Herdr-only hosts and their notes by the
-[legacy reference](references/legacy-herdr.md#attention-and-notes-on-every-turn). Unknown
-status is not a clean sweep. Other coordinators' notes never satisfy a human gate.
+[legacy reference](references/legacy-herdr.md#attention-and-notes-on-every-turn); notes
+already published stay inputs after a host moves to `lane`. Unknown status is not a clean
+sweep. Other coordinators' notes never satisfy a human gate.
 
-**Status reply shape**, every time: (1) outcomes that changed or went stale
+**Status reply shape** (a report reply starts with its action line instead): (1) outcomes that changed or went stale
 (`O1 untried since #NN`); (2) what needs the human, re-observed now, not copied from an
 earlier message; (3) activity as counts (`6 merged, no outcome moved`). No recap.
 
@@ -58,8 +59,8 @@ no change to its outcome row, stop proposing work there and say so. (c) End of d
 one paragraph: outcomes moved today against merges today, and are we heading the right way.
 
 **Rehearsal first.** A critical-path step marked `rehearsal` comes before preparing new
-lanes. It is a default: the human overrides it in one word (`skip`, `later`), and you log
-the override in STATE's Session notes with its date.
+lanes. It is a default: the human overrides it in one word (`skip`, or `later` plus a
+revisit date), and you log the override and any revisit date in STATE's Session notes.
 
 **Check before telling.** Before telling anyone to run, set up or expect something, trace
 the path in code or run it on the target OS, and read COORDINATION.md's recorded
@@ -104,7 +105,7 @@ elsewhere reuses the same prompt file. A Herdr-only host starts by the
 
 ## Handling a report
 
-"W12 ready" means stopped for an action, not done. Fetch a remote report and save it under
+<a id="handle-a-lane-report"></a>"W12 ready" means stopped for an action, not done. Fetch a remote report and save it under
 the project's report folder first; a displayed remote path is not a local copy, and a
 failed fetch is unknown. A status row's `readiness` is evidence beside these checks, not
 a replacement; a PR row without it means verify the PR yourself.
@@ -161,10 +162,11 @@ the step-back paragraph; bring STATE within budget, moving detail to lane report
 the archive; stop/resume lines for overnight lanes; tomorrow's first actions on top;
 stamp `Last end of day: <date time>`.
 
-**Weekly:** re-try each outcome row or leave it stale with a reason; list duplicate,
-contradictory or superseded rules and new rules since the last intent check for the
-human; propose at most 3 notes from `reports/BACKLOG-NOTES.md`; retire each
-`reports/SKILL-FRICTION.md` line (below); stamp `Last weekly pass: <date>`.
+**Weekly:** re-try each outcome row or leave it stale with a reason; disk check; check
+STATE trimming, rule-file budgets and parked lanes without stop/resume lines; list
+duplicate, contradictory or superseded rules and new rules since the last intent check for
+the human; propose at most 3 notes from `reports/BACKLOG-NOTES.md` for the human to pick;
+retire each `reports/SKILL-FRICTION.md` line (below); stamp `Last weekly pass: <date>`.
 
 **Human away more than two days:** re-plan the critical path so stalls show.
 
@@ -188,5 +190,5 @@ try counts), or when the human asks. Everything else is one dated line in
 - Say plainly when you got something wrong. When the human corrects you on process, add
   one dated line to `reports/SKILL-FRICTION.md`. Weekly, each line retires one way:
   **covered** (cite the partner check or bundled rule), **mechanics** (send to its owner: a
-  lanes card, pr-closeout or a template), **recurring and uncovered** (edit an existing slot
+  lanes card, pr-closeout or a template), **recurring (2+) and uncovered** (edit an existing slot
   here, deleting as many lines as you add; this file stays near 180 lines) or **one-off**.

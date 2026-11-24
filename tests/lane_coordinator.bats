@@ -119,8 +119,13 @@ for phrase in ('`Worker: lane`', 'bundled with developerlanes',
 assert '**every user message**' in coordinator
 attention = ' '.join(raw.split('## Every turn\n', 1)[1].split('\n## ', 1)[0].split())
 for phrase in ('lane workers as the bundled skill describes', 'Herdr-only hosts and their notes',
-               'legacy-herdr.md#attention-and-notes-on-every-turn'):
+               'legacy-herdr.md#attention-and-notes-on-every-turn',
+               'notes already published stay inputs after a host moves to `lane`'):
     assert phrase in attention, phrase
+# The frozen legacy file links back to these fragments; keep them resolvable.
+legacy = (skill / 'references/legacy-herdr.md').read_text()
+for fragment in re.findall(r'\(\.\./SKILL\.md#([^)]+)\)', legacy):
+    assert f'<a id="{fragment}"></a>' in raw or f'## {fragment}' in raw.lower(), fragment
 # The rewrite's budget: about 180 lines; a friction fix replaces lines rather than adding them.
 assert len(raw.splitlines()) <= 200, 'The skill holds habits; mechanics belong to the bundled coordinator'
 # Mechanics live in the bundled skill: the coordinator's own files carry no lane command lines.
@@ -447,6 +452,9 @@ for phrase in ("five largest lane folders with sizes", "private reports only", "
     assert phrase in disk, phrase
 eod = " ".join(routines.split("**End of day:**", 1)[1].split("**Weekly:**", 1)[0].split())
 assert "disk check" in eod and "step-back paragraph" in eod
+weekly = " ".join(routines.split("**Weekly:**", 1)[1].split()[:60])
+for phrase in ("disk check", "rule-file budgets", "parked lanes without stop/resume lines"):
+    assert phrase in weekly, phrase
 coordination = (skill / "references/coordination-template.md").read_text()
 for phrase in ("## Routines", "Drift check", "Morning sweep", "Budget", "report",
                "Disk check (end of day + weekly)", "minimum free GiB", "explicit roots"):

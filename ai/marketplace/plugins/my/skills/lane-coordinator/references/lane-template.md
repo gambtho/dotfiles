@@ -32,18 +32,21 @@ Product (pick one variant, delete the other):
 - Tried by: <this lane, how> | <coordinator or the human after merge, how, on which machine>.
 - The PR is a means, not the done line: one green PR at `pr-closeout`'s readiness.
 Maintenance (no user outcome): one green PR. The report claims no outcome.
+LOCAL or publication-held work: local checks pass; report status and blockers, not a PR gate.
 
 # Report
-One report at `<local report path>`, or ONE batched real blocker. Top line: the try result,
-`works` / `doesn't` / `not tried (why)`, or `maintenance`. Then at most ten lines: PR, head,
-CI at that head, ready or blocked, next action and owner, unverified risk. Below: base,
+One report at `<local report path>`, or ONE batched real blocker. A summary of at most ten
+lines opens it: first the try result (`works` / `doesn't` / `not tried (why)`, or
+`maintenance`), then PR, head, CI at that head, ready or blocked, next action and owner,
+unverified risk. Below: base,
 worktree, changed paths, exact checks, what the change gives the human and why existing
 mechanisms do not already cover it (or infrastructure-only), unverified outcomes, and
 closeout's bot-opportunity evidence. Mark each claim about another lane, host, person or
 project **observed** (command or source) or **inferred**. A task started by `lane` with a PR
 writes the evidence file the shared workflow describes, so `lane status` shows its readiness checks;
 a Herdr-only host may send a ready nudge by the [legacy pointers](legacy-herdr.md#optional-once-only-local-pointers).
-End with **Notes for later**: one line each; the coordinator files only those that move an outcome.
+End with **Notes for later**, one line each, marking any that block the current try
+(product, docs or our skill); the coordinator files them by the skill's Notes for later rule.
 List bulky outputs: path, size, safe to delete when; say none or mark unknowns.
 Before closing or a long pause, write `W<n>-HANDOFF.md` from the handoff template
 in the same location as the lane's report (e.g. `reports/W<n>-HANDOFF.md`).
@@ -57,6 +60,8 @@ if automatic), first action, report.
 - Standing authority names allowed paths and actions, never blanket approval; stricter
   project stops, WIP limits and end-to-end PR ownership kept.
 - Every bundled path resolved and readable on the recipient host; remote inputs delivered.
+- A decision brief was converted once into the canonical executable plan (Task IDs, owned
+  files) before implementation.
 - A lighter process only where the project approved it; checks, reviews, checkpoints
   and publication limits still apply.
 - Host, worker and reason recorded in STATE's `What / report` cell. -->

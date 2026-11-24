@@ -9,7 +9,8 @@ to stay off, the Rules for every lane pointer and Sequencing; don't copy the wor
 For a project whose hosts are all lane workers, drop the legacy-herdr.md sentence; otherwise resolve its link to a
 verified readable reference on each recipient host when projecting outside this skill.
 Resolve paths and remove these instructions and unused placeholder sections before delivery.
-When relocating rules, create the destination and reconcile affected prompts before deleting the source. For a running
+When relocating rules, create the destination and reconcile affected prompts and STATE in the same update before
+deleting the source. For a running
 lane, amend its prompt file under a dated heading and mark superseded instructions; verify the amended prompt copy is
 observable by the lane and its checkpoint is loaded, or give an explicit reread instruction through an approved channel.
 Mark delivery unknown until confirmed; a local edit or template change is not delivery, and never rerun a start to
