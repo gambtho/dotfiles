@@ -17,12 +17,12 @@ not the stable repo table. Verify repository identity before assigning a profile
 ## Hosts
 
 To avoid local winning by omission, match each lane to `Use for`; local is the fallback
-when no row matches. To avoid incomplete remote setup, each remote row needs a project-local
-`lane-hosts.json` binding or a reason it remains manual; the project's coordinator prepares
-its own [binding](remote-lanes.md#explicit-remote-command). A `Worker` value of `lane` is an
-explicit per-project opt in to the developerlanes commands; blank or `herdr` keeps the existing
-`herdr-lane` or manual path. Bound hosts use `herdr-lane --host` to avoid manual transfer;
-unbound hosts use the documented copy/start fallback. This table grants no setup or launch
+when no row matches. A `Worker` value of `lane` is an explicit per-project opt in to the
+developerlanes commands: record its saved enrollment instead of a binding. Blank or `herdr`
+keeps the frozen `herdr-lane` or manual path; to avoid incomplete remote setup, each such
+remote row needs a project-local `lane-hosts.json` binding or a reason it remains manual,
+and the project's coordinator prepares its own
+[binding](legacy-herdr.md#explicit-remote-command). This table grants no setup or launch
 authority; STATE keeps its single coordinator writer. Host checks record tools/access only,
 not lane or PR readiness.
 

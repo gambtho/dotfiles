@@ -318,3 +318,49 @@ setup_utility_autoloads() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"1|"* ]]
 }
+
+# A fresh server has mise only in ~/.local/bin, which login files add to PATH
+# themselves. Model that install: a mise that emits shim activation and records
+# which shell asked, a node shim, and a competing gh shim. Then start real login
+# shells with a minimal PATH that already holds the dotfiles bin.
+@test "fresh-HOME login shells find mise shims installed under ~/.local/bin" {
+  local shims="$HOME/.local/share/mise/shims"
+  mkdir -p "$HOME/.local/bin" "$HOME/.dotfiles/bin" "$shims"
+  cat >"$HOME/.local/bin/mise" <<'MISE'
+#!/bin/sh
+[ "$1" = activate ] && [ "$3" = --shims ] || exit 1
+printf '%s\n' "$2" >>"$HOME/mise-activations"
+printf 'export PATH="%s:$PATH"\n' "$HOME/.local/share/mise/shims"
+MISE
+  printf '#!/bin/sh\necho node-shim\n' >"$shims/node"
+  printf '#!/bin/sh\n' >"$shims/gh"
+  printf '#!/bin/sh\n' >"$HOME/.dotfiles/bin/gh"
+  chmod +x "$HOME/.local/bin/mise" "$shims/node" "$shims/gh" "$HOME/.dotfiles/bin/gh"
+  ln -s "$REPO_ROOT/core/shell/zprofile.symlink" "$HOME/.zprofile"
+  ln -s "$REPO_ROOT/core/shell/bash_profile.symlink" "$HOME/.bash_profile"
+
+  local shell
+  for shell in zsh bash; do
+    rm -f "$HOME/mise-activations"
+    run env -i HOME="$HOME" PATH="/usr/bin:/bin:$HOME/.dotfiles/bin" \
+      "$shell" -lc 'command -v node && node && command -v gh'
+    [ "$status" -eq 0 ]
+    [ "${lines[0]}" = "$shims/node" ]
+    [ "${lines[1]}" = node-shim ]
+    [ "${lines[2]}" = "$HOME/.dotfiles/bin/gh" ]
+    [ "$(cat "$HOME/mise-activations")" = "$shell" ]
+  done
+}
+
+@test "shell files never hard-code a user's home directory" {
+  # Comment lines may show example paths; code must use $HOME.
+  run bash -c 'cd "$1" || exit 2
+    files=()
+    while IFS= read -r -d "" file; do files+=("$file"); done \
+      < <(git ls-files -z -- "*.zsh" "*.sh" "*.bash" "*.symlink" bin)
+    (( ${#files[@]} )) || exit 2
+    grep -nE "(^|[^[:alnum:]._/-])/(home|Users)/[[:alnum:]._-]+" -- "${files[@]}" |
+      grep -vE "^[^:]+:[0-9]+:[[:space:]]*#"' _ "$REPO_ROOT"
+  [ "$status" -eq 1 ]
+  [ -z "$output" ]
+}

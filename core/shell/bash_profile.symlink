@@ -13,10 +13,22 @@ if [ -f "$HOME/.profile" ]; then
   . "$HOME/.profile"
 fi
 
-case ":$PATH:" in
-  *":$HOME/.dotfiles/bin:"*) ;;
-  *) PATH="$HOME/.dotfiles/bin:$PATH" ;;
-esac
+# Put mise shims on PATH so node and npm globals resolve in login shells.
+# ~/.profile adds ~/.local/bin only when it already existed at login, so look
+# there directly as well.
+if command -v mise >/dev/null 2>&1; then
+  eval "$(mise activate bash --shims)"
+elif [ -x "$HOME/.local/bin/mise" ]; then
+  eval "$("$HOME/.local/bin/mise" activate bash --shims)"
+fi
+
+# Move the dotfiles bin to the front even when ~/.profile already added it, so
+# the gh identity shim also wins over a mise shim.
+PATH=":$PATH:"
+PATH="${PATH//":$HOME/.dotfiles/bin:"/:}"
+PATH="${PATH#:}"
+PATH="${PATH%:}"
+PATH="$HOME/.dotfiles/bin${PATH:+:$PATH}"
 # A managed Pi must win over an npm copy (including one supplied by mise).
 if [ -d "$HOME/.pi/agent/bin" ]; then
   PATH="$HOME/.pi/agent/bin:$PATH"

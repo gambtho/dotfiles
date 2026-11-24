@@ -43,8 +43,8 @@ setup() {
     install_platform_packages
   ' _ "$REPO_ROOT" "$events"
   [ "$status" -eq 0 ]
-  grep -Fxq 'apt install -y curl git' "$events"
-  grep -Fxq 'apt-get install -y --no-install-recommends dbus-user-session gir1.2-glib-2.0 gnome-keyring python3-gi' "$events"
+  grep -Fxq 'apt install -o DPkg::Lock::Timeout=600 -y curl git' "$events"
+  grep -Fxq 'apt-get install -o DPkg::Lock::Timeout=600 -y --no-install-recommends dbus-user-session gir1.2-glib-2.0 gnome-keyring python3-gi' "$events"
   [ "$(grep -c '^apt install ' "$events")" -eq 1 ]
   [ "$(grep -c '^apt-get install ' "$events")" -eq 1 ]
   [ "$(grep -n '^apt-get install ' "$events" | cut -d: -f1)" -lt "$(grep -n '^apt upgrade ' "$events" | cut -d: -f1)" ]

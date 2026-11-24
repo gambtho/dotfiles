@@ -1,6 +1,6 @@
 ---
 name: lane-coordinator
-description: Use when coordinating parallel work lanes across Pi, Claude Code, or a Claude app session, writing lane prompts, explicitly starting a lane in Herdr, verifying lane reports, or keeping project coordination state. Triggers include "coordinate <project>", "end of day <project>", "weekly <project>" (project optional with only one project folder), "lane coordinator", "start W12", "write a lane prompt", "W<n>", or a pasted lane report.
+description: Use when coordinating parallel work lanes across Pi, Claude Code, or a Claude app session, writing lane prompts, explicitly starting a lane, verifying lane reports, or keeping project coordination state. Triggers include "coordinate <project>", "end of day <project>", "weekly <project>" (project optional with only one project folder), "lane coordinator", "start W12", "write a lane prompt", "W<n>", or a pasted lane report.
 ---
 
 # Lane coordinator
@@ -22,31 +22,38 @@ because they are not listed in the coordinator's session. If a sibling file real
 is missing, report it to the human and stop. See [harness notes](references/harness-notes.md)
 for invocation and capability limits outside Pi.
 
-## Attention and messages on every turn
+## Lane mechanics: read the bundled coordinator
 
-Before answering **every user message**, read this project's live lane status and your
-addressed coordinator inbox, not only on `coordinate` or morning sweeps.
-When every Hosts row is `Worker: lane`, `lane status`, `lane instruct` and `lane report`
-replace the Herdr snapshot, inbox notes and `send.py`: read notes already published, then skip
-the Herdr steps in this section. Herdr-only hosts keep them: use the one-shot
-[local messaging helper and contract](references/messaging.md) for filtered Herdr metadata
-and immutable `reports/inbox/` notes. Unknown/offline status is not a clean sweep. Live
-working/blocked state beats stale ready metadata. Fetch reports and verify head/CI before
-advising action; status discovery never grants pane-input or publication authority.
+For every host whose Hosts row says `Worker: lane`, read the coordinator skill bundled
+with developerlanes and follow it for start, status, steering, answers, reports, retire,
+cleanup, launch lookup and restart. This skill does not describe those commands. The file
+is `resources/skills/lane-coordinator/SKILL.md` inside the `lanes` package that the `lane`
+on PATH runs from, not another copy on the machine; `lane init` prints its full path.
+Record the path in COORDINATION.md and read the file once per session; take flags from
+`lane`'s own help. If you cannot read it, or it or the installed `lane` does not cover an
+operation or flag named here, stop and tell the human; do not run `lane` commands from
+memory or drop the flag.
 
-Notes have categories: `tom-decision` carries the human's verbatim words, timestamp and
-inspectable source; `coordinator-instruction` stays within approved scope; `fyi` is no action.
-Only a verified, correctly scoped `tom-decision` can satisfy a human gate. Cross-coordinator
-notes are advisory `fyi` only, with receiving-project write authority. Preserve the single
-STATE writer and record pickup/disposition in the recipient's report; never infer delivery
-from publication. Existing addressed report notes remain inputs during inbox adoption.
+The bundled skill wins on commands, IDs, exit codes and their order. This skill and the
+project's rule files win on our habits: `W<n>` prompt files and templates, STATE layout,
+the review pack, routines, the authority table and writing rules. Those are this
+project's own rules, not additions the bundled skill warns against. Neither file adds authority.
 
-For an owned local idle Claude Code or Pi session on a Herdr-only host, the messaging contract's once-only
-`send.py` can deliver a note pointer or lane ready nudge after exact identity/no-dialog checks.
-Use verified ownership evidence, never a label guess or edited inherited context. Coordinator
-logs send intent/outcome in STATE as its single writer; lanes use their reports. Busy/unknown
-means file pickup, not a human paste relay. Existing/uncertain claims are inspect-only; no
-fallback transport or resend. Remote delivery and all human gates remain unchanged.
+A host that is not a lane worker uses the frozen
+[Herdr-only legacy reference](references/legacy-herdr.md); it takes no new changes.
+Choose per Hosts row; a project can have both kinds.
+
+## Attention on every turn
+
+Before answering **every user message**, read this project's live lane state, not only
+on `coordinate` or morning sweeps: lane workers as the bundled skill describes, each
+Herdr-only host and its addressed notes by the
+[legacy reference](references/legacy-herdr.md#attention-and-notes-on-every-turn). Notes
+already published stay inputs after a host moves to `lane`. Unknown or offline
+status is not a clean sweep. Live working/blocked state beats a stale ready claim. Read
+the report and verify head/CI before advising action; reading status never grants
+pane-input or publication authority. Cross-coordinator notes are advisory `fyi` only,
+written with the receiving project's write authority; they never satisfy a human gate.
 
 ## Start or resume
 
@@ -110,9 +117,8 @@ For every coherent update:
 3. Refuse to overwrite a file changed since it was read. Write a same-directory temp
    file, check it is nonempty and STATE has unique lane rows, recheck the original,
    then rename into place. On a mismatch, re-read and reconcile instead of overwriting.
-   The launch helper's STATE projection is an action of the single coordinator writer;
-   re-read STATE after it runs before preparing another update. This is stale-write
-   protection, not a lock against unrelated writers.
+   Rows a launch command adds are actions of the single coordinator writer; re-read STATE
+   after one runs. This is stale-write protection, not a lock against unrelated writers.
 4. Make one commit per coherent update, including its affected prompts and STATE where
    the project authorizes versioning them. Do not silently add workflow artifacts to Git.
 5. **Closing a lane** moves its row to the project's archive (for example
@@ -121,18 +127,11 @@ For every coherent update:
    safe to delete, using the lane report/handoff; link pending cleanup from the
    archive and keep its decision under **Needs the human** until decided. Delete
    only after the human approves that exact list; project authority still applies.
-   Unknown safety or size is not deletion-ready. After closure, when the lane's report
-   and handoff are already in the project's report location (fetch first for remote
-   lanes), close only its own Herdr workspace, matched by its launch receipt or its
-   exactly one current workspace at the recorded label. Recheck idle or done status
-   immediately before close; leave working, blocked, unknown or ambiguous identity open.
-   Run `herdr workspace close <id>` locally or through the recorded remote binding.
-   The status check and close are not atomic, so work can resume in that window; the
-   pre-check does not protect against concurrent input. After a confirmed close, record
-   success in the archive line. A timeout/error or changed status is
-   inspect-only: do not retry automatically or record closure until reconciled. This is
-   not a deletion; do not close a coordinator's own workspace, another project's/person's,
-   or any uncertain identity. Worktree, branch, sandbox and file deletion rules are unchanged.
+   Unknown safety or size is not deletion-ready. After closure, finish a lane worker's
+   task in the bundled skill's order, once its report and handoff are saved in the
+   project's report location. Applying a cleanup plan removes a worktree: it is a deletion
+   under the project's authority table. A Herdr-only host's workspace closes by the
+   [legacy rule](references/legacy-herdr.md#close-a-closed-lanes-workspace).
 6. **A decision** names its scope in one line of about 25 words or fewer, plus a pointer
    to its full record (session file, lane report or archive). Decisions that are done, superseded or now in
    the project's rule files leave STATE in the same update. Keep about 10 at most;
@@ -152,33 +151,17 @@ use the project folder.
 - Before telling a lane what another lane will deliver ("PR6 adds lift"), read that
   lane's plan file. Don't infer scope from a PR number.
 - To avoid local winning by omission, match the lane against each Hosts row's `Use for`
-  in COORDINATION.md. A row whose `Worker` is `lane` opts that host and project into
-  developerlanes; every other row keeps the existing local, `herdr-lane` or manual path.
-  Write the host, worker choice and brief reason in its `Host:` line and STATE row's
-  `What / report` cell; local is the fallback when no row matches. For another host, follow
-  [remote lanes](references/remote-lanes.md); the coordinator remains the single STATE writer.
+  in COORDINATION.md; local is the fallback when no row matches. Write the host, worker
+  choice and brief reason in its `Host:` line and STATE row's `What / report` cell. See
+  [hosts and lane workers](references/remote-lanes.md).
 - Next number: highest `W<n>` in `lanes/` or STATE.md, plus one. Use
   [lane-template.md](references/lane-template.md), or the optional
   [light-process template](references/light-process-template.md) for fast-moving internal
   repos with project-authorized lighter process, to avoid oversized prompts/reports.
   Set a per-lane elapsed-time budget: on expiry, stop new work and report pending checks,
   reviews and resume conditions, not ready; this prevents open-ended closeout.
-  Use the single-line
-  handoff: local `herdr-lane <project>-<n> "Read <path> and follow it."` when installed,
-  otherwise plain Read (see [local handoff](references/herdr-launch.md#manual-local-handoff)).
-  Prefix local or bound-remote starts with `--agent claude` when the approved lane names Claude Code.
-  Remote: to remove manual transfer overhead, use `herdr-lane --host <binding> <project>-<n>
-  <prompt>` from the project-local folder for bound hosts, where installed and authorized;
-  this replaces that reference's remote Read-only rule. A host/project row whose `Worker`
-  is `lane` instead uses the [developerlanes worker](references/remote-lanes.md#developerlanes-worker-opt-in)
-  command with the prompt and approved inputs. [Manual copy/start](references/remote-lanes.md#explicit-copy-and-manual-startup)
-  is for unbound hosts whose Hosts row explains why; see [bindings](references/remote-lanes.md#explicit-remote-command).
-  Don't add `/name` or `--name`.
-  Default new workspace labels, agent names and live Herdr aliases to
-  `<project-slug>-<lane-number>` (e.g. `double-holo-12`). Keep full W12/task identity in lane files and
-  STATE.md; preserve filenames/numbering and all existing names. Honor explicit
-  naming overrides that satisfy Herdr's alias constraints; use the approved label in
-  both handoff commands. Reject invalid names or collisions, never truncate or invent suffixes.
+  A Herdr-only host's handoff line and session names follow the
+  [legacy reference](references/legacy-herdr.md#handoff-line-and-session-names).
 - Before handoff or launch, check the prompt against project AGENTS.md, COMMON-RULES
   and repo rules: worktree location, publication authority and stop conditions. For a
   remote lane, deliver every named input to the target host, or use only host paths verified to exist.
@@ -198,8 +181,7 @@ use the project folder.
   by the lane and its checkpoint is loaded. Otherwise give an explicit reread instruction through an
   already-approved channel; mark amendment/note delivery unknown until confirmed, not delivered by a local edit.
   Do not rely on the human relaying "reread". Editing a template does not update loaded context;
-  remote copies and pre-checkpoint lanes need delivery evidence. Remote create-only launch delivery
-  remains unchanged; do not rerun launch helpers to deliver amendments.
+  remote copies and pre-checkpoint lanes need delivery evidence. Never rerun a start to deliver an amendment.
 - **Shared hot files:** once two lanes will PR into the same repo, check which files every
   PR edits (changelog, repository maps, generated inventories, counts). Fix that first
   (fragments, directory-level maps) or every merge breaks every other open PR.
@@ -245,32 +227,23 @@ use the project folder.
 ## Start a lane only when asked
 
 Preparing a prompt never launches it, including in a Claude app session: this keeps
-handoff separate from launch permission. On explicit "start W<n>" for a remote lane, the coordinator
-may run the row's one approved start path once: `herdr-lane --host <binding> <project>-<n> <prompt>`,
-or the developerlanes command when `Worker: lane`. Only that `lane start` takes
-`--label "<project> W<n>" --by <project>-coord`, and it always does. Record the request/launch in STATE; never retry a
-start, and use `launch-status` for an uncertain developerlanes result. See [remote lanes](references/remote-lanes.md)
-for inputs, bindings, snapshots and endpoint checks. Local launches require shell/tool access
-inside the intended Herdr session (`HERDR_ENV=1`); otherwise return the handoff
-without claiming a launch.
-
-For a local lane, when an approved prompt exists and the user says "start W12", use
-the mechanical helper in [herdr-launch.md](references/herdr-launch.md) immediately after
-context/prompt/source verification, not another planning round or a manual handoff
-when eligible access exists. It reconciles live identity, groups with prepared project
-setup (reports flat when wholly absent), starts the named selected agent on the verified source pane, and submits once without
-waiting for task completion. Its receipt is authoritative; uncertain delivery is
-inspect-only, never an automatic resend/replacement workspace. Never approve dialogs,
-control another client's focused pane, or infer implementation approval from launch
-permission. A Herdr workspace is not an isolated Git worktree.
+handoff separate from launch permission. On explicit "start W<n>", start it once by the
+row's one approved path and record the start in STATE; never retry a start. For a lane
+worker, follow the bundled skill and add our two habits: `--label "<project> W<n>" --by <project>-coord`
+on every start, and the approved context as `--input` files
+(see [hosts and lane workers](references/remote-lanes.md)). A Herdr-only host starts by the
+[legacy reference](references/legacy-herdr.md#start-a-lane-on-a-herdr-host). Launch
+permission is not implementation approval.
 
 ## Handle a lane report
 
 A lane returns one consolidated readiness report or ONE batched real blocker.
 "W12 ready" means stopped for an action (merge, reply, close or decide), not done.
-Read the report; fetch a remote lane's named reports first. A `Worker: lane` task uses
-`lane --host <host> report <task>` before any retire/cleanup. Failed/offline fetch means
-unknown, not ready. Manual sessions are not automatically monitored.
+Read the report; fetch a remote lane's report first, and save it before the task is
+finished. Failed/offline fetch means unknown, not ready. Where a lane worker's status row
+carries `readiness`, read it as the bundled skill says: it is evidence beside the checks
+below, not a replacement. A PR row without it means the lane wrote no evidence file or
+the worker's `lane` predates it: verify the PR yourself. Manual sessions are not automatically monitored.
 STATE.md tracks next actions, owners and notification attempts.
 
 Approved LOCAL delivery includes authorized setup/verification, safe in-scope

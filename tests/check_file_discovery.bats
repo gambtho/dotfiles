@@ -108,7 +108,7 @@ list_files() {
     [ "$status" -eq 0 ]
     for file in bootstrap relink versions list-check-files validate-ai \
       validate-pi-security-runtime common.sh log-helper \
-      lib/artifacts.sh lib/links.sh lib/phases.sh lib/system.sh; do
+      lib/apt.sh lib/artifacts.sh lib/links.sh lib/phases.sh lib/system.sh; do
       printf '%s\n' "$output" | grep -Fxq "libexec/$file"
     done
     ! printf '%s\n' "$output" | grep -Fxq libexec/validate-pi-permission-config
