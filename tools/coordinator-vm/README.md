@@ -58,7 +58,7 @@ bash tools/coordinator-vm/deploy.sh create  --subscription SUBSCRIPTION_ID --ssh
 ```
 
 `what-if` changes nothing. The admin account is `tng`; `--admin-user NAME`
-picks another. Both read your global Git name and email and write
+picks another, and then replaces `tng` in the SSH commands below. Both read your global Git name and email and write
 them into cloud-init, because bootstrap needs a Git identity. cloud-init is
 stored with the VM and readable by anyone who can read the VM, so it holds no
 secrets.
