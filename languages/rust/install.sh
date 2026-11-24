@@ -13,8 +13,8 @@ install_rust() {
 
 install_ubuntu_dependencies() {
   log_info "Installing dependencies on Ubuntu..."
-  sudo apt-get update
-  sudo apt-get install -y build-essential curl
+  sudo_apt apt-get update
+  sudo_apt apt-get install -y build-essential curl
 }
 
 install_macos_dependencies() {

@@ -4,6 +4,7 @@
 # needs only one slice) can see which functions form which contract:
 #
 #   libexec/lib/system.sh       command_exists, detect_os
+#   libexec/lib/apt.sh          sudo_apt, APT calls that wait for package locks
 #   libexec/lib/phases.sh       run_phase / finish_phases install-phase runner
 #   libexec/lib/links.sh        the managed-symlink contract and shared link loop
 #   libexec/lib/artifacts.sh    pinned, digest-verified artifact acquisition
@@ -14,6 +15,7 @@
 
 source "$(dirname "${BASH_SOURCE[0]}")/log-helper"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/system.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/apt.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/phases.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/links.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/artifacts.sh"

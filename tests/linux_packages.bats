@@ -197,7 +197,7 @@ setup_asciinema_apt_fixture() {
 
   [ "$status" -eq 0 ]
   cmp "$REPO_ROOT/work/apt-preferences/asciinema" "$published"
-  [ "$(grep -n 'dotfiles-asciinema$' "$events" | cut -d: -f1)" -lt "$(grep -n '^apt update$' "$events" | cut -d: -f1)" ]
+  [ "$(grep -n 'dotfiles-asciinema$' "$events" | cut -d: -f1)" -lt "$(grep -n '^apt update ' "$events" | cut -d: -f1)" ]
   [ "$(grep -c '^apt install ' "$events")" -eq 1 ]
   grep '^apt install ' "$events" | grep -wq asciinema
   grep '^apt install ' "$events" | grep -wq ffmpeg
@@ -226,7 +226,7 @@ setup_asciinema_apt_fixture() {
   ' _ "$REPO_ROOT"
 
   [ "$status" -eq 42 ]
-  ! grep -q '^apt update$' "$events"
+  ! grep -q '^apt update' "$events"
   ! grep -q '^apt install ' "$events"
 }
 
@@ -296,7 +296,7 @@ setup_asciinema_apt_fixture() {
   [ "$status" -eq 0 ]
   [ "$(sed -n '1p' "$events")" = repositories ]
   [ "$(grep -c '^apt install ' "$events")" -eq 1 ]
-  grep -Fq 'apt install -y ca-certificates docker-ce' "$events"
+  grep -Fq 'apt install -o DPkg::Lock::Timeout=600 -y ca-certificates docker-ce' "$events"
 }
 
 @test "package composition failure prevents apt installation" {
@@ -399,5 +399,89 @@ setup_asciinema_apt_fixture() {
   [ ! -e "$audit_root/tmp/unmanaged-apt-ubuntu-missing.txt" ]
   [ ! -s "$events" ]
   run bash -c 'compgen -G "$1/tmp/managed-apt.*"' _ "$audit_root"
+  [ "$status" -eq 1 ]
+}
+
+# --- waiting for package locks ------------------------------------------------
+#
+# A fresh server runs unattended upgrades and its daily index refresh just
+# after boot. sudo_apt waits for those instead of failing the install.
+
+run_sudo_apt() {
+  run env EVENTS="$TEST_ROOT/events" DOTFILES_APT_LOCK_TIMEOUT="${TIMEOUT:-600}" bash -c '
+    source "$1/libexec/common.sh"
+    sleep() { printf "sleep %s\n" "$*" >>"$EVENTS"; SECONDS=$((SECONDS + $1)); }
+    '"$1"'
+    shift
+    sudo_apt "$@"
+  ' _ "$REPO_ROOT" "${@:2}"
+}
+
+@test "APT installs wait for the dpkg lock" {
+  run_sudo_apt 'sudo() { printf "%s\n" "$*" >>"$EVENTS"; }' apt-get install -y git
+
+  [ "$status" -eq 0 ]
+  [ "$(<"$TEST_ROOT/events")" = "apt-get install -o DPkg::Lock::Timeout=600 -y git" ]
+}
+
+@test "an install retries while another process holds the download cache lock" {
+  run_sudo_apt 'sudo() {
+    printf "%s\n" "$*" >>"$EVENTS"
+    if (($(grep -c "^apt-get " "$EVENTS") < 2)); then
+      printf "E: Could not get lock /var/cache/apt/archives/lock. It is held by process 1 (apt-get)\n" >&2
+      return 100
+    fi
+  }' apt-get install -y git
+
+  [ "$status" -eq 0 ]
+  [ "$(grep -c '^apt-get install ' "$TEST_ROOT/events")" -eq 2 ]
+}
+
+@test "an index refresh retries while another process holds the index lock" {
+  run_sudo_apt 'sudo() {
+    printf "%s\n" "$*" >>"$EVENTS"
+    if (($(grep -c "^apt " "$EVENTS") < 3)); then
+      printf "E: Could not get lock /var/lib/apt/lists/lock. It is held by process 1 (apt-get)\n" >&2
+      return 100
+    fi
+  }' apt update
+
+  [ "$status" -eq 0 ]
+  [ "$(grep -c '^apt update ' "$TEST_ROOT/events")" -eq 3 ]
+  [ "$(grep -c '^sleep ' "$TEST_ROOT/events")" -eq 2 ]
+  [[ "$output" != *"Could not get lock"* ]]
+}
+
+@test "an index refresh that fails for another reason is not retried" {
+  run_sudo_apt 'sudo() {
+    printf "%s\n" "$*" >>"$EVENTS"
+    printf "E: Could not open lock file /var/lib/apt/lists/lock - open (13: Permission denied)\n" >&2
+    printf "E: Failed to fetch http://archive.invalid/dists/InRelease\n" >&2
+    return 100
+  }' apt-get update
+
+  [ "$status" -eq 100 ]
+  [ "$(wc -l <"$TEST_ROOT/events")" -eq 1 ]
+  [[ "$output" == *"Failed to fetch"* ]]
+}
+
+@test "an index refresh stops waiting at the lock timeout" {
+  TIMEOUT=7 run_sudo_apt 'sudo() {
+    printf "%s\n" "$*" >>"$EVENTS"
+    printf "E: Could not get lock /var/lib/apt/lists/lock.\n" >&2
+    return 100
+  }' apt-get update
+
+  [ "$status" -eq 100 ]
+  # Seven seconds allow one five-second wait, then no further attempt.
+  [ "$(grep -c '^apt-get update -o DPkg::Lock::Timeout=7$' "$TEST_ROOT/events")" -eq 2 ]
+  [ "$(grep -c '^sleep 5$' "$TEST_ROOT/events")" -eq 1 ]
+  [[ "$output" == *"Could not get lock"* ]]
+}
+
+@test "no installer calls APT without the lock wait" {
+  run rg -n 'sudo +apt(-get)? ' "$REPO_ROOT/bin" "$REPO_ROOT/libexec" "$REPO_ROOT/core" \
+    "$REPO_ROOT/languages" "$REPO_ROOT/work" "$REPO_ROOT/tools" "$REPO_ROOT/ai" \
+    --glob '*.sh' --glob 'bin/*' --glob 'libexec/*' --glob '!lib/apt.sh'
   [ "$status" -eq 1 ]
 }
