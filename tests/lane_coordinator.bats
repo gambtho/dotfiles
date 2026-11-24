@@ -45,15 +45,18 @@ from pathlib import Path
 import sys
 skill = Path(sys.argv[1])
 common = " ".join((skill / "references/common-rules-template.md").read_text().split())
-coordinator = " ".join((skill / "SKILL.md").read_text().split())
-for text in (common, coordinator):
+# The coordinator's PR check moved to pr-closeout; the CLI mechanics live in its fallback.
+check = " ".join((skill.parent / "pr-closeout/references/coordinator-check.md").read_text().split())
+closeout = " ".join((skill.parent / "pr-closeout/SKILL.md").read_text().split())
+for text in (common, check):
     for clause in ("standing default", "explicit project opt-out", "Copilot",
                    "quota", "review bot", "current-head", "never stalls",
                    "different model family", "review round: local CodeRabbit CLI"):
         assert clause in text, clause
+assert "local CodeRabbit fallback" in common
 for clause in ("coderabbit review --agent", "Never post local output",
-               "billing", "one local fallback per PR"):
-    assert clause in common, clause
+               "billing", "One local fallback per PR"):
+    assert clause in closeout, clause
 PY
   [ "$status" -eq 0 ]
 }
@@ -76,11 +79,17 @@ coordinator = ' '.join((skill / 'SKILL.md').read_text().split())
 for text in (workflow, coordinator):
     for phrase in ('observed', 'command or source', 'inferred'):
         assert phrase in text, phrase
-for phrase in ('re-observe', 'blocker', 'instruction', 'Needs the human', 'dated heading',
-               'shared-resource lead', 'exact cleanup list', 'never cleans up another project',
-               'prompt copy is observable', 'checkpoint is loaded', 'explicit reread instruction',
-               'delivery unknown until confirmed'):
-    assert phrase in coordinator, phrase
+assert 'uniqueness or identity assumption stays inferred until tested by a lane' in coordinator
+# Amendment delivery lives in the common-rules header; the disk routine in morning.md.
+header = ' '.join((skill / 'references/common-rules-template.md').read_text().split('## Shared workflow', 1)[0].split())
+for phrase in ('dated heading', 'prompt copy is observable', 'checkpoint is loaded',
+               'explicit reread instruction', 'Mark delivery unknown until confirmed',
+               'never rerun a start to deliver an amendment'):
+    assert phrase in header, phrase
+morning = ' '.join((skill / 'references/morning.md').read_text().split())
+for phrase in ('shared-resource lead', 'exact cleanup list', 'never cleans up another project',
+               'Needs the human'):
+    assert phrase in morning, phrase
 closeout = (skill.parent / 'pr-closeout/SKILL.md').read_text()
 assert 'lane prompt checkpoint' in closeout
 review = (repo / 'tools/automations/prompts/lane-review.md').read_text()
@@ -100,24 +109,24 @@ import sys
 skill = Path(sys.argv[1])
 raw = (skill / 'SKILL.md').read_text()
 coordinator = ' '.join(raw.split())
-pointer = ' '.join(raw.split('## Lane mechanics: read the bundled coordinator\n', 1)[1].split('\n## ', 1)[0].split())
-for phrase in ('`Worker: lane`', 'bundled with developerlanes and follow it',
-               'This skill does not describe those commands',
-               'resources/skills/lane-coordinator/SKILL.md', '`lane init` prints its full path',
-               'that the `lane` on PATH runs from', 'does not cover an operation or flag named here',
-               'Choose per Hosts row', 'stop and tell the human', 'wins on commands', 'win on our habits', 'Neither file adds authority',
-               'references/legacy-herdr.md'):
+pointer = ' '.join(raw.split('## Where things live\n', 1)[1].split('\n## ', 1)[0].split())
+for phrase in ('`Worker: lane`', 'bundled with developerlanes',
+               'resources/skills/lane-coordinator/SKILL.md', '`lane init` prints it',
+               'the `lane` on PATH runs from', 'does not cover an operation or flag named here',
+               'choose per Hosts row', 'stop and tell the human', 'wins on commands', 'ours wins on habits',
+               'neither adds authority', 'references/legacy-herdr.md'):
     assert phrase in pointer, phrase
 assert '**every user message**' in coordinator
-attention = ' '.join(raw.split('## Attention on every turn\n', 1)[1].split('\n## ', 1)[0].split())
-for phrase in ('lane workers as the bundled skill describes', 'each Herdr-only host and its addressed notes',
-               'legacy-herdr.md#attention-and-notes-on-every-turn', 'Notes already published stay inputs'):
+attention = ' '.join(raw.split('## Every turn\n', 1)[1].split('\n## ', 1)[0].split())
+for phrase in ('lane workers as the bundled skill describes', 'Herdr-only hosts and their notes',
+               'legacy-herdr.md#attention-and-notes-on-every-turn'):
     assert phrase in attention, phrase
-assert len(raw.splitlines()) < 470, 'The skill holds habits; mechanics belong to the bundled coordinator'
+# The rewrite's budget: about 180 lines; a friction fix replaces lines rather than adding them.
+assert len(raw.splitlines()) <= 200, 'The skill holds habits; mechanics belong to the bundled coordinator'
 # Mechanics live in the bundled skill: the coordinator's own files carry no lane command lines.
 commands = re.compile(r'`lane (?:--host \S+ )?(?:start|status|instruct|answer|report|retire|cleanup|launch-status|inbox)\b')
 allowed = {'references/covered-answers.md': 1}
-for name in ('SKILL.md', 'references/remote-lanes.md', 'references/harness-notes.md',
+for name in ('SKILL.md', 'references/harness-notes.md',
              'references/coordination-template.md', 'references/covered-answers.md'):
     hits = commands.findall((skill / name).read_text())
     assert len(hits) <= allowed.get(name, 0), (name, hits)
@@ -125,6 +134,48 @@ for word in ('launch-status', '--creation-id', '--expected-hash', 'herdr-lane', 
     assert word not in coordinator, word
 PY
   [ "$status" -eq 0 ]
+}
+
+@test "partner checks tie work to outcomes and hook into existing steps" {
+  run python3 - "$SKILL_DIR" <<'PY'
+from pathlib import Path
+import sys
+
+skill = Path(sys.argv[1])
+refs = skill / "references"
+read = lambda path: " ".join(path.read_text().split())
+raw = (skill / "SKILL.md").read_text()
+main = " ".join(raw.split())
+partner = " ".join(raw.split("## Partner checks\n", 1)[1].split("\n## ", 1)[0].split())
+for check in ("**Tie work to the goal.**", "**Step back at set points.**", "**Rehearsal first.**",
+              "**Check before telling.**", "**Read back decisions first.**"):
+    assert check in partner, check
+# Off-goal work stops for the human rather than getting a one-line note.
+assert "off-goal and **stop and ask**" in partner
+for phrase in ("**3 merges in one area**", "overrides it in one word", "log the override",
+               "`tried: <how>` or `guess`", "recorded environment limits", "`Decisions in force: D3, D7`"):
+    assert phrase in partner, phrase
+for phrase in ("only a try moves an outcome row, never a merge",
+               "You propose outcome rows and status changes; the human confirms them",
+               "If a row's wording or status is in question, ask",
+               "agree with the human each time who tries it", "mark stale outcome rows by hand",
+               "Done means tried", "`awaiting try`"):
+    assert phrase in main, phrase
+state = read(refs / "state-template.md")
+for phrase in ("## Outcomes (required, 3–7 rows)", "works / partly / doesn't / untried",
+               "A merge never sets `works`", "last try is over 7 days old", "`rehearsal`", "D1 ("):
+    assert phrase in state, phrase
+lane = (refs / "lane-template.md").read_text()
+assert lane.splitlines()[1].startswith("<O<n>:") and "Maintenance:" in lane.splitlines()[1]
+for phrase in ("Outcome: <who> can <do what> on <which setup>.", "Tried by:",
+               "Maintenance (no user outcome): one green PR.", "`not tried (why)`", "**Notes for later**"):
+    assert phrase in lane, phrase
+assert "## Recorded environment limits\n" in (refs / "coordination-template.md").read_text()
+PY
+  [ "$status" -eq 0 ] || {
+    echo "$output"
+    false
+  }
 }
 
 @test "direct pointers retain both-agent ownership and once-only delivery gates" {
@@ -152,12 +203,12 @@ from pathlib import Path
 import sys
 
 text = Path(sys.argv[1]).read_text()
-reports = text.split("## Handle a lane report\n", 1)[1].split("\n## ", 1)[0]
-reply = reports.split("**Reply in this order:**", 1)[1].split("\n7.", 1)[0]
-assert "first line" in reply
+reports = text.split("## Handling a report\n", 1)[1].split("\n## ", 1)[0]
+reply = reports.split("**Reply**", 1)[1].split("\n4.", 1)[0]
+assert "action and its owner first" in reply
 first_line = reply.split("```text\n", 1)[1].splitlines()[0].strip()
 assert first_line == "W<n> needs <action> from <owner>."
-assert 'not a "done/not done" verdict' in " ".join(reply.split())
+assert "not a done/not-done verdict" in " ".join(reply.split())
 PY
   [ "$status" -eq 0 ]
 }
@@ -168,14 +219,13 @@ from pathlib import Path
 import sys
 
 skill = Path(sys.argv[1])
-reports = ' '.join((skill / 'SKILL.md').read_text().split('## Handle a lane report\n', 1)[1].split('\n## ', 1)[0].split())
-for phrase in ('lane nudge, inbox note or status read', 'one notification per lane state change',
-               'Record the attempt or skip in STATE', 'never repeat an unchanged item',
-               'lane id, action and owner only', 'never request or accept approval',
-               'clearly at the terminal', 'harness-notes.md'):
+reports = ' '.join((skill / 'SKILL.md').read_text().split('## Handling a report\n', 1)[1].split('\n## ', 1)[0].split())
+for phrase in ('once per lane state change', 'record it in STATE', 'harness-notes.md'):
     assert phrase in reports, phrase
+# The harness notes keep the push tool's limits: presence check, never an approval channel.
 harness = (skill / 'references/harness-notes.md').read_text()
 assert 'PushNotification' in harness and 'presence check' in harness
+assert 'never an approval channel' in harness
 assert 'No equivalent callable push tool' in harness
 PY
   [ "$status" -eq 0 ]
@@ -190,7 +240,8 @@ skill = Path(sys.argv[1])
 coordinator = " ".join((skill / "SKILL.md").read_text().split())
 lane = " ".join((skill / "references/lane-template.md").read_text().split())
 closeout = " ".join((skill.parent / "pr-closeout/SKILL.md").read_text().split())
-for text in (coordinator, lane):
+check = " ".join((skill.parent / "pr-closeout/references/coordinator-check.md").read_text().split())
+for text in (check, lane):
     for phrase in ("human's current workflow", "infrastructure-only", "unverified",
                    "what the change gives the human", "why existing mechanisms do not already cover it"):
         assert phrase in text, phrase
@@ -215,6 +266,7 @@ skill = Path(sys.argv[1])
 coordinator = " ".join((skill / "SKILL.md").read_text().split())
 common = " ".join((skill / "references/common-rules-template.md").read_text().split())
 closeout = " ".join((skill.parent / "pr-closeout/SKILL.md").read_text().split())
+check = " ".join((skill.parent / "pr-closeout/references/coordinator-check.md").read_text().split())
 
 for phrase in ("deliver every named input to the target host", "host paths verified to exist"):
     assert phrase in coordinator, phrase
@@ -225,13 +277,13 @@ for phrase in ("recorded environment limits", "recorded facts"):
 for phrase in ("decisions in force", "explicit `no X`"):
     assert phrase in coordinator, phrase
 
-for text in (coordinator, common, closeout):
+for text in (check, common, closeout):
     for phrase in ("merge queue", "combined head", "queue-ready"):
         assert phrase in text, (phrase, text[:80])
 assert "detect or record merge-queue status" in common
 assert "only for a real conflict" in common
 assert "do not assume it" in common
-assert "local HEAD = remote PR head = tested revision = CI revision" in coordinator
+assert "local HEAD = remote PR head = tested revision = CI revision" in check
 assert "without a merge queue" in closeout
 PY
   [ "$status" -eq 0 ]
@@ -293,7 +345,7 @@ import sys
 skill = Path(sys.argv[1])
 text = " ".join((skill / "SKILL.md").read_text().split())
 for phrase in ("../<name>/SKILL.md", "not the current session's skill list or slash commands",
-               "says nothing about what a lane has", "Never remove or swap these tools",
+               "Never remove or swap them",
                "lane prompt, template or project's rules", "report it to the human and stop"):
     assert phrase in text, phrase
 for name in ("pr-closeout", "polish-core", "second-opinion-core", "adversarial-review"):
@@ -372,31 +424,35 @@ import sys
 
 skill = Path(sys.argv[1])
 text = (skill / "SKILL.md").read_text()
-start = text.split("## Start or resume\n", 1)[1].split("\n## Keep STATE.md current", 1)[0]
-maintenance = text.split("## Maintenance\n", 1)[1].split("\n## Live changes", 1)[0]
+routines = text.split("## Routines\n", 1)[1].split("\n## ", 1)[0]
+start = routines.split("**Coordinate:**", 1)[1].split("**End of day:**", 1)[0]
 for phrase in ("coordinate <project>", "end of day <project>", "weekly <project>"):
     assert phrase in text.split("\n---", 1)[0], phrase
-    assert phrase in maintenance, phrase
-for phrase in ("only one project folder", "Routines", "18 hours", "last STATE commit", "7 days", "missing"):
-    assert phrase in start, phrase
-assert start.index("pick-up test") < start.index("drift report") < start.index("morning sweep") < start.index("Give the user a short status")
-assert "Don't run it unasked" in start
-assert "--json state,headRefOid,statusCheckRollup" in start
-assert "manual" in maintenance and "budgets" in maintenance
-assert "**Disk, at end of day and weekly:**" in maintenance, "Missing disk routine"
-disk = " ".join(maintenance.split("**Disk, at end of day and weekly:**", 1)[1].split("**End of day:**", 1)[0].split())
+    assert phrase in routines, phrase
+for phrase in ("only one project folder", "Routines", "**unknown**", "grant no authority"):
+    assert phrase in " ".join(routines.split()), phrase
+for phrase in ("18 hours", "last STATE commit", "7 days", "missing", "stale outcome rows by hand"):
+    assert phrase in " ".join(start.split()), phrase
+assert start.index("pick-up test") < start.index("drift report") < start.index("morning") < start.index("status reply")
+assert "don't run it unasked" in " ".join(start.split())
+morning = (skill / "references/morning.md").read_text()
+assert "--json state,headRefOid,statusCheckRollup" in morning
+assert "## Disk routine (end of day and weekly)\n" in morning, "Missing disk routine"
+disk = " ".join(morning.split("## Disk routine (end of day and weekly)\n", 1)[1].split("\n## ", 1)[0].split())
 for phrase in ("five largest lane folders with sizes", "private reports only", "free-space threshold",
                "**Needs the human**", "unknown, not healthy", "never infer deletion approval from a disk warning",
                "If no disk-check command exists", "inspect only configured roots manually",
                "observation time", "missing commands, roots or measurements unknown",
-               "Cleanup follows **Keep STATE.md current**, step 5's exact-list approval rules"):
+               "Cleanup follows STATE's exact-list approval rules"):
     assert phrase in disk, phrase
+eod = " ".join(routines.split("**End of day:**", 1)[1].split("**Weekly:**", 1)[0].split())
+assert "disk check" in eod and "step-back paragraph" in eod
 coordination = (skill / "references/coordination-template.md").read_text()
 for phrase in ("## Routines", "Drift check", "Morning sweep", "Budget", "report",
                "Disk check (end of day + weekly)", "minimum free GiB", "explicit roots"):
     assert phrase in coordination, phrase
 for stamp in ("Last end of day: <date time>", "Last weekly pass: <date>"):
-    assert stamp in maintenance and stamp in (skill / "references/state-template.md").read_text(), stamp
+    assert stamp in routines and stamp in (skill / "references/state-template.md").read_text(), stamp
 PY
   [ "$status" -eq 0 ]
 }
@@ -448,13 +504,14 @@ import sys
 skill, package = map(Path, sys.argv[1:])
 lane = (skill / "references/lane-template.md").read_text()
 closeout = (package / "skills/pr-closeout/SKILL.md").read_text()
-assert "Read only the **Review evidence** section" in lane
-assert "including aliases" in lane and "coordinator alone writes profiles" in lane
-for text in (lane, closeout):
-    for phrase in ("~1k hand-written product lines", "~1.5× product", "~1k changed lines in total",
-                   "COORDINATION.md", "otherwise treat", "project's own rule wins"):
-        assert phrase in text, phrase
-    assert "~1.5k" not in text
+# Review loading and size defaults have one home in pr-closeout; the lane template points there.
+assert "Read only [Review evidence]" in closeout and "Only the coordinator writes profiles" in closeout
+assert "`pr-closeout` for the one review phase" in lane
+for phrase in ("~1k hand-written product lines", "~1.5× product", "~1k changed lines in total",
+               "COORDINATION.md", "otherwise treat", "project's own rule wins"):
+    assert phrase in closeout, phrase
+    assert phrase == "COORDINATION.md" or phrase not in lane, phrase
+assert "~1.5k" not in closeout
 live = (skill / "references/live-changes.md").read_text()
 for phrase in ("project's authority table", "approved plan with a cost cap", "lane's own resources",
                "propose the exact commands and wait", "Use short-lived tokens.",
@@ -469,20 +526,23 @@ PY
 from pathlib import Path
 import sys
 
-text = (Path(sys.argv[1]) / "SKILL.md").read_text()
-prompt = " ".join(text.split("## Write a lane prompt\n", 1)[1].split("\n## Start a lane", 1)[0].split())
-for phrase in ("Before advising action or sending an instruction",
-               "refresh live PR/head/CI and session state the advice relies on",
-               "An open lane is not a running session", "current runtime/user observation or say unknown",
+skill = Path(sys.argv[1])
+text = (skill / "SKILL.md").read_text()
+prompt = " ".join(text.split("## Partner checks\n", 1)[1].split("\n## Start only", 1)[0].split())
+for phrase in ("Before advising action",
+               "refresh the live PR/head/CI and session state it relies on",
+               "an open lane is not a running session",
                "existing tool already covers it", "sibling projects' Routines and tools"):
     assert phrase in prompt, phrase
-assert "approved tasks required for that phase" not in prompt
-merged = " ".join(text.split("## When something merges\n", 1)[1].split("\n## Maintenance", 1)[0].split())
-for phrase in ("approved tasks required for that phase with shipped implementation",
-               "merged prerequisites alone do not complete its own tasks", "Mark unverified completion unknown",
-               "every lane #N unblocks or conflicts with", "Respect each decision's scope",
-               "do not make route-specific dependencies global"):
-    assert phrase in merged, phrase
+# A merge moves no outcome; merges are counted per area and the check lists what a PR unblocks.
+flat = " ".join(text.split())
+assert "only a try moves an outcome row, never a merge" in flat
+assert "**3 merges in one area**" in flat
+check = " ".join((skill.parent / "pr-closeout/references/coordinator-check.md").read_text().split())
+assert "every lane the PR unblocks or conflicts with" in check
+state = " ".join((skill / "references/state-template.md").read_text().split())
+for phrase in ("respecting each decision's scope", "do not make route-specific dependencies global"):
+    assert phrase in state, phrase
 PY
   [ "$status" -eq 0 ]
 }
@@ -497,8 +557,10 @@ texts = {name: " ".join((skill / name).read_text().split()) for name in
          ("SKILL.md", "references/state-template.md", "references/handoff-template.md", "references/lane-template.md")}
 condition = "all current resume conditions and who decides (a person, or none if automatic)"
 for name, text in texts.items():
-    assert condition in text, name
-assert "**A decision** names its scope" in texts["SKILL.md"]
+    if name != "SKILL.md":
+        assert condition in text, name
+assert "stop/resume lines for overnight lanes" in texts["SKILL.md"]
+assert "Decisions in force carry IDs (`D1`…)" in texts["SKILL.md"]
 for phrase in ("name each decision's scope", "respecting each decision's scope",
                "do not make route-specific dependencies global"):
     assert phrase in texts["references/state-template.md"], phrase
@@ -516,28 +578,33 @@ import sys
 
 skill = Path(sys.argv[1])
 state = (skill / "references/state-template.md").read_text()
-for phrase in ("One home per fact", "one-word state", "PR numbers without heads or CI",
+for phrase in ("one home per fact", "one-word state", "PR numbers without heads or CI",
                "next actor and action", "report path", "## Needs the human", "ordered one-liners",
                "## Waiting on others", "not already a lane row's next actor", "at most about 10",
                "not already in the project's rule files", "dated or triggered items", "not already in a lane row",
                "Parked: <links to paused lane rows", "all current resume conditions and who decides"):
-    assert phrase in state, phrase
+    assert phrase in " ".join(state.split()), phrase
 text = (skill / "SKILL.md").read_text()
-updates = text.split("For every coherent update:", 1)[1].split("If something took digging", 1)[0]
-for phrase in ("Closing a lane", "same update", "CLOSED-<month>.md", "25 words", "full record",
-               "done, superseded", "rule files", "oldest", "archive", "Replace, don't add", "one home"):
+# Write-time steps live in the template's header; the skill keeps the rule and the pick-up test.
+updates = " ".join(state.split("<!-- Writing it:", 1)[1].split("-->", 1)[0].split())
+decisions = " ".join(state.split("## Decisions in force\n", 1)[1].split("\n## ", 1)[0].split())
+for phrase in ("Closing a lane", "same update", "CLOSED-<month>.md", "archive", "Replace, don't add", "one home"):
     assert phrase in updates, phrase
-closing = " ".join(updates.split("5. **Closing a lane**", 1)[1].split("6. **A decision**", 1)[0].split())
-for phrase in ("exact deletion list with sizes", "lane report/handoff", "archive",
+for phrase in ("25 words", "full record", "Done or superseded", "rule files", "oldest", "archive", "D1 ("):
+    assert phrase in decisions, phrase
+for phrase in ("exact deletion list with sizes", "lane report/handoff",
                "**Needs the human** until decided", "only after the human approves that exact list",
-               "project authority still applies", "Unknown safety or size is not deletion-ready"):
-    assert phrase in closing, phrase
-eod = text.split("**End of day:**", 1)[1].split("**Next morning:**", 1)[0]
-for phrase in ("Routines", "budget", "inspection", "lane reports", "archive", "current fact",
-               "by section", "where", "human", "weekly pass"):
+               "Unknown safety or size is not deletion-ready", "refuse to overwrite a file changed since"):
+    assert phrase in updates, phrase
+flat = " ".join(text.split())
+assert "**Replace, don't add**" in flat and "each outcome's status and the human's next decision" in flat
+eod = " ".join(text.split("**End of day:**", 1)[1].split("**Weekly:**", 1)[0].split())
+for phrase in ("drift check", "budget", "lane reports", "archive", "step-back paragraph",
+               "tomorrow's first actions", "Last end of day"):
     assert phrase in eod, phrase
-weekly = text.split("**Weekly, in the coordinator session:**", 1)[1].split("**Human away", 1)[0]
-for phrase in ("daily", "duplicate", "superseded", "intent check", "budgets", "AGENTS", "COORDINATION", "PEOPLE"):
+weekly = " ".join(text.split("**Weekly:**", 1)[1].split("**Human away", 1)[0].split())
+for phrase in ("re-try each outcome row", "duplicate", "superseded", "intent check",
+               "at most 3 notes", "reports/BACKLOG-NOTES.md", "reports/SKILL-FRICTION.md"):
     assert phrase in weekly, phrase
 assert "Full record: `reports/decision.md`." in state
 PY
@@ -550,10 +617,10 @@ from pathlib import Path
 import sys
 
 skill = Path(sys.argv[1])
-text = " ".join((skill / "SKILL.md").read_text().split())
-step = text.split("5. **Closing a lane**", 1)[1].split("6. **A decision**", 1)[0]
+state = (skill / "references/state-template.md").read_text()
+step = " ".join(state.split("<!-- Writing it:", 1)[1].split("-->", 1)[0].split())
 for phrase in ("in the bundled skill's order", "report and handoff are saved", "it is a deletion",
-               "references/legacy-herdr.md#close-a-closed-lanes-workspace"):
+               "legacy reference's \"Close a closed lane's workspace\""):
     assert phrase in step, phrase
 legacy = (skill / "references/legacy-herdr.md").read_text()
 closing = " ".join(legacy.split("## Close a closed lane's workspace\n", 1)[1].split("\n## ", 1)[0].split())
@@ -614,7 +681,7 @@ import re
 import subprocess
 import sys
 
-text = (Path(sys.argv[1]) / "SKILL.md").read_text()
+text = (Path(sys.argv[1]).parent / "pr-closeout/references/coordinator-check.md").read_text()
 filters = re.findall(r"--json files --jq '([^']+)'", text)
 assert len(filters) == 1, filters
 # Each kind's additions are distinct bits, so a miscounted path changes the exact total.
@@ -638,13 +705,15 @@ PY
 }
 
 @test "coordinator delegates bot waiting and requires snapshot consistency" {
-  run python3 - "$SKILL_DIR/SKILL.md" <<'PY'
+  run python3 - "$SKILL_DIR" <<'PY'
 from pathlib import Path
 import sys
-text = " ".join(Path(sys.argv[1]).read_text().split())
-assert "../pr-closeout/SKILL.md#bounded-waiting" in text
-assert "../pr-closeout/SKILL.md#snapshot-helper" in text
-assert "unreadable final PR observation; refresh before recommending ready" in text
+skill = Path(sys.argv[1])
+assert "../pr-closeout/references/coordinator-check.md" in (skill / "SKILL.md").read_text()
+text = " ".join((skill.parent / "pr-closeout/references/coordinator-check.md").read_text().split())
+assert "../SKILL.md#bounded-waiting" in text
+assert "../SKILL.md#snapshot-helper" in text
+assert "unreadable final PR observation, refresh before recommending ready" in text
 assert "do not make the human relay or babysit that wait" in text
 assert "--repo <lane worktree> --github-repo <repo> --pr <n>" in text
 assert "ignore only its local blockers" in text
@@ -775,22 +844,22 @@ import sys
 skill = Path(sys.argv[1])
 refs = skill / "references"
 read = lambda path: " ".join(path.read_text().split())
-main, remote, lane = read(skill / "SKILL.md"), read(refs / "remote-lanes.md"), read(refs / "lane-template.md")
+main, lane = read(skill / "SKILL.md"), read(refs / "lane-template.md")
 coordination, common, legacy = (read(refs / name) for name in
                                 ("coordination-template.md", "common-rules-template.md", "legacy-herdr.md"))
 
-for text in (main, remote, lane):
+for text in (main, lane):
     assert "`Worker: lane`" in text or "`Worker` is `lane`" in text
-tagged = '--label "<project> W<n>" --by <project>-coord'
-for text in (main, remote):
-    assert tagged in text
-    assert "`--input` files" in text
-for phrase in ("../SKILL.md#lane-mechanics-read-the-bundled-coordinator", "grants no new publication, answer or launch authority",
-               "saved host/worker enrollment", "Keep STATE, other lanes' context, credentials and session trees",
+# lanes appends the task ID to the label, so the label carries only our lane number.
+assert '--label "W<n>" --by <project>-coord' in main and "lanes appends the task ID" in main
+assert '--label "<project> W<n>"' not in main
+assert "`--input` files" in main
+# The former hosts reference folded into the skill.
+for phrase in ("saved host/worker enrollment", "STATE, other lanes' context and credentials stay home",
                "only to hosts its Hosts table allows", "a displayed remote path is not a local copy",
-               "not a replacement", "(covered-answers.md)", "legacy-herdr.md#remote-lanes-on-herdr-hosts",
-               "fresh start after a set-aside reuses the same prompt file", "Do not rename it", "new creation ID"):
-    assert phrase in remote, phrase
+               "not a replacement", "(references/covered-answers.md)", "reuses the same prompt file"):
+    assert phrase in main, phrase
+assert "## Remote lanes on Herdr hosts" in (refs / "legacy-herdr.md").read_text()
 assert "| Worker |" in coordination
 assert "`lane`" in coordination and "opt in" in coordination.lower()
 assert "without `lane` keeps" in lane
@@ -808,12 +877,9 @@ for heading in ("## Attention and notes on every turn", "## Handoff line and ses
 for phrase in ("herdr-lane --host <binding>", "scripts/messages.py", "scripts/send.py", "scripts/launch.py",
                "reports/inbox/", "herdr workspace close <id>"):
     assert phrase in legacy, phrase
-for name in ("messaging.md", "herdr-launch.md"):
-    stub = (refs / name).read_text()
-    assert "legacy-herdr.md#" in stub and len(stub.splitlines()) <= 5, name
-    # Fragments named in already delivered prompts still land on a pointer.
-    assert '<a id="%s"></a>' % {"messaging.md": "optional-once-only-local-pointers",
-                                "herdr-launch.md": "manual-local-handoff"}[name] in stub, name
+# The moved-file stubs and folded references are gone; the legacy file holds their targets.
+for name in ("messaging.md", "herdr-launch.md", "remote-lanes.md", "light-process-template.md"):
+    assert not (refs / name).exists(), name
 for script in ("launch.py", "send.py", "messages.py", "morning.py", "codex-review.sh", "claude-review.sh"):
     assert (skill / "scripts" / script).is_file(), script
 
@@ -826,7 +892,7 @@ for phrase in ("`reports/<number>-evidence.json` next to its report", "with the 
 for phrase in ("writes the evidence file the shared workflow describes", "readiness checks",
                "**observed** (command or source) or **inferred**"):
     assert phrase in lane, phrase
-assert "carries `readiness`" in main and "wrote no evidence file" in main and "verify the PR yourself" in main
+assert "`readiness` is evidence beside these checks" in main and "verify the PR yourself" in main
 
 lane_template = (refs / "lane-template.md").read_text()
 goals = re.findall(r"(?m)^#{1,2} Goal[ \t]*\r?\n(?:\r?\n)*([^\r\n]+)", lane_template)
@@ -850,7 +916,7 @@ main, covered = read(skill / "SKILL.md"), read(refs / "covered-answers.md")
 common, messaging = (read(refs / name) for name in ("common-rules-template.md", "legacy-herdr.md"))
 
 assert "[covered answers](references/covered-answers.md)" in main
-assert "anything unclear goes to the human" in main
+assert "anything unclear goes to the human" in main.lower()
 for text in (covered, common):
     for phrase in ("existing decision or standing rule already", "publish within the repository's PR rules",
                    "continue within approved scope", "fix in-scope review findings",
@@ -879,10 +945,9 @@ assert "On a Herdr host, if the wrapper" in messaging and "(covered-answers.md)"
 assert "started by `lane` skips the note checkpoint and ready nudge" in common
 assert "read only notes its prompt names" in common
 
-reply = main.split("6. **Reply in this order:**")[1].split("7. **Recommend")[0]
-for phrase in ("**Re-check first:**", "waits on the human", "re-observe its state now",
-               "an earlier message is not evidence"):
-    assert phrase in reply, phrase
+reply = main.split("3. **Reply**")[1].split("4. Answer")[0]
+assert "Re-observe before saying something waits on the human" in reply
+assert "re-observed now, not copied from an earlier message" in main
 PY
   [ "$status" -eq 0 ] || {
     echo "$output"
