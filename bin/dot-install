@@ -86,31 +86,38 @@ APT_ETC=/etc/apt
 # with the file names its install guide uses, and pin gh to it.
 setup_github_cli_repository() {
   local keyring="$APT_ETC/keyrings/githubcli-archive-keyring.gpg"
-  local list="$APT_ETC/sources.list.d/github-cli.list" previous="" temporary status=0
+  local list="$APT_ETC/sources.list.d/github-cli.list" previous="" temporary downloaded=false status=0
   temporary=$(mktemp) || return
-  curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
+  if curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
     --connect-timeout 10 --max-time 120 --retry 3 \
     https://cli.github.com/packages/githubcli-archive-keyring.gpg --output "$temporary" &&
-    [[ -s "$temporary" ]] &&
+    [[ -s "$temporary" ]]; then
+    downloaded=true
     sudo install -D -m 0644 "$temporary" "$keyring" || status=$?
+  fi
   rm -f -- "$temporary"
   ((status == 0)) || return "$status"
-  if [[ -f "$list" ]]; then
-    previous=$(sudo cat -- "$list") || return
-  fi
-  printf 'deb [arch=%s signed-by=%s] https://cli.github.com/packages stable main\n' \
-    "$(dpkg --print-architecture)" "$keyring" |
-    sudo tee "$list" >/dev/null || return
-  # Another file may already list GitHub's repository with a different keyring.
-  # APT then refuses every source, so put back what was there and use that one.
-  # Ask as root, so APT reads the same configuration as the update that follows.
-  if ! sudo apt-cache policy >/dev/null; then
-    if [[ -n "$previous" ]]; then
-      printf '%s\n' "$previous" | sudo tee "$list" >/dev/null || return
-    else
-      sudo rm -f -- "$list" || return
+  # A brief outage must not stop every other package; the next run retries.
+  if [[ "$downloaded" != true ]]; then
+    log_warning "Could not download GitHub's gh signing key; left the gh source as it was."
+  else
+    if [[ -f "$list" ]]; then
+      previous=$(sudo cat -- "$list") || return
     fi
-    log_warning "APT rejected $list beside the existing sources; left them as they were."
+    printf 'deb [arch=%s signed-by=%s] https://cli.github.com/packages stable main\n' \
+      "$(dpkg --print-architecture)" "$keyring" |
+      sudo tee "$list" >/dev/null || return
+    # Another file may already list GitHub's repository with a different keyring.
+    # APT then refuses every source, so put back what was there and use that one.
+    # Ask as root, so APT reads the same configuration as the update that follows.
+    if ! sudo apt-cache policy >/dev/null; then
+      if [[ -n "$previous" ]]; then
+        printf '%s\n' "$previous" | sudo tee "$list" >/dev/null || return
+      else
+        sudo rm -f -- "$list" || return
+      fi
+      log_warning "APT rejected $list beside the existing sources; left them as they were."
+    fi
   fi
   sudo install -D -m 0644 "$DOTFILES_ROOT/platforms/linux/apt-preferences/gh-from-github" \
     "$APT_ETC/preferences.d/gh-from-github"

@@ -114,8 +114,9 @@ On every Linux profile, package provisioning adds GitHub's own `gh` repository
 `/etc/apt/keyrings/githubcli-archive-keyring.gpg`) and prefers it for `gh` with
 `/etc/apt/preferences.d/gh-from-github` (priority 600). Ubuntu's `gh` is far
 behind, and Ubuntu Pro's esm-apps pin (510) would otherwise keep it. An older
-`gh` is upgraded once APT has fetched GitHub's index; if that fetch fails, the
-next `bin/dot-install` or `bin/dot-update` does it. A machine that already lists
+`gh` is upgraded once GitHub's key and index download; if either fails, the
+run warns and continues, and the next `bin/dot-install` or `bin/dot-update`
+does it. A machine that already lists
 GitHub's repository in another source file keeps that entry. macOS gets `gh`
 from the Brewfile.
 

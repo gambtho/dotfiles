@@ -471,22 +471,27 @@ apt update -o DPkg::Lock::Timeout=600" ]
   [ -f "$etc/preferences.d/gh-from-github" ]
 }
 
-@test "a failed or empty gh keyring download stops package setup before APT" {
-  local events="$TEST_ROOT/events" curl_status
+@test "a failed or empty gh keyring download leaves the gh source alone and continues" {
+  local events="$TEST_ROOT/events" etc="$TEST_ROOT/etc/apt" curl_status
 
   for curl_status in 22 0; do
+    rm -f "$events"
     run env INSTALL_SOURCE_ONLY=1 EVENTS="$events" TMPDIR="$TEST_ROOT" CURL_STATUS="$curl_status" bash -c '
       source "$1/bin/dot-install"
       OS=Ubuntu
       PROFILE=server
       APT_ETC=$2
       curl() { : >"${@: -1}"; return "$CURL_STATUS"; }
-      sudo() { printf "%s\n" "$*" >>"$EVENTS"; }
+      sudo() { printf "%s\n" "${*//$APT_ETC/}" >>"$EVENTS"; }
       install_platform_packages
-    ' _ "$REPO_ROOT" "$TEST_ROOT/etc/apt"
+    ' _ "$REPO_ROOT" "$etc"
 
-    [ "$status" -ne 0 ]
-    [ ! -e "$events" ]
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Could not download GitHub's gh signing key"* ]]
+    [ "$(sed -n 1p "$events")" = "install -D -m 0644 $REPO_ROOT/platforms/linux/apt-preferences/gh-from-github /preferences.d/gh-from-github" ]
+    run grep -E 'keyrings|github-cli.list|apt-cache' "$events"
+    [ "$status" -eq 1 ]
+    grep -q '^apt install ' "$events"
     [ -z "$(find "$TEST_ROOT" -maxdepth 1 -name 'tmp.*')" ]
   done
 }
