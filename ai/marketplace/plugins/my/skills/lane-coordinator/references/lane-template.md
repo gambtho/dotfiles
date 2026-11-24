@@ -8,26 +8,21 @@ PR from a freshly fetched `origin/<base>`). Read the project's AGENTS.md, its sh
 workflow at `<resolved project path>/lanes/COMMON-RULES.md`, the repo's own AGENTS.md
 and contribution guide, and any effort rules named below; follow them. Use the shared
 workflow's prompt-hash and addressed-note checkpoints before acting and reporting ready.
-Coordinator: verify workflow/[messaging](messaging.md) readability on the recipient host.
+Coordinator: verify the shared workflow is readable on the recipient host.
 Publication follows COORDINATION.md; otherwise draft exact text. Name publication holds.
 
 Host: <chosen host>: <brief reason matched against Hosts `Use for`; local if no row matches>.
-A host/project whose `Worker` is `lane` uses developerlanes launch/status/instruct/report;
-without `lane` keeps the existing Herdr/manual transport. For remote lanes, inbox
-coverage and note delivery follow messaging.md's host rules. Coordinator: record
-host/worker/reason in STATE's `What / report` cell. Remote lanes need
-verified hostname/user, host alias, roots and report return command; put the guard first.
-Resolve paths/authority/profiles via [remote lanes](remote-lanes.md).
-Handoff: [local](herdr-launch.md#manual-local-handoff) installed
-`herdr-lane [--agent claude] <project>-<n> "Read <path> and follow it."`, otherwise plain Read; bound remote:
-`herdr-lane --host <binding> <project>-<n> <prompt>`, replacing the remote Read-only fallback.
-A host whose `Worker` is `lane` instead starts with the [developerlanes command](remote-lanes.md#developerlanes-worker-opt-in),
-including the selected inputs. Use [bindings](remote-lanes.md#explicit-remote-command);
-manual copy/start needs an unbound host and a reason in Hosts.
+A host/project whose `Worker` is `lane` is started and steered through developerlanes with
+the selected inputs ([hosts and lane workers](remote-lanes.md)); a host without `lane` keeps
+the frozen Herdr/manual handoff, notes and bindings in the
+[legacy reference](legacy-herdr.md#handoff-line-and-session-names). Coordinator: record
+host/worker/reason in STATE's `What / report` cell. Remote lanes need verified
+hostname/user, host alias, roots and how the report returns; put the guard first.
 
 ## Session identity (private)
 
-New workspace label, agent name and live Herdr alias: `<project-slug>-<lane-number>`
+On a lane worker, `lane` names the task. On a Herdr-only host, the new workspace label,
+agent name and live Herdr alias are `<project-slug>-<lane-number>`
 (e.g. `double-holo-12` for W12), unless the user explicitly overrides with a valid,
 unique name. Full lane/task identity stays in this file and STATE.md; filenames and
 numbering are unchanged. Never rename existing sessions/workspaces/aliases.
@@ -103,7 +98,11 @@ Ready requires local HEAD = remote PR head = tested revision = CI revision. Incl
 reusable review evidence (base, head provenance, scope, content/profile identities,
 model, dispositions) and closeout's bot-opportunity evidence.
 "W<n> ready" requests an action, not a completion verdict; coordinator replies action/owner first.
-Optional local ready nudge (Herdr hosts only): [once-only pointers](messaging.md#optional-once-only-local-pointers);
+Mark each claim about another lane, host, person or project **observed** (command or
+source) or **inferred**; re-observe an inferred claim before calling it a blocker.
+A task started by `lane` with a PR also writes the evidence file the shared workflow
+describes, next to this report, so `lane status` shows its readiness checks.
+Herdr-only hosts: optional ready nudge by the [legacy pointers](legacy-herdr.md#optional-once-only-local-pointers);
 record here, never STATE. Manual sessions are not monitored.
 Escalate new material choices, shared/destructive operations or actions outside authority;
 public/production/provider approval limits remain.

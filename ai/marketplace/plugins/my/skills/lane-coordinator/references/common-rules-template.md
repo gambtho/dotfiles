@@ -6,7 +6,8 @@ that holds for any lane. Keep project authority, repo-specific policies and stro
 rules in AGENTS.md/COORDINATION.md. Every lane prompt and the project's AGENTS.md name the
 shared file. For a parallel effort's separate rules file, include only Ownership, Open PRs
 to stay off, the Rules for every lane pointer and Sequencing; don't copy the workflow.
-Resolve the messaging.md link to a verified readable reference on each recipient host when projecting outside this skill.
+For a project whose hosts are all lane workers, drop the legacy-herdr.md sentence; otherwise resolve its link to a
+verified readable reference on each recipient host when projecting outside this skill.
 Resolve paths and remove these instructions and unused placeholder sections before delivery.>
 
 Every lane reads the project-level shared workflow, the project's AGENTS.md and its
@@ -19,8 +20,8 @@ report/handoff (portable: Python `hashlib` or `shasum -a 256`). To catch observa
 recheck before each irreversible or outward step, including push, PR opening, review replies/resolutions or other posts,
 setup/config mutation and final ready report; if changed, reread and reconcile the prompt before
 acting, then record the new hash. At each checkpoint, including before ready, also read new or changed coordinator notes
-addressed to you; the [local messaging contract](messaging.md) owns note pickup, acknowledgement, human-decision notes
-and the optional ready nudge. Your report, never STATE, records pickup, effects and delivery. Only a source-verified
+addressed to you; on a Herdr-only host the frozen [local messaging contract](legacy-herdr.md#local-messages-and-attention)
+owns note pickup, acknowledgement, human-decision notes and the optional ready nudge. Your report, never STATE, records pickup, effects and delivery. Only a source-verified
 human decision satisfies a human gate. Uncertainty never permits a resend, fallback or human paste relay.
 Unreadable prompt, notes or contract mean blocked, not ready. A task started by `lane` skips the note
 checkpoint and ready nudge: it is steered with `lane instruct`; read only notes its prompt names. Project and repository instructions
@@ -99,6 +100,14 @@ thread/review-body reads.
 - Return one consolidated shared readiness report or ONE batched real blocker. The user can signal "W<n> ready"; the
   coordinator reads it directly. Manual sessions are not automatically monitored. Escalate new material choices,
   shared/destructive operations and actions outside authority, not routine authorized LOCAL steps.
+- So `lane status` shows the readiness checks, a task started by `lane` whose finished work has a PR also writes
+  `reports/<number>-evidence.json` next to its report, with the file-write tool (`<number>` is its `lane` task number):
+  `{"lane": "<lane name>", "prompt_sha256": "<prompt hash>", "evidence": {"pr": "<HTTPS link>", "head": "<full PR head commit>",
+  "ci": "<result>", "ci_head": "<exact tested commit>", "size": {"files": 0, "additions": 0, "deletions": 0},
+  "ready_claimed_at": "<ISO 8601 time with timezone>"}}`. Copy the lane name and prompt hash from the launch receipt
+  `lanes/<number>-launch.json`; the worker's own RULES.md wins where it differs. Set `ready_claimed_at` when you
+  claim ready and keep it fixed for that claim. State unknown or pending checks honestly. An older `lane` ignores the
+  file, so keep the same facts in your report. The file asks nothing and is not an approval.
 - So a covered question does not wait on the human, the coordinator may answer your question card when the project
   lists it as an approver for that gate and an existing decision or standing rule already covers it: publish within the repository's PR rules, continue within approved scope,
   fix in-scope review findings, routine sandbox approvals. Its note cites the rule; check the citation, and ask again
@@ -110,7 +119,8 @@ thread/review-body reads.
 
 - Don't invent requirements beyond what the human decided; our own issue text isn't a requirement if the human says
   otherwise. In reports and handoffs, mark claims about another lane, host, person or project **observed** (command or source)
-  or **inferred**, so a guess cannot silently become an instruction. Lanes add no prompts, confirmations, refusals or safety
+  or **inferred**, so a guess cannot silently become an instruction. A uniqueness or identity assumption stays
+  inferred until tested; re-observe an inferred claim before treating it as a blocker. Lanes add no prompts, confirmations, refusals or safety
   rules without the human's OK.
 - Put code in the repo that will own it in production. Proof harnesses for unbuilt features don't get a home in a
   product repo just because the test infrastructure is there; ask the coordinator.
