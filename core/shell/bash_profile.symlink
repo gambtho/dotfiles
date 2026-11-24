@@ -22,10 +22,12 @@ elif [ -x "$HOME/.local/bin/mise" ]; then
   eval "$("$HOME/.local/bin/mise" activate bash --shims)"
 fi
 
-case ":$PATH:" in
-  *":$HOME/.dotfiles/bin:"*) ;;
-  *) PATH="$HOME/.dotfiles/bin:$PATH" ;;
-esac
+# Move the dotfiles bin to the front even when ~/.profile already added it, so
+# the gh identity shim also wins over a mise shim.
+PATH=":$PATH:"
+PATH="${PATH//":$HOME/.dotfiles/bin:"/:}"
+PATH="${PATH#:}"
+PATH="$HOME/.dotfiles/bin:${PATH%:}"
 # A managed Pi must win over an npm copy (including one supplied by mise).
 if [ -d "$HOME/.pi/agent/bin" ]; then
   PATH="$HOME/.pi/agent/bin:$PATH"
