@@ -2,7 +2,7 @@
   "$schema": "https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#",
   "contentVersion": "1.0.0.0",
   "metadata": {
-    "description": "One always-on coordinator VM: no public IP on the VM, no inbound, encryption at host, weekly backup, identity without role grants."
+    "description": "One always-on coordinator VM: no public IP on the VM, no inbound, encryption at host, identity without role grants."
   },
   "parameters": {
     "location": { "type": "string" },
@@ -13,10 +13,7 @@
     "osDiskSku": { "type": "string", "defaultValue": "Premium_LRS", "allowedValues": ["Premium_LRS", "StandardSSD_LRS"] },
     "adminUsername": { "type": "string" },
     "adminSshPublicKey": { "type": "string" },
-    "cloudInit": { "type": "string", "metadata": { "description": "Rendered cloud-init text. It is readable by anyone who can read the VM, so it must hold no secrets." } },
-    "backupDay": { "type": "string", "defaultValue": "Sunday" },
-    "backupTimeUtc": { "type": "string", "defaultValue": "2026-01-04T07:00:00Z", "metadata": { "description": "Only the time of day is used." } },
-    "backupRetentionWeeks": { "type": "int", "defaultValue": 4 }
+    "cloudInit": { "type": "string", "metadata": { "description": "Rendered cloud-init text. It is readable by anyone who can read the VM, so it must hold no secrets." } }
   },
   "resources": [
     {
@@ -44,10 +41,7 @@
           "osDiskSku": { "value": "[parameters('osDiskSku')]" },
           "adminUsername": { "value": "[parameters('adminUsername')]" },
           "adminSshPublicKey": { "value": "[parameters('adminSshPublicKey')]" },
-          "cloudInit": { "value": "[parameters('cloudInit')]" },
-          "backupDay": { "value": "[parameters('backupDay')]" },
-          "backupTimeUtc": { "value": "[parameters('backupTimeUtc')]" },
-          "backupRetentionWeeks": { "value": "[parameters('backupRetentionWeeks')]" }
+          "cloudInit": { "value": "[parameters('cloudInit')]" }
         },
         "template": {
           "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
@@ -60,10 +54,7 @@
             "osDiskSku": { "type": "string" },
             "adminUsername": { "type": "string" },
             "adminSshPublicKey": { "type": "string" },
-            "cloudInit": { "type": "string" },
-            "backupDay": { "type": "string" },
-            "backupTimeUtc": { "type": "string" },
-            "backupRetentionWeeks": { "type": "int" }
+            "cloudInit": { "type": "string" }
           },
           "variables": {
             "nsgName": "[concat(parameters('vmName'), '-nsg')]",
@@ -71,12 +62,7 @@
             "natName": "[concat(parameters('vmName'), '-nat')]",
             "vnetName": "[concat(parameters('vmName'), '-vnet')]",
             "subnetName": "default",
-            "nicName": "[concat(parameters('vmName'), '-nic')]",
-            "vaultName": "[concat(parameters('vmName'), '-backup')]",
-            "policyName": "weekly",
-            "backupFabric": "Azure",
-            "backupContainer": "[concat('iaasvmcontainer;iaasvmcontainerv2;', resourceGroup().name, ';', parameters('vmName'))]",
-            "backupItem": "[concat('vm;iaasvmcontainerv2;', resourceGroup().name, ';', parameters('vmName'))]"
+            "nicName": "[concat(parameters('vmName'), '-nic')]"
           },
           "resources": [
             {
@@ -228,68 +214,6 @@
                   ]
                 },
                 "diagnosticsProfile": { "bootDiagnostics": { "enabled": true } }
-              }
-            },
-            {
-              "type": "Microsoft.RecoveryServices/vaults",
-              "apiVersion": "2024-04-01",
-              "name": "[variables('vaultName')]",
-              "location": "[parameters('location')]",
-              "sku": { "name": "RS0", "tier": "Standard" },
-              "properties": { "publicNetworkAccess": "Enabled" }
-            },
-            {
-              "type": "Microsoft.RecoveryServices/vaults/backupstorageconfig",
-              "apiVersion": "2024-04-01",
-              "name": "[concat(variables('vaultName'), '/vaultstorageconfig')]",
-              "dependsOn": [
-                "[resourceId('Microsoft.RecoveryServices/vaults', variables('vaultName'))]"
-              ],
-              "properties": { "storageModelType": "LocallyRedundant" }
-            },
-            {
-              "type": "Microsoft.RecoveryServices/vaults/backupPolicies",
-              "apiVersion": "2024-04-01",
-              "name": "[concat(variables('vaultName'), '/', variables('policyName'))]",
-              "dependsOn": [
-                "[resourceId('Microsoft.RecoveryServices/vaults/backupstorageconfig', variables('vaultName'), 'vaultstorageconfig')]"
-              ],
-              "properties": {
-                "backupManagementType": "AzureIaasVM",
-                "policyType": "V2",
-                "instantRpRetentionRangeInDays": 5,
-                "instantRPDetails": { "azureBackupRGNamePrefix": "[concat(resourceGroup().name, '-snapshots-')]" },
-                "timeZone": "UTC",
-                "schedulePolicy": {
-                  "schedulePolicyType": "SimpleSchedulePolicyV2",
-                  "scheduleRunFrequency": "Weekly",
-                  "weeklySchedule": {
-                    "scheduleRunDays": ["[parameters('backupDay')]"],
-                    "scheduleRunTimes": ["[parameters('backupTimeUtc')]"]
-                  }
-                },
-                "retentionPolicy": {
-                  "retentionPolicyType": "LongTermRetentionPolicy",
-                  "weeklySchedule": {
-                    "daysOfTheWeek": ["[parameters('backupDay')]"],
-                    "retentionTimes": ["[parameters('backupTimeUtc')]"],
-                    "retentionDuration": { "count": "[parameters('backupRetentionWeeks')]", "durationType": "Weeks" }
-                  }
-                }
-              }
-            },
-            {
-              "type": "Microsoft.RecoveryServices/vaults/backupFabrics/protectionContainers/protectedItems",
-              "apiVersion": "2024-04-01",
-              "name": "[concat(variables('vaultName'), '/', variables('backupFabric'), '/', variables('backupContainer'), '/', variables('backupItem'))]",
-              "dependsOn": [
-                "[resourceId('Microsoft.RecoveryServices/vaults/backupPolicies', variables('vaultName'), variables('policyName'))]",
-                "[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]"
-              ],
-              "properties": {
-                "protectedItemType": "Microsoft.Compute/virtualMachines",
-                "policyId": "[resourceId('Microsoft.RecoveryServices/vaults/backupPolicies', variables('vaultName'), variables('policyName'))]",
-                "sourceResourceId": "[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]"
               }
             }
           ],

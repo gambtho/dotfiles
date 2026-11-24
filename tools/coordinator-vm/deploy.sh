@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # tools/coordinator-vm/deploy.sh -- preview or create the coordinator VM.
 #
-# Usage: deploy.sh [what-if|create] --subscription ID --admin-user NAME --ssh-key FILE.pub [--location REGION]
+# Usage: deploy.sh [what-if|create] --subscription ID --ssh-key FILE.pub [--admin-user NAME] [--location REGION]
 #
-# The default is what-if, which changes nothing in Azure. The Git name and
+# The default is what-if, which changes nothing in Azure. The admin account is
+# tng unless --admin-user names another. The Git name and
 # email written into cloud-init come from this machine's global Git config.
 # The VM clones the public repository and checks out this checkout's HEAD, so
 # create first fetches that repository's main and needs HEAD to be on it: a
@@ -20,7 +21,7 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 repository_url=https://github.com/gambtho/dotfiles.git
 mode=what-if
 subscription=""
-admin_user=""
+admin_user=tng
 ssh_key_file=""
 location=eastus2
 

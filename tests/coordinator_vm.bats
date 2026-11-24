@@ -107,16 +107,10 @@ esac'
   [ "$status" -eq 0 ]
 }
 
-@test "the VM is backed up weekly" {
-  run jq -e '
-    (map(select(.type == "Microsoft.RecoveryServices/vaults/backupPolicies"))[0].properties
-      | .policyType == "V2"
-        and .schedulePolicy.scheduleRunFrequency == "Weekly"
-        and (.schedulePolicy.weeklySchedule.scheduleRunDays | length == 1))
-    and (map(select(.type | endswith("/protectedItems"))) | length == 1 and (.[0].properties
-      | (.sourceResourceId | contains("Microsoft.Compute/virtualMachines\u0027, parameters(\u0027vmName\u0027)"))
-        and (.policyId | contains("variables(\u0027policyName\u0027)"))))
-  ' <<<"$(resources)"
+@test "the template holds no backup vault: the VM is rebuilt from code" {
+  run jq -e 'all(.[]; .type | test("RecoveryServices|DataProtection"; "i") | not)' <<<"$(resources)"
+  [ "$status" -eq 0 ]
+  run jq -e '.parameters | keys | all(test("backup"; "i") | not)' "$TEMPLATE"
   [ "$status" -eq 0 ]
 }
 
@@ -136,13 +130,13 @@ esac'
 @test "deploy previews by default and never creates unless asked" {
   stub_deploy_tools
   write_public_key
-  run bash "$DEPLOY" --subscription sub-id --admin-user coordinatoradmin --ssh-key "$TEST_ROOT/key.pub"
+  run bash "$DEPLOY" --subscription sub-id --ssh-key "$TEST_ROOT/key.pub"
   [ "$status" -eq 0 ]
   # No fetch and no second az call: a preview touches nothing.
   [ "$(wc -l <"$CALLS")" -eq 1 ]
   grep -q '^deployment sub what-if --subscription sub-id --location eastus2 ' "$CALLS"
   run jq -r '.parameters | .adminUsername.value, .location.value, (.adminSshPublicKey.value | split(" ")[0])' "$TEST_ROOT/parameters.json"
-  [ "$output" = $'coordinatoradmin\neastus2\nssh-ed25519' ]
+  [ "$output" = $'tng\neastus2\nssh-ed25519' ]
   run jq -r '.parameters.cloudInit.value' "$TEST_ROOT/parameters.json"
   [[ "$output" == *"name = Test Person"* ]]
   [[ "$output" == *"email = test@example.com"* ]]

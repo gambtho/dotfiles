@@ -22,11 +22,12 @@ Everything needed to build it again is in this folder.
   networks no longer give a VM outbound access by default, and the box needs to
   reach package mirrors, GitHub, Azure Relay and Tailscale. Nothing can connect
   inward through it.
-- A Recovery Services vault that backs the VM up every Sunday at 07:00 UTC and
-  keeps four weeks. Azure Backup puts its snapshots in a second resource group
-  that it creates itself, named `rg-coordinator-snapshots-1`.
 - A system-assigned identity with no role assignments. The template contains
   none, and nothing here adds any.
+
+There is no backup or snapshot. The VM is rebuilt from this folder, and the
+state worth keeping (each project's coordinator folder) is pushed to Git.
+Sign-ins, pairings and the lanes registry are redone on a rebuild.
 
 A plain JSON template rather than Bicep or a script of `az` commands: `what-if`
 can preview a template before the resource group exists, a script cannot, and
@@ -46,17 +47,18 @@ turns it into Bicep if you prefer that later.
 3. Check the VM size is offered to your subscription in the region you want
    (`az vm list-skus --subscription SUBSCRIPTION_ID -l REGION --size Standard_D4as_v5 --all`). The default
    region is `eastus2`.
-4. Pick the SSH **public** key for the admin account. The matching private key
-   stays on your own machine.
+4. Make a new SSH key pair for the admin account and pass its **public** half
+   to `deploy.sh`. The private key stays on your own machine; commit neither.
 
 ## Preview and create
 
 ```sh
-bash tools/coordinator-vm/deploy.sh what-if --subscription SUBSCRIPTION_ID --admin-user NAME --ssh-key ~/.ssh/KEY.pub
-bash tools/coordinator-vm/deploy.sh create  --subscription SUBSCRIPTION_ID --admin-user NAME --ssh-key ~/.ssh/KEY.pub
+bash tools/coordinator-vm/deploy.sh what-if --subscription SUBSCRIPTION_ID --ssh-key ~/.ssh/KEY.pub
+bash tools/coordinator-vm/deploy.sh create  --subscription SUBSCRIPTION_ID --ssh-key ~/.ssh/KEY.pub
 ```
 
-`what-if` changes nothing. Both read your global Git name and email and write
+`what-if` changes nothing. The admin account is `tng`; `--admin-user NAME`
+picks another. Both read your global Git name and email and write
 them into cloud-init, because bootstrap needs a Git identity. cloud-init is
 stored with the VM and readable by anyone who can read the VM, so it holds no
 secrets.
@@ -90,7 +92,7 @@ az vm run-command invoke --subscription SUBSCRIPTION_ID -g rg-coordinator -n coo
 ```
 
 The output contains a Tailscale sign-in link. Open it, approve the machine,
-then `ssh NAME@coordinator` over Tailscale with the key you chose. If the link
+then `ssh tng@coordinator` over Tailscale with the key you chose. If the link
 does not appear, use the Azure serial console instead; it needs a password on
 the account first (portal: **Reset password**).
 
@@ -102,6 +104,18 @@ the account first (portal: **Reset password**).
 | GitHub | `gh auth login` |
 | Azure | `az login --use-device-code`, as yourself. Azure Relay needs a user sign-in; the VM's own identity has no roles |
 | Claude Code | install it the way its documentation says, then run `claude` and sign in |
+
+Your tenant may block device-code sign-in. If `az login --use-device-code` is
+refused, sign in with the browser on your own machine through a forwarded port:
+
+1. On the VM, run `BROWSER=echo az login`. With no browser to open, it prints
+   the sign-in address instead and waits.
+2. Find `redirect_uri=http%3A%2F%2Flocalhost%3APORT` in that address. The port
+   changes every time.
+3. In a second terminal on your own machine, forward that port:
+   `ssh -N -L PORT:localhost:PORT tng@coordinator`.
+4. Open the printed address in your own browser and sign in. The last
+   redirect, to `localhost:PORT`, now reaches `az` on the VM.
 
 ### 3. Install lanes and start a fresh registry
 
@@ -158,23 +172,19 @@ Use one workspace per project coordinator.
 
 Move one project first and run it for a few days before the next. A project
 moves only when every machine it uses is a lanes worker. Its coordinator folder
-keeps pushing to its private repository; that push is the off-box backup
-between weekly snapshots.
+keeps pushing to its private repository; that push is the only off-box copy.
 
 ## Rebuild or remove
 
-- **Clean replacement:** delete the VM and run `deploy.sh create` again; the
-  template is incremental. The OS disk goes with the VM, so the registry,
-  pairings and every sign-in are gone: redo "First boot" from step 1. Check the
-  new VM has one successful backup before you rely on it.
-- **Recovery:** to keep that local state, restore the VM or its disk from a
-  recovery point in the vault instead of deleting it.
-- **Removal:** deleting the resource group needs the backup stopped and its
-  data deleted first, and the vault's soft delete can hold that for 14 days.
+- **Rebuild:** delete the VM and run `deploy.sh create` again; the template is
+  incremental. The OS disk goes with the VM, so the registry, pairings and
+  every sign-in are gone: redo "First boot" from step 1. Push each coordinator
+  folder first.
+- **Removal:** delete the resource group.
 
 ## Not tested yet
 
 No VM has been created from this. cloud-init passes `cloud-init schema`, and
 `what-if` accepts the template, but first boot, `dot-install` on a clean
-Ubuntu server, the Tailscale sign-in link through run-command and the backup
-policy have not run for real. Expect to fix something on the first build.
+Ubuntu server, the Tailscale sign-in link through run-command and the
+forwarded-port sign-in have not run for real. Expect to fix something on the first build.
