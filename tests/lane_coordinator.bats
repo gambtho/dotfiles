@@ -789,7 +789,7 @@ for phrase in ("../SKILL.md#lane-mechanics-read-the-bundled-coordinator", "grant
                "saved host/worker enrollment", "Keep STATE, other lanes' context, credentials and session trees",
                "only to hosts its Hosts table allows", "a displayed remote path is not a local copy",
                "not a replacement", "(covered-answers.md)", "legacy-herdr.md#remote-lanes-on-herdr-hosts",
-               "fresh start after a set-aside reuses the same prompt file", "Do not rename it"):
+               "fresh start after a set-aside reuses the same prompt file", "Do not rename it", "new creation ID"):
     assert phrase in remote, phrase
 assert "| Worker |" in coordination
 assert "`lane`" in coordination and "opt in" in coordination.lower()
@@ -811,6 +811,9 @@ for phrase in ("herdr-lane --host <binding>", "scripts/messages.py", "scripts/se
 for name in ("messaging.md", "herdr-launch.md"):
     stub = (refs / name).read_text()
     assert "legacy-herdr.md#" in stub and len(stub.splitlines()) <= 5, name
+    # Fragments named in already delivered prompts still land on a pointer.
+    assert '<a id="%s"></a>' % {"messaging.md": "optional-once-only-local-pointers",
+                                "herdr-launch.md": "manual-local-handoff"}[name] in stub, name
 for script in ("launch.py", "send.py", "messages.py", "morning.py", "codex-review.sh", "claude-review.sh"):
     assert (skill / "scripts" / script).is_file(), script
 

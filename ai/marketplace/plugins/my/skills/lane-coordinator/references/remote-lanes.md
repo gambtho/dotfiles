@@ -20,8 +20,9 @@ and follow it. The row grants no new publication, answer or launch authority. Ou
   profile. Keep STATE, other lanes' context, credentials and session trees on their owning
   hosts. A project's content goes only to hosts its Hosts table allows.
 - **STATE.** Write the IDs the bundled skill tells you to save in the lane's STATE row.
-- **One prompt file.** A fresh start after a set-aside reuses the same prompt file. Do not
-  rename it to force a new start, which leaves two copies of one prompt.
+- **One prompt file.** On another machine, a fresh start after a set-aside reuses the same
+  prompt file under a new creation ID. Do not rename it to force a new start, which leaves
+  two copies of one prompt.
 - **Reports.** Before finishing a task, save its fetched report and optional handoff under
   the project's report folder; a displayed remote path is not a local copy. A failed, stale
   or unsafe read is unknown.
