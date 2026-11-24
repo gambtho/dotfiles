@@ -5,7 +5,10 @@ Description=Herdr session for project coordinators
 [Service]
 Type=exec
 WorkingDirectory=%h
-Environment="PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin"
+# The user manager may predate the switch to zsh, so name the pane shell and
+# the mise shims here rather than inherit them.
+Environment="SHELL=/usr/bin/zsh"
+Environment="PATH=%h/.local/bin:%h/.local/share/mise/shims:/usr/local/bin:/usr/bin:/bin"
 # Herdr directly, not through `mise exec`: that would install every tool in
 # the global mise config at boot, and the server profile installs only some.
 # Panes get their tools from the login shell.
