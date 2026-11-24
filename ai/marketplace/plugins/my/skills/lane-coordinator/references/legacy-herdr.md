@@ -1,6 +1,6 @@
 # Herdr-only hosts (legacy, frozen)
 
-**For projects whose hosts are not lane workers; no new changes.** This file holds every
+**For hosts that are not lane workers; no new changes.** This file holds every
 Herdr-only path the coordinator skill used before `lane` workers: terminal snapshots, inbox
 note files and `send.py`, the local Herdr launch helper, `herdr-lane` remote launch, rsync
 report fetch and workspace close by label. It is kept only until the last project starts

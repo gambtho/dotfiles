@@ -40,8 +40,8 @@ the review pack, routines, the authority table and writing rules. Those are this
 project's own rules, not additions the bundled skill warns against. Neither file adds authority.
 
 A host that is not a lane worker uses the frozen
-[Herdr-only legacy reference](references/legacy-herdr.md): for projects whose hosts are
-not lane workers; no new changes. Choose per Hosts row; a project can have both kinds.
+[Herdr-only legacy reference](references/legacy-herdr.md); it takes no new changes.
+Choose per Hosts row; a project can have both kinds.
 
 ## Attention on every turn
 

@@ -798,7 +798,7 @@ assert "without `lane` keeps" in lane
 # One frozen legacy file holds every Herdr-only path; the old files only point at it.
 raw_legacy = (refs / "legacy-herdr.md").read_text()
 header = raw_legacy.split("## Attention and notes on every turn")[0]
-assert "For projects whose hosts are not lane workers; no new changes." in header
+assert "For hosts that are not lane workers; no new changes." in header
 for heading in ("## Attention and notes on every turn", "## Handoff line and session names",
                 "## Start a lane on a Herdr host", "## Close a closed lane's workspace",
                 "## Explicit Herdr lane launch", "### Manual local handoff", "## Local messages and attention",
