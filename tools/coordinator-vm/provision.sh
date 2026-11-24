@@ -29,6 +29,12 @@ fi
 
 bash "$DOTFILES_ROOT/bin/dot-install"
 
+# dot-install treats Herdr as optional; this box exists to run it.
+if [[ ! -x "$HOME/.local/bin/herdr" ]]; then
+  printf '%s\n' 'provision.sh: Herdr was not installed; see the dot-install output above.' >&2
+  exit 1
+fi
+
 # One Herdr session at boot. cloud-init has already enabled lingering, which is
 # what starts the user manager without a login.
 unit_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"

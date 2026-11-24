@@ -5,6 +5,8 @@
 #
 # The default is what-if, which changes nothing in Azure. The Git name and
 # email written into cloud-init come from this machine's global Git config.
+# The VM checks out this checkout's HEAD, so create needs HEAD to be on
+# origin/main: a commit GitHub does not serve would fail on first boot.
 
 set -euo pipefail
 
@@ -51,19 +53,31 @@ if [[ -z "$subscription" || -z "$admin_user" || -z "$ssh_key_file" ]]; then
   exit 2
 fi
 
+# Azure accepts ED25519 keys and RSA keys of 2048 bits or more. The text check
+# keeps a private key file out; ssh-keygen proves the key itself parses.
 ssh_key=$(<"$ssh_key_file")
-if [[ ! "$ssh_key" =~ ^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp[0-9]+)\ [A-Za-z0-9+/=]+(\ [^[:cntrl:]]*)?$ ]]; then
-  printf 'deploy.sh: %s is not a single SSH public key.\n' "$ssh_key_file" >&2
+key_bits=""
+if [[ "$ssh_key" =~ ^(ssh-ed25519|ssh-rsa)\ [A-Za-z0-9+/=]+(\ [^[:cntrl:]]*)?$ ]]; then
+  key_bits=$(ssh-keygen -l -f "$ssh_key_file" 2>/dev/null | awk 'NR == 1 { print $1 }') || key_bits=""
+fi
+if [[ ! "$key_bits" =~ ^[0-9]+$ ]] || [[ "$ssh_key" == ssh-rsa\ * && "$key_bits" -lt 2048 ]]; then
+  printf 'deploy.sh: %s is not one ED25519 or RSA (2048 bits or more) public key.\n' "$ssh_key_file" >&2
   exit 1
 fi
 
-# cloud-init text is not secret, but these two values land inside YAML, so
-# accept only characters that cannot change its structure.
+# cloud-init text is not secret, but these values land inside YAML, so accept
+# only characters that cannot change its structure. A name has no "@", so it
+# can never contain one of the template's own markers.
 git_name=$(git config --global --includes --get user.name || true)
 git_email=$(git config --global --includes --get user.email || true)
-safe='^[A-Za-z0-9][A-Za-z0-9 ._@+-]*$'
-if [[ ! "$git_name" =~ $safe || ! "$git_email" =~ $safe ]]; then
+if [[ ! "$git_name" =~ ^[A-Za-z0-9][A-Za-z0-9\ ._+-]*$ || ! "$git_email" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]*@[A-Za-z0-9.-]+$ ]]; then
   printf '%s\n' 'deploy.sh: set a plain global Git user.name and user.email first.' >&2
+  exit 1
+fi
+
+revision=$(git -C "$here" rev-parse --verify 'HEAD^{commit}')
+if [[ "$mode" == create ]] && ! git -C "$here" merge-base --is-ancestor "$revision" origin/main; then
+  printf '%s\n' 'deploy.sh: create from a commit that is on origin/main; the VM clones it from GitHub.' >&2
   exit 1
 fi
 
@@ -73,6 +87,7 @@ jq -n \
   --rawfile cloud_init "$here/cloud-init.yaml" \
   --arg git_name "$git_name" \
   --arg git_email "$git_email" \
+  --arg revision "$revision" \
   --arg location "$location" \
   --arg admin_user "$admin_user" \
   --arg ssh_key "$ssh_key" \
@@ -83,7 +98,12 @@ jq -n \
       location: {value: $location},
       adminUsername: {value: $admin_user},
       adminSshPublicKey: {value: $ssh_key},
-      cloudInit: {value: ($cloud_init | sub("@GIT_NAME@"; $git_name) | sub("@GIT_EMAIL@"; $git_email))}
+      cloudInit: {
+        value: ($cloud_init
+          | sub("@GIT_NAME@"; $git_name)
+          | sub("@GIT_EMAIL@"; $git_email)
+          | sub("@DOTFILES_REVISION@"; $revision))
+      }
     }
   }' >"$work/parameters.json"
 

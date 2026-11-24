@@ -61,6 +61,10 @@ them into cloud-init, because bootstrap needs a Git identity. cloud-init is
 stored with the VM and readable by anyone who can read the VM, so it holds no
 secrets.
 
+The VM checks out the commit your checkout is on, so `create` refuses a commit
+that is not on `origin/main`. On the VM, `~/.dotfiles` starts detached at that
+commit; `git -C ~/.dotfiles switch main` when you want it to follow main.
+
 ## First boot
 
 cloud-init takes a while (it builds language runtimes). Its log is
@@ -74,7 +78,15 @@ The VM has no inbound path, so the first sign-in goes through Azure:
 
 ```sh
 az vm run-command invoke -g rg-coordinator -n coordinator --command-id RunShellScript \
-  --scripts 'cloud-init status --long; tailscale up --timeout 20s; tailscale status'
+  --scripts 'cloud-init status --long; tail -n 5 /var/log/coordinator-provision.log'
+```
+
+Repeat until it reports `status: done` and the log ends with "Provisioning
+finished". Only then ask Tailscale for a sign-in link:
+
+```sh
+az vm run-command invoke -g rg-coordinator -n coordinator --command-id RunShellScript \
+  --scripts 'tailscale up --timeout 20s; tailscale status'
 ```
 
 The output contains a Tailscale sign-in link. Open it, approve the machine,
@@ -151,9 +163,14 @@ between weekly snapshots.
 
 ## Rebuild or remove
 
-To rebuild, delete the VM and run `deploy.sh create` again; the template is
-incremental. Removing the resource group needs the backup stopped and its data
-deleted first, and the vault's soft delete can hold deletion for 14 days.
+- **Clean replacement:** delete the VM and run `deploy.sh create` again; the
+  template is incremental. The OS disk goes with the VM, so the registry,
+  pairings and every sign-in are gone: redo "First boot" from step 1. Check the
+  new VM has one successful backup before you rely on it.
+- **Recovery:** to keep that local state, restore the VM or its disk from a
+  recovery point in the vault instead of deleting it.
+- **Removal:** deleting the resource group needs the backup stopped and its
+  data deleted first, and the vault's soft delete can hold that for 14 days.
 
 ## Not tested yet
 

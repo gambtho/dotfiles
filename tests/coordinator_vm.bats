@@ -16,7 +16,18 @@ resources() {
 }
 
 write_public_key() {
-  printf 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeKeyForTestsOnly000000000000000000000000 test\n' >"$TEST_ROOT/key.pub"
+  ssh-keygen -q -t ed25519 -N '' -C test -f "$TEST_ROOT/key"
+}
+
+# A checkout whose HEAD is on origin/main, or not, for the create check.
+make_checkout() {
+  CHECKOUT="$TEST_ROOT/checkout"
+  mkdir -p "$CHECKOUT/tools"
+  cp -R "$SRC" "$CHECKOUT/tools/coordinator-vm"
+  git -C "$CHECKOUT" init -q
+  git -C "$CHECKOUT" -c user.name=t -c user.email=t@example.com commit -q --allow-empty -m base
+  git -C "$CHECKOUT" update-ref refs/remotes/origin/main HEAD
+  DEPLOY="$CHECKOUT/tools/coordinator-vm/deploy.sh"
 }
 
 stub_deploy_tools() {
@@ -26,33 +37,41 @@ printf "%s\n" "$*" >>"$CALLS"
 for arg in "$@"; do
   case "$arg" in @*) cp "${arg#@}" "$TEST_ROOT/parameters.json" ;; esac
 done'
+  # Only the identity lookups are stubbed; everything else is real Git.
   stub_command git '
 case "$*" in
-  *user.name*) printf "%s\n" "${GIT_NAME-Test Person}" ;;
-  *user.email*) printf "%s\n" "${GIT_EMAIL-test@example.com}" ;;
+  *"--get user.name") printf "%s\n" "${GIT_NAME-Test Person}" ;;
+  *"--get user.email") printf "%s\n" "${GIT_EMAIL-test@example.com}" ;;
+  *) exec /usr/bin/git "$@" ;;
 esac'
+  make_checkout
 }
 
 @test "the VM has no public IP and the only security rule denies all inbound" {
   run jq -e '
     (map(select(.type == "Microsoft.Network/networkInterfaces")) | length == 1
-      and all(.[].properties.ipConfigurations[]; .properties | has("publicIPAddress") | not))
+      and (.[0].properties.ipConfigurations | length == 1
+        and (.[0].properties | has("publicIPAddress") | not)))
     and (map(select(.type == "Microsoft.Network/networkSecurityGroups")) | length == 1
-      and (.[0].properties.securityRules | length == 1
-        and .[0].properties.direction == "Inbound"
-        and .[0].properties.access == "Deny"
-        and .[0].properties.sourceAddressPrefix == "*"
-        and .[0].properties.destinationPortRange == "*"))
+      and (.[0].properties.securityRules | length == 1 and (.[0].properties
+        | .direction == "Inbound" and .access == "Deny" and .protocol == "*"
+          and .sourceAddressPrefix == "*" and .sourcePortRange == "*"
+          and .destinationAddressPrefix == "*" and .destinationPortRange == "*")))
+    and (map(select(.type == "Microsoft.Network/virtualNetworks"))[0].properties.subnets
+      | length == 1 and (.[0].properties.networkSecurityGroup.id | contains("variables(\u0027nsgName\u0027)")))
   ' <<<"$(resources)"
   [ "$status" -eq 0 ]
 }
 
 @test "the one public IP belongs to the outbound NAT gateway" {
   run jq -e '
-    (map(select(.type == "Microsoft.Network/publicIPAddresses")) | length == 1)
-    and (map(select(.type == "Microsoft.Network/natGateways"))[0].properties.publicIpAddresses | length == 1)
+    (map(select(.type == "Microsoft.Network/publicIPAddresses")) | length == 1
+      and .[0].name == "[variables(\u0027natIpName\u0027)]")
+    and (map(select(.type == "Microsoft.Network/natGateways"))[0].properties.publicIpAddresses
+      | length == 1 and (.[0].id | contains("variables(\u0027natIpName\u0027)")))
     and (map(select(.type == "Microsoft.Network/virtualNetworks"))[0].properties.subnets
-      | all(.properties.defaultOutboundAccess == false and (.properties.natGateway.id | length > 0)))
+      | length == 1 and (.[0].properties
+        | .defaultOutboundAccess == false and (.natGateway.id | contains("variables(\u0027natName\u0027)"))))
   ' <<<"$(resources)"
   [ "$status" -eq 0 ]
 }
@@ -70,7 +89,7 @@ esac'
   [ "$status" -eq 0 ]
 }
 
-@test "the identity gets no role grants and the template takes no secrets" {
+@test "the template declares no role grants and no secret parameters" {
   run jq -e 'all(.[]; .type | test("roleAssignments|roleDefinitions"; "i") | not)' <<<"$(resources)"
   [ "$status" -eq 0 ]
   run jq -e '[.. | objects | select(.type? == "securestring" or .type? == "secureObject")] | length == 0' "$TEMPLATE"
@@ -80,28 +99,33 @@ esac'
 @test "the VM is backed up weekly" {
   run jq -e '
     (map(select(.type == "Microsoft.RecoveryServices/vaults/backupPolicies"))[0].properties
-      | .schedulePolicy.scheduleRunFrequency == "Weekly"
+      | .policyType == "V2"
+        and .schedulePolicy.scheduleRunFrequency == "Weekly"
         and (.schedulePolicy.weeklySchedule.scheduleRunDays | length == 1))
-    and (map(select(.type | endswith("/protectedItems"))) | length == 1)
+    and (map(select(.type | endswith("/protectedItems"))) | length == 1 and (.[0].properties
+      | (.sourceResourceId | contains("Microsoft.Compute/virtualMachines\u0027, parameters(\u0027vmName\u0027)"))
+        and (.policyId | contains("variables(\u0027policyName\u0027)"))))
   ' <<<"$(resources)"
   [ "$status" -eq 0 ]
 }
 
-@test "cloud-init carries no secrets and hands off to the provision script" {
-  # The only match allowed is the comment that says there are none.
-  run bash -c 'rg -i "password|passwd|token|authkey|secret|private key" "$1" | rg -v "No secrets here"' _ "$SRC/cloud-init.yaml"
-  [ -z "$output" ]
-  run rg -c 'tools/coordinator-vm/provision.sh' "$SRC/cloud-init.yaml"
+@test "cloud-init names no credential and hands off to the provision script" {
+  # A keyword scan, not proof. The one allowed match is the comment saying so.
+  run grep -ciE 'password|passwd|token|authkey|secret|private key' "$SRC/cloud-init.yaml"
+  [ "$status" -eq 0 ]
+  [ "$output" = 1 ]
+  grep -q 'No secrets here' "$SRC/cloud-init.yaml"
+  run grep -c 'tools/coordinator-vm/provision.sh' "$SRC/cloud-init.yaml"
   [ "$output" = 1 ]
   [ "$(head -n 1 "$SRC/cloud-init.yaml")" = "#cloud-config" ]
-  # deploy.sh fills exactly these two values.
-  [ "$(rg -o '@[A-Z_]+@' "$SRC/cloud-init.yaml" | sort | tr '\n' ' ')" = "@GIT_EMAIL@ @GIT_NAME@ " ]
+  # deploy.sh fills exactly these values.
+  [ "$(grep -oE '@[A-Z_]+@' "$SRC/cloud-init.yaml" | sort | tr '\n' ' ')" = "@DOTFILES_REVISION@ @GIT_EMAIL@ @GIT_NAME@ " ]
 }
 
 @test "deploy previews by default and never creates unless asked" {
   stub_deploy_tools
   write_public_key
-  run bash "$SRC/deploy.sh" --subscription sub-id --admin-user admin --ssh-key "$TEST_ROOT/key.pub"
+  run bash "$DEPLOY" --subscription sub-id --admin-user admin --ssh-key "$TEST_ROOT/key.pub"
   [ "$status" -eq 0 ]
   [ "$(wc -l <"$CALLS")" -eq 1 ]
   grep -q '^deployment sub what-if --subscription sub-id --location eastus2 ' "$CALLS"
@@ -110,31 +134,53 @@ esac'
   run jq -r '.parameters.cloudInit.value' "$TEST_ROOT/parameters.json"
   [[ "$output" == *"name = Test Person"* ]]
   [[ "$output" == *"email = test@example.com"* ]]
-  [[ "$output" != *"@GIT_"* ]]
+  [[ "$output" == *"checkout --detach $(git -C "$CHECKOUT" rev-parse HEAD) &&"* ]]
+  [ -z "$(grep -oE '@[A-Z_]+@' <<<"$output")" ]
 }
 
 @test "deploy creates only when the mode says create" {
   stub_deploy_tools
   write_public_key
-  run bash "$SRC/deploy.sh" create --subscription sub-id --admin-user admin --ssh-key "$TEST_ROOT/key.pub" --location westus3
+  run bash "$DEPLOY" create --subscription sub-id --admin-user admin --ssh-key "$TEST_ROOT/key.pub" --location westus3
   [ "$status" -eq 0 ]
   grep -q '^deployment sub create --subscription sub-id --location westus3 ' "$CALLS"
 }
 
-@test "deploy refuses a private key, an unsafe Git identity and missing options" {
+@test "deploy refuses to create from a commit that is not on origin/main" {
   stub_deploy_tools
   write_public_key
-  printf '%s\n' '-----BEGIN OPENSSH PRIVATE KEY-----' 'AAAA' '-----END OPENSSH PRIVATE KEY-----' >"$TEST_ROOT/key"
-  run bash "$SRC/deploy.sh" --subscription sub-id --admin-user admin --ssh-key "$TEST_ROOT/key"
+  git -C "$CHECKOUT" -c user.name=t -c user.email=t@example.com commit -q --allow-empty -m unpublished
+  run bash "$DEPLOY" create --subscription sub-id --admin-user admin --ssh-key "$TEST_ROOT/key.pub"
   [ "$status" -eq 1 ]
-  [[ "$output" == *"not a single SSH public key"* ]]
+  [[ "$output" == *"on origin/main"* ]]
+  [ ! -s "$CALLS" ]
+  # A preview from the same commit is still allowed.
+  run bash "$DEPLOY" what-if --subscription sub-id --admin-user admin --ssh-key "$TEST_ROOT/key.pub"
+  [ "$status" -eq 0 ]
+}
 
-  GIT_NAME='Bad: "name"' run bash "$SRC/deploy.sh" --subscription sub-id --admin-user admin --ssh-key "$TEST_ROOT/key.pub"
+@test "deploy refuses unusable keys, an unsafe Git identity and missing options" {
+  stub_deploy_tools
+  write_public_key
+  local key
+  # The private half, a truncated key, an ECDSA key and a short RSA key.
+  printf 'ssh-ed25519 AAAA test\n' >"$TEST_ROOT/truncated.pub"
+  ssh-keygen -q -t ecdsa -N '' -f "$TEST_ROOT/ecdsa"
+  ssh-keygen -q -t rsa -b 1024 -N '' -f "$TEST_ROOT/short"
+  for key in key truncated.pub ecdsa.pub short.pub; do
+    run bash "$DEPLOY" --subscription sub-id --admin-user admin --ssh-key "$TEST_ROOT/$key"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"is not one ED25519 or RSA"* ]]
+  done
+
+  GIT_NAME='Bad: "name"' run bash "$DEPLOY" --subscription sub-id --admin-user admin --ssh-key "$TEST_ROOT/key.pub"
   [ "$status" -eq 1 ]
-  GIT_EMAIL='' run bash "$SRC/deploy.sh" --subscription sub-id --admin-user admin --ssh-key "$TEST_ROOT/key.pub"
+  GIT_NAME='Alice @GIT_EMAIL@' run bash "$DEPLOY" --subscription sub-id --admin-user admin --ssh-key "$TEST_ROOT/key.pub"
+  [ "$status" -eq 1 ]
+  GIT_EMAIL='' run bash "$DEPLOY" --subscription sub-id --admin-user admin --ssh-key "$TEST_ROOT/key.pub"
   [ "$status" -eq 1 ]
 
-  run bash "$SRC/deploy.sh" create --admin-user admin --ssh-key "$TEST_ROOT/key.pub"
+  run bash "$DEPLOY" create --admin-user admin --ssh-key "$TEST_ROOT/key.pub"
   [ "$status" -eq 2 ]
   [ ! -s "$CALLS" ]
 }
@@ -147,6 +193,16 @@ esac'
   printf '#!/usr/bin/env bash\nprintf "dot-install\\n" >>"$CALLS"\n' >"$checkout/bin/dot-install"
   stub_command systemctl 'printf "systemctl %s\n" "$*" >>"$CALLS"'
 
+  # dot-install can succeed without Herdr; provisioning must not.
+  run bash "$checkout/tools/coordinator-vm/provision.sh" "$TEST_ROOT/identity"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"Herdr was not installed"* ]]
+  ! grep -q systemctl "$CALLS"
+
+  : >"$CALLS"
+  mkdir -p "$HOME/.local/bin"
+  printf '#!/bin/sh\n' >"$HOME/.local/bin/herdr"
+  chmod +x "$HOME/.local/bin/herdr"
   run bash "$checkout/tools/coordinator-vm/provision.sh" "$TEST_ROOT/identity"
   [ "$status" -eq 0 ]
   [ "$(cat "$CALLS")" = "bootstrap --non-interactive --profile server global=$TEST_ROOT/identity

@@ -3,9 +3,10 @@
 # with the VM and anyone who can read the VM can read it. Sign-ins are manual;
 # see README.md beside this file.
 #
-# deploy.sh replaces the two @...@ values with the Git identity of the person
-# who deploys. Everything else happens in provision.sh, from a fresh clone, so
-# the same steps can be rerun by hand.
+# deploy.sh replaces the @...@ values: the Git identity of the person who
+# deploys, and the published commit of this repository to check out, so a
+# rebuild installs what was reviewed rather than whatever main holds that day.
+# Everything else happens in provision.sh, so the same steps can be rerun by hand.
 package_update: true
 package_upgrade: true
 apt:
@@ -43,5 +44,6 @@ runcmd:
     - >-
       sudo -H -u "$(id -nu 1000)" sh -c
       'git clone https://github.com/gambtho/dotfiles.git "$HOME/.dotfiles" &&
+      git -C "$HOME/.dotfiles" checkout --detach @DOTFILES_REVISION@ &&
       bash "$HOME/.dotfiles/tools/coordinator-vm/provision.sh" /etc/coordinator-vm/git-identity'
       > /var/log/coordinator-provision.log 2>&1
