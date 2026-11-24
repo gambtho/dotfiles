@@ -44,7 +44,7 @@ turns it into Bicep if you prefer that later.
    ```
 
 3. Check the VM size is offered to your subscription in the region you want
-   (`az vm list-skus -l REGION --size Standard_D4as_v5 --all`). The default
+   (`az vm list-skus --subscription SUBSCRIPTION_ID -l REGION --size Standard_D4as_v5 --all`). The default
    region is `eastus2`.
 4. Pick the SSH **public** key for the admin account. The matching private key
    stays on your own machine.
@@ -77,7 +77,7 @@ marks everything else.
 The VM has no inbound path, so the first sign-in goes through Azure:
 
 ```sh
-az vm run-command invoke -g rg-coordinator -n coordinator --command-id RunShellScript \
+az vm run-command invoke --subscription SUBSCRIPTION_ID -g rg-coordinator -n coordinator --command-id RunShellScript \
   --scripts 'cloud-init status --long; tail -n 5 /var/log/coordinator-provision.log'
 ```
 
@@ -85,7 +85,7 @@ Repeat until it reports `status: done` and the log ends with "Provisioning
 finished". Only then ask Tailscale for a sign-in link:
 
 ```sh
-az vm run-command invoke -g rg-coordinator -n coordinator --command-id RunShellScript \
+az vm run-command invoke --subscription SUBSCRIPTION_ID -g rg-coordinator -n coordinator --command-id RunShellScript \
   --scripts 'tailscale up --timeout 20s; tailscale status'
 ```
 

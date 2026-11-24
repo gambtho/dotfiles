@@ -43,8 +43,8 @@ mkdir -p "$unit_dir"
 install -m 0644 "$DOTFILES_ROOT/tools/coordinator-vm/coordinator-herdr.service" "$unit_dir/coordinator-herdr.service"
 systemctl --user daemon-reload
 systemctl --user enable --now coordinator-herdr.service
-# The unit counts as started once mise runs, before Herdr itself is up, so ask
-# the server.
+# systemd reports the unit started as soon as the binary runs, so ask the
+# server itself.
 ready=false
 for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
   if "$HOME/.local/bin/herdr" workspace list >/dev/null 2>&1; then
