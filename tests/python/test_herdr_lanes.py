@@ -732,6 +732,9 @@ class BindingTests(unittest.TestCase):
                                   r'status|report|inbox|dashboard|host|listen)\b')
         retired = re.compile(rf'`lane\s+(?!{developerlanes_command})[^`]+`|/bin/lane\b')
         for name in filter(None, [*docs, 'tools/herdr/config.toml.template']):
+            # Generated automation reports (libexec/automation_run.py) may quote a retired path as evidence.
+            if name in ('docs/automation-reports/dotfiles-health.md', 'docs/automation-reports/tooling-radar.md'):
+                continue
             shell = False
             for number, line in enumerate((root / name).read_text().splitlines(), 1):
                 # The migration warning names the retired path, not an invocation.
