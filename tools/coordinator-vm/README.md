@@ -92,7 +92,8 @@ az vm run-command invoke --subscription SUBSCRIPTION_ID -g rg-coordinator -n coo
 ```
 
 The output contains a Tailscale sign-in link. Open it, approve the machine,
-then `ssh tng@coordinator` over Tailscale with the key you chose. If the link
+then `ssh -i ~/.ssh/KEY tng@coordinator` over Tailscale, naming the private
+half of the key you deployed. If the link
 does not appear, use the Azure serial console instead; it needs a password on
 the account first (portal: **Reset password**).
 
@@ -113,7 +114,7 @@ refused, sign in with the browser on your own machine through a forwarded port:
 2. Find `redirect_uri=http%3A%2F%2Flocalhost%3APORT` in that address. The port
    changes every time.
 3. In a second terminal on your own machine, forward that port:
-   `ssh -N -L PORT:localhost:PORT tng@coordinator`.
+   `ssh -i ~/.ssh/KEY -N -L PORT:localhost:PORT tng@coordinator`.
 4. Open the printed address in your own browser and sign in. The last
    redirect, to `localhost:PORT`, now reaches `az` on the VM.
 
@@ -179,7 +180,12 @@ keeps pushing to its private repository; that push is the only off-box copy.
 - **Rebuild:** delete the VM and run `deploy.sh create` again; the template is
   incremental. The OS disk goes with the VM, so the registry, pairings and
   every sign-in are gone: redo "First boot" from step 1. Push each coordinator
-  folder first.
+  folder first. Before signing the new VM in to Tailscale, remove the old
+  `coordinator` device in the Tailscale admin console, or the new one is named
+  `coordinator-1`. The new VM also has a new SSH host key: run
+  `ssh-keygen -R coordinator` on your own machine, and compare the fingerprint
+  SSH then offers with `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` run
+  through `az vm run-command invoke`.
 - **Removal:** delete the resource group.
 
 ## Not tested yet
