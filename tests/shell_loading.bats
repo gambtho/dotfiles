@@ -318,3 +318,36 @@ setup_utility_autoloads() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"1|"* ]]
 }
+
+# A fresh server has mise only in ~/.local/bin, which login files add to PATH
+# themselves. Model that install: a mise that emits shim activation and one
+# shim, then start real login shells with a minimal PATH.
+@test "fresh-HOME login shells find mise shims installed under ~/.local/bin" {
+  local shims="$HOME/.local/share/mise/shims"
+  mkdir -p "$HOME/.local/bin" "$shims"
+  cat >"$HOME/.local/bin/mise" <<'MISE'
+#!/bin/sh
+[ "$1" = activate ] && [ "$3" = --shims ] || exit 1
+printf 'export PATH="%s:$PATH"\n' "$HOME/.local/share/mise/shims"
+MISE
+  printf '#!/bin/sh\necho node-shim\n' >"$shims/node"
+  chmod +x "$HOME/.local/bin/mise" "$shims/node"
+  ln -s "$REPO_ROOT/core/shell/zprofile.symlink" "$HOME/.zprofile"
+  ln -s "$REPO_ROOT/core/shell/bash_profile.symlink" "$HOME/.bash_profile"
+
+  local shell
+  for shell in zsh bash; do
+    run env -i HOME="$HOME" PATH=/usr/bin:/bin "$shell" -lc 'command -v node && node'
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"$shims/node"* ]]
+    [[ "$output" == *"node-shim"* ]]
+  done
+}
+
+@test "shell files never hard-code a user's home directory" {
+  # Comment lines may show example paths; code must use $HOME.
+  run bash -c 'cd "$1" && git ls-files -z -- "*.zsh" "*.sh" "*.bash" "*.symlink" bin |
+    xargs -0 grep -nE "/(home|Users)/[A-Za-z0-9._-]+" | grep -vE "^[^:]+:[0-9]+:[[:space:]]*#"' _ "$REPO_ROOT"
+  [ "$status" -eq 1 ]
+  [ -z "$output" ]
+}

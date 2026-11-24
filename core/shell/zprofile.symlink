@@ -6,8 +6,12 @@
 # Interactive shells still go through .zshrc afterwards, which is harmless
 # since mise activate is idempotent.
 
-if command -v mise >/dev/null 2>&1; then
+# Look in ~/.local/bin too: the standalone installer puts mise there, and the
+# PATH loop below has not run yet.
+if (( $+commands[mise] )); then
   eval "$(mise activate zsh --shims)"
+elif [[ -x "$HOME/.local/bin/mise" ]]; then
+  eval "$("$HOME/.local/bin/mise" activate zsh --shims)"
 fi
 
 # Make managed Pi and the dotfiles commands available in non-interactive login
