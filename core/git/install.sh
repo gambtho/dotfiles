@@ -9,8 +9,8 @@ MARKER_FILE="$(dirname "$0")/git_updated"
 # Function to use git ppa for latest version
 git_ppa() {
   sudo apt-add-repository ppa:git-core/ppa
-  sudo apt-get update
-  sudo apt-get install -y git
+  sudo_apt apt-get update
+  sudo_apt apt-get install -y git
 }
 
 # Main function

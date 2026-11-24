@@ -406,15 +406,15 @@ linux_prep() {
   log_info "Preparing Linux environment"
   ensure_wsl_ssh_closed || return
 
-  sudo apt update
-  sudo apt-get install -y ca-certificates curl gnupg build-essential \
+  sudo_apt apt update
+  sudo_apt apt-get install -y ca-certificates curl gnupg build-essential \
     libssl-dev libreadline-dev zlib1g-dev libyaml-dev
 
   sudo install -m 0755 -d /etc/apt/keyrings
 
   if ! command_exists zsh; then
     log_info "Installing zsh"
-    sudo apt install -y zsh
+    sudo_apt apt install -y zsh
     log_success "zsh installed"
   else
     log_info "zsh already installed"

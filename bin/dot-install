@@ -53,7 +53,7 @@ install_keyring_apt_packages() {
   done <<<"$package_list"
   # GNOME Keyring recommends PAM integration. Do not add that integration
   # implicitly, or change recommendation policy for the ordinary package set.
-  sudo apt-get install -y --no-install-recommends "${packages[@]}" >/dev/null
+  sudo_apt apt-get install -y --no-install-recommends "${packages[@]}" >/dev/null
 }
 
 install_apt_packages() {
@@ -63,7 +63,7 @@ install_apt_packages() {
   log_info "Updating composed APT packages for $OS/$PROFILE..."
   ensure_wsl_ssh_closed || return
   setup_package_repositories || return
-  sudo apt update >/dev/null || return
+  sudo_apt apt update >/dev/null || return
   if [[ "$PROFILE" == work ]]; then
     verify_asciinema_apt_candidate || return
   fi
@@ -72,11 +72,11 @@ install_apt_packages() {
   while IFS= read -r package; do
     [[ -n "$package" ]] && apt_packages+=("$package")
   done <<<"$package_list"
-  sudo apt install -y "${apt_packages[@]}" >/dev/null || return
+  sudo_apt apt install -y "${apt_packages[@]}" >/dev/null || return
   install_keyring_apt_packages || return
-  sudo apt upgrade -y >/dev/null || return
-  sudo apt autoremove -y >/dev/null || return
-  sudo apt autoclean -y >/dev/null
+  sudo_apt apt upgrade -y >/dev/null || return
+  sudo_apt apt autoremove -y >/dev/null || return
+  sudo_apt apt autoclean -y >/dev/null
 }
 
 setup_package_repositories() {
@@ -139,7 +139,14 @@ install_managed_tools() {
 
 install_languages() {
   log_info "Installing language runtimes via mise..."
-  DOTFILES_PROFILE="$PROFILE" bash "$DOTFILES_ROOT/languages/mise/install.sh"
+  DOTFILES_PROFILE="$PROFILE" bash "$DOTFILES_ROOT/languages/mise/install.sh" || return
+  # A shell that never ran `mise activate` (cloud-init, a first run before the
+  # login shell is set up) cannot see the runtimes just installed, and later
+  # phases need node and npm. Append, so anything already on PATH still wins.
+  local shims="${MISE_DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/mise}/shims"
+  if [[ -d "$shims" && ":$PATH:" != *":$shims:"* ]]; then
+    export PATH="$PATH:$shims"
+  fi
 }
 
 # ── Phase 3: Shell setup ──────────────────────────────────────────────────────

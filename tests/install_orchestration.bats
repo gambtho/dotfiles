@@ -680,3 +680,20 @@ CASES
   run rg -n 'KREW_ROOT:-\$HOME/\.krew' "$REPO_ROOT/work/path.zsh"
   [ "$status" -eq 0 ]
 }
+
+@test "runtimes installed by mise are visible to later install phases" {
+  local shims="$HOME/.local/share/mise/shims"
+  mkdir -p "$shims"
+
+  run env INSTALL_SOURCE_ONLY=1 HOME="$HOME" bash -c '
+    source "$1/bin/dot-install"
+    PROFILE=server
+    bash() { :; }
+    before=$PATH
+    install_languages
+    install_languages
+    [[ "$PATH" == "$before:$2" ]]
+  ' _ "$REPO_ROOT" "$shims"
+
+  [ "$status" -eq 0 ]
+}
