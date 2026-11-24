@@ -8,7 +8,8 @@ MARKER_FILE="$(dirname "$0")/git_updated"
 
 # Function to use git ppa for latest version
 git_ppa() {
-  sudo apt-add-repository ppa:git-core/ppa
+  # The index refresh is the next line, which waits for a held lock.
+  sudo apt-add-repository --no-update ppa:git-core/ppa
   sudo_apt apt-get update
   sudo_apt apt-get install -y git
 }

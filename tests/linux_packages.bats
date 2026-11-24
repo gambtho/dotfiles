@@ -410,7 +410,7 @@ setup_asciinema_apt_fixture() {
 run_sudo_apt() {
   run env EVENTS="$TEST_ROOT/events" DOTFILES_APT_LOCK_TIMEOUT="${TIMEOUT:-600}" bash -c '
     source "$1/libexec/common.sh"
-    sleep() { printf "sleep %s\n" "$*" >>"$EVENTS"; }
+    sleep() { printf "sleep %s\n" "$*" >>"$EVENTS"; SECONDS=$((SECONDS + $1)); }
     '"$1"'
     shift
     sudo_apt "$@"
@@ -422,6 +422,19 @@ run_sudo_apt() {
 
   [ "$status" -eq 0 ]
   [ "$(<"$TEST_ROOT/events")" = "apt-get install -o DPkg::Lock::Timeout=600 -y git" ]
+}
+
+@test "an install retries while another process holds the download cache lock" {
+  run_sudo_apt 'sudo() {
+    printf "%s\n" "$*" >>"$EVENTS"
+    if (($(grep -c "^apt-get " "$EVENTS") < 2)); then
+      printf "E: Could not get lock /var/cache/apt/archives/lock. It is held by process 1 (apt-get)\n" >&2
+      return 100
+    fi
+  }' apt-get install -y git
+
+  [ "$status" -eq 0 ]
+  [ "$(grep -c '^apt-get install ' "$TEST_ROOT/events")" -eq 2 ]
 }
 
 @test "an index refresh retries while another process holds the index lock" {
@@ -442,6 +455,7 @@ run_sudo_apt() {
 @test "an index refresh that fails for another reason is not retried" {
   run_sudo_apt 'sudo() {
     printf "%s\n" "$*" >>"$EVENTS"
+    printf "E: Could not open lock file /var/lib/apt/lists/lock - open (13: Permission denied)\n" >&2
     printf "E: Failed to fetch http://archive.invalid/dists/InRelease\n" >&2
     return 100
   }' apt-get update
@@ -452,14 +466,16 @@ run_sudo_apt() {
 }
 
 @test "an index refresh stops waiting at the lock timeout" {
-  TIMEOUT=0 run_sudo_apt 'sudo() {
+  TIMEOUT=7 run_sudo_apt 'sudo() {
     printf "%s\n" "$*" >>"$EVENTS"
     printf "E: Could not get lock /var/lib/apt/lists/lock.\n" >&2
     return 100
   }' apt-get update
 
   [ "$status" -eq 100 ]
-  [ "$(wc -l <"$TEST_ROOT/events")" -eq 1 ]
+  # Seven seconds allow one five-second wait, then no further attempt.
+  [ "$(grep -c '^apt-get update -o DPkg::Lock::Timeout=7$' "$TEST_ROOT/events")" -eq 2 ]
+  [ "$(grep -c '^sleep 5$' "$TEST_ROOT/events")" -eq 1 ]
   [[ "$output" == *"Could not get lock"* ]]
 }
 

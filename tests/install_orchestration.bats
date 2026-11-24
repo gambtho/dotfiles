@@ -684,6 +684,8 @@ CASES
 @test "runtimes installed by mise are visible to later install phases" {
   local shims="$HOME/.local/share/mise/shims"
   mkdir -p "$shims"
+  printf '#!/bin/sh\necho RUNTIME_RAN\n' >"$shims/fixture-runtime"
+  chmod +x "$shims/fixture-runtime"
 
   run env INSTALL_SOURCE_ONLY=1 HOME="$HOME" bash -c '
     source "$1/bin/dot-install"
@@ -693,7 +695,9 @@ CASES
     install_languages
     install_languages
     [[ "$PATH" == "$before:$2" ]]
+    env fixture-runtime
   ' _ "$REPO_ROOT" "$shims"
 
   [ "$status" -eq 0 ]
+  [[ "$output" == *RUNTIME_RAN* ]]
 }
