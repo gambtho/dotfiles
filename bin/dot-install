@@ -81,39 +81,35 @@ install_apt_packages() {
 
 APT_ETC=/etc/apt
 
-# Prints the first source file other than ours that already names GitHub's
-# repository. APT refuses two entries for it with different keyrings.
-github_cli_other_source() {
-  local file
-  for file in "$APT_ETC/sources.list" "$APT_ETC/sources.list.d/"*.list "$APT_ETC/sources.list.d/"*.sources; do
-    [[ -f "$file" && "$file" != "$APT_ETC/sources.list.d/github-cli.list" ]] || continue
-    if grep -Eq '^[[:space:]]*[^#[:space:]].*cli[.]github[.]com/packages' "$file"; then
-      printf '%s\n' "$file"
-      return 0
-    fi
-  done
-  return 1
-}
-
 # Ubuntu's own gh trails upstream by years, and Ubuntu Pro's esm-apps pin can
 # hold that build even when a newer one is available. Use GitHub's repository,
 # with the file names its install guide uses, and pin gh to it.
 setup_github_cli_repository() {
-  local keyring="$APT_ETC/keyrings/githubcli-archive-keyring.gpg" existing temporary status=0
-  if existing=$(github_cli_other_source); then
-    log_info "Using the GitHub CLI source already in $existing"
-  else
-    temporary=$(mktemp) || return
-    curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
-      --connect-timeout 10 --max-time 120 --retry 3 \
-      https://cli.github.com/packages/githubcli-archive-keyring.gpg --output "$temporary" &&
-      [[ -s "$temporary" ]] &&
-      sudo install -D -m 0644 "$temporary" "$keyring" || status=$?
-    rm -f -- "$temporary"
-    ((status == 0)) || return "$status"
-    printf 'deb [arch=%s signed-by=%s] https://cli.github.com/packages stable main\n' \
-      "$(dpkg --print-architecture)" "$keyring" |
-      sudo tee "$APT_ETC/sources.list.d/github-cli.list" >/dev/null || return
+  local keyring="$APT_ETC/keyrings/githubcli-archive-keyring.gpg"
+  local list="$APT_ETC/sources.list.d/github-cli.list" previous="" temporary status=0
+  temporary=$(mktemp) || return
+  curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
+    --connect-timeout 10 --max-time 120 --retry 3 \
+    https://cli.github.com/packages/githubcli-archive-keyring.gpg --output "$temporary" &&
+    [[ -s "$temporary" ]] &&
+    sudo install -D -m 0644 "$temporary" "$keyring" || status=$?
+  rm -f -- "$temporary"
+  ((status == 0)) || return "$status"
+  if [[ -f "$list" ]]; then
+    previous=$(<"$list") || return
+  fi
+  printf 'deb [arch=%s signed-by=%s] https://cli.github.com/packages stable main\n' \
+    "$(dpkg --print-architecture)" "$keyring" |
+    sudo tee "$list" >/dev/null || return
+  # Another file may already list GitHub's repository with a different keyring.
+  # APT then refuses every source, so put back what was there and use that one.
+  if ! apt-cache policy >/dev/null; then
+    if [[ -n "$previous" ]]; then
+      printf '%s\n' "$previous" | sudo tee "$list" >/dev/null || return
+    else
+      sudo rm -f -- "$list" || return
+    fi
+    log_warning "APT rejected $list beside the existing sources; left them as they were."
   fi
   sudo install -D -m 0644 "$DOTFILES_ROOT/platforms/linux/apt-preferences/gh-from-github" \
     "$APT_ETC/preferences.d/gh-from-github"

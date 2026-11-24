@@ -408,81 +408,86 @@ gh_candidate() {
   [ "$(gh_candidate "$pin")" = 2.83.1 ]
 }
 
-@test "Linux package setup publishes GitHub's gh repository and pin before APT runs" {
-  local events="$TEST_ROOT/events" published="$TEST_ROOT/published" etc="$TEST_ROOT/etc/apt"
-  mkdir -p "$published" "$etc/sources.list.d"
-
-  run env INSTALL_SOURCE_ONLY=1 EVENTS="$events" PUBLISHED="$published" ETC="$etc" bash -c '
+# Runs dot-install's Linux package phase with sudo writing into a fixture /etc/apt.
+run_gh_package_setup() {
+  local etc="$TEST_ROOT/etc/apt"
+  mkdir -p "$etc/sources.list.d"
+  run env INSTALL_SOURCE_ONLY=1 EVENTS="$TEST_ROOT/events" ETC="$etc" APT_CACHE_STATUS="$1" bash -c '
     source "$1/bin/dot-install"
     OS=Ubuntu
     PROFILE=server
     APT_ETC=$ETC
-    curl() {
-      printf "curl %s\n" "${@: -3:1}" >>"$EVENTS"
-      printf "keyring\n" >"${@: -1}"
-    }
+    curl() { printf "curl %s\n" "${@: -3:1}" >>"$EVENTS"; printf "keyring\n" >"${@: -1}"; }
     dpkg() { printf "arm64\n"; }
+    apt-cache() { printf "apt-cache %s\n" "$*" >>"$EVENTS"; return "$APT_CACHE_STATUS"; }
     sudo() {
+      local to="${@: -1}"
       case "$1" in
-        install) local to="${@: -1}"; printf "install %s\n" "${to#$ETC}" >>"$EVENTS"; cp "${@: -2:1}" "$PUBLISHED/${to##*/}" ;;
-        tee) printf "tee %s\n" "${2#$ETC}" >>"$EVENTS"; cat >"$PUBLISHED/$(basename "$2")" ;;
+        install) printf "install %s\n" "${to#$ETC}" >>"$EVENTS"; mkdir -p "${to%/*}"; cp "${@: -2:1}" "$to" ;;
+        tee) printf "tee %s\n" "${2#$ETC}" >>"$EVENTS"; cat >"$2" ;;
+        rm) printf "rm %s\n" "${to#$ETC}" >>"$EVENTS"; rm -f -- "$to" ;;
         *) printf "%s\n" "$*" >>"$EVENTS" ;;
       esac
     }
     install_platform_packages
   ' _ "$REPO_ROOT"
+}
+
+@test "Linux package setup publishes GitHub's gh repository and pin before APT runs" {
+  local etc="$TEST_ROOT/etc/apt"
+  run_gh_package_setup 0
 
   [ "$status" -eq 0 ]
-  [ "$(sed -n 1,4p "$events")" = "curl https://cli.github.com/packages/githubcli-archive-keyring.gpg
+  [ "$(sed -n 1,6p "$TEST_ROOT/events")" = "curl https://cli.github.com/packages/githubcli-archive-keyring.gpg
 install /keyrings/githubcli-archive-keyring.gpg
 tee /sources.list.d/github-cli.list
-install /preferences.d/gh-from-github" ]
-  [ "$(sed -n 5p "$events")" = "apt update -o DPkg::Lock::Timeout=600" ]
-  [ "$(<"$published/githubcli-archive-keyring.gpg")" = keyring ]
-  [ "$(<"$published/github-cli.list")" = "deb [arch=arm64 signed-by=$etc/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" ]
-  cmp "$REPO_ROOT/platforms/linux/apt-preferences/gh-from-github" "$published/gh-from-github"
-  grep '^apt install ' "$events" | grep -wq gh
+apt-cache policy
+install /preferences.d/gh-from-github
+apt update -o DPkg::Lock::Timeout=600" ]
+  [ "$(<"$etc/keyrings/githubcli-archive-keyring.gpg")" = keyring ]
+  [ "$(<"$etc/sources.list.d/github-cli.list")" = "deb [arch=arm64 signed-by=$etc/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" ]
+  cmp "$REPO_ROOT/platforms/linux/apt-preferences/gh-from-github" "$etc/preferences.d/gh-from-github"
+  grep '^apt install ' "$TEST_ROOT/events" | grep -wq gh
 }
 
-@test "an existing GitHub CLI source in another file is kept, and gh is still pinned" {
-  local events="$TEST_ROOT/events" etc="$TEST_ROOT/etc/apt"
+@test "a gh source APT rejects is put back as it was, and gh is still pinned" {
+  local etc="$TEST_ROOT/etc/apt" old='deb [signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main'
   mkdir -p "$etc/sources.list.d"
-  printf 'Types: deb\nURIs: https://cli.github.com/packages\nSuites: stable\nComponents: main\nSigned-By: /usr/share/keyrings/githubcli-archive-keyring.gpg\n' \
-    >"$etc/sources.list.d/gh.sources"
-
-  run env INSTALL_SOURCE_ONLY=1 EVENTS="$events" ETC="$etc" bash -c '
-    source "$1/bin/dot-install"
-    OS=Ubuntu
-    PROFILE=server
-    APT_ETC=$ETC
-    curl() { printf "curl\n" >>"$EVENTS"; }
-    sudo() { printf "%s\n" "${*//$ETC/}" >>"$EVENTS"; }
-    install_platform_packages
-  ' _ "$REPO_ROOT"
+  printf '%s\n' "$old" >"$etc/sources.list.d/github-cli.list"
+  run_gh_package_setup 100
 
   [ "$status" -eq 0 ]
-  [[ "$output" == *"already in $etc/sources.list.d/gh.sources"* ]]
-  ! grep -q '^curl' "$events"
-  ! grep -q '^tee ' "$events"
-  [ "$(sed -n 1p "$events")" = "install -D -m 0644 $REPO_ROOT/platforms/linux/apt-preferences/gh-from-github /preferences.d/gh-from-github" ]
+  [[ "$output" == *"APT rejected $etc/sources.list.d/github-cli.list"* ]]
+  [ "$(<"$etc/sources.list.d/github-cli.list")" = "$old" ]
+  cmp "$REPO_ROOT/platforms/linux/apt-preferences/gh-from-github" "$etc/preferences.d/gh-from-github"
+
+  rm -r "$etc" "$TEST_ROOT/events"
+  run_gh_package_setup 100
+
+  [ "$status" -eq 0 ]
+  [ ! -e "$etc/sources.list.d/github-cli.list" ]
+  grep -Fxq 'rm /sources.list.d/github-cli.list' "$TEST_ROOT/events"
+  [ -f "$etc/preferences.d/gh-from-github" ]
 }
 
-@test "a failed gh keyring download stops package setup before APT" {
-  local events="$TEST_ROOT/events"
+@test "a failed or empty gh keyring download stops package setup before APT" {
+  local events="$TEST_ROOT/events" curl_status
 
-  run env INSTALL_SOURCE_ONLY=1 EVENTS="$events" TMPDIR="$TEST_ROOT" bash -c '
-    source "$1/bin/dot-install"
-    OS=Ubuntu
-    PROFILE=server
-    APT_ETC=$2
-    curl() { : >"${@: -1}"; return 22; }
-    sudo() { printf "%s\n" "$*" >>"$EVENTS"; }
-    install_platform_packages
-  ' _ "$REPO_ROOT" "$TEST_ROOT/etc/apt"
+  for curl_status in 22 0; do
+    run env INSTALL_SOURCE_ONLY=1 EVENTS="$events" TMPDIR="$TEST_ROOT" CURL_STATUS="$curl_status" bash -c '
+      source "$1/bin/dot-install"
+      OS=Ubuntu
+      PROFILE=server
+      APT_ETC=$2
+      curl() { : >"${@: -1}"; return "$CURL_STATUS"; }
+      sudo() { printf "%s\n" "$*" >>"$EVENTS"; }
+      install_platform_packages
+    ' _ "$REPO_ROOT" "$TEST_ROOT/etc/apt"
 
-  [ "$status" -eq 22 ]
-  [ ! -e "$events" ]
-  [ -z "$(find "$TEST_ROOT" -maxdepth 1 -name 'tmp.*')" ]
+    [ "$status" -ne 0 ]
+    [ ! -e "$events" ]
+    [ -z "$(find "$TEST_ROOT" -maxdepth 1 -name 'tmp.*')" ]
+  done
 }
 
 @test "Kubernetes repository follows the canonical channel pin" {
