@@ -159,9 +159,9 @@ sweep; flag `weekly <project>` if `Last weekly pass:` is missing or over 7 days 
 run it unasked); mark stale outcome rows by hand; then give the status reply.
 
 **End of day:** drift check and fix STATE; disk check per [morning.md](references/morning.md);
-the step-back paragraph; bring STATE within budget (drift check `STATE-lines`), moving
-closed lanes to the archive and detail to lane reports; stop/resume lines for overnight lanes;
-tomorrow's first actions on top; stamp `Last end of day: <date time>`.
+the step-back paragraph; stop/resume lines for overnight lanes; tomorrow's first actions on
+top; then bring STATE within budget (drift check `STATE-lines`), moving closed lanes to the
+archive and detail to lane reports; stamp `Last end of day: <date time>`.
 
 **Weekly:** re-try each outcome row or leave it stale with a reason; disk check; check
 STATE trimming, rule-file budgets and parked lanes without stop/resume lines; list
