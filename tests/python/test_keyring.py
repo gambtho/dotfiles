@@ -942,7 +942,13 @@ class SealTests(unittest.TestCase):
             self.inputs.append(input)
             return subprocess.CompletedProcess(command, 0)
 
-        with contextlib.redirect_stdout(self.output), contextlib.redirect_stderr(self.output):
+        # Independent of the runner's account: root would be refused as a unit user.
+        with (
+            mock.patch.object(self.module.os, "getuid", return_value=1000),
+            mock.patch.object(self.module.pwd, "getpwuid", return_value=mock.Mock(pw_name="tng")),
+            contextlib.redirect_stdout(self.output),
+            contextlib.redirect_stderr(self.output),
+        ):
             try:
                 return self.module.seal(self.provider, prompt or (lambda: "test-password"),
                                         run=run, tpm=str(self.tpm))
@@ -976,6 +982,8 @@ class SealTests(unittest.TestCase):
         self.assertNotIn("test-password", self.output.getvalue())
         unit = self.inputs[self.commands.index(["sudo", "tee", "/etc/systemd/system/dotfiles-keyring-unlock.service"])]
         self.assertIn(f"ExecStart=/usr/bin/python3 {ROOT / 'libexec/keyring'} boot-unlock".encode(), unit)
+        self.assertIn(b"User=tng\n", unit)
+        self.assertIn(b"After=user@1000.service\n", unit)
         self.assertEqual(self.commands[-2:], [
             ["sudo", "systemctl", "enable", "dotfiles-keyring-unlock.service"],
             ["sudo", "systemctl", "start", "dotfiles-keyring-unlock.service"],
