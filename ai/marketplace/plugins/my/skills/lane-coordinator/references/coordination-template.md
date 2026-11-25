@@ -60,6 +60,13 @@ For the shared checker command/config, see [morning.md](morning.md); adopting it
 
 Record failed checks or exhausted budgets as unknown, not clean results.
 
+## Recorded environment limits
+
+What does not work where, so "check before telling" can read it: one line each, with the
+host or OS, what fails, how it was observed and the date.
+
+- <host/OS>: <what does not work or needs a workaround> (<observed how>, <date>).
+
 ## Project facts
 
 <Only stable facts not already owned by AGENTS.md or repo instructions. Name the

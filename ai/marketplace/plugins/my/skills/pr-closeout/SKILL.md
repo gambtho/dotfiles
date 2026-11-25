@@ -14,6 +14,8 @@ for profile provenance, reusable identities and one independent review phase. Lo
 that `##` heading and read through the next `##` heading, excluding it; do not load
 the coordinator-only maintenance reference. Only the coordinator writes profiles;
 return verified candidates rather than publishing.
+A coordinator checking a lane's PR also reads
+[the coordinator check](references/coordinator-check.md); lanes skip it.
 
 Before a PR exists, perform this review phase and local verification only; do not create/push a PR or claim remote merge-readiness. For a PR, continue through the remote closeout checks below. Reuse valid review evidence instead of dispatching the same review again.
 

@@ -155,3 +155,22 @@ for rate limits. Report contents are private
 project observations: keep them local; nothing uploads them. Run one coordinator
 invocation per project at a time; atomic publication does not prevent lost updates
 between competing writers. `--help` is offline and does not change files.
+
+## Disk routine (end of day and weekly)
+
+Use the project's Routines disk check to report free disk, configured project sizes and
+budgets, and the five largest lane folders with sizes, in private reports only. The
+coordinator of the project that owns shared machines is the shared-resource lead: for an
+over-budget project it asks that project's coordinator for an exact cleanup list; it
+never cleans up another project. If no disk-check command exists, inspect only configured
+roots manually; record observation time and mark missing commands, roots or measurements
+unknown. Below the free-space threshold, add a **Needs the human** item; missing
+thresholds or failed measurements are unknown, not healthy. Cleanup follows STATE's
+exact-list approval rules; never infer deletion approval from a disk warning.
+
+## Without a configured command
+
+Morning sweep: re-check every open PR in STATE with
+`gh pr view <n> -R <repo> --json state,headRefOid,statusCheckRollup` and note anything
+merged, closed or red. Drift check: compare open PR state, head and checks and lane waits
+with GitHub by hand; record an observation time and unknown queries in a local drift report.

@@ -8,7 +8,14 @@ shared file. For a parallel effort's separate rules file, include only Ownership
 to stay off, the Rules for every lane pointer and Sequencing; don't copy the workflow.
 For a project whose hosts are all lane workers, drop the legacy-herdr.md sentence; otherwise resolve its link to a
 verified readable reference on each recipient host when projecting outside this skill.
-Resolve paths and remove these instructions and unused placeholder sections before delivery.>
+Resolve paths and remove these instructions and unused placeholder sections before delivery.
+When relocating rules, create the destination and reconcile affected prompts and STATE in the same update before
+deleting the source. For a running
+lane, amend its prompt file under a dated heading and mark superseded instructions; verify the amended prompt copy is
+observable by the lane and its checkpoint is loaded, or give an explicit reread instruction through an approved channel.
+Mark delivery unknown until confirmed; a local edit or template change is not delivery, and never rerun a start to
+deliver an amendment. Once two lanes PR into one repo, fix files every PR edits (changelog, generated maps, counts)
+before they collide.>
 
 Every lane reads the project-level shared workflow, the project's AGENTS.md and its
 own prompt. Parallel lanes also read their effort rules.
@@ -20,11 +27,11 @@ report/handoff (portable: Python `hashlib` or `shasum -a 256`). To catch observa
 recheck before each irreversible or outward step, including push, PR opening, review replies/resolutions or other posts,
 setup/config mutation and final ready report; if changed, reread and reconcile the prompt before
 acting, then record the new hash. At each checkpoint, including before ready, also read new or changed coordinator notes
-addressed to you; on a Herdr-only host the frozen [local messaging contract](legacy-herdr.md#local-messages-and-attention)
-owns note pickup, acknowledgement, human-decision notes and the optional ready nudge. Your report, never STATE, records pickup, effects and delivery. Only a source-verified
-human decision satisfies a human gate. Uncertainty never permits a resend, fallback or human paste relay.
-Unreadable prompt, notes or contract mean blocked, not ready. A task started by `lane` skips the note
-checkpoint and ready nudge: it is steered with `lane instruct`; read only notes its prompt names. Project and repository instructions
+addressed to you, by the frozen [local messaging contract](legacy-herdr.md#local-messages-and-attention) on a Herdr-only host.
+Your report, never STATE, records pickup and effects. Only a source-verified human decision satisfies a human gate.
+Uncertainty never permits a resend, fallback or human paste relay. Unreadable prompt, notes or contract mean blocked.
+A task started by `lane` skips the note checkpoint and ready nudge: it is steered with `lane instruct`; read only notes
+its prompt names. Project and repository instructions
 and the human's explicit decisions take precedence. This file changes no publication, merge, cloud or desktop authority.
 If instructions conflict, stop and ask the coordinator.
 
@@ -37,18 +44,10 @@ Codex lanes from `claude-review.sh` there; on failure, stop and report.
 
 ### Standing review fallback
 
-Local CodeRabbit is a standing default for every lane and coordinator unless the project
-records an explicit project opt-out. Qualify it from observed evidence at the current-head:
-a Copilot review request fails or reports exhausted quota, a GitHub CLI `gh` API request is
-rate limited, or a review bot reports a rate-limit/skip notice. Record the response or URL;
-do not infer it from an absent review. The lane never stalls asking a human to request
-Copilot. Follow `pr-closeout`'s one local fallback per PR, billing/auth prechecks and
-coverage checks: run `coderabbit review --agent` only with verified safe billing and no
-sign-in, install, organization switch or paid-credit opt-in. Never post local output or fix
-unverified findings. Record `review round: local CodeRabbit CLI (reason)` in the report and
-PR body. If local prechecks or the run cannot complete, use one independent review by a
-different model family and say so instead. Preserve mandatory-review blockers and final
-thread/review-body reads.
+Local CodeRabbit is the standing default for every lane unless the project records an explicit project opt-out. When
+a current-head Copilot request, `gh` API call or review bot shows a rate limit or quota, follow `pr-closeout`'s local
+CodeRabbit fallback; the lane never stalls asking a human to request Copilot. If it cannot run, use one review by a
+different model family. Record `review round: local CodeRabbit CLI (reason)` or the fallback reason in report and PR body.
 
 ### Design, then plan
 
