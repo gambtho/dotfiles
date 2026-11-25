@@ -470,6 +470,14 @@ def budget_counts(documents, prompts):
             for name, text in {**documents, **prompts}.items()]
 
 
+STATE_LINE_TARGET = 200
+
+
+def state_lines(state):
+    count = len(state.splitlines())
+    return count, STATE_LINE_TARGET, count > STATE_LINE_TARGET
+
+
 def state_dates(state):
     header = re.search(r"Last updated:\s*(\d{4}-\d{2}-\d{2})", state)
     dates = []
@@ -1112,6 +1120,8 @@ def drift(client, state, now, me):
     budgets = budget_counts(documents, prompts)
     budget_text = [f"{name}={count}/{limit}{'!' if over else ''}" for name, count, limit, over in budgets
                    if name in documents or over]
+    line_count, line_target, lines_over = state_lines(state)
+    budget_text.append(f"STATE-lines={line_count}/{line_target}{'!' if lines_over else ''}")
     try:
         folders = old_folders(state, now, client.budget)
     except (OSError, ValueError):
@@ -1133,10 +1143,10 @@ def drift(client, state, now, me):
               "## Dates", f"Header={header}; newest-row-date={newest}." +
               (" Flag: row date is newer (possibly planned work)." if header != "unknown" and newest != "unknown" and newest > header else ""),
               "## Budgets", " ".join(budget_text),
-              "Words/upper-limit; ! flags excess. STATE uses the 1,600-word inspection threshold. Lane prompts shown only above 800 words.",
+              "Words/upper-limit; ! flags excess. STATE uses the 1,600-word inspection threshold and a 200-line target. Lane prompts shown only above 800 words.",
               "## Old folders", (f"{len(folders)} folders; {sum(s for _, s in folders) / 2**20:.1f} MiB; full list: STATE-DRIFT-folders.txt." if folders is not None else "unknown: folder coverage incomplete."),
               disk_text, "## Next actions", "Coordinator reconciles stale waits, heads and owners; checks unknown queries before treating this receipt as current. "
-              "Budget flags invite trimming receipts, not deleting unresolved decisions. This check is advisory and does not edit STATE or its last-run stamp."]
+              "Budget flags invite archiving closed lanes to CLOSED-<month>.md and trimming receipts, not deleting unresolved decisions. This check is advisory and does not edit STATE or its last-run stamp."]
     receipt = "\n\n".join(lines) + "\n"
     return receipt, folder_text
 

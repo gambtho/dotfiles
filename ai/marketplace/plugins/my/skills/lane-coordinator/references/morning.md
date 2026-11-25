@@ -143,6 +143,8 @@ Check mode retains the existing bounded project-root old-folder advisory and
 local document/closed-owner checks. Archive discovery uses `CLOSED-*.md`, with
 shared-root fallback. Candidate/archive reads are capped at 100 and old-folder
 walks at 10,000 entries; skipped coverage is unknown. This is not a disk scan.
+Budgets show word counts and `STATE-lines` against a 200-line target (`!` above 200);
+archive closed lanes to `CLOSED-<month>.md`.
 PR check summaries are tied to the queried head commit; absent/truncated/mismatched
 metadata is unknown. `checks=none` means no reported checks, not passing CI.
 

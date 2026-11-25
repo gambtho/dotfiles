@@ -138,11 +138,12 @@ or status is in question, ask. A row is stale when a merge touches its area afte
 try, or its last try is older than 7 days.
 
 Decisions in force carry IDs (`D1`…) and point to their full record; keep about 10.
-**Replace, don't add**: one home per fact. Closing a lane archives its row in the same
-update; bulky-output deletion waits for the human's OK on an exact list. Pick-up test: a
-fresh session can state the goal, each outcome's status and the human's next decision.
-Durable facts go to [COORDINATION.md](references/coordination-template.md) and
-[PEOPLE.md](references/people-template.md).
+**Replace, don't add**: one home per fact. Closing a lane (merged and tried, retired,
+cleaned up; not `awaiting try`) moves its row to `CLOSED-<month>.md` in the same update as
+one dated outcome line; STATE stays at most 200 lines and keeps every decision in force. Bulky-output deletion waits for
+the human's OK on an exact list. Pick-up test: a fresh session can state the goal, each
+outcome's status and the human's next decision. Durable facts go to
+[COORDINATION.md](references/coordination-template.md) and [PEOPLE.md](references/people-template.md).
 
 ## Routines
 
@@ -158,9 +159,9 @@ sweep; flag `weekly <project>` if `Last weekly pass:` is missing or over 7 days 
 run it unasked); mark stale outcome rows by hand; then give the status reply.
 
 **End of day:** drift check and fix STATE; disk check per [morning.md](references/morning.md);
-the step-back paragraph; bring STATE within budget, moving detail to lane reports and
-the archive; stop/resume lines for overnight lanes; tomorrow's first actions on top;
-stamp `Last end of day: <date time>`.
+the step-back paragraph; stop/resume lines for overnight lanes; tomorrow's first actions on
+top; then bring STATE within budget (drift check `STATE-lines`), moving closed lanes to the
+archive and detail to lane reports; stamp `Last end of day: <date time>`.
 
 **Weekly:** re-try each outcome row or leave it stale with a reason; disk check; check
 STATE trimming, rule-file budgets and parked lanes without stop/resume lines; list
