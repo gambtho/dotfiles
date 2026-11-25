@@ -103,7 +103,7 @@ the account first (portal: **Reset password**).
 | Sign-in | Command |
 |---|---|
 | Tailscale | done in step 1 |
-| GitHub | `gh auth login` |
+| GitHub | `make -C ~/.dotfiles keyring-init` in a human terminal if the login keyring is absent (`make -C ~/.dotfiles keyring-check`), then `gh auth login` |
 | Azure | `az login --use-device-code`, as yourself. Azure Relay needs a user sign-in; the VM's own identity has no roles |
 | Claude Code | install it the way its documentation says, then run `claude` and sign in |
 
@@ -177,6 +177,9 @@ unlocking. From then on the keyring unlocks itself at every boot; see "Unattende
 unlock at boot" in the top-level README for what it protects and how to undo it.
 If it fails, `systemctl status dotfiles-keyring-unlock` says why and
 `make -C ~/.dotfiles keyring-unlock` still works by hand.
+The unlock runs alongside the user services, so Herdr can restore panes a few
+seconds before it finishes. A `gh` or `git push` in that window exits with the
+locked-keyring error; run it again once `make -C ~/.dotfiles keyring-check` passes.
 Use one workspace per project coordinator.
 
 ### 7. Move projects one at a time
