@@ -138,9 +138,9 @@ or status is in question, ask. A row is stale when a merge touches its area afte
 try, or its last try is older than 7 days.
 
 Decisions in force carry IDs (`D1`…) and point to their full record; keep about 10.
-**Replace, don't add**: one home per fact. Closing a lane (merged, retired, cleaned up)
-moves its row to `CLOSED-<month>.md` in the same update as one dated outcome line; STATE
-stays under 200 lines and keeps every decision in force. Bulky-output deletion waits for
+**Replace, don't add**: one home per fact. Closing a lane (merged and tried, retired,
+cleaned up; not `awaiting try`) moves its row to `CLOSED-<month>.md` in the same update as
+one dated outcome line; STATE stays at most 200 lines and keeps every decision in force. Bulky-output deletion waits for
 the human's OK on an exact list. Pick-up test: a fresh session can state the goal, each
 outcome's status and the human's next decision. Durable facts go to
 [COORDINATION.md](references/coordination-template.md) and [PEOPLE.md](references/people-template.md).

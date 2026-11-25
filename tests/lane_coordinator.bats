@@ -598,9 +598,10 @@ updates = " ".join(state.split("<!-- Writing it:", 1)[1].split("-->", 1)[0].spli
 decisions = " ".join(state.split("## Decisions in force\n", 1)[1].split("\n## ", 1)[0].split())
 for phrase in ("Closing a lane", "same update", "CLOSED-<month>.md", "archive", "Replace, don't add", "one home",
                "at each cleanup and at end of day", "- W<n> (<date>, merged #42): <one-line outcome>;",
-               "under 200 lines", "A decision still in force never moves to the archive"):
+               "at most 200 lines", "never while `awaiting try`", "A decision still in force never moves to the archive"):
     assert phrase in updates, phrase
-for phrase in ("25 words", "full record", "Done or superseded", "rule files", "oldest", "archive", "D1 ("):
+for phrase in ("25 words", "full record", "Done or superseded", "rule files", "move to the archive",
+               "ask the human which to retire", "D1 ("):
     assert phrase in decisions, phrase
 for phrase in ("exact deletion list with sizes", "lane report/handoff",
                "**Needs the human** until decided", "only after the human approves that exact list",
@@ -608,7 +609,7 @@ for phrase in ("exact deletion list with sizes", "lane report/handoff",
     assert phrase in updates, phrase
 flat = " ".join(text.split())
 assert "**Replace, don't add**" in flat and "each outcome's status and the human's next decision" in flat
-for phrase in ("`CLOSED-<month>.md` in the same update", "dated outcome line", "under 200 lines",
+for phrase in ("`CLOSED-<month>.md` in the same update", "dated outcome line", "at most 200 lines", "not `awaiting try`",
                "keeps every decision in force"):
     assert phrase in flat, phrase
 eod = " ".join(text.split("**End of day:**", 1)[1].split("**Weekly:**", 1)[0].split())
