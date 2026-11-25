@@ -167,6 +167,7 @@ For each worker the coordinators will use:
 `provision.sh` already enabled `coordinator-herdr.service`, and cloud-init
 enabled lingering, so the session starts at boot without a login.
 **Manual:** `systemctl --user status coordinator-herdr.service` to confirm.
+Its panes start with `DOTFILES_KEYRING_PROMPT=0`, so they never stop at the keyring prompt after a restart; run `make -C ~/.dotfiles keyring-unlock` by hand.
 Use one workspace per project coordinator.
 
 ### 7. Move projects one at a time

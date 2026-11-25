@@ -224,6 +224,8 @@ systemctl --user enable --now coordinator-herdr.service" ]
   cmp "$SRC/coordinator-herdr.service" "$XDG_CONFIG_HOME/systemd/user/coordinator-herdr.service"
   # Not through mise: that would install the whole global toolset at boot.
   grep -Fxq 'ExecStart=%h/.local/bin/herdr server' "$SRC/coordinator-herdr.service"
+  # Restored panes must come up at a shell, not the keyring prompt.
+  grep -Fxq 'Environment="DOTFILES_KEYRING_PROMPT=0"' "$SRC/coordinator-herdr.service"
 
   HERDR_DOWN=1 run bash "$checkout/tools/coordinator-vm/provision.sh" "$TEST_ROOT/identity"
   [ "$status" -eq 1 ]
