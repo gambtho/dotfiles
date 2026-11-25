@@ -319,7 +319,7 @@ prompts with hidden input **only while the existing Login keyring is locked**,
 before Powerlevel10k's instant prompt. Already-unlocked terminals stay silent.
 Inspection/native activation has a two-second overall limit; entering the password
 has no time limit, followed by a ten-second unlock limit. No password is saved
-unless you opt in to the TPM boot unlock below. macOS Keychain is unchanged.
+unless you opt in to the TPM or WSL boot unlock below. macOS Keychain is unchanged.
 
 Ctrl-C or Ctrl-Z cancels the one password attempt without stopping shell
 initialization. A later terminal may offer another attempt. Simultaneous terminals
@@ -448,6 +448,59 @@ To undo it:
 sudo systemctl disable dotfiles-keyring-unlock.service
 sudo rm /etc/systemd/system/dotfiles-keyring-unlock.service /etc/credstore.encrypted/dotfiles-keyring
 sudo systemctl daemon-reload
+```
+
+### Unattended unlock on WSL (Windows DPAPI)
+
+WSL has no TPM of its own, but Windows does. On WSL, Windows can keep a copy of the
+keyring password protected by DPAPI under your Windows user, and the login keyring
+unlocks itself each time the WSL distribution starts. This does not start WSL. Where
+a Windows logon task already starts WSL (with systemd and linger enabled), signing in
+to Windows is the only step after a restart. From the main checkout, once, after the
+login keyring exists:
+
+```bash
+make keyring-seal-windows
+# then restart Windows (or run `wsl --shutdown` from Windows), sign in, and in a
+# new WSL shell, without unlocking anything:
+make keyring-check
+gh api user --jq .login
+```
+
+`keyring-seal-windows` refuses outside WSL, without
+`/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe`, or without an
+existing login keyring. It reads the keyring password from a hidden prompt and
+passes it on stdin, never in arguments or the environment, to `powershell.exe`,
+which encrypts it with `ConvertTo-SecureString | ConvertFrom-SecureString` into
+`%LOCALAPPDATA%\dotfiles\keyring.dpapi`. It then installs and enables the user unit
+`~/.config/systemd/user/dotfiles-keyring-unlock.service`, with this checkout's
+absolute path, and runs it once. No sudo is needed. When WSL starts, the unit runs
+`libexec/keyring boot-unlock`, which, only when run as that unit, asks
+`powershell.exe` to decrypt the copy and reads the password from its output. It
+retries for about a minute while Windows interop and your Windows profile come up,
+then unlocks the existing login keyring with the same checks as the TPM path: one
+attempt, never a new keyring. On failure it logs one line, the keyring stays
+locked, `make keyring-unlock` works as before and the `gh` refusal also names
+`systemctl --user status dotfiles-keyring-unlock`. Re-run `make keyring-seal-windows`
+after changing the keyring password or your Windows profile is reset. There is one
+copy per Windows user, so this suits one WSL distribution that uses the dotfiles
+keyring; sealing from a second distribution replaces the first one's copy.
+
+What this protects against: a copy of the WSL disk alone gets nothing, because the
+password copy lives in the Windows profile. A copy of the whole Windows disk cannot
+decrypt it without your Windows sign-in (or a domain DPAPI recovery key, where one
+exists). What it does not stop: any process running as you, in WSL or Windows, can
+ask Windows to decrypt the copy and so recover the keyring password, as well as read
+the token from the unlocked keyring as it can today.
+
+To undo it:
+
+```bash
+systemctl --user disable --now dotfiles-keyring-unlock.service
+rm ~/.config/systemd/user/dotfiles-keyring-unlock.service
+systemctl --user daemon-reload
+/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -Command \
+  'Remove-Item "$env:LOCALAPPDATA\dotfiles\keyring.dpapi"'
 ```
 
 ## Routine Updates

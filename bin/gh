@@ -93,6 +93,9 @@ exec_real_gh() {
       if [ -e /etc/systemd/system/dotfiles-keyring-unlock.service ]; then
         printf 'gh: boot unlock failed: systemctl status dotfiles-keyring-unlock\n' >&2
       fi
+      if [ -e "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/dotfiles-keyring-unlock.service" ]; then
+        printf 'gh: boot unlock failed: systemctl --user status dotfiles-keyring-unlock\n' >&2
+      fi
       exit 6
     fi
   fi
