@@ -1,0 +1,5 @@
+# Prefer GitHub's gh. Ubuntu Pro's esm-apps pin (510) would otherwise hold
+# Ubuntu's old build in place.
+Package: gh
+Pin: origin cli.github.com
+Pin-Priority: 600
