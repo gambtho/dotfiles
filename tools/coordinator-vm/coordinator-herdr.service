@@ -10,7 +10,8 @@ WorkingDirectory=%h
 Environment="SHELL=/usr/bin/zsh"
 Environment="PATH=%h/.local/bin:%h/.local/share/mise/shims:/usr/local/bin:/usr/bin:/bin"
 # Panes Herdr restores after a restart must not stop at the keyring password
-# prompt. Unlock by hand with `make keyring-unlock`.
+# prompt. dotfiles-keyring-unlock.service unlocks it at boot once sealed;
+# otherwise unlock by hand with `make keyring-unlock`.
 Environment="DOTFILES_KEYRING_PROMPT=0"
 # Herdr directly, not through `mise exec`: that would install every tool in
 # the global mise config at boot, and the server profile installs only some.

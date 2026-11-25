@@ -4,6 +4,7 @@ import importlib.util
 import io
 import os
 import pathlib
+import re
 import socket
 import subprocess
 import sys
@@ -791,6 +792,243 @@ m["gh_check"](["auth", "login"], lambda: time.sleep(30))
 '''
         result = subprocess.run([sys.executable, "-c", code], timeout=4, check=False)
         self.assertEqual(result.returncode, 1)
+
+
+class BootUnlockTests(unittest.TestCase):
+    def setUp(self):
+        self.module = load_helper()
+        self.bus = FakeBus(self.module)
+        self.provider = self.module.GnomeKeyring(self.bus)
+        self.output = io.StringIO()
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.credentials = pathlib.Path(self.temporary.name)
+        self.sleeps = []
+
+    def methods(self):
+        return [call[3] for call in self.bus.calls]
+
+    def seal(self, content=b"test-password"):
+        (self.credentials / "dotfiles-keyring").write_bytes(content)
+
+    def boot(self, environment=None, factory=None, attempts=3):
+        environment = {"CREDENTIALS_DIRECTORY": str(self.credentials)} if environment is None else environment
+        with (
+            mock.patch.dict(os.environ, environment, clear=True),
+            contextlib.redirect_stdout(self.output),
+            contextlib.redirect_stderr(self.output),
+        ):
+            return self.module.boot_unlock(factory or (lambda: self.provider),
+                                           attempts=attempts, sleep=self.sleeps.append)
+
+    def test_no_credential_refuses_without_bus_access(self):
+        factory = mock.Mock(side_effect=AssertionError("bus used"))
+        self.assertEqual(self.boot(environment={}, factory=factory), 1)
+        self.assertEqual(self.boot(factory=factory), 1)
+        factory.assert_not_called()
+        self.assertTrue(self.bus.locked)
+        self.assertIn("make keyring-unlock", self.output.getvalue())
+        self.assertEqual(self.output.getvalue().count("boot unlock failed"), 2)
+
+    def test_credential_unlocks_once_and_closes_session(self):
+        self.seal(b"test-password\n")
+        self.assertEqual(self.boot(), 0)
+        self.assertFalse(self.bus.locked)
+        self.assertEqual(self.methods().count("UnlockWithMasterPassword"), 1)
+        self.assertIn("Close", self.methods())
+        self.assertNotIn("CreateWithMasterPassword", self.methods())
+        self.assertNotIn("test-password", self.output.getvalue())
+
+    def test_password_never_comes_from_environment_or_arguments(self):
+        planted = {name: "test-password" for name in (
+            "PASSWORD", "KEYRING_PASSWORD", "DOTFILES_KEYRING", "dotfiles-keyring")}
+        self.assertEqual(self.boot(environment=planted), 1)
+        self.assertTrue(self.bus.locked)
+        self.assertNotIn("UnlockWithMasterPassword", self.methods())
+        self.seal()
+        self.assertEqual(self.boot(environment=dict(planted, CREDENTIALS_DIRECTORY=str(self.credentials),
+                                                    KEYRING_PASSWORD="wrong")), 0)
+        unlock = [call for call in self.bus.calls if call[3] == "UnlockWithMasterPassword"]
+        self.assertEqual(len(unlock), 1)
+        self.assertEqual(unlock[0][5][1][2], list(b"test-password"))
+        result = subprocess.run([sys.executable, str(ROOT / "libexec/keyring"), "boot-unlock", "test-password"],
+                                env=dict(os.environ, CREDENTIALS_DIRECTORY=str(self.credentials)),
+                                capture_output=True, check=False)
+        self.assertEqual(result.returncode, 2)
+        self.assertNotIn(b"test-password", result.stdout + result.stderr)
+
+    def test_symlinked_or_empty_credential_is_refused(self):
+        target = self.credentials / "elsewhere"
+        target.write_bytes(b"test-password")
+        (self.credentials / "dotfiles-keyring").symlink_to(target)
+        self.assertEqual(self.boot(), 1)
+        (self.credentials / "dotfiles-keyring").unlink()
+        self.seal(b"\n")
+        self.assertEqual(self.boot(), 1)
+        self.assertNotIn("UnlockWithMasterPassword", self.methods())
+
+    def test_waits_for_secret_service_then_unlocks(self):
+        self.seal()
+        self.bus.owner = self.bus.gnome_owner = None
+        failures = iter([self.module.KeyringError("bus not ready")])
+
+        def factory():
+            for error in failures:
+                raise error
+            return self.provider
+
+        real = self.bus.call
+
+        def not_activatable_once(destination, path, interface, method, signature, args):
+            if method == "StartServiceByName" and not getattr(self, "activated", False):
+                self.activated = True
+                raise self.module.KeyringError("StartServiceByName failed")
+            return real(destination, path, interface, method, signature, args)
+
+        self.bus.call = not_activatable_once
+        self.assertEqual(self.boot(factory=factory, attempts=3), 0)
+        self.assertEqual(len(self.sleeps), 2)
+        self.assertFalse(self.bus.locked)
+        self.assertEqual(self.methods().count("UnlockWithMasterPassword"), 1)
+
+    def test_gives_up_after_bounded_retries_with_one_line(self):
+        self.seal()
+        factory = mock.Mock(side_effect=self.module.KeyringError("Session bus unavailable."))
+        self.assertEqual(self.boot(factory=factory, attempts=3), 1)
+        self.assertEqual(factory.call_count, 3)
+        self.assertEqual(len(self.sleeps), 2)
+        self.assertEqual(self.output.getvalue().strip().count("\n"), 0)
+        self.assertIn("boot unlock failed: Session bus unavailable.", self.output.getvalue())
+
+    def test_wrong_password_is_tried_once(self):
+        self.seal(b"wrong-password")
+        self.assertEqual(self.boot(), 1)
+        self.assertTrue(self.bus.locked)
+        self.assertEqual(self.methods().count("UnlockWithMasterPassword"), 1)
+        self.assertEqual(self.sleeps, [])
+        self.assertNotIn("wrong-password", self.output.getvalue())
+
+    def test_already_unlocked_or_absent_or_other_provider_never_sends_password(self):
+        self.seal()
+        self.bus.locked = False
+        self.assertEqual(self.boot(), 0)
+        self.bus.locked = True
+        self.bus.collection = "/"
+        self.assertEqual(self.boot(attempts=1), 1)
+        self.bus.collection = "/org/freedesktop/secrets/collection/login"
+        self.bus.gnome_owner = ":1.99"
+        self.assertEqual(self.boot(attempts=1), 1)
+        self.assertEqual(self.sleeps, [])
+        self.assertNotIn("UnlockWithMasterPassword", self.methods())
+        self.assertNotIn("CreateWithMasterPassword", self.methods())
+
+
+class SealTests(unittest.TestCase):
+    def setUp(self):
+        self.module = load_helper()
+        self.bus = FakeBus(self.module)
+        self.provider = self.module.GnomeKeyring(self.bus)
+        self.commands = []
+        self.inputs = []
+        self.output = io.StringIO()
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.tpm = pathlib.Path(self.temporary.name) / "tpmrm0"
+        self.tpm.touch()
+
+    def run_seal(self, prompt=None):
+        def run(command, input=None, check=False, stdout=None):
+            self.commands.append(command)
+            self.inputs.append(input)
+            return subprocess.CompletedProcess(command, 0)
+
+        # Independent of the runner's account: root would be refused as a unit user.
+        with (
+            mock.patch.object(self.module.os, "getuid", return_value=1000),
+            mock.patch.object(self.module.pwd, "getpwuid", return_value=mock.Mock(pw_name="tng")),
+            contextlib.redirect_stdout(self.output),
+            contextlib.redirect_stderr(self.output),
+        ):
+            try:
+                return self.module.seal(self.provider, prompt or (lambda: "test-password"),
+                                        run=run, tpm=str(self.tpm))
+            except self.module.KeyringError as error:
+                return str(error)
+
+    def test_refuses_without_tpm_before_prompt(self):
+        self.tpm.unlink()
+        prompt = mock.Mock()
+        self.assertIn("No TPM", self.run_seal(prompt))
+        prompt.assert_not_called()
+        self.assertEqual(self.commands, [])
+
+    def test_refuses_without_login_keyring_before_prompt(self):
+        self.bus.collection = "/"
+        prompt = mock.Mock()
+        self.assertIn("absent", self.run_seal(prompt))
+        prompt.assert_not_called()
+        self.assertEqual(self.commands, [])
+        self.assertNotIn("CreateWithMasterPassword", [call[3] for call in self.bus.calls])
+
+    def test_seals_without_pcrs_and_passes_password_only_on_stdin(self):
+        self.assertEqual(self.run_seal(), 0)
+        encrypt = self.commands[1]
+        self.assertEqual(encrypt, ["sudo", "systemd-creds", "encrypt", "--with-key=tpm2", "--tpm2-pcrs=",
+                                   "--name=dotfiles-keyring", "-",
+                                   "/etc/credstore.encrypted/dotfiles-keyring"])
+        self.assertEqual(self.inputs[1], b"test-password")
+        for command in self.commands:
+            self.assertFalse(any("test-password" in part for part in command))
+        self.assertNotIn("test-password", self.output.getvalue())
+        unit = self.inputs[self.commands.index(["sudo", "tee", "/etc/systemd/system/dotfiles-keyring-unlock.service"])]
+        self.assertIn(f"ExecStart=/usr/bin/python3 {ROOT / 'libexec/keyring'} boot-unlock".encode(), unit)
+        self.assertIn(b"User=tng\n", unit)
+        self.assertIn(b"After=user@1000.service\n", unit)
+        self.assertEqual(self.commands[-2:], [
+            ["sudo", "systemctl", "enable", "dotfiles-keyring-unlock.service"],
+            ["sudo", "systemctl", "start", "dotfiles-keyring-unlock.service"],
+        ])
+        self.assertNotIn("UnlockWithMasterPassword", [call[3] for call in self.bus.calls])
+
+    def test_empty_password_is_not_sealed(self):
+        self.assertIn("empty", self.run_seal(lambda: ""))
+        self.assertEqual(self.commands, [])
+
+    def test_seal_refuses_extra_arguments(self):
+        result = subprocess.run([sys.executable, str(ROOT / "libexec/keyring"), "seal", "test-password"],
+                                capture_output=True, check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn(b"test-password", result.stdout + result.stderr)
+
+
+class UnitRenderTests(unittest.TestCase):
+    def setUp(self):
+        self.module = load_helper()
+        self.template = (ROOT / "tools/coordinator-vm/dotfiles-keyring-unlock.service").read_text()
+
+    def test_unit_renders_with_absolute_paths_and_no_specifiers(self):
+        unit = self.module.render_unit(self.template, "tng", 1000, "/home/tng/.dotfiles/libexec/keyring")
+        body = [line for line in unit.splitlines() if not line.startswith("#")]
+        self.assertFalse(any(re.search(r"@[A-Z]+@", line) for line in body))
+        self.assertFalse(any("%" in line for line in body))
+        for expected in (
+            "User=tng",
+            "Requires=user@1000.service",
+            "After=user@1000.service",
+            "Environment=XDG_RUNTIME_DIR=/run/user/1000",
+            "Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus",
+            "LoadCredentialEncrypted=dotfiles-keyring",
+            "ExecStart=/usr/bin/python3 /home/tng/.dotfiles/libexec/keyring boot-unlock",
+        ):
+            self.assertIn(expected, body)
+
+    def test_unit_refuses_paths_systemd_would_reinterpret(self):
+        for helper in ("libexec/keyring", "/home/a b/keyring", "/home/%h/keyring", "/home/x;y/keyring"):
+            with self.assertRaises(self.module.KeyringError):
+                self.module.render_unit(self.template, "tng", 1000, helper)
+        for user, uid in (("root user", 1000), ("tng", 0), ("tng", "1000")):
+            with self.assertRaises(self.module.KeyringError):
+                self.module.render_unit(self.template, user, uid, "/home/tng/keyring")
 
 
 if __name__ == "__main__":

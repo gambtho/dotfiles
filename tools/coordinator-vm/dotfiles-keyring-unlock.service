@@ -1,0 +1,22 @@
+# Managed by dotfiles: `make keyring-seal` fills in the @...@ values with the
+# admin user and this checkout's absolute path, then installs it as a system
+# unit. Paths are written out: %h would mean root's home here, even with User=.
+[Unit]
+Description=Unlock the login keyring from the TPM-sealed password
+Requires=user@@UID@.service
+After=user@@UID@.service
+
+[Service]
+Type=oneshot
+User=@USER@
+Environment=XDG_RUNTIME_DIR=/run/user/@UID@
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/@UID@/bus
+# PID 1 decrypts /etc/credstore.encrypted/dotfiles-keyring with the TPM and
+# hands it to this service only, in $CREDENTIALS_DIRECTORY.
+LoadCredentialEncrypted=dotfiles-keyring
+ExecStart=/usr/bin/python3 @HELPER@ boot-unlock
+TimeoutStartSec=120
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target
