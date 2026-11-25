@@ -10,6 +10,7 @@ Everything needed to build it again is in this folder.
 | `cloud-init.yaml` | First boot: basic packages, a clone of this repository, `provision.sh` |
 | `provision.sh` | Runs bootstrap and `dot-install` with the `server` profile, then enables the Herdr service |
 | `coordinator-herdr.service` | User service that starts one Herdr session at boot |
+| `dotfiles-keyring-unlock.service` | Template for the system service that unlocks the keyring at boot; `make keyring-seal` installs it |
 
 ## What gets created
 
@@ -167,7 +168,15 @@ For each worker the coordinators will use:
 `provision.sh` already enabled `coordinator-herdr.service`, and cloud-init
 enabled lingering, so the session starts at boot without a login.
 **Manual:** `systemctl --user status coordinator-herdr.service` to confirm.
-Its panes start with `DOTFILES_KEYRING_PROMPT=0`, so they never stop at the keyring prompt after a restart; run `make -C ~/.dotfiles keyring-unlock` by hand.
+Its panes start with `DOTFILES_KEYRING_PROMPT=0`, so they never stop at the keyring prompt after a restart.
+
+**Manual, once:** after `gh auth login`, run `make -C ~/.dotfiles keyring-seal`
+(types the keyring password once, uses sudo), then `sudo reboot` and check
+`make -C ~/.dotfiles keyring-check` and `gh api user --jq .login` without
+unlocking. From then on the keyring unlocks itself at every boot; see "Unattended
+unlock at boot" in the top-level README for what it protects and how to undo it.
+If it fails, `systemctl status dotfiles-keyring-unlock` says why and
+`make -C ~/.dotfiles keyring-unlock` still works by hand.
 Use one workspace per project coordinator.
 
 ### 7. Move projects one at a time
@@ -180,7 +189,7 @@ keeps pushing to its private repository; that push is the only off-box copy.
 
 - **Rebuild:** delete the VM and run `deploy.sh create` again; the template is
   incremental. The OS disk goes with the VM, so the registry, pairings and
-  every sign-in are gone: redo "First boot" from step 1. Push each coordinator
+  every sign-in and the sealed keyring password are gone: redo "First boot" from step 1. Push each coordinator
   folder first. Before signing the new VM in to Tailscale, remove the old
   `coordinator` device in the Tailscale admin console, or the new one is named
   `coordinator-1`. The new VM also has a new SSH host key: run

@@ -26,7 +26,7 @@ cache-maintenance-check: ## Inspect cache timer and last service result without 
 
 # ── Linux credential keyring ───────────────────────────────────────────────────
 
-.PHONY: keyring-check keyring-init keyring-unlock
+.PHONY: keyring-check keyring-init keyring-unlock keyring-seal
 
 keyring-check: ## Inspect the existing GNOME login keyring without activating it
 	/usr/bin/python3 libexec/keyring check
@@ -36,6 +36,9 @@ keyring-init: ## Create an absent GNOME login keyring with a hidden, confirmed p
 
 keyring-unlock: ## Explicitly unlock the GNOME login keyring with hidden password input
 	/usr/bin/python3 libexec/keyring unlock
+
+keyring-seal: ## Seal the keyring password to this machine's TPM and unlock at each boot (sudo)
+	/usr/bin/python3 libexec/keyring seal
 
 # ── Explicit Herdr preferences and project dashboard ───────────────────────────
 

@@ -318,8 +318,8 @@ terminals and background tools. On Linux, an interactive foreground zsh terminal
 prompts with hidden input **only while the existing Login keyring is locked**,
 before Powerlevel10k's instant prompt. Already-unlocked terminals stay silent.
 Inspection/native activation has a two-second overall limit; entering the password
-has no time limit, followed by a ten-second unlock limit. No password is saved and
-there is no unattended unlock. macOS Keychain is unchanged.
+has no time limit, followed by a ten-second unlock limit. No password is saved
+unless you opt in to the TPM boot unlock below. macOS Keychain is unchanged.
 
 Ctrl-C or Ctrl-Z cancels the one password attempt without stopping shell
 initialization. A later terminal may offer another attempt. Simultaneous terminals
@@ -405,6 +405,50 @@ For an opt-in real-provider smoke test, after installing the Linux dependencies:
 It uses a disposable keyring, an isolated session bus without service activation,
 and temporary HOME/XDG paths. Ordinary Python tests use fakes and need neither
 GI nor a running keyring. No test uses your production keyring or restarts services.
+
+### Unattended unlock at boot (TPM)
+
+On a Linux machine with a TPM (`/dev/tpmrm0`), such as the coordinator VM, the
+login keyring can unlock itself at every boot, so `gh` and `git push` work after
+an unattended restart. From the main checkout, once, after the login keyring exists:
+
+```bash
+make keyring-seal
+sudo reboot
+# after the restart, without unlocking anything:
+make keyring-check
+gh api user --jq .login
+```
+
+`keyring-seal` refuses without a TPM or an existing login keyring. It reads the
+keyring password from a hidden prompt and, with sudo, seals it to this machine's
+TPM with `systemd-creds encrypt --with-key=tpm2 --tpm2-pcrs=` into
+`/etc/credstore.encrypted/dotfiles-keyring`. No PCRs are bound, so Secure Boot
+database updates do not break it. It then installs and enables the system unit
+`dotfiles-keyring-unlock.service`, with this checkout's absolute path, and runs it
+once. At boot, systemd decrypts the password into that service's private credential
+directory and `libexec/keyring boot-unlock`, running as you, unlocks the existing
+login keyring with the same checks as `keyring-unlock`. It reads the password only
+from there, never from arguments or the environment, retries briefly while the
+Secret Service starts, and never creates a keyring. On failure it logs one line,
+the keyring stays locked and `make keyring-unlock` works as before; the `gh`
+refusal then also names `systemctl status dotfiles-keyring-unlock`. Re-run
+`make keyring-seal` after changing the keyring password or rebuilding the machine.
+
+What this protects against: a raw copy of the disk, or the disk attached to another
+machine, gets the sealed file and the encrypted keyring but no TPM to open them.
+What it does not stop: root, a cloud run-command, or any shell as you. That shell
+can read the token from the unlocked keyring, as it can today after a manual unlock,
+and can also recover the keyring password while the unlock runs. A cloud restore that
+carries the virtual TPM state may unseal it; that takes rights over the VM.
+
+To undo it:
+
+```bash
+sudo systemctl disable dotfiles-keyring-unlock.service
+sudo rm /etc/systemd/system/dotfiles-keyring-unlock.service /etc/credstore.encrypted/dotfiles-keyring
+sudo systemctl daemon-reload
+```
 
 ## Routine Updates
 

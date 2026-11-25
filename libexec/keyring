@@ -7,11 +7,14 @@ import getpass
 import hashlib
 import os
 import pathlib
+import pwd
 import re
 import signal
 import stat
+import subprocess
 import sys
 import threading
+import time
 import warnings
 import xml.etree.ElementTree as ET
 
@@ -21,6 +24,12 @@ PROVIDER = "org.freedesktop.secrets"
 INTERNAL = "org.gnome.keyring.InternalUnsupportedGuiltRiddenInterface"
 DBUS = "org.freedesktop.DBus"
 DBUS_PATH = "/org/freedesktop/DBus"
+CREDENTIAL = "dotfiles-keyring"
+CREDSTORE = "/etc/credstore.encrypted"
+UNIT = "dotfiles-keyring-unlock.service"
+UNIT_PATH = "/etc/systemd/system/" + UNIT
+UNIT_TEMPLATE = pathlib.Path(__file__).resolve().parent.parent / "tools/coordinator-vm" / UNIT
+TPM_DEVICE = "/dev/tpmrm0"
 
 
 class KeyringError(Exception):
@@ -256,10 +265,15 @@ def read_password():
 
 
 @contextlib.contextmanager
-def deadline(seconds, exit_code=1):
+def deadline(seconds, exit_code=1, message=None):
     # A Python signal handler can wait behind a blocking Gio C call. A watchdog
     # exits this short-lived CLI even then; the OS releases its bus and locks.
-    timer = threading.Timer(seconds, lambda: os._exit(exit_code))
+    def expire():
+        if message:
+            os.write(2, message.encode() + b"\n")
+        os._exit(exit_code)
+
+    timer = threading.Timer(seconds, expire)
     timer.daemon = True
     timer.start()
     try:
@@ -346,6 +360,106 @@ def startup(provider_factory=None, prompt=read_password):
     return 0
 
 
+def read_credential():
+    # The only password source for unattended unlock: the file systemd puts in
+    # this service's private credential directory. Never argv or environment.
+    directory = os.environ.get("CREDENTIALS_DIRECTORY", "")
+    if not os.path.isabs(directory):
+        raise KeyringError(f"No systemd credential; boot unlock runs only from {UNIT}.")
+    try:
+        descriptor = os.open(os.path.join(directory, CREDENTIAL),
+                             os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except OSError as error:
+        raise KeyringError(f"Credential {CREDENTIAL} missing; run make keyring-seal.") from error
+    with os.fdopen(descriptor, "rb") as source:
+        if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
+            raise KeyringError(f"Credential {CREDENTIAL} is not a regular file.")
+        data = source.read(4097)
+    try:
+        password = data.decode()
+    except UnicodeDecodeError as error:
+        raise KeyringError(f"Credential {CREDENTIAL} is not UTF-8 text.") from error
+    # Hidden prompts never return a newline; tolerate one from a hand-made seal.
+    password = password.removesuffix("\n")
+    if not password or len(data) > 4096:
+        raise KeyringError(f"Credential {CREDENTIAL} is empty or too long.")
+    return password
+
+
+def boot_unlock(provider_factory=None, read=read_credential, attempts=15, delay=2, sleep=time.sleep):
+    try:
+        password = read()
+        # The user manager can be up before its bus or the keyring daemon is,
+        # and the daemon may claim its two bus names one at a time.
+        for attempt in range(attempts):
+            try:
+                provider = (provider_factory or GnomeKeyring)()
+                locked = provider.inspect(activate=True)
+                break
+            except KeyringError:
+                if attempt == attempts - 1:
+                    raise
+                sleep(delay)
+        if not locked:
+            print("Login keyring already unlocked.")
+            return 0
+        # One attempt only: a wrong sealed password must not be retried.
+        provider.unlock(password)
+        print("Login keyring unlocked at boot.")
+        return 0
+    except KeyringError as error:
+        print(f"keyring: boot unlock failed: {error} Unlock by hand with make keyring-unlock.",
+              file=sys.stderr)
+        return 1
+
+
+def render_unit(template, user, uid, helper):
+    # systemd expands % specifiers and splits on whitespace; refuse rather than
+    # quote. %h would also name root's home in a system unit.
+    if not re.fullmatch(r"[a-z_][a-z0-9_-]*", user) or type(uid) is not int or uid <= 0:
+        raise KeyringError("Unsupported user for the boot unlock unit.")
+    if not helper.startswith("/") or re.search(r"[\s%\\\"';$]", helper):
+        raise KeyringError("The dotfiles checkout path is not absolute or needs quoting; move it.")
+    return (template.replace("@USER@", user).replace("@UID@", str(uid))
+            .replace("@HELPER@", helper))
+
+
+def seal(provider, prompt=read_password, run=subprocess.run, tpm=TPM_DEVICE):
+    if not os.path.exists(tpm):
+        raise KeyringError(f"No TPM at {tpm}; nothing was sealed.")
+    provider.inspect(activate=True)
+    unit = render_unit(UNIT_TEMPLATE.read_text(), pwd.getpwuid(os.getuid()).pw_name,
+                       os.getuid(), str(pathlib.Path(__file__).resolve()))
+    password = prompt()
+    if not password:
+        raise KeyringError("Password must not be empty.")
+
+    def sudo(*command, data=None):
+        try:
+            run(["sudo", *command], input=data, check=True,
+                stdout=subprocess.DEVNULL if data is not None else None)
+        except (OSError, subprocess.CalledProcessError) as error:
+            raise KeyringError(f"sudo {command[0]} {command[1]} failed.") from error
+
+    sudo("install", "-d", "-m", "0700", "-o", "root", "-g", "root", CREDSTORE)
+    # No PCRs, named explicitly: systemd 255 defaults to PCR 7.
+    sudo("systemd-creds", "encrypt", "--with-key=tpm2", "--tpm2-pcrs=",
+         f"--name={CREDENTIAL}", "-", f"{CREDSTORE}/{CREDENTIAL}", data=password.encode())
+    print(f"Sealed to this machine's TPM: {CREDSTORE}/{CREDENTIAL}")
+    sudo("tee", UNIT_PATH, data=unit.encode())
+    sudo("chmod", "0644", UNIT_PATH)
+    sudo("systemctl", "daemon-reload")
+    sudo("systemctl", "enable", UNIT)
+    # Proves the TPM decrypt and the unit now, before a reboot depends on them.
+    # An already unlocked keyring does not check the password; the reboot does.
+    try:
+        sudo("systemctl", "start", UNIT)
+    except KeyringError as error:
+        raise KeyringError(f"Sealed and enabled, but the first run failed; see systemctl status {UNIT}.") from error
+    print(f"Enabled {UNIT}; it unlocks the login keyring at each boot.")
+    return 0
+
+
 def auth_free(args):
     if not args or args[0] in ("help", "--help", "-h", "version", "--version", "completion"):
         return True
@@ -410,6 +524,10 @@ def run(command, provider, prompt=read_password):
         initialize = command == "init"
         if initialize and not foreground_terminal():
             raise KeyringError("Initialization requires a foreground human terminal.")
+        if command == "seal":
+            if not foreground_terminal():
+                raise KeyringError("Sealing requires a foreground human terminal.")
+            return seal(provider, prompt)
         if not provider.inspect(activate=command in ("unlock", "init"), initialize=initialize):
             print("Login keyring unlocked.")
             return 0
@@ -444,10 +562,12 @@ def run(command, provider, prompt=read_password):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("check", "init", "unlock", "startup", "gh-check"))
+    parser.add_argument("command", choices=(
+        "check", "init", "unlock", "startup", "gh-check", "boot-unlock", "seal",
+    ))
     parser.add_argument("gh_args", nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
-    if args.command == "init" and args.gh_args:
+    if args.command in ("init", "boot-unlock", "seal") and args.gh_args:
         parser.error("This command accepts no extra arguments; passwords require hidden terminal input.")
     if args.command == "init" and not foreground_terminal():
         print("keyring: Initialization requires a foreground human terminal.", file=sys.stderr)
@@ -462,6 +582,9 @@ def main(argv=None):
         return startup()
     if args.command == "gh-check":
         return gh_check(args.gh_args)
+    if args.command == "boot-unlock":
+        with deadline(90, message="keyring: boot unlock failed: timed out. Unlock by hand with make keyring-unlock."):
+            return boot_unlock()
     try:
         provider = GnomeKeyring()
     except KeyringError as error:

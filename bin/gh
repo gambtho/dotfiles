@@ -90,6 +90,9 @@ exec_real_gh() {
       printf '  make -C %q keyring-unlock\n' "$IDENTITY_DOTFILES_ROOT" >&2
       printf 'gh: if the login keyring is absent, initialize it first:\n' >&2
       printf '  make -C %q keyring-init\n' "$IDENTITY_DOTFILES_ROOT" >&2
+      if [ -e /etc/systemd/system/dotfiles-keyring-unlock.service ]; then
+        printf 'gh: boot unlock failed: systemctl status dotfiles-keyring-unlock\n' >&2
+      fi
       exit 6
     fi
   fi
