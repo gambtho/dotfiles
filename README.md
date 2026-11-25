@@ -454,8 +454,9 @@ sudo systemctl daemon-reload
 
 WSL has no TPM of its own, but Windows does. On WSL, Windows can keep a copy of the
 keyring password protected by DPAPI under your Windows user, and the login keyring
-unlocks itself each time WSL starts. WSL starts when you sign in to Windows, so after
-a restart that sign-in is the only step. From the main checkout, once, after the
+unlocks itself each time the WSL distribution starts. This does not start WSL. Where
+a Windows logon task already starts WSL (with systemd and linger enabled), signing in
+to Windows is the only step after a restart. From the main checkout, once, after the
 login keyring exists:
 
 ```bash
@@ -481,7 +482,9 @@ then unlocks the existing login keyring with the same checks as the TPM path: on
 attempt, never a new keyring. On failure it logs one line, the keyring stays
 locked, `make keyring-unlock` works as before and the `gh` refusal also names
 `systemctl --user status dotfiles-keyring-unlock`. Re-run `make keyring-seal-windows`
-after changing the keyring password or your Windows profile is reset.
+after changing the keyring password or your Windows profile is reset. There is one
+copy per Windows user, so this suits one WSL distribution that uses the dotfiles
+keyring; sealing from a second distribution replaces the first one's copy.
 
 What this protects against: a copy of the WSL disk alone gets nothing, because the
 password copy lives in the Windows profile. A copy of the whole Windows disk cannot
