@@ -44,8 +44,9 @@ machine-local full config that preserves additional bindings, use
 Then run `herdr config check` and, only if it passes, apply with
 `herdr server reload-config`, not a server restart.
 
-Defaults keep priority Agent rows icon-only and show optional `$needs` workspace
-metadata (hidden at zero). Machine identity stays visible in the dashboard. This does not
+Defaults keep priority Agent rows icon-only and show optional `$harness` and
+`$needs` workspace metadata (`$needs` is hidden at zero). `$harness` is the lane's
+harness icon, reported by the lanes tooling: `✳` Claude Code, `π` Pi, `◇` Copilot. Machine identity stays visible in the dashboard. This does not
 produce counts by itself: the optional heading reporter below sets them.
 
 ## Set up a machine as a project home
@@ -58,7 +59,7 @@ use this order (the examples use the fictional project `orchard`):
 1. From the canonical dotfiles checkout, run `make herdr-lanes`. This installs
    the runtime only; it does not change sidebar preferences or start a harness.
 2. For an existing config, make a reviewed copy of its **full current contents**.
-   Change only `[ui.sidebar.spaces].rows` to the `$needs` row in
+   Change only `[ui.sidebar.spaces].rows` to the Spaces row in
    `tools/herdr/config.toml.template`; preserve all other preferences and bindings.
    Do not refresh straight from the shipped template unless replacing every local
    preference is intentional. Apply the reviewed copy through the backup path:
@@ -557,8 +558,8 @@ After integrating the reviewed source into the canonical checkout:
    ```
 
    For sidebar rows, merge `[ui.sidebar.agents]` and `[ui.sidebar.spaces]` from
-   `tools/herdr/config.toml.template`: icon-only Agents and the optional `$needs`
-   token on Spaces. This is the same row used by the project-home setup above;
+   `tools/herdr/config.toml.template`: icon-only Agents and the optional `$harness`
+   and `$needs` tokens on Spaces. This is the same row used by the project-home setup above;
    do not replace it with a workspace-only row that hides the count.
 
 3. Remove only existing `[[keys.command]]` blocks whose `command` is exactly
