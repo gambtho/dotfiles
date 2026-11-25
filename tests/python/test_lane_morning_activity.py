@@ -114,6 +114,10 @@ class StateParsingTests(unittest.TestCase):
                                 ("PEOPLE", 701, 700, True), ("STATE", 1601, 1600, True),
                                 ("W20", 801, 800, True), ("W21", 800, 800, False)])
 
+    def test_state_line_target(self):
+        self.assertEqual(morning.state_lines("row\n" * 200), (200, 200, False))
+        self.assertEqual(morning.state_lines("row\n" * 201), (201, 200, True))
+
     def test_stamp_minute_is_included(self):
         for timestamp, expected in [("2026-10-23T13:30:40Z", True),
                                     ("2026-10-23T13:29:59Z", False),

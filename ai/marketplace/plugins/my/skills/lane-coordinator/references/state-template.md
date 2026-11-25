@@ -12,8 +12,12 @@ read it; write a same-directory temp file, check it is nonempty with unique lane
 recheck the original, then rename. Re-read after a `lane` command updates a row. One
 commit per coherent update where the project versions STATE. After a rule or ownership
 change, reconcile affected prompts and STATE in the same update and mark old instructions
-superseded. Replace, don't add: one home per fact. Closing a lane moves its row to the archive (`CLOSED-<month>.md`) in the same
-update. Propose an exact deletion list with sizes for bulky outputs from the lane
+superseded. Replace, don't add: one home per fact. Closing a lane (merged, retired or
+cleaned up, including at each cleanup and at end of day) moves its row or paragraph to the
+archive (`CLOSED-<month>.md`, same folder) in the same update, as one line:
+`- W<n> (<date>, merged #42): <one-line outcome>; report reports/W<n>-REPORT.md`.
+Keep STATE under 200 lines: open lanes, outcomes, decisions in force, needs and next steps.
+A decision still in force never moves to the archive. Propose an exact deletion list with sizes for bulky outputs from the lane
 report/handoff; it stays under **Needs the human** until decided, and deletion happens
 only after the human approves that exact list. Unknown safety or size is not
 deletion-ready. Once the report and handoff are saved in the project's report location,

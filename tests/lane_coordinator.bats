@@ -596,7 +596,9 @@ text = (skill / "SKILL.md").read_text()
 # Write-time steps live in the template's header; the skill keeps the rule and the pick-up test.
 updates = " ".join(state.split("<!-- Writing it:", 1)[1].split("-->", 1)[0].split())
 decisions = " ".join(state.split("## Decisions in force\n", 1)[1].split("\n## ", 1)[0].split())
-for phrase in ("Closing a lane", "same update", "CLOSED-<month>.md", "archive", "Replace, don't add", "one home"):
+for phrase in ("Closing a lane", "same update", "CLOSED-<month>.md", "archive", "Replace, don't add", "one home",
+               "at each cleanup and at end of day", "- W<n> (<date>, merged #42): <one-line outcome>;",
+               "under 200 lines", "A decision still in force never moves to the archive"):
     assert phrase in updates, phrase
 for phrase in ("25 words", "full record", "Done or superseded", "rule files", "oldest", "archive", "D1 ("):
     assert phrase in decisions, phrase
@@ -606,9 +608,12 @@ for phrase in ("exact deletion list with sizes", "lane report/handoff",
     assert phrase in updates, phrase
 flat = " ".join(text.split())
 assert "**Replace, don't add**" in flat and "each outcome's status and the human's next decision" in flat
+for phrase in ("`CLOSED-<month>.md` in the same update", "dated outcome line", "under 200 lines",
+               "keeps every decision in force"):
+    assert phrase in flat, phrase
 eod = " ".join(text.split("**End of day:**", 1)[1].split("**Weekly:**", 1)[0].split())
 for phrase in ("drift check", "budget", "lane reports", "archive", "step-back paragraph",
-               "tomorrow's first actions", "Last end of day"):
+               "tomorrow's first actions", "Last end of day", "`STATE-lines`", "closed lanes"):
     assert phrase in eod, phrase
 weekly = " ".join(text.split("**Weekly:**", 1)[1].split("**Human away", 1)[0].split())
 for phrase in ("re-try each outcome row", "duplicate", "superseded", "intent check",
