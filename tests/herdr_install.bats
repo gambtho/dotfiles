@@ -216,9 +216,8 @@ assert config["onboarding"] is False
 assert ui["sidebar"]["agents"]["rows"] == [["state_icon"]]
 spaces = ui["sidebar"]["spaces"]["rows"][0]
 assert spaces[:2] == ["state_icon", "workspace"]
-assert spaces[2] == {"token": "$harness"}
-assert spaces[3]["token"] == "$needs"
-assert spaces[3]["rules"] == [{"equals": "0", "hide": True}]
+assert spaces[2]["token"] == "$needs"
+assert spaces[2]["rules"] == [{"equals": "0", "hide": True}]
 PY
   [ "$status" -eq 0 ]
 }
