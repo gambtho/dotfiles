@@ -1031,5 +1031,268 @@ class UnitRenderTests(unittest.TestCase):
                 self.module.render_unit(self.template, user, uid, "/home/tng/keyring")
 
 
+FAKE_POWERSHELL = r"""#!/usr/bin/python3
+import base64, os, pathlib, sys
+state = pathlib.Path(os.environ["FAKE_PS_STATE"])
+args = sys.argv[1:]
+assert args[:3] == ["-NoProfile", "-NonInteractive", "-EncodedCommand"] and len(args) == 4, args
+script = base64.b64decode(args[3]).decode("utf-16-le")
+with (state / "argv").open("a") as log:
+    log.write(" ".join(sys.argv) + "\n")
+data = sys.stdin.buffer.read()
+if "ReadToEnd" in script:
+    (state / "blob").write_bytes(data)
+    sys.exit(int(os.environ.get("FAKE_PS_SEAL_EXIT", "0")))
+assert data == b"", "unseal must not read stdin"
+codes = os.environ.get("FAKE_PS_CODES", "0").split(",")
+calls = state / "calls"
+count = int(calls.read_text()) if calls.exists() else 0
+calls.write_text(str(count + 1))
+code = int(codes[min(count, len(codes) - 1)])
+if code == 0:
+    sys.stdout.buffer.write((state / "blob").read_bytes())
+sys.exit(code)
+"""
+
+
+class FakePowerShell:
+    """A fake powershell.exe on the real subprocess boundary; no real DPAPI."""
+
+    def __init__(self, test, module):
+        temporary = tempfile.TemporaryDirectory()
+        test.addCleanup(temporary.cleanup)
+        self.state = pathlib.Path(temporary.name)
+        self.path = self.state / "powershell.exe"
+        self.path.write_text(FAKE_POWERSHELL)
+        self.path.chmod(0o755)
+        patcher = mock.patch.object(module, "POWERSHELL", str(self.path))
+        patcher.start()
+        test.addCleanup(patcher.stop)
+        self.environment = {"FAKE_PS_STATE": str(self.state)}
+
+    def seal(self, data=b"test-password"):
+        (self.state / "blob").write_bytes(data)
+
+    def argv(self):
+        path = self.state / "argv"
+        return path.read_text() if path.exists() else ""
+
+    def calls(self):
+        path = self.state / "calls"
+        return int(path.read_text()) if path.exists() else 0
+
+
+class DpapiBootUnlockTests(unittest.TestCase):
+    def setUp(self):
+        self.module = load_helper()
+        self.bus = FakeBus(self.module)
+        self.provider = self.module.GnomeKeyring(self.bus)
+        self.output = io.StringIO()
+        self.powershell = FakePowerShell(self, self.module)
+        self.sleeps = []
+        self.now = [0.0]
+        self.real_read_dpapi = self.module.read_dpapi
+
+    def methods(self):
+        return [call[3] for call in self.bus.calls]
+
+    def read(self, codes="0", budget=60):
+        def sleep(seconds):
+            self.sleeps.append(seconds)
+            self.now[0] += seconds
+
+        with mock.patch.dict(os.environ, dict(self.powershell.environment, FAKE_PS_CODES=codes)):
+            return self.real_read_dpapi(sleep=sleep, clock=lambda: self.now[0], budget=budget)
+
+    def boot(self, as_unit=True, wsl=True, codes="0", environment=None):
+        environment = environment if environment is not None else {}
+        def read():
+            with (
+                mock.patch.object(self.module, "launched_as_unit", return_value=as_unit),
+                mock.patch.object(self.module, "on_wsl", return_value=wsl),
+                mock.patch.object(self.module, "read_dpapi", side_effect=lambda: self.read(codes)),
+            ):
+                return self.module.read_boot_password()
+
+        with (
+            mock.patch.dict(os.environ, environment, clear=True),
+            contextlib.redirect_stdout(self.output),
+            contextlib.redirect_stderr(self.output),
+        ):
+            return self.module.boot_unlock(lambda: self.provider, read=read, attempts=1,
+                                           sleep=self.sleeps.append)
+
+    def test_unit_decrypts_on_stdout_and_unlocks_once(self):
+        self.powershell.seal("test-password".encode())
+        self.assertEqual(self.boot(), 0)
+        self.assertFalse(self.bus.locked)
+        self.assertEqual(self.methods().count("UnlockWithMasterPassword"), 1)
+        self.assertEqual(self.powershell.calls(), 1)
+        self.assertNotIn("test-password", self.powershell.argv())
+        self.assertNotIn("test-password", self.output.getvalue())
+
+    def test_non_ascii_password_round_trips_as_utf8(self):
+        self.powershell.seal("pässwörd €".encode())
+        self.assertEqual(self.read(), "pässwörd €")
+
+    def test_refuses_outside_the_unit_or_wsl_without_running_powershell(self):
+        self.powershell.seal()
+        self.assertEqual(self.boot(as_unit=False), 1)
+        self.assertEqual(self.boot(wsl=False), 1)
+        self.assertEqual(self.powershell.calls(), 0)
+        self.assertNotIn("UnlockWithMasterPassword", self.methods())
+        self.assertTrue(self.bus.locked)
+
+    def test_systemd_credential_wins_over_dpapi(self):
+        with tempfile.TemporaryDirectory() as directory:
+            (pathlib.Path(directory) / "dotfiles-keyring").write_bytes(b"test-password")
+            self.assertEqual(self.boot(environment={"CREDENTIALS_DIRECTORY": directory}), 0)
+        self.assertEqual(self.powershell.calls(), 0)
+        self.assertFalse(self.bus.locked)
+
+    def test_retries_while_windows_is_not_ready(self):
+        self.powershell.seal()
+        self.assertEqual(self.read(codes="1,3,0"), "test-password")
+        self.assertEqual(self.powershell.calls(), 3)
+        self.assertEqual(len(self.sleeps), 2)
+
+    def test_missing_interop_is_retried(self):
+        self.powershell.path.unlink()
+        with self.assertRaises(self.module.KeyringError) as raised:
+            self.read(budget=9)
+        self.assertIn("did not run", str(raised.exception))
+        self.assertEqual(len(self.sleeps), 3)
+
+    def test_missing_copy_fails_at_once(self):
+        with self.assertRaises(self.module.KeyringError) as raised:
+            self.read(codes="4")
+        self.assertIn("make keyring-seal-windows", str(raised.exception))
+        self.assertEqual(self.sleeps, [])
+
+    def test_gives_up_after_the_window_with_one_line(self):
+        self.powershell.seal()
+        self.assertEqual(self.boot(codes="1"), 1)
+        self.assertEqual(self.sleeps, [3] * 20)
+        self.assertEqual(self.output.getvalue().strip().count("\n"), 0)
+        self.assertIn("boot unlock failed: Windows could not decrypt the DPAPI copy (powershell.exe exit 1).",
+                      self.output.getvalue())
+        self.assertIn("make keyring-unlock", self.output.getvalue())
+        self.assertNotIn("UnlockWithMasterPassword", self.methods())
+
+    def test_wrong_or_empty_copy_is_tried_once(self):
+        self.powershell.seal(b"wrong-password")
+        self.assertEqual(self.boot(), 1)
+        self.assertEqual(self.powershell.calls(), 1)
+        self.assertEqual(self.methods().count("UnlockWithMasterPassword"), 1)
+        self.assertNotIn("wrong-password", self.output.getvalue())
+        self.powershell.seal(b"")
+        self.assertEqual(self.boot(), 1)
+        self.assertEqual(self.methods().count("UnlockWithMasterPassword"), 1)
+        self.assertTrue(self.bus.locked)
+
+    def test_launched_as_unit_needs_invocation_and_unit_cgroup(self):
+        cgroup = "0::/user.slice/user-1000.slice/user@1000.service/app.slice/dotfiles-keyring-unlock.service\n"
+        for environment, text, expected in (
+            ({"INVOCATION_ID": "abc"}, cgroup, True),
+            ({}, cgroup, False),
+            ({"INVOCATION_ID": "abc"}, cgroup.replace("dotfiles-keyring-unlock", "other"), False),
+        ):
+            with (
+                mock.patch.dict(os.environ, environment, clear=True),
+                mock.patch.object(self.module.pathlib.Path, "read_text", return_value=text),
+            ):
+                self.assertEqual(self.module.launched_as_unit(), expected)
+
+
+class SealWindowsTests(unittest.TestCase):
+    def setUp(self):
+        self.module = load_helper()
+        self.bus = FakeBus(self.module)
+        self.provider = self.module.GnomeKeyring(self.bus)
+        self.powershell = FakePowerShell(self, self.module)
+        self.output = io.StringIO()
+        self.config = self.powershell.state / "config"
+        self.systemctl = []
+
+    def unit(self):
+        return self.config / "systemd/user/dotfiles-keyring-unlock.service"
+
+    def run_seal(self, prompt=None, wsl=True, seal_exit="0"):
+        def run(command, **options):
+            if command[0] == "systemctl":
+                self.systemctl.append(command)
+                return subprocess.CompletedProcess(command, 0)
+            return subprocess.run(command, **options)
+
+        with (
+            mock.patch.dict(os.environ, dict(self.powershell.environment, XDG_CONFIG_HOME=str(self.config),
+                                             FAKE_PS_SEAL_EXIT=seal_exit)),
+            mock.patch.object(self.module.os, "getuid", return_value=1000),
+            mock.patch.object(self.module.pwd, "getpwuid", return_value=mock.Mock(pw_name="tng")),
+            contextlib.redirect_stdout(self.output),
+            contextlib.redirect_stderr(self.output),
+        ):
+            try:
+                return self.module.seal_windows(self.provider, prompt or (lambda: "test-password"),
+                                                run=run, wsl=lambda: wsl)
+            except self.module.KeyringError as error:
+                return str(error)
+
+    def test_refuses_outside_wsl_or_without_keyring_before_prompt(self):
+        prompt = mock.Mock()
+        self.assertIn("Needs WSL", self.run_seal(prompt, wsl=False))
+        self.bus.collection = "/"
+        self.assertIn("absent", self.run_seal(prompt))
+        self.powershell.path.unlink()
+        self.assertIn("Needs WSL", self.run_seal(prompt))
+        prompt.assert_not_called()
+        self.assertEqual(self.powershell.argv(), "")
+        self.assertFalse(self.unit().exists())
+        self.assertNotIn("CreateWithMasterPassword", [call[3] for call in self.bus.calls])
+
+    def test_password_goes_only_to_powershell_stdin_then_unit_is_enabled(self):
+        self.assertEqual(self.run_seal(lambda: "pässwörd"), 0)
+        self.assertEqual((self.powershell.state / "blob").read_bytes(), "pässwörd".encode())
+        self.assertNotIn("pässwörd", self.powershell.argv())
+        self.assertNotIn("pässwörd", self.output.getvalue())
+        self.assertNotIn("pässwörd", self.unit().read_text())
+        self.assertIn(f"ExecStart=/usr/bin/python3 {ROOT / 'libexec/keyring'} boot-unlock\n", self.unit().read_text())
+        self.assertEqual(self.systemctl, [
+            ["systemctl", "--user", "daemon-reload"],
+            ["systemctl", "--user", "enable", "dotfiles-keyring-unlock.service"],
+            ["systemctl", "--user", "start", "dotfiles-keyring-unlock.service"],
+        ])
+        self.assertNotIn("UnlockWithMasterPassword", [call[3] for call in self.bus.calls])
+
+    def test_powershell_failure_enables_nothing(self):
+        self.assertIn("exit 1", self.run_seal(seal_exit="1"))
+        self.assertFalse(self.unit().exists())
+        self.assertEqual(self.systemctl, [])
+
+    def test_empty_password_is_not_sealed(self):
+        self.assertIn("empty", self.run_seal(lambda: ""))
+        self.assertEqual(self.powershell.argv(), "")
+
+    def test_seal_windows_refuses_extra_arguments(self):
+        result = subprocess.run([sys.executable, str(ROOT / "libexec/keyring"), "seal-windows", "test-password"],
+                                capture_output=True, check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn(b"test-password", result.stdout + result.stderr)
+
+    def test_wsl_unit_renders_as_a_user_unit(self):
+        template = (ROOT / "platforms/linux/wsl-keyring-unlock.service").read_text()
+        unit = self.module.render_unit(template, "tng", 1000, "/home/tng/.dotfiles/libexec/keyring")
+        body = [line for line in unit.splitlines() if line and not line.startswith("#")]
+        self.assertFalse(any(re.search(r"@[A-Z]+@|%", line) for line in body))
+        for expected in (
+            "After=gnome-keyring-daemon.socket gnome-keyring-daemon.service",
+            "ExecStart=/usr/bin/python3 /home/tng/.dotfiles/libexec/keyring boot-unlock",
+            "WantedBy=default.target",
+        ):
+            self.assertIn(expected, body)
+        for forbidden in ("User=", "LoadCredential", "Environment="):
+            self.assertFalse(any(line.startswith(forbidden) for line in body))
+
+
 if __name__ == "__main__":
     unittest.main()

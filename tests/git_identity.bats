@@ -1684,6 +1684,22 @@ EOF
   grep -Fq 'dot\ files' "$TEST_ROOT/err"
 }
 
+@test "keyring refusal names the WSL user unlock unit only when it is installed" {
+  [ "$(uname -s)" = Linux ] || skip "Linux keyring only"
+  setup_shim_repo "$TEST_ROOT/r" https://github.com/gambtho/repo.git
+  setup_keyring_preflight
+  export XDG_CONFIG_HOME="$TEST_ROOT/config"
+  cd "$TEST_ROOT/r"
+  run "$REPO_ROOT/bin/gh" auth status
+  [ "$status" -eq 6 ]
+  [[ "$output" != *"systemctl --user status"* ]]
+  mkdir -p "$XDG_CONFIG_HOME/systemd/user"
+  : >"$XDG_CONFIG_HOME/systemd/user/dotfiles-keyring-unlock.service"
+  run "$REPO_ROOT/bin/gh" auth status
+  [ "$status" -eq 6 ]
+  [[ "$output" == *"boot unlock failed: systemctl --user status dotfiles-keyring-unlock"* ]]
+}
+
 @test "macOS delegation does not invoke system Python keyring preflight" {
   setup_shim_repo "$TEST_ROOT/r" https://github.com/gambtho/repo.git
   setup_keyring_preflight

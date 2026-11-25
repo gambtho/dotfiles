@@ -1,0 +1,16 @@
+# Managed by dotfiles: on WSL, `make keyring-seal-windows` fills in @HELPER@ with
+# this checkout's absolute path and installs this as the user unit
+# dotfiles-keyring-unlock.service.
+[Unit]
+Description=Unlock the login keyring from the Windows DPAPI copy of its password
+After=gnome-keyring-daemon.socket gnome-keyring-daemon.service
+
+[Service]
+Type=oneshot
+# boot-unlock asks powershell.exe to decrypt %LOCALAPPDATA%\dotfiles\keyring.dpapi
+# and reads the password from its stdout, only when run as this unit.
+ExecStart=/usr/bin/python3 @HELPER@ boot-unlock
+TimeoutStartSec=180
+
+[Install]
+WantedBy=default.target

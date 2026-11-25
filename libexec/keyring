@@ -2,6 +2,7 @@
 """Inspect, initialize or unlock a GNOME Login keyring."""
 
 import argparse
+import base64
 import contextlib
 import getpass
 import hashlib
@@ -30,6 +31,28 @@ UNIT = "dotfiles-keyring-unlock.service"
 UNIT_PATH = "/etc/systemd/system/" + UNIT
 UNIT_TEMPLATE = pathlib.Path(__file__).resolve().parent.parent / "tools/coordinator-vm" / UNIT
 TPM_DEVICE = "/dev/tpmrm0"
+# WSL: a copy of the password protected by Windows DPAPI under the Windows user.
+POWERSHELL = "/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
+DPAPI_BLOB = r"%LOCALAPPDATA%\dotfiles\keyring.dpapi"
+USER_UNIT_TEMPLATE = pathlib.Path(__file__).resolve().parent.parent / "platforms/linux/wsl-keyring-unlock.service"
+# The password only ever travels on stdin/stdout; these scripts hold no secret.
+DPAPI_SEAL = r"""$ErrorActionPreference = 'Stop'; $ProgressPreference = 'SilentlyContinue'
+[Console]::InputEncoding = [Text.UTF8Encoding]::new($false)
+$p = [Console]::In.ReadToEnd()
+if (-not $p -or -not $env:LOCALAPPDATA) { exit 3 }
+$blob = ConvertFrom-SecureString (ConvertTo-SecureString -String $p -AsPlainText -Force)
+$d = Join-Path $env:LOCALAPPDATA 'dotfiles'
+New-Item -ItemType Directory -Force -Path $d | Out-Null
+Set-Content -LiteralPath (Join-Path $d 'keyring.dpapi') -Value $blob -Encoding Ascii -NoNewline
+"""
+DPAPI_UNSEAL = r"""$ErrorActionPreference = 'Stop'; $ProgressPreference = 'SilentlyContinue'
+if (-not $env:LOCALAPPDATA) { exit 3 }
+$f = Join-Path $env:LOCALAPPDATA 'dotfiles\keyring.dpapi'
+if (-not (Test-Path -LiteralPath $f -PathType Leaf)) { exit 4 }
+$s = ConvertTo-SecureString -String (Get-Content -LiteralPath $f -Raw).Trim()
+$b = [Text.UTF8Encoding]::new($false).GetBytes([Net.NetworkCredential]::new('', $s).Password)
+$o = [Console]::OpenStandardOutput(); $o.Write($b, 0, $b.Length); $o.Flush()
+"""
 
 
 class KeyringError(Exception):
@@ -374,19 +397,77 @@ def read_credential():
     with os.fdopen(descriptor, "rb") as source:
         if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
             raise KeyringError(f"Credential {CREDENTIAL} is not a regular file.")
-        data = source.read(4097)
+        return decode_password(source.read(4097), f"Credential {CREDENTIAL}")
+
+
+def decode_password(data, label):
     try:
         password = data.decode()
     except UnicodeDecodeError as error:
-        raise KeyringError(f"Credential {CREDENTIAL} is not UTF-8 text.") from error
+        raise KeyringError(f"{label} is not UTF-8 text.") from error
     # Hidden prompts never return a newline; tolerate one from a hand-made seal.
     password = password.removesuffix("\n")
     if not password or len(data) > 4096:
-        raise KeyringError(f"Credential {CREDENTIAL} is empty or too long.")
+        raise KeyringError(f"{label} is empty or too long.")
     return password
 
 
-def boot_unlock(provider_factory=None, read=read_credential, attempts=15, delay=2, sleep=time.sleep):
+def on_wsl():
+    try:
+        return "microsoft" in pathlib.Path("/proc/sys/kernel/osrelease").read_text().lower()
+    except OSError:
+        return False
+
+
+def launched_as_unit():
+    # systemd sets INVOCATION_ID and places the service in its own cgroup.
+    if not os.environ.get("INVOCATION_ID"):
+        return False
+    try:
+        cgroup = pathlib.Path("/proc/self/cgroup").read_text()
+    except OSError:
+        return False
+    return any(line.endswith("/" + UNIT) for line in cgroup.splitlines())
+
+
+def powershell(script, run=subprocess.run, data=None, timeout=30):
+    # -EncodedCommand survives interop's command-line conversion unchanged.
+    # A Windows working directory avoids the UNC-path fallback for WSL paths.
+    return run([POWERSHELL, "-NoProfile", "-NonInteractive", "-EncodedCommand",
+                base64.b64encode(script.encode("utf-16-le")).decode()],
+               input=data if data is not None else b"", capture_output=True,
+               timeout=timeout, cwd=os.path.dirname(POWERSHELL), check=False)
+
+
+def read_dpapi(run=subprocess.run, sleep=time.sleep, clock=time.monotonic, budget=60, delay=3):
+    # Right after Windows sign-in, interop, the /mnt/c mount or the DPAPI
+    # profile may not be ready yet: retry within a bounded window.
+    end = clock() + budget
+    while True:
+        try:
+            result = powershell(DPAPI_UNSEAL, run)
+            code = result.returncode
+        except (OSError, subprocess.TimeoutExpired):
+            result, code = None, None
+        if code == 0:
+            return decode_password(result.stdout, "The DPAPI copy")
+        if code == 4:
+            raise KeyringError(f"No DPAPI copy at {DPAPI_BLOB}; run make keyring-seal-windows.")
+        if clock() >= end:
+            raise KeyringError("Windows could not decrypt the DPAPI copy "
+                               f"(powershell.exe {'exit ' + str(code) if code is not None else 'did not run'}).")
+        sleep(delay)
+
+
+def read_boot_password():
+    if os.environ.get("CREDENTIALS_DIRECTORY"):
+        return read_credential()
+    if on_wsl() and launched_as_unit():
+        return read_dpapi()
+    return read_credential()
+
+
+def boot_unlock(provider_factory=None, read=read_boot_password, attempts=15, delay=2, sleep=time.sleep):
     try:
         password = read()
         # The user manager can be up before its bus or the keyring daemon is,
@@ -460,6 +541,48 @@ def seal(provider, prompt=read_password, run=subprocess.run, tpm=TPM_DEVICE):
     return 0
 
 
+def user_unit_path():
+    config = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+    return pathlib.Path(config) / "systemd/user" / UNIT
+
+
+def seal_windows(provider, prompt=read_password, run=subprocess.run, wsl=on_wsl):
+    if not wsl() or not os.path.exists(POWERSHELL):
+        raise KeyringError(f"Needs WSL with Windows interop ({POWERSHELL}); nothing was sealed.")
+    provider.inspect(activate=True)
+    unit = render_unit(USER_UNIT_TEMPLATE.read_text(), pwd.getpwuid(os.getuid()).pw_name,
+                       os.getuid(), str(pathlib.Path(__file__).resolve()))
+    password = prompt()
+    if not password:
+        raise KeyringError("Password must not be empty.")
+    try:
+        result = powershell(DPAPI_SEAL, run, data=password.encode())
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise KeyringError("powershell.exe did not run; nothing was sealed.") from error
+    if result.returncode != 0:
+        raise KeyringError(f"powershell.exe could not write the DPAPI copy (exit {result.returncode}).")
+    print(f"Sealed with Windows DPAPI for your Windows user: {DPAPI_BLOB}")
+    path = user_unit_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(unit)
+
+    def systemctl(*command):
+        try:
+            run(["systemctl", "--user", *command], check=True)
+        except (OSError, subprocess.CalledProcessError) as error:
+            raise KeyringError(f"systemctl --user {command[0]} failed.") from error
+
+    systemctl("daemon-reload")
+    systemctl("enable", UNIT)
+    # Proves interop and the DPAPI decrypt now, before a restart depends on them.
+    try:
+        systemctl("start", UNIT)
+    except KeyringError as error:
+        raise KeyringError(f"Sealed and enabled, but the first run failed; see systemctl --user status {UNIT}.") from error
+    print(f"Enabled user unit {UNIT}; it unlocks the login keyring each time WSL starts.")
+    return 0
+
+
 def auth_free(args):
     if not args or args[0] in ("help", "--help", "-h", "version", "--version", "completion"):
         return True
@@ -528,6 +651,10 @@ def run(command, provider, prompt=read_password):
             if not foreground_terminal():
                 raise KeyringError("Sealing requires a foreground human terminal.")
             return seal(provider, prompt)
+        if command == "seal-windows":
+            if not foreground_terminal():
+                raise KeyringError("Sealing requires a foreground human terminal.")
+            return seal_windows(provider, prompt)
         if not provider.inspect(activate=command in ("unlock", "init"), initialize=initialize):
             print("Login keyring unlocked.")
             return 0
@@ -563,11 +690,11 @@ def run(command, provider, prompt=read_password):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=(
-        "check", "init", "unlock", "startup", "gh-check", "boot-unlock", "seal",
+        "check", "init", "unlock", "startup", "gh-check", "boot-unlock", "seal", "seal-windows",
     ))
     parser.add_argument("gh_args", nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
-    if args.command in ("init", "boot-unlock", "seal") and args.gh_args:
+    if args.command in ("init", "boot-unlock", "seal", "seal-windows") and args.gh_args:
         parser.error("This command accepts no extra arguments; passwords require hidden terminal input.")
     if args.command == "init" and not foreground_terminal():
         print("keyring: Initialization requires a foreground human terminal.", file=sys.stderr)
@@ -583,7 +710,9 @@ def main(argv=None):
     if args.command == "gh-check":
         return gh_check(args.gh_args)
     if args.command == "boot-unlock":
-        with deadline(90, message="keyring: boot unlock failed: timed out. Unlock by hand with make keyring-unlock."):
+        # The DPAPI path may wait up to a minute for Windows interop first.
+        seconds = 90 if os.environ.get("CREDENTIALS_DIRECTORY") else 150
+        with deadline(seconds, message="keyring: boot unlock failed: timed out. Unlock by hand with make keyring-unlock."):
             return boot_unlock()
     try:
         provider = GnomeKeyring()
