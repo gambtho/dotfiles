@@ -610,7 +610,7 @@ On first use, `make ai` runs Pi's official managed installer, which installs the
 
 GPT-6 Astra now uses Pi's native Copilot transport. The installer retires only the obsolete Astra override with a private backup and migration receipt, preserving unrelated custom models and provider settings. Ordinary `make ai` delegates extension reconciliation to `pi update --extensions --no-approve`; packages may advance and cached files may be replaced. Installed permission schema/evaluator checks precede policy publication. Stop Pi sessions before applying. See [AI setup documentation](ai/README.md) for mutable ownership, native updates, and configuration backups.
 
-The installer keeps a real machine-local extensions directory and links the three authored extension files individually; `ai/pi/settings.json` loads the local `my` package. The guard blocks Pi's direct file-write tools in primary checkouts; use a linked worktree, or place an intentional exception in `~/.pi/worktree-guard-allow`.
+The installer keeps a real machine-local extensions directory and links the four authored extension files individually; `ai/pi/settings.json` loads the local `my` package. The guard blocks Pi's direct file-write tools in primary checkouts; use a linked worktree, or place an intentional exception in `~/.pi/worktree-guard-allow`.
 
 The personal package provides review, planning, document-understanding, and lane-coordination workflows. See the [package inventory](ai/marketplace/plugins/my/README.md) for all prompt templates and skills, and `AGENTS.md` for repository conventions.
 
