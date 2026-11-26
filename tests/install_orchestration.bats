@@ -75,20 +75,71 @@ SCRIPT
   [[ "$output" != *"PROVISIONING_STARTED"* ]]
 }
 
-@test "dot-update forwards exact arguments and the installer exit status" {
-  local fixture="$TEST_ROOT/update"
-  mkdir -p "$fixture"
-  cp "$REPO_ROOT/bin/dot-update" "$fixture/dot-update"
-  cat >"$fixture/dot-install" <<'SCRIPT'
-#!/usr/bin/env bash
-printf '<%s>\n' "$@"
-exit 37
-SCRIPT
-  chmod +x "$fixture/dot-install"
+# An upstream with dot-update and a dot-install that prints its version, and a
+# checkout one commit behind it.
+make_update_fixture() {
+  export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.com GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.com
+  UPSTREAM="$TEST_ROOT/upstream"
+  CHECKOUT="$TEST_ROOT/checkout"
+  mkdir -p "$UPSTREAM/bin"
+  git -C "$UPSTREAM" init -q -b main
+  cp "$REPO_ROOT/bin/dot-update" "$UPSTREAM/bin/dot-update"
+  write_fixture_installer old
+  git -C "$UPSTREAM" add bin
+  git -C "$UPSTREAM" commit -qm old
+  git clone -q "$UPSTREAM" "$CHECKOUT"
+  write_fixture_installer new
+  git -C "$UPSTREAM" commit -qam new
+}
 
-  run bash "$fixture/dot-update" --help "two words" "" -- -m
+write_fixture_installer() {
+  printf '#!/usr/bin/env bash\nprintf "%s:<%%s>\\n" "$@"\nexit 37\n' "$1" >"$UPSTREAM/bin/dot-install"
+  chmod +x "$UPSTREAM/bin/dot-install"
+}
+
+@test "dot-update pulls first, then runs the pulled installer with exact arguments and its exit status" {
+  make_update_fixture
+
+  run bash "$CHECKOUT/bin/dot-update" --help "two words" "" -- -m
+
   [ "$status" -eq 37 ]
-  [ "$output" = $'<--help>\n<two words>\n<>\n<-->\n<-m>' ]
+  [[ "$output" == *$'new:<--help>\nnew:<two words>\nnew:<>\nnew:<-->\nnew:<-m>' ]]
+  [ "$(git -C "$CHECKOUT" rev-parse HEAD)" = "$(git -C "$UPSTREAM" rev-parse HEAD)" ]
+}
+
+@test "dot-update stops before pulling or installing on a dirty tree or another branch" {
+  make_update_fixture
+  local before
+  before=$(git -C "$CHECKOUT" rev-parse HEAD)
+
+  printf 'local edit\n' >>"$CHECKOUT/bin/dot-install"
+  run bash "$CHECKOUT/bin/dot-update"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"uncommitted changes"* ]]
+  [[ "$output" != *"old:"* ]]
+  git -C "$CHECKOUT" checkout -q -- bin/dot-install
+
+  git -C "$CHECKOUT" checkout -q -b topic
+  run bash "$CHECKOUT/bin/dot-update"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"on topic, not main"* ]]
+  [[ "$output" != *"old:"* ]]
+
+  git -C "$CHECKOUT" checkout -q --detach main
+  run bash "$CHECKOUT/bin/dot-update"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"detached HEAD"* ]]
+  [ "$(git -C "$CHECKOUT" rev-parse HEAD)" = "$before" ]
+}
+
+@test "dot-update refuses a pull that is not a fast-forward" {
+  make_update_fixture
+  git -C "$CHECKOUT" commit -q --allow-empty -m local
+
+  run bash "$CHECKOUT/bin/dot-update"
+
+  [ "$status" -ne 0 ]
+  [[ "$output" != *"old:"* && "$output" != *"new:"* ]]
 }
 
 @test "the shared installer ensures knowledge after runtimes before AI on every run" {
@@ -274,24 +325,36 @@ SCRIPT
   [[ "$output" == *"WARNING: fonts"* ]]
 }
 
-@test "make ai runs both AI installers and propagates failures" {
+@test "make ai runs every AI installer and propagates failures" {
   local fixture="$TEST_ROOT/make-ai"
-  mkdir -p "$fixture/ai/pi" "$fixture/ai/copilot"
+  mkdir -p "$fixture/ai/pi" "$fixture/ai/claude" "$fixture/ai/copilot"
   cp "$REPO_ROOT/Makefile" "$fixture/Makefile"
   printf '#!/usr/bin/env bash\ntouch "%s/pi-ran"\nexit 1\n' "$fixture" >"$fixture/ai/pi/install.sh"
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >"%s/claude-args"\n' "$fixture" >"$fixture/ai/claude/install.sh"
   printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >"%s/copilot-args"\n' "$fixture" >"$fixture/ai/copilot/install.sh"
 
   run make -C "$fixture" ai
   [ "$status" -ne 0 ]
   [[ "$output" == *"ai/pi/install.sh"* ]]
   [ -f "$fixture/pi-ran" ]
-  [ -f "$fixture/copilot-args" ]
+  [ -z "$(<"$fixture/claude-args")" ]
   [ -z "$(<"$fixture/copilot-args")" ]
 
   run make -C "$fixture" ai-check
   [ "$status" -ne 0 ]
   [[ "$output" == *"ai/pi/install.sh"* ]]
+  [ "$(<"$fixture/claude-args")" = --check ]
   [ "$(<"$fixture/copilot-args")" = --check ]
+}
+
+@test "dot-install installs the Claude Code skills plugin as an optional AI phase" {
+  INSTALL_SOURCE_ONLY=1 run bash -c '
+    source "$1/bin/dot-install"
+    run_phase() { printf "%s\n" "$*"; }
+    setup_ai
+  ' _ "$REPO_ROOT"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"optional ai-pi bash $REPO_ROOT/ai/pi/install.sh"*"optional ai-claude bash $REPO_ROOT/ai/claude/install.sh"* ]]
 }
 
 @test "remote installer is denied without explicit consent" {

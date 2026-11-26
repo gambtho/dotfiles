@@ -68,7 +68,6 @@ DOTFILES_HEALTH_FIXES = (
     "AGENTS.md",
     "README.md",
     "ai/README.md",
-    "ai/marketplace/plugins/my/README.md",
     "tools/herdr/README.md",
     "docs/guides/*.md",
 )
@@ -86,6 +85,9 @@ SECRET_PATTERNS = (
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
 )
 
+# The skills live in their own repository. Pi checks out the tag pinned in
+# ai/pi/settings.json, and `pi list` prints where.
+SKILLS_SOURCE = "git:github.com/gambtho/gambtho-skills"
 LANE_SKILLS = ("lane-coordinator", "pr-closeout", "adversarial-review", "second-opinion-core", "polish-core")
 # PEOPLE.md stays out: reviewing process does not need notes about individuals,
 # and this report leaves the machine.
@@ -641,8 +643,34 @@ def recent_activity(folder: Path, now: float) -> list[Path]:
     return [path for _, path in found[:LANE_ACTIVITY_FILES]]
 
 
+def skills_pin(dotfiles: Path = DOTFILES) -> str:
+    settings = json.loads((dotfiles / "ai" / "pi" / "settings.json").read_text())
+    for entry in settings.get("packages", []):
+        source = entry if isinstance(entry, str) else entry.get("source", "")
+        if source.startswith(SKILLS_SOURCE + "@"):
+            return source
+    raise AutomationError(f"ai/pi/settings.json does not pin {SKILLS_SOURCE}")
+
+
+def pinned_skills_root(dotfiles: Path = DOTFILES) -> Path:
+    """Return the skills folder of Pi's checkout, only if it is at the pinned tag."""
+    source = skills_pin(dotfiles)
+    tag = source.rsplit("@", 1)[1]
+    lines = run([str(PI_AGENT / "bin" / "pi"), "list"]).splitlines()
+    for index, line in enumerate(lines[:-1]):
+        if line.strip().removesuffix(" (filtered)") == source:
+            package = Path(lines[index + 1].strip())
+            break
+    else:
+        raise AutomationError(f"pi list does not show {source}; run make ai")
+    found = run(["git", "-C", str(package), "describe", "--tags", "--exact-match", "HEAD"]).strip()
+    if found != tag:
+        raise AutomationError(f"{package} is at {found or 'no tag'}, not the pinned {tag}; run make ai")
+    return package / "skills"
+
+
 def gather_lane_review(evidence: Path, repo: Path) -> None:
-    skills_root = DOTFILES / "ai" / "marketplace" / "plugins" / "my" / "skills"
+    skills_root = pinned_skills_root()
     for skill in LANE_SKILLS:
         shutil.copytree(
             skills_root / skill,

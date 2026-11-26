@@ -44,7 +44,7 @@ class DowngradeTests(unittest.TestCase):
         self.assertIn('lines', automation.downgrade_reason(HEALTH, ['README.md'], automation.MAX_FIX_LINES + 1, False))
 
     def test_fixes_outside_the_profile_scope_are_dropped(self):
-        for path in ('ai/pi/AGENTS.md', 'ai/marketplace/plugins/my/skills/x/SKILL.md',
+        for path in ('ai/pi/AGENTS.md', 'skills/x/SKILL.md',
                      'core/shell/zshrc.symlink', 'tests/x.bats', '.gitignore'):
             self.assertIn('allowed files', automation.downgrade_reason(HEALTH, [path], 1, False), path)
 
@@ -403,6 +403,56 @@ class PrBodyTests(unittest.TestCase):
         self.assertIn('Applied fixes: `docs/guides/x.md`.', body)
 
 
+class PinnedSkillsTests(unittest.TestCase):
+    """lane-review copies the skills from Pi's checkout of the pinned tag, never another revision."""
+
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name)
+        self.pin = automation.skills_pin(ROOT)
+        self.tag = self.pin.rsplit('@', 1)[1]
+        self.package = self.root / 'gambtho-skills'
+        (self.package / 'skills/pr-closeout').mkdir(parents=True)
+        (self.package / 'skills/pr-closeout/SKILL.md').write_text('x\n')
+        git(self.package, 'init', '-q')
+        git(self.package, 'add', '.')
+        git(self.package, '-c', 'user.name=t', '-c', 'user.email=t@example.com', 'commit', '-qm', 'x')
+
+    def resolve(self, listing):
+        real_run = automation.run
+
+        def fake_run(cmd, **kwargs):
+            if cmd[1:] == ['list']:
+                return listing
+            return real_run(cmd, **kwargs)
+
+        with mock.patch.object(automation, 'run', side_effect=fake_run):
+            return automation.pinned_skills_root(ROOT)
+
+    def listing(self):
+        return f'User packages:\n  npm:pi-web-access\n    /x\n  {self.pin} (filtered)\n    {self.package}\n'
+
+    def test_settings_pin_the_skills_package_by_tag(self):
+        self.assertRegex(self.pin, r'^git:github\.com/gambtho/gambtho-skills@v\d+\.\d+\.\d+$')
+
+    def test_found_at_the_pinned_tag(self):
+        git(self.package, 'tag', self.tag)
+        self.assertEqual(self.resolve(self.listing()), self.package / 'skills')
+
+    def test_missing_from_pi_list_stops(self):
+        with self.assertRaisesRegex(automation.AutomationError, 'does not show'):
+            self.resolve('User packages:\n  npm:pi-web-access\n    /x\n')
+
+    def test_other_revision_stops(self):
+        git(self.package, 'tag', 'v0.0.1')
+        with self.assertRaisesRegex(automation.AutomationError, 'not the pinned'):
+            self.resolve(self.listing())
+        git(self.package, 'tag', '-d', 'v0.0.1')
+        with self.assertRaises(automation.AutomationError):
+            self.resolve(self.listing())
+
+
 class LaneEvidenceTests(unittest.TestCase):
     def setUp(self):
         temp = tempfile.TemporaryDirectory()
@@ -411,7 +461,12 @@ class LaneEvidenceTests(unittest.TestCase):
 
     def gather(self):
         evidence = self.home / 'evidence'
+        skills = self.home / 'package/skills'
+        for skill in automation.LANE_SKILLS:
+            (skills / skill).mkdir(parents=True, exist_ok=True)
+            (skills / skill / 'SKILL.md').write_text(f'# {skill}\n')
         with mock.patch.object(automation, 'HOME', self.home), \
+             mock.patch.object(automation, 'pinned_skills_root', return_value=skills), \
              mock.patch.object(automation, 'lane_folders', return_value=automation.lane_folders(self.home)), \
              mock.patch.object(automation, 'survey_lane_folder', return_value='survey'):
             automation.gather_lane_review(evidence, ROOT)

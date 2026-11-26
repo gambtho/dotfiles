@@ -81,7 +81,7 @@ custom units. The installer never performs that migration for you.
   tools/          # Tool configs: docker, kubernetes
   platforms/      # OS-specific: linux/, macos/, windows/
   work/           # Work context: only sourced when work profile is active
-  ai/             # Pi configuration, personal prompts/skills, standalone Copilot CLI bootstrap
+  ai/             # Pi configuration, skills plugin pin, standalone Copilot CLI bootstrap
   profiles/       # Machine profiles: personal.zsh, work.zsh
   config/         # XDG config files, symlinked to ~/.config/<name>
   docs/automation-reports/ # Weekly automation review reports
@@ -506,11 +506,13 @@ systemctl --user daemon-reload
 ## Routine Updates
 
 ```bash
-bin/dot-update    # update packages and language runtimes; restore Neovim plugins to the tracked lockfile
+bin/dot-update    # pull main, then update packages, runtimes and AI tools; restore Neovim plugins to the tracked lockfile
 make check        # run syntax, lint, tests, and AI config validation
 ```
 
-`bin/dot-update` delegates to `bin/dot-install`, which runs `nvim --headless "+Lazy!
+`bin/dot-update` fast-forwards the checkout first. It stops before changing
+anything when the checkout is not on `main` or has uncommitted changes to
+tracked files. It then runs the pulled `bin/dot-install`, which runs `nvim --headless "+Lazy!
 restore" +qa` — this restores plugins to match `config/nvim/lazy-lock.json`
 exactly. It never advances the lockfile itself.
 
@@ -545,7 +547,7 @@ process inheriting the dotfiles PATH. After pulling the rename, clear cached
 command paths with `rehash` in zsh or `hash -r` in Bash, or start a fresh shell.
 `dot-install` accepts no provisioning arguments; `--help`/`-h` displays usage,
 and any other arguments fail before provisioning starts. `dot-update` forwards
-the same arguments and exit status.
+the same arguments and exit status after it pulls.
 
 After pulling this modernization, verify the repository, refresh symlinks, and
 run the installer:
@@ -685,20 +687,22 @@ PATH. Shell-loading tests verify both system `install` and the `gh` override.
 
 ## AI Coding Agent
 
-This repository configures Pi and bootstraps the standalone GitHub Copilot CLI. Pi is the only repository-managed coding-agent harness; the standalone CLI does not share Pi's configuration or authentication:
+This repository configures Pi, installs the shared skills package for Pi and Claude Code, and bootstraps the standalone GitHub Copilot CLI. Pi is the only repository-managed coding-agent harness; the standalone CLI does not share Pi's configuration or authentication:
 
 ```text
 ai/
+  claude/install.sh       # pins the gambtho-skills plugin for Claude Code
   copilot/install.sh      # standalone Copilot CLI bootstrap; upgrades via copilot update
   pi/                     # settings, global guidance, keybindings, extensions, installer
-  marketplace/plugins/my/ # local Pi package containing prompts and skills
 ```
 
 ### Setup
 
 ```bash
-make ai                  # converge Pi/update extensions and bootstrap missing Copilot CLI
+make ai                  # converge Pi/update extensions, pin the Claude skills plugin, bootstrap missing Copilot CLI
 make ai-check            # dry-run without changing the machine
+make skills-update       # git pull --ff-only, then make ai (stop Pi sessions first)
+make skills-pin VERSION=v0.3.0  # move the skills pin for Pi and Claude Code (in a PR)
 pi update --extensions   # independently update extension packages (stop Pi sessions first)
 pi update                # update the managed Pi release independently of make ai
 ```
@@ -707,16 +711,16 @@ On first use, `make ai` runs Pi's official managed installer, which installs the
 
 GPT-6 Astra now uses Pi's native Copilot transport. The installer retires only the obsolete Astra override with a private backup and migration receipt, preserving unrelated custom models and provider settings. Ordinary `make ai` delegates extension reconciliation to `pi update --extensions --no-approve`; packages may advance and cached files may be replaced. Installed permission schema/evaluator checks precede policy publication. Stop Pi sessions before applying. See [AI setup documentation](ai/README.md) for mutable ownership, native updates, and configuration backups.
 
-The installer keeps a real machine-local extensions directory and links the three authored extension files individually; `ai/pi/settings.json` loads the local `my` package. The guard blocks Pi's direct file-write tools in primary checkouts; use a linked worktree, or place an intentional exception in `~/.pi/worktree-guard-allow`.
+The installer keeps a real machine-local extensions directory and links the three authored extension files individually; `ai/pi/settings.json` loads the pinned skills package. The guard blocks Pi's direct file-write tools in primary checkouts; use a linked worktree, or place an intentional exception in `~/.pi/worktree-guard-allow`.
 
-The personal package provides review, planning, document-understanding, and lane-coordination workflows. See the [package inventory](ai/marketplace/plugins/my/README.md) for all prompt templates and skills, and `AGENTS.md` for repository conventions.
+Review, planning, document-understanding, and lane-coordination prompts and skills come from [gambtho/gambtho-skills](https://github.com/gambtho/gambtho-skills), pinned to one release tag. Pi loads its skills and prompts; Claude Code loads its skills as the `gambtho-skills` plugin, installed by `ai/claude/install.sh` from `make ai` and the full installer. That script skips with a notice when `claude` is missing. Once Claude Code shows the plugin at the pinned version, it removes `~/.claude/skills` links into `~/.dotfiles` and records their names in `~/.local/state/dotfiles/claude-legacy-links.txt`. See `AGENTS.md` for repository conventions.
 
 Pi's always-loaded global working agreement is `ai/pi/AGENTS.md`; project instructions override it through repository `AGENTS.md` files. Native iPhone access to the actual default Herdr/Pi terminal uses the opt-in [Heeler setup](tools/herdr/heeler/README.md), with explicit boot preparation and operator-only SSH publication. No browser backend, reverse proxy or DNS-provider API credential is required.
 
 ### Validation
 
 ```bash
-make validate   # checks Pi prompt/skill frontmatter and manifest coverage
+make validate   # checks tracked Pi JSON baselines and repository symlinks
 ```
 
 ## Origins

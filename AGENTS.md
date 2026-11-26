@@ -4,10 +4,11 @@ Personal dotfiles for Linux, macOS, and WSL. Built around zsh + Prezto + Powerle
 
 ## AI Tool Configuration
 
-This repository manages Pi as the coding-agent harness under `ai/`:
+This repository manages Pi as the coding-agent harness under `ai/`, and installs the shared skills package for Pi and Claude Code:
 
 ```text
 ai/
+  claude/install.sh           # Install or re-pin the skills plugin for Claude Code
   copilot/install.sh          # Bootstrap standalone Copilot CLI when missing
   pi/
     settings.json             # First-install/reset baseline; package inventory is authoritative
@@ -26,51 +27,21 @@ ai/
       lane-native-editor.ts   # Restores Pi's native frame for lane sessions
       worktree-guard.ts       # Blocks direct writes in primary checkouts
     install.sh                # Managed Pi configuration and native extension update
-  marketplace/plugins/my/    # Local personal Pi package
-    prompts/                  # Slash-command prompt templates
-    skills/                   # On-demand Agent Skills
-    package.json              # Pi resource manifest
 ```
 
-Stop Pi before changing resources. `make ai` converges Pi configuration and also bootstraps the standalone Copilot CLI when missing; first CLI installation requires reviewed remote-installer consent. `bash ai/pi/install.sh` handles Pi only. Pi convergence runs native `pi update --extensions --no-approve`; packages may advance and native reconciliation may replace cached files. Host self-update remains operator-owned through `pi update`. See `ai/README.md` for installed compatibility gates, selective refresh and per-file configuration backups. Do not deploy from an implementation worktree.
+Stop Pi before changing resources. `make ai` converges Pi configuration, installs or re-pins the skills plugin for Claude Code, and bootstraps the standalone Copilot CLI when missing; first CLI installation requires reviewed remote-installer consent. `bash ai/pi/install.sh` handles Pi only. Pi convergence runs native `pi update --extensions --no-approve`; packages may advance and native reconciliation may replace cached files. Host self-update remains operator-owned through `pi update`. See `ai/README.md` for installed compatibility gates, selective refresh and per-file configuration backups. Do not deploy from an implementation worktree.
 
 The installer links immutable authored resources, publishes runtime-mutated settings and security configuration as regular machine-local files, and leaves authentication, sessions, trust decisions, package caches, user plans, logs, and generated model catalogs machine-local. Tracked mutable baselines such as `ai/pi/config/modes.json`, `ai/pi/config/subagents.json`, `ai/pi/config/file-context.json`, and `ai/pi/config/web-search.json` remain first-install/reset inputs whose runtime drift is preserved, except removal of the ignored top-level `graceTurns` key, exact owned child-exclusion normalization, and explicit selective preference refresh. `ai/pi/config/permission-system.json` is different: its repository-owned permission map and stable fields are republished on `make ai` while valid runtime `yoloMode`, `debugLog`, and `permissionReviewLog` controls are preserved; active YOLO blocks normal publication.
 
 Pi authenticates directly to the GitHub Copilot subscription through `/login`. Select any enabled Copilot model with `/model`; press Ctrl+S in the picker to save it as the startup default.
 
-## The `my` Package
+## The skills package
 
-`ai/marketplace/plugins/my/` is the canonical source for personal prompts and skills.
+Personal prompts and skills live in [gambtho/gambtho-skills](https://github.com/gambtho/gambtho-skills), not here. Change them there; its README lists them. Both harnesses load one release tag, pinned twice: Pi's package source in `ai/pi/settings.json` and `SKILLS_TAG` in `ai/claude/install.sh`. `make skills-pin VERSION=vX.Y.Z` rewrites both, and `tests/dependency_pins.bats` keeps them equal. Pi loads the skills and prompts; Claude Code loads the skills as the `gambtho-skills` plugin. After Claude Code shows the plugin at the pinned version, `ai/claude/install.sh` removes `~/.claude/skills` links into `~/.dotfiles` and records their names in `~/.local/state/dotfiles/claude-legacy-links.txt`.
 
-### Prompt templates
+The package's prompts dispatch the named agents in `ai/pi/agents/`. Renaming or removing an agent breaks them; `tests/pi_modes.bats` checks the names against the pinned release.
 
-- `/adversarial-review` — attack a PR or diff with two isolated reviewers from different model families.
-- `/cold-read` — check document understanding with a fresh, context-free reader; report only.
-- `/eod` — run the lane coordinator's end-of-day routine.
-- `/weekly` — run the lane coordinator's weekly routine.
-- `/fix-pr` — collect unresolved PR review comments and failing CI, then write a plan under `~/.pi/pr-fix-plans/`.
-- `/polish` — analyze changed code, auto-fix high-confidence issues, and report the rest.
-- `/polish-pr` — polish a PR in an isolated worktree and prompt before pushing.
-- `/review-prs` — batch-review open PRs and persist learnings under `~/.pi/pr-reviews/`.
-- `/second-opinion` — review a spec or plan with a different GitHub Copilot model.
-
-### Skills
-
-- `adversarial-review` — counterexample-driven PR or diff review.
-- `cli-ergonomics` — evidence-backed CLI audits and command design.
-- `cold-read` — advisory document-understanding check without project context.
-- `jekyll-media-gallery` — Jekyll media-gallery workflow.
-- `product-owner` — product strategy conversation and outcome-focused feature briefs.
-- `improve` — holistic codebase audit with ranked findings.
-- `overnight-improve` — autonomous iterative improvement using Pi Ralph tooling.
-- `polish-core` — shared engine behind `/polish`, including per-language idiom rules.
-- `blindspot-pass` — pre-implementation risk surface.
-- `implementation-plan` — evidence-based implementation plan.
-- `lane-coordinator` — coordinate lanes across harnesses: our habits (STATE.md, lane prompts, verified reports, routines, approval-gated publication) around the developerlanes bundled coordinator, which owns the `lane` commands; Herdr-only paths are frozen in one legacy reference.
-- `change-explainer` — reviewer-facing completed-change write-up.
-- `pr-closeout` — drive a PR to merge-ready in any repository (project review profiles, bot vs human thread rules, flake discipline, size check).
-- `pr-text` — plain-language PR bodies, review comments/replies and issues.
-- `second-opinion-core` — cross-model spec/plan review; runs automatically after a spec or plan is written and backs `/second-opinion`.
+`dot-update` fast-forwards `~/.dotfiles` on `main` (it stops on a dirty tree or another branch) and then runs the pulled `dot-install`, which runs every AI installer. `make skills-update` is a shorter path: `git pull --ff-only`, then `make ai`.
 
 ## Conventions
 
@@ -80,9 +51,7 @@ Pi authenticates directly to the GitHub Copilot subscription through `/login`. S
 - Superpowers planning is a process, not a read-only security/UI mode. Shitty (including clipboard/memory/planner) and caffeinate are retired; user plans remain untouched. Package caches follow native Pi reconciliation. Codemode nested tool calls use permission/worktree tripwires, while classifier/image models and extension-internal execution retain separate ambient authority.
 - Normal `make ai` removes the ignored top-level `graceTurns` key without setting `wrapUpTurns` or changing turn budgets. Selective refresh does not migrate turn-budget preferences: `wrapUpTurns` warns before the hard limit, unlike retired `graceTurns` after a soft limit. Choose existing subagent settings deliberately. File-context uses F8 without taking native copy keys; custom shortcuts survive.
 - Never commit `auth.json`, sessions, trust decisions, generated model catalogs, or package caches.
-- Language rules live in `ai/marketplace/plugins/my/skills/polish-core/rules/`.
-- After changing Pi configuration or package resources, run `make validate` and the relevant tests.
-- Prompt and skill edits take effect after `/reload` or in the next Pi session.
+- After changing Pi configuration, run `make validate` and the relevant tests.
 
 ## Weekly Automations
 
@@ -94,8 +63,6 @@ Pi authenticates directly to the GitHub Copilot subscription through `/login`. S
 
 ## Adding resources
 
-For a skill, create `ai/marketplace/plugins/my/skills/<name>/SKILL.md` with valid `name` and `description` frontmatter, then add it to `package.json`.
-
-For a prompt template, create `ai/marketplace/plugins/my/prompts/<name>.md` with `description` frontmatter, then add it to `package.json`.
+Skills and prompt templates go in gambtho/gambtho-skills; release a tag there, then run `make skills-pin VERSION=<tag>` here.
 
 For global guidance or settings, edit files under `ai/pi/` and run `make ai` to refresh links.

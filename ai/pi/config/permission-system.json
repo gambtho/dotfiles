@@ -74,7 +74,6 @@
       "~/.agents/skills/*": "allow",
       "~/.pi/agent/skills/*": "allow",
       "~/.pi/agent/git/*": "allow",
-      "~/.dotfiles/ai/marketplace/plugins/my/skills/*": "allow",
       "~/.dotfiles/.worktrees/*": "allow",
       "~/.dotfiles/tmp/worktrees/*": "allow",
       "/mnt/c/dev/flygd-wingman-*": "allow",

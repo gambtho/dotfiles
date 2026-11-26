@@ -78,7 +78,7 @@ exec /usr/bin/git "$@"
   assert.doesNotMatch(readFileSync(`${root}/npm-events`, "utf8"), /forbidden-project/);
 }));
 
-test("public SDK retains exact authored filters, local my and retired-source exclusion", () => fixture(({ root, run }) => {
+test("public SDK retains exact authored filters, the pinned skills package and retired-source exclusion", () => fixture(({ root, run }) => {
   const result = run(process.execPath, ["--input-type=module", "-e", `
 import assert from "node:assert/strict";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -97,7 +97,7 @@ const agent = process.env.PI_CODING_AGENT_DIR;
 function write(path, content) { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, content); }
 for (const entry of [...authored.packages, "npm:shitty-extensions", "npm:@narumitw/pi-caffeinate"]) {
   const source = typeof entry === "string" ? entry : entry.source;
-  const packageRoot = source.startsWith("npm:") ? join(agent, "npm/node_modules", source.slice(4)) : source.startsWith("git:") ? join(agent, "git", source.slice(4).replace(/@[^@]+$/, "")) : join(process.env.HOME, ".dotfiles/ai/marketplace/plugins/my");
+  const packageRoot = source.startsWith("npm:") ? join(agent, "npm/node_modules", source.slice(4)) : source.startsWith("git:") ? join(agent, "git", source.slice(4).replace(/@[^@]+$/, "")) : (() => { throw new Error("unexpected local package source " + source); })();
   const resources = selected[source] ? Object.fromEntries(Object.keys(extra).map(kind => [kind, [...selected[source][kind], ...extra[kind]]])) : extra;
   // The upstream package still ships tab-status; absence from the fixture
   // must not make a stale authored selection look correctly filtered.
@@ -117,8 +117,10 @@ for (const [source, expected] of Object.entries(selected)) for (const [kind, pat
 }
 for (const source of ["npm:@narumitw/pi-worktree", "npm:@narumitw/pi-file-context"]) assert.ok(resolved.extensions.some(resource => resource.enabled && resource.metadata.source === source));
 for (const kind of Object.keys(extra)) assert.ok(resolved[kind].some(resource => resource.enabled && resource.metadata.source === "git:github.com/obra/superpowers"));
-assert.equal(manager.listConfiguredPackages().find(pkg => pkg.source === "~/.dotfiles/ai/marketplace/plugins/my").installedPath, join(process.env.HOME, ".dotfiles/ai/marketplace/plugins/my"));
-console.log("exact filters/local my/retired exclusion passed");
+const skills = manager.listConfiguredPackages().find(pkg => pkg.source.startsWith("git:github.com/gambtho/gambtho-skills@"));
+assert.equal(skills.installedPath, join(agent, "git/github.com/gambtho/gambtho-skills"));
+for (const kind of ["skills", "prompts"]) assert.ok(resolved[kind].some(resource => resource.enabled && resource.metadata.source === skills.source));
+console.log("exact filters/pinned skills/retired exclusion passed");
 `]);
-  assert.match(result, /exact filters\/local my\/retired exclusion passed/);
+  assert.match(result, /exact filters\/pinned skills\/retired exclusion passed/);
 }));

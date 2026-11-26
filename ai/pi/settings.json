@@ -93,6 +93,6 @@
       "prompts": [],
       "themes": []
     },
-    "~/.dotfiles/ai/marketplace/plugins/my"
+    "git:github.com/gambtho/gambtho-skills@v0.2.0"
   ]
 }
