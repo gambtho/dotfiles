@@ -185,8 +185,10 @@ the pre-push guard — prints the commands that finish provisioning rather than
 just naming the gap: `make -C <dotfiles-root> relink` when the identity file is
 authored but not yet linked into `$HOME`, `make -C <dotfiles-root> bootstrap`
 when it hasn't been authored at all, and
-`GH_CONFIG_DIR=$HOME/.gh-<slug> gh auth login --scopes repo,workflow` for a missing
-`gh` config dir. The emitted dotfiles root is resolved and shell-escaped, so the
+`GH_CONFIG_DIR=$HOME/.gh-<slug> gh auth login --scopes repo,workflow,read:public_key` for a missing
+`gh` config dir (swap `read:public_key` for this machine's own scope; see
+[Signing in on more than one machine](#signing-in-on-more-than-one-machine)).
+The emitted dotfiles root is resolved and shell-escaped, so the
 repair works from an unrelated repository with spaces in the dotfiles path.
 Use `make -C "${DOTFILES:-$HOME/.dotfiles}" bootstrap` when provisioning manually
 from outside the checkout.
@@ -232,9 +234,11 @@ secondary-identity prompt, which fills in the template but does not run
 either of these for you):
 
 1. Authenticate `gh` into the identity's own config directory, with the
-   scopes this design's credential helper needs:
+   scopes this design's credential helper needs, plus this machine's own
+   read-only scope (see
+   [Signing in on more than one machine](#signing-in-on-more-than-one-machine)):
    ```bash
-   GH_CONFIG_DIR=$HOME/.gh-alt gh auth login --scopes repo,workflow
+   GH_CONFIG_DIR=$HOME/.gh-alt gh auth login --scopes repo,workflow,read:public_key
    ```
 2. Generate an SSH key registered on the second GitHub account **as a signing
    key** (Settings → SSH and GPG keys → New SSH key → key type "Signing Key"),
@@ -271,7 +275,8 @@ unmapped, so nothing routes it and nothing blocks it.
 `identity-owners.local.example` by hand. It then offers to provision each
 non-`default` slug the map names, rendering
 `gitconfig.secondary.symlink.example` into `core/git/gitconfig.<slug>.symlink`
-(gitignored) and pointing you at `GH_CONFIG_DIR=$HOME/.gh-<slug> gh auth login`.
+(gitignored) and pointing you at `GH_CONFIG_DIR=$HOME/.gh-<slug> gh auth login`
+with this machine's own scope.
 Which account is secondary differs per machine, so the prompts follow the map
 rather than a fixed account name. `bin/git-identity` prints the map
 actually in effect, which is the first thing to check when routing surprises you
@@ -284,6 +289,27 @@ re-links it on its own) and the `gh` config dir (`$HOME/.gh-<slug>`, created
 only by that `gh auth login`). Bootstrap authoring the file does not link it,
 so a run interrupted between those two steps leaves an identity that exists in
 the repo but not in `$HOME`.
+
+### Signing in on more than one machine
+
+GitHub keeps only a few GitHub CLI tokens for each account and set of scopes.
+When you sign in again, it can revoke an idle token with the same scopes, so
+signing in on one machine can sign another machine out.
+
+Give each machine one extra read-only scope that no other machine uses, and pass
+it to every `gh auth login` on that machine. For example, on one machine:
+
+```bash
+gh auth login --hostname github.com --web --scopes read:public_key
+```
+
+Other read-only scopes for other machines: `read:gpg_key`,
+`read:ssh_signing_key`, `read:project`. Where a command already passes
+`--scopes repo,workflow`, add the extra scope to that list. `gh auth status`
+lists a token's scopes, so you can see which one a machine already uses.
+
+Sign in one machine at a time, and run `gh auth status` on it before you move to
+the next. Don't run `gh auth logout` first.
 
 ## Linux credential keyring
 
@@ -385,10 +411,12 @@ provider/version produces an error, with no fallback to `gnome-keyring-daemon --
 
 After unlocking, reauthenticate interactively for each GitHub identity that was
 using plaintext storage, from a repository routed to that identity (or with its
-explicit `GH_CONFIG_DIR`):
+explicit `GH_CONFIG_DIR`). Keep this machine's own extra scope (see
+[Signing in on more than one machine](#signing-in-on-more-than-one-machine)),
+sign in one machine at a time, and don't log out first:
 
 ```bash
-gh auth login --hostname github.com --web
+gh auth login --hostname github.com --web --scopes read:public_key
 gh auth status --hostname github.com
 ```
 

@@ -103,7 +103,7 @@ the account first (portal: **Reset password**).
 | Sign-in | Command |
 |---|---|
 | Tailscale | done in step 1 |
-| GitHub | `make -C ~/.dotfiles keyring-init` in a human terminal if the login keyring is absent (`make -C ~/.dotfiles keyring-check`), then `gh auth login` |
+| GitHub | `make -C ~/.dotfiles keyring-init` in a human terminal if the login keyring is absent (`make -C ~/.dotfiles keyring-check`), then `gh auth login --hostname github.com --web --scopes <scope>` with a read-only scope no other machine uses (see "Signing in on more than one machine" in the top-level README) |
 | Azure | `az login --use-device-code`, as yourself. Azure Relay needs a user sign-in; the VM's own identity has no roles |
 | Claude Code | install it the way its documentation says, then run `claude` and sign in |
 
