@@ -24,13 +24,13 @@ setup() {
       "plugin list --json")
         if [[ -f "$STATE/version" ]]; then
           jq -n --arg v "$(cat "$STATE/version")" --argjson e "$(cat "$STATE/enabled" 2>/dev/null || echo true)" \
-            "[{id: \"gambtho-skills@gambtho-skills\", version: \$v, enabled: \$e, scope: \"user\"}]"
+            "[{id: \"gambtho-skills@gambtho-skills\", version: \$v, enabled: \$e, scope: \"$(cat "$STATE/scope" 2>/dev/null || echo user)\"}]"
         else
           echo "[]"
         fi ;;
-      "plugin marketplace remove gambtho-skills")
+      "plugin marketplace remove gambtho-skills --scope user")
         echo "$*" >>"$STATE/calls"; rm -f "$STATE/ref" "$STATE/version" ;;
-      "plugin marketplace add gambtho/gambtho-skills@"*)
+      "plugin marketplace add gambtho/gambtho-skills@"*" --scope user")
         echo "$*" >>"$STATE/calls"; echo "${4#*@}" >"$STATE/ref" ;;
       "plugin install gambtho-skills@gambtho-skills --scope user")
         echo "$*" >>"$STATE/calls"
@@ -70,7 +70,7 @@ assert_only_unrelated_skills_remain() {
   run bash "$INSTALLER"
 
   [ "$status" -eq 0 ]
-  [ "$(cat "$STATE/calls")" = "plugin marketplace add gambtho/gambtho-skills@$TAG
+  [ "$(cat "$STATE/calls")" = "plugin marketplace add gambtho/gambtho-skills@$TAG --scope user
 plugin install gambtho-skills@gambtho-skills --scope user" ]
   [ "$(cat "$STATE/version")" = "${TAG#v}" ]
   [[ "$output" == *"Removed legacy Claude skill link: pr-closeout"* ]]
@@ -104,8 +104,8 @@ plugin install gambtho-skills@gambtho-skills --scope user" ]
     run bash "$INSTALLER"
 
     [ "$status" -eq 0 ]
-    [ "$(cat "$STATE/calls")" = "plugin marketplace remove gambtho-skills
-plugin marketplace add gambtho/gambtho-skills@$TAG
+    [ "$(cat "$STATE/calls")" = "plugin marketplace remove gambtho-skills --scope user
+plugin marketplace add gambtho/gambtho-skills@$TAG --scope user
 plugin install gambtho-skills@gambtho-skills --scope user" ]
     [ "$(cat "$STATE/ref")" = "$TAG" ]
     [ "$(cat "$STATE/version")" = "${TAG#v}" ]
@@ -134,6 +134,20 @@ plugin install gambtho-skills@gambtho-skills --scope user" ]
   [ "$status" -ne 0 ]
   [[ "$output" == *"claude plugin enable gambtho-skills@gambtho-skills"* ]]
   [ -L "$HOME/.claude/skills/pr-text" ]
+}
+
+@test "a project-scope plugin does not count; the user-scope install still runs first" {
+  legacy_links
+  installed_at "$TAG"
+  echo project >"$STATE/scope"
+
+  run bash "$INSTALLER"
+
+  # The fake keeps one install, so after "installing" it still reports project
+  # scope: the script must refuse to remove the global links.
+  [ "$status" -ne 0 ]
+  [ "$(cat "$STATE/calls")" = "plugin install gambtho-skills@gambtho-skills --scope user" ]
+  [ -L "$HOME/.claude/skills/pr-closeout" ]
 }
 
 @test "check mode reports the plan and changes nothing" {

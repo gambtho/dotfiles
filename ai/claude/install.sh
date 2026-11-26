@@ -39,10 +39,11 @@ marketplace_pin() {
     jq -r --arg name "$MARKETPLACE" '.[] | select(.name == $name) | "\(.repo // "") \(.ref // "")"'
 }
 
-# Prints "<version> <enabled>" for the plugin, or nothing when it is absent.
+# Prints "<version> <enabled>" for the user-scope plugin, or nothing when it is
+# absent. A project-scope install does not replace the global links.
 plugin_state() {
   claude plugin list --json |
-    jq -r --arg id "$PLUGIN" '.[] | select(.id == $id) | "\(.version // "") \(.enabled)"'
+    jq -r --arg id "$PLUGIN" '.[] | select(.id == $id and .scope == "user") | "\(.version // "") \(.enabled)"'
 }
 
 # Lexically resolve . and .. so dangling links can be classified too.
@@ -109,11 +110,11 @@ fi
 if [[ "$repin" == true ]]; then
   echo "Re-pinning the $MARKETPLACE marketplace from ${pin:-?} to $SKILLS_REPO@$SKILLS_TAG..."
   # Removing the marketplace also uninstalls its plugin.
-  claude plugin marketplace remove "$MARKETPLACE"
+  claude plugin marketplace remove "$MARKETPLACE" --scope user
   pin=""
 fi
 if [[ -z "$pin" ]]; then
-  claude plugin marketplace add "$SKILLS_REPO@$SKILLS_TAG"
+  claude plugin marketplace add "$SKILLS_REPO@$SKILLS_TAG" --scope user
 fi
 state=$(plugin_state)
 if [[ -z "$state" ]]; then
