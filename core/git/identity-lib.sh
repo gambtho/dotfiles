@@ -262,9 +262,9 @@ identity_slug_provision_hint() {
   fi
 
   if [ ! -d "$configdir" ]; then
-    printf '%srun: GH_CONFIG_DIR=%s gh auth login --scopes repo,workflow,read:public_key\n' \
+    printf '%srun: GH_CONFIG_DIR=%s gh auth login --web --scopes repo,workflow,read:public_key\n' \
       "$prefix" "$configdir"
-    printf '%sSwap read:public_key for a read-only scope no other machine uses (README: Signing in on more than one machine).\n' "$prefix"
+    printf '%sSwap read:public_key for a read-only scope no other machine uses, sign in one machine at a time, and check gh auth status before the next (README: Signing in on more than one machine).\n' "$prefix"
   fi
 
   return 0

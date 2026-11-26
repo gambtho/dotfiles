@@ -185,7 +185,7 @@ the pre-push guard — prints the commands that finish provisioning rather than
 just naming the gap: `make -C <dotfiles-root> relink` when the identity file is
 authored but not yet linked into `$HOME`, `make -C <dotfiles-root> bootstrap`
 when it hasn't been authored at all, and
-`GH_CONFIG_DIR=$HOME/.gh-<slug> gh auth login --scopes repo,workflow,read:public_key` for a missing
+`GH_CONFIG_DIR=$HOME/.gh-<slug> gh auth login --web --scopes repo,workflow,read:public_key` for a missing
 `gh` config dir (swap `read:public_key` for this machine's own scope; see
 [Signing in on more than one machine](#signing-in-on-more-than-one-machine)).
 The emitted dotfiles root is resolved and shell-escaped, so the
@@ -238,7 +238,7 @@ either of these for you):
    read-only scope (see
    [Signing in on more than one machine](#signing-in-on-more-than-one-machine)):
    ```bash
-   GH_CONFIG_DIR=$HOME/.gh-alt gh auth login --scopes repo,workflow,read:public_key
+   GH_CONFIG_DIR=$HOME/.gh-alt gh auth login --web --scopes repo,workflow,read:public_key
    ```
 2. Generate an SSH key registered on the second GitHub account **as a signing
    key** (Settings → SSH and GPG keys → New SSH key → key type "Signing Key"),
@@ -275,8 +275,8 @@ unmapped, so nothing routes it and nothing blocks it.
 `identity-owners.local.example` by hand. It then offers to provision each
 non-`default` slug the map names, rendering
 `gitconfig.secondary.symlink.example` into `core/git/gitconfig.<slug>.symlink`
-(gitignored) and pointing you at `GH_CONFIG_DIR=$HOME/.gh-<slug> gh auth login`
-with this machine's own scope.
+(gitignored) and pointing you at
+`GH_CONFIG_DIR=$HOME/.gh-<slug> gh auth login --web --scopes repo,workflow,read:public_key`.
 Which account is secondary differs per machine, so the prompts follow the map
 rather than a fixed account name. `bin/git-identity` prints the map
 actually in effect, which is the first thing to check when routing surprises you
@@ -307,6 +307,9 @@ Other read-only scopes for other machines: `read:gpg_key`,
 `read:ssh_signing_key`, `read:project`. Where a command already passes
 `--scopes repo,workflow`, add the extra scope to that list. `gh auth status`
 lists a token's scopes, so you can see which one a machine already uses.
+Use the browser (`--web`): a pasted token keeps its own scopes. If you let `gh`
+upload an SSH key, it adds `admin:public_key`, which covers `read:public_key`, so
+pick a different extra scope on that machine.
 
 Sign in one machine at a time, and run `gh auth status` on it before you move to
 the next. Don't run `gh auth logout` first.
@@ -419,6 +422,8 @@ sign in one machine at a time, and don't log out first:
 gh auth login --hostname github.com --web --scopes read:public_key
 gh auth status --hostname github.com
 ```
+
+For a routed identity, use `--scopes repo,workflow,read:public_key`.
 
 Confirm that status reports `(keyring)`. Do not use `--insecure-storage` or
 `--show-token`. Existing plaintext credentials are not automatically migrated by
