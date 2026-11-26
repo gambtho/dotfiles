@@ -49,12 +49,17 @@ jobs:
         run: |
           set -euo pipefail
           package_prefix="$RUNNER_TEMP/pi-security-gate"
+          # Test the permission evaluator version the installer pins, never @latest.
+          permission_spec=$(jq -er '
+            [.packages[] | if type == "object" then .source else . end
+              | select(startswith("npm:@gotgenes/pi-permission-system@")) | ltrimstr("npm:")] | .[0]
+          ' ai/pi/settings.json)
           MISE_SKIP_RESHIM=1 npm_config_cache="$RUNNER_TEMP/npm-cache" npm install \
             --global \
             --prefix "$package_prefix" \
             --ignore-scripts --legacy-peer-deps --no-audit --no-fund \
             "@earendil-works/pi-coding-agent@latest" \
-            "@gotgenes/pi-permission-system@latest" \
+            "$permission_spec" \
             "@gotgenes/pi-subagents@latest" \
             "@narumitw/pi-lsp@latest"
           source libexec/lib/pi-runtime.sh

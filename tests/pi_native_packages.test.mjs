@@ -97,12 +97,14 @@ const agent = process.env.PI_CODING_AGENT_DIR;
 function write(path, content) { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, content); }
 for (const entry of [...authored.packages, "npm:shitty-extensions", "npm:@narumitw/pi-caffeinate"]) {
   const source = typeof entry === "string" ? entry : entry.source;
-  const packageRoot = source.startsWith("npm:") ? join(agent, "npm/node_modules", source.slice(4)) : source.startsWith("git:") ? join(agent, "git", source.slice(4).replace(/@[^@]+$/, "")) : (() => { throw new Error("unexpected local package source " + source); })();
+  // An exact npm pin lives under its bare name, and Pi reinstalls any other version.
+  const [, npmName, npmPin] = source.match(/^npm:(.+?)(?:@(\\d+\\.\\d+\\.\\d+))?$/) ?? [];
+  const packageRoot = source.startsWith("npm:") ? join(agent, "npm/node_modules", npmName) : source.startsWith("git:") ? join(agent, "git", source.slice(4).replace(/@[^@]+$/, "")) : (() => { throw new Error("unexpected local package source " + source); })();
   const resources = selected[source] ? Object.fromEntries(Object.keys(extra).map(kind => [kind, [...selected[source][kind], ...extra[kind]]])) : extra;
   // The upstream package still ships tab-status; absence from the fixture
   // must not make a stale authored selection look correctly filtered.
   if (source === "git:github.com/tmustier/pi-extensions") resources.extensions.push("tab-status/tab-status.ts");
-  write(join(packageRoot, "package.json"), JSON.stringify({ name: "fixture", version: "1.0.0", pi: resources }));
+  write(join(packageRoot, "package.json"), JSON.stringify({ name: "fixture", version: npmPin ?? "1.0.0", pi: resources }));
   for (const paths of Object.values(resources)) for (const path of paths) write(join(packageRoot, path), "");
 }
 const manager = new DefaultPackageManager({ cwd: process.cwd(), agentDir: agent, settingsManager: SettingsManager.inMemory(authored) });
