@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-CONTROLLER = ROOT / "ai/marketplace/plugins/my/skills/pr-closeout/scripts/knowledge_git.py"
+CONTROLLER = ROOT / "libexec/agent-knowledge.d/knowledge_git.py"
 PUBLISHER = CONTROLLER.with_name("private_review_store.py")
 
 

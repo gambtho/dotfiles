@@ -10,7 +10,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-SCRIPT = Path(__file__).resolve().parents[2] / "ai/marketplace/plugins/my/skills/pr-closeout/scripts/private_review_store.py"
+SCRIPT = Path(__file__).resolve().parents[2] / "libexec/agent-knowledge.d/private_review_store.py"
 
 
 class PrivateReviewStoreTests(unittest.TestCase):
