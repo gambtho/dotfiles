@@ -8,29 +8,29 @@
 # claude, copilot) and ~/.pi/agent/bin are not on PATH. This adds the ones that
 # exist, in the order the login profiles use, without reading any rc file.
 
-# Put each existing managed tool directory on PATH, in front, unless it is
-# already there. As in the login profiles, ~/.pi/agent/bin ends up first, and a
-# ~/.dotfiles/bin already on PATH stays ahead of the rest, so its gh identity
-# shim keeps winning.
+# Put each existing managed tool directory on PATH. mise's shims and
+# ~/.local/bin go in front unless already there. Then, as in the login
+# profiles, a ~/.dotfiles/bin already on PATH moves to the front, so its gh
+# identity shim wins over them, and ~/.pi/agent/bin (only Pi's launcher) goes
+# first. Every call gives the same order.
 prepend_managed_tool_path() {
   local mise_data=${MISE_DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/mise}
-  local dotfiles_bin="$HOME/.dotfiles/bin" dir
+  local pi_bin="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/bin" dir
   for dir in "$mise_data/shims" "$HOME/.local/bin"; do
     [[ -d "$dir" && ":$PATH:" != *":$dir:"* ]] || continue
     PATH="$dir${PATH:+:$PATH}"
   done
-  if [[ ":$PATH:" == *":$dotfiles_bin:"* ]]; then
-    PATH=":$PATH:"
-    PATH=${PATH//":$dotfiles_bin:"/:}
-    PATH=${PATH#:}
-    PATH=${PATH%:}
-    PATH="$dotfiles_bin${PATH:+:$PATH}"
-  fi
-  dir="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/bin"
-  if [[ -d "$dir" && ":$PATH:" != *":$dir:"* ]]; then
-    PATH="$dir${PATH:+:$PATH}"
-  fi
+  [[ ":$PATH:" != *":$HOME/.dotfiles/bin:"* ]] || _move_to_path_front "$HOME/.dotfiles/bin"
+  [[ ! -d "$pi_bin" ]] || _move_to_path_front "$pi_bin"
   export PATH
+}
+
+_move_to_path_front() {
+  PATH=":$PATH:"
+  PATH=${PATH//":$1:"/:}
+  PATH=${PATH#:}
+  PATH=${PATH%:}
+  PATH="$1${PATH:+:$PATH}"
 }
 
 # A harness counts as set up on this machine when its config exists. There,
@@ -58,9 +58,10 @@ check_claude_tool() {
 
 check_pi_tool() {
   pi_was_set_up || return 0
-  command -v node >/dev/null 2>&1 && return 0
+  # Run it: a mise shim exists even when mise cannot resolve a node to run.
+  node --version >/dev/null 2>&1 && return 0
   printf '%s\n' \
-    "ERROR: Pi is set up here (${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/settings.json exists), but no node command was found on PATH or in mise's shims." \
+    "ERROR: Pi is set up here (${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/settings.json exists), but no working node was found on PATH or in mise's shims." \
     "  Fix: run 'mise install node' (mise is usually ~/.local/bin/mise), then rerun." >&2
   return 1
 }

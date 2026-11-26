@@ -185,7 +185,15 @@ write_fixture_installer() {
   run env -i HOME="$HOME" PATH=/usr/bin:/bin bash "$CHECKOUT/bin/dot-update"
 
   [ "$status" -eq 1 ]
-  [[ "$output" == *"no node command was found"* && "$output" == *"mise install node"* ]]
+  [[ "$output" == *"no working node was found"* && "$output" == *"mise install node"* ]]
+  [ "$(git -C "$CHECKOUT" rev-parse HEAD)" = "$before" ]
+
+  # A shim that cannot run node does not count.
+  mkdir -p "$HOME/.local/share/mise/shims"
+  printf '#!/bin/sh\nexit 1\n' >"$HOME/.local/share/mise/shims/node"
+  chmod +x "$HOME/.local/share/mise/shims/node"
+  run env -i HOME="$HOME" PATH=/usr/bin:/bin bash "$CHECKOUT/bin/dot-update"
+  [ "$status" -eq 1 ]
   [ "$(git -C "$CHECKOUT" rev-parse HEAD)" = "$before" ]
 
   # A node behind mise's shims is found without a login shell.
@@ -215,6 +223,9 @@ write_fixture_installer() {
   run env -i HOME="$HOME" PATH="/usr/local/bin:$HOME/.dotfiles/bin:/usr/bin:/bin" bash -c '
     source "$1/libexec/lib/tool-path.sh"
     prepend_managed_tool_path
+    first=$PATH
+    prepend_managed_tool_path
+    [[ "$PATH" == "$first" ]] || echo "SECOND CALL CHANGED PATH: $PATH"
     printf "%s\n" "$PATH"
   ' _ "$REPO_ROOT"
   [ "$status" -eq 0 ]
