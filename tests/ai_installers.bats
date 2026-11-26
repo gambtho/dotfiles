@@ -107,8 +107,8 @@ else
   [[ "$PWD" != "$REPO_ROOT" && ! -e "$PWD/.pi" ]] || exit 82
   if [[ "$1" == install && $# == 2 && "$2" == npm:*@[0-9]* ]]; then
     # Like native Pi: installing a configured exact source replaces the copy.
-    [[ "${PI_TEST_INSTALL_FAIL:-0}" != 1 ]] || exit 45
     printf '%s\n' "$PWD" >"$TEST_ROOT/install-cwd"
+    [[ "${PI_TEST_INSTALL_FAIL:-0}" != 1 ]] || exit 45
     specs=${2#npm:}
   else
     [[ "$*" == 'update --extensions --no-approve' ]] || exit 81
@@ -334,6 +334,7 @@ SCRIPT
   [ "$(jq -r .version "$package_root/package.json")" = "$FIXTURE_PERMISSION_VERSION" ]
   [ "$(grep -c '^install' "$HOME/pi-invocations")" -eq 1 ]
   grep -Fx "install npm:@gotgenes/pi-permission-system@$FIXTURE_PERMISSION_VERSION" "$HOME/pi-invocations"
+  [ -s "$TEST_ROOT/install-cwd" ]
   [ ! -d "$(<"$TEST_ROOT/install-cwd")" ]
   # A matching copy is left alone.
   run bash "$REPO_ROOT/ai/pi/install.sh"
@@ -349,6 +350,7 @@ SCRIPT
   [[ "$output" == *"Installing pinned npm:@gotgenes/pi-permission-system@$FIXTURE_PERMISSION_VERSION failed"* ]]
   [ ! -e "$HOME/.pi/agent/AGENTS.md" ]
   [ ! -e "$HOME/.pi/agent/extensions/pi-permission-system/config.json" ]
+  [ -s "$TEST_ROOT/install-cwd" ]
   [ ! -d "$(<"$TEST_ROOT/install-cwd")" ]
 }
 
