@@ -29,7 +29,9 @@ setup() {
           echo "[]"
         fi ;;
       "plugin marketplace remove gambtho-skills --scope user")
-        echo "$*" >>"$STATE/calls"; rm -f "$STATE/ref" "$STATE/version" ;;
+        echo "$*" >>"$STATE/calls"
+        [[ ! -f "$STATE/project-marketplace" ]] || exit 1
+        rm -f "$STATE/ref" "$STATE/version" ;;
       "plugin marketplace add gambtho/gambtho-skills@"*" --scope user")
         echo "$*" >>"$STATE/calls"; echo "${4#*@}" >"$STATE/ref" ;;
       "plugin install gambtho-skills@gambtho-skills --scope user")
@@ -147,6 +149,19 @@ plugin install gambtho-skills@gambtho-skills --scope user" ]
   # scope: the script must refuse to remove the global links.
   [ "$status" -ne 0 ]
   [ "$(cat "$STATE/calls")" = "plugin install gambtho-skills@gambtho-skills --scope user" ]
+  [ -L "$HOME/.claude/skills/pr-closeout" ]
+}
+
+@test "a marketplace declared only outside user settings is reported, not removed" {
+  legacy_links
+  installed_at v0.0.1
+  touch "$STATE/project-marketplace"
+
+  run bash "$INSTALLER"
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"not declared in user settings"* ]]
+  [ "$(cat "$STATE/calls")" = "plugin marketplace remove gambtho-skills --scope user" ]
   [ -L "$HOME/.claude/skills/pr-closeout" ]
 }
 

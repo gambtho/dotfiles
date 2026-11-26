@@ -663,9 +663,12 @@ def pinned_skills_root(dotfiles: Path = DOTFILES) -> Path:
             break
     else:
         raise AutomationError(f"pi list does not show {source}; run make ai")
-    found = run(["git", "-C", str(package), "describe", "--tags", "--exact-match", "HEAD"]).strip()
+    try:
+        found = run(["git", "-C", str(package), "describe", "--tags", "--exact-match", "--match", tag, "HEAD"]).strip()
+    except AutomationError:
+        found = ""
     if found != tag:
-        raise AutomationError(f"{package} is at {found or 'no tag'}, not the pinned {tag}; run make ai")
+        raise AutomationError(f"{package} is not at the pinned {tag}; run make ai")
     return package / "skills"
 
 

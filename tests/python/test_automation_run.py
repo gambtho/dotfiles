@@ -444,9 +444,14 @@ class PinnedSkillsTests(unittest.TestCase):
         with self.assertRaisesRegex(automation.AutomationError, 'does not show'):
             self.resolve('User packages:\n  npm:pi-web-access\n    /x\n')
 
+    def test_another_tag_on_the_same_commit_does_not_hide_the_pin(self):
+        git(self.package, 'tag', self.tag)
+        git(self.package, '-c', 'user.name=t', '-c', 'user.email=t@example.com', 'tag', '-a', '-m', 'x', 'v99.0.0')
+        self.assertEqual(self.resolve(self.listing()), self.package / 'skills')
+
     def test_other_revision_stops(self):
         git(self.package, 'tag', 'v0.0.1')
-        with self.assertRaisesRegex(automation.AutomationError, 'not the pinned'):
+        with self.assertRaisesRegex(automation.AutomationError, 'not at the pinned'):
             self.resolve(self.listing())
         git(self.package, 'tag', '-d', 'v0.0.1')
         with self.assertRaises(automation.AutomationError):

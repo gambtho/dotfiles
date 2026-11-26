@@ -109,8 +109,12 @@ fi
 
 if [[ "$repin" == true ]]; then
   echo "Re-pinning the $MARKETPLACE marketplace from ${pin:-?} to $SKILLS_REPO@$SKILLS_TAG..."
-  # Removing the marketplace also uninstalls its plugin.
-  claude plugin marketplace remove "$MARKETPLACE" --scope user
+  # Removing the marketplace also uninstalls its plugin. Only the user
+  # declaration is ours to change; one in project settings is reported.
+  if ! claude plugin marketplace remove "$MARKETPLACE" --scope user; then
+    echo "The $MARKETPLACE marketplace at ${pin:-?} is not declared in user settings; change it where it is declared. Keeping the old skill links." >&2
+    exit 1
+  fi
   pin=""
 fi
 if [[ -z "$pin" ]]; then
