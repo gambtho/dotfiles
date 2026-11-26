@@ -74,20 +74,39 @@ setup() {
   [ "$status" -eq 1 ]
 }
 
-@test "main Pi remotes float except the reviewed editor and skills releases" {
+@test "main Pi remotes float except the reviewed editor, skills and permission releases" {
   run jq -e --arg editor 'git:github.com/gambtho/pi-file-editor@v0.1.0' '
     [.packages[] | if type == "string" then . else .source end] as $sources
     | all($sources[];
         if startswith("npm:") then test("^npm:(@[^/]+/)?[^@]+$")
+          or test("^npm:@gotgenes/pi-permission-system@[0-9]+[.][0-9]+[.][0-9]+$")
         elif startswith("git:") then . == $editor
           or test("^git:github.com/gambtho/gambtho-skills@v[0-9]+[.][0-9]+[.][0-9]+$")
           or test("^git:github.com/[^@]+$")
         else false end)
     and ($sources | map(select(startswith("git:github.com/gambtho/gambtho-skills@"))) | length == 1)
     and ($sources | map(select(. == $editor)) | length == 1)
+    and ($sources | map(select(startswith("npm:@gotgenes/pi-permission-system"))) | length == 1)
     and ($sources | map(select(contains("pi-sandbox"))) | length == 0)
   ' "$REPO_ROOT/ai/pi/settings.json"
   [ "$status" -eq 0 ]
+}
+
+permission_pin() {
+  jq -r '.packages[] | if type == "string" then . else .source end
+    | select(startswith("npm:@gotgenes/pi-permission-system@")) | sub(".*@"; "")' "$1/ai/pi/settings.json"
+}
+
+@test "Pi installs an exact permission evaluator release" {
+  # 44.0.0 places each scope's rules after earlier scopes', so the read-only
+  # agents' bash catch-all overrides the global printenv and env asks.
+  # Move this pin only together with agent policies that keep those asks.
+  run permission_pin "$REPO_ROOT"
+  [ "$status" -eq 0 ]
+  [ "${#lines[@]}" -eq 1 ]
+  [[ "${lines[0]}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+  run grep -F 'pi-permission-system@latest' "$REPO_ROOT/.github/workflows/check.yml"
+  [ "$status" -eq 1 ]
 }
 
 skills_pins() {
@@ -132,8 +151,13 @@ skills_pins() {
 @test "CI provisions isolated current candidates before SDK checks and fails on runtime regression" {
   local fixture="$TEST_ROOT/ci-repo" steps="$TEST_ROOT/steps.json"
   export RUNNER_TEMP="$TEST_ROOT/runner" GITHUB_ENV="$TEST_ROOT/github-env" GITHUB_PATH="$TEST_ROOT/github-path"
-  mkdir -p "$fixture/libexec/lib" "$fixture/config" "$RUNNER_TEMP"
+  mkdir -p "$fixture/libexec/lib" "$fixture/config" "$fixture/ai/pi" "$RUNNER_TEMP"
   cp "$REPO_ROOT/libexec/lib/pi-runtime.sh" "$REPO_ROOT/libexec/lib/artifacts.sh" "$fixture/libexec/lib/"
+  # CI installs the permission evaluator the installer pins; a fixture pin proves where it reads it.
+  jq '.packages |= map(if type == "string" and startswith("npm:@gotgenes/pi-permission-system@")
+    then "npm:@gotgenes/pi-permission-system@30.0.0" else . end)' \
+    "$REPO_ROOT/ai/pi/settings.json" >"$fixture/ai/pi/settings.json"
+  [ "$(permission_pin "$fixture")" = 30.0.0 ]
   printf '#!/bin/sh\nexit 0\n' >"$TEST_ROOT/ci-yq-payload"
   export CI_YQ_PAYLOAD="$TEST_ROOT/ci-yq-payload"
   source "$REPO_ROOT/libexec/lib/artifacts.sh"
@@ -150,7 +174,7 @@ skills_pins() {
   printf '' >"$GITHUB_ENV"
   stub_command npm '
     [[ "$*" == *"--global"* && "$*" == *"--ignore-scripts"* ]] || exit 81
-    [[ "$*" == *"@earendil-works/pi-coding-agent@latest"* && "$*" == *"@gotgenes/pi-permission-system@latest"* ]] || exit 82
+    [[ "$*" == *"@earendil-works/pi-coding-agent@latest"* && " $* " == *" @gotgenes/pi-permission-system@30.0.0 "* ]] || exit 82
     [[ "$*" == *"@gotgenes/pi-subagents@latest"* && "$*" == *"@narumitw/pi-lsp@latest"* ]] || exit 82
     [[ "$*" == *"--prefix $RUNNER_TEMP/"* && "$npm_config_cache" == "$RUNNER_TEMP/"* ]] || exit 83
     prefix=""

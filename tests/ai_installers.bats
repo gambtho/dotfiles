@@ -16,7 +16,7 @@ setup() {
   source "$REPO_ROOT/config/versions.env"
   # Fixture host identity is independent of optional application runtime pins.
   export PI_VERSION=1.2.0
-  FIXTURE_PERMISSION_VERSION=29.2.0
+  FIXTURE_PERMISSION_VERSION=$(jq -r '.packages[] | strings | select(startswith("npm:@gotgenes/pi-permission-system@")) | sub(".*@"; "")' "$REPO_ROOT/ai/pi/settings.json")
   mkdir -p "$HOME/.pi/agent"
   export npm_config_prefix="$TEST_ROOT/global-prefix" npm_config_cache="$TEST_ROOT/npm-cache"
   export npm_config_userconfig="$TEST_ROOT/user.npmrc" npm_config_globalconfig="$TEST_ROOT/global.npmrc"
@@ -104,17 +104,31 @@ if [[ "${1:-}" == --version ]]; then
 else
   printf '%s\n' "$*" >"$HOME/pi-invocation"
   printf '%s\n' "$*" >>"$HOME/pi-invocations"
-  [[ "$*" == 'update --extensions --no-approve' ]] || exit 81
   [[ "$PWD" != "$REPO_ROOT" && ! -e "$PWD/.pi" ]] || exit 82
-  printf '%s\n' "$PWD" >"$TEST_ROOT/update-cwd"
-  [[ "${PI_TEST_UPDATE_FAIL:-0}" != 1 ]] || exit 42
-  if [[ "${PI_TEST_REQUIRE_REGULAR_MIGRATION:-0}" == 1 ]]; then
-    [[ ! -e "$PI_CODING_AGENT_DIR/amplike.json" ]] || exit 89
+  if [[ "$1" == install && $# == 2 && "$2" == npm:*@[0-9]* ]]; then
+    # Like native Pi: installing a configured exact source replaces the copy.
+    [[ "${PI_TEST_INSTALL_FAIL:-0}" != 1 ]] || exit 45
+    printf '%s\n' "$PWD" >"$TEST_ROOT/install-cwd"
+    specs=${2#npm:}
+  else
+    [[ "$*" == 'update --extensions --no-approve' ]] || exit 81
+    printf '%s\n' "$PWD" >"$TEST_ROOT/update-cwd"
+    [[ "${PI_TEST_UPDATE_FAIL:-0}" != 1 ]] || exit 42
+    if [[ "${PI_TEST_REQUIRE_REGULAR_MIGRATION:-0}" == 1 ]]; then
+      [[ ! -e "$PI_CODING_AGENT_DIR/amplike.json" ]] || exit 89
+    fi
+    # Like native Pi: update never installs or moves an exact-version npm source.
+    specs=$(jq -r '.packages[] | if type == "object" then .source else . end | select(startswith("npm:")) | ltrimstr("npm:")
+      | select(test("@[0-9]+[.][0-9]+[.][0-9]+$") | not)' "$PI_CODING_AGENT_DIR/settings.json")
   fi
-  while IFS= read -r package_name; do
+  while IFS= read -r spec; do
+    package_name=$spec version=29.2.0
+    if [[ "$spec" =~ ^(.+)@([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+      package_name=${BASH_REMATCH[1]} version=${BASH_REMATCH[2]}
+    fi
     package_root="$PI_CODING_AGENT_DIR/npm/node_modules/$package_name"
     mkdir -p "$package_root"
-    printf '{"name":"%s","version":"29.2.0"}\n' "$package_name" >"$package_root/package.json"
+    printf '{"name":"%s","version":"%s"}\n' "$package_name" "$version" >"$package_root/package.json"
     if [[ "$package_name" == @gotgenes/pi-permission-system ]]; then
       mkdir -p "$package_root/schemas" "$package_root/src"
       # Tests may seed an incompatible installed schema; don't overwrite it.
@@ -122,7 +136,7 @@ else
         cp "$TEST_ROOT/permission-system-schema.json" "$package_root/schemas/permissions.schema.json"
       printf 'export class PermissionManager {}\n' >"$package_root/src/permission-manager.ts"
     fi
-  done < <(jq -r '.packages[] | if type == "object" then .source else . end | select(startswith("npm:")) | ltrimstr("npm:")' "$PI_CODING_AGENT_DIR/settings.json")
+  done <<<"$specs"
 fi
 SCRIPT
   chmod +x "$HOME/.pi/agent/bin/pi"
@@ -309,6 +323,35 @@ SCRIPT
   grep -Fx 'update --extensions --no-approve' "$HOME/pi-invocations"
 }
 
+@test "installer replaces a permission evaluator that differs from the pin" {
+  export PI_VERSION
+  stub_existing_pi
+  local package_root="$HOME/.pi/agent/npm/node_modules/@gotgenes/pi-permission-system"
+  mkdir -p "$package_root"
+  printf '{"name":"@gotgenes/pi-permission-system","version":"44.0.1"}\n' >"$package_root/package.json"
+  run bash "$REPO_ROOT/ai/pi/install.sh"
+  [ "$status" -eq 0 ]
+  [ "$(jq -r .version "$package_root/package.json")" = "$FIXTURE_PERMISSION_VERSION" ]
+  [ "$(grep -c '^install' "$HOME/pi-invocations")" -eq 1 ]
+  grep -Fx "install npm:@gotgenes/pi-permission-system@$FIXTURE_PERMISSION_VERSION" "$HOME/pi-invocations"
+  [ ! -d "$(<"$TEST_ROOT/install-cwd")" ]
+  # A matching copy is left alone.
+  run bash "$REPO_ROOT/ai/pi/install.sh"
+  [ "$status" -eq 0 ]
+  [ "$(grep -c '^install' "$HOME/pi-invocations")" -eq 1 ]
+}
+
+@test "a failed pinned install stops before authored links and policy publication" {
+  export PI_VERSION
+  stub_existing_pi
+  run env PI_TEST_INSTALL_FAIL=1 bash "$REPO_ROOT/ai/pi/install.sh"
+  [ "$status" -eq 45 ]
+  [[ "$output" == *"Installing pinned npm:@gotgenes/pi-permission-system@$FIXTURE_PERMISSION_VERSION failed"* ]]
+  [ ! -e "$HOME/.pi/agent/AGENTS.md" ]
+  [ ! -e "$HOME/.pi/agent/extensions/pi-permission-system/config.json" ]
+  [ ! -d "$(<"$TEST_ROOT/install-cwd")" ]
+}
+
 @test "native extension update and runtime failures stop before authored links and policy publication" {
   export PI_VERSION PI_TEST_REQUIRE_GATE_BEFORE_LINKS=1
   stub_existing_pi
@@ -321,7 +364,7 @@ SCRIPT
   [ ! -e "$HOME/.pi/agent/extensions/pi-permission-system/config.json" ]
   run env PI_TEST_VALIDATOR_FAIL=1 bash "$REPO_ROOT/ai/pi/install.sh"
   [ "$status" -ne 0 ]
-  [[ "$output" == *'pi install npm:@gotgenes/pi-permission-system'* ]]
+  [[ "$output" == *"pi install npm:@gotgenes/pi-permission-system@$FIXTURE_PERMISSION_VERSION and rerun"* ]]
   [ ! -e "$HOME/.pi/agent/AGENTS.md" ]
   [ ! -e "$HOME/.pi/agent/extensions/worktree-guard.ts" ]
   [ ! -e "$HOME/.pi/agent/extensions/pi-permission-system/config.json" ]
@@ -915,7 +958,7 @@ EOF
     and ($sources | index("npm:pi-web-access")) != null
     and ($sources | index("npm:@narumitw/pi-lsp")) != null
     and ($sources | index("npm:@gotgenes/pi-subagents")) != null
-    and ($sources | index("npm:@gotgenes/pi-permission-system")) != null
+    and ($sources | map(select(test("^npm:@gotgenes/pi-permission-system@[0-9]+[.][0-9]+[.][0-9]+$"))) | length == 1)
     and ($sources | map(select(contains("pi-sandbox"))) | length == 0)
   ' "$REPO_ROOT/ai/pi/settings.json"
   [ "$status" -eq 0 ]
@@ -1051,7 +1094,7 @@ SCRIPT
 @test "Pi loads permission-system and enables code actions without sandbox" {
   run jq -e '
     [.packages[] | if type == "string" then . else .source end] as $sources
-    | ($sources | index("npm:@gotgenes/pi-permission-system")) != null
+    | ($sources | map(select(startswith("npm:@gotgenes/pi-permission-system@"))) | length == 1)
     and ($sources | map(select(contains("pi-sandbox"))) | length == 0)
     and ([.packages[] | objects | select(.source == "git:github.com/tmustier/pi-extensions")][0].extensions
       | index("code-actions/index.ts")) != null
