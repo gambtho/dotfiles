@@ -53,8 +53,8 @@ check_pi_tool() {
 }
 
 check_ai_tools() {
-  local status=0
-  check_claude_tool || status=1
-  check_pi_tool || status=1
-  return "$status"
+  local missing=0
+  check_claude_tool || missing=1
+  check_pi_tool || missing=1
+  return "$missing"
 }
