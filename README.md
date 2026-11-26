@@ -311,8 +311,8 @@ Use the browser (`--web`): a pasted token keeps its own scopes. If you let `gh`
 upload an SSH key, it adds `admin:public_key`, which covers `read:public_key`, so
 pick a different extra scope on that machine.
 
-Sign in one machine at a time, and run `gh auth status` on it before you move to
-the next. Don't run `gh auth logout` first.
+Sign in one machine at a time, and run `gh auth status` on it, with the same
+`GH_CONFIG_DIR` you signed in with, before you move to the next. Don't run `gh auth logout` first.
 
 ## Linux credential keyring
 

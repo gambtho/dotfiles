@@ -221,7 +221,7 @@ setup_one_secondary_identity() {
 
   log_success "Identity '$slug' written to $target"
   log_info "Next for '$slug': GH_CONFIG_DIR=\$HOME/.gh-$slug gh auth login --web --scopes repo,workflow,read:public_key"
-  log_info "Swap read:public_key for a read-only scope no other machine uses, sign in one machine at a time, and check gh auth status before the next (README: Signing in on more than one machine)."
+  log_info "Swap read:public_key for a read-only scope no other machine uses, sign in one machine at a time, and check gh auth status with the same GH_CONFIG_DIR before the next (README: Signing in on more than one machine)."
 }
 
 # Write the conditional-include blocks that actually route each identity. Kept
@@ -337,7 +337,7 @@ setup_identity_map() {
   for owner in $secondaries; do
     log_info "Next for '$owner': GH_CONFIG_DIR=\$HOME/.gh-$owner gh auth login --web --scopes repo,workflow,read:public_key, then create core/git/gitconfig.$owner.symlink"
   done
-  [ -z "$secondaries" ] || log_info "Swap read:public_key for a read-only scope no other machine uses, sign in one machine at a time, and check gh auth status before the next (README: Signing in on more than one machine)."
+  [ -z "$secondaries" ] || log_info "Swap read:public_key for a read-only scope no other machine uses, sign in one machine at a time, and check gh auth status with the same GH_CONFIG_DIR before the next (README: Signing in on more than one machine)."
 }
 
 setup_profile() {
