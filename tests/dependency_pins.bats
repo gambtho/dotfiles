@@ -74,18 +74,59 @@ setup() {
   [ "$status" -eq 1 ]
 }
 
-@test "main Pi remotes float except the reviewed editor release while local my remains local" {
+@test "main Pi remotes float except the reviewed editor and skills releases" {
   run jq -e --arg editor 'git:github.com/gambtho/pi-file-editor@v0.1.0' '
     [.packages[] | if type == "string" then . else .source end] as $sources
     | all($sources[];
         if startswith("npm:") then test("^npm:(@[^/]+/)?[^@]+$")
-        elif startswith("git:") then . == $editor or test("^git:github.com/[^@]+$")
-        else . == "~/.dotfiles/ai/marketplace/plugins/my" end)
-    and ($sources | index("~/.dotfiles/ai/marketplace/plugins/my") != null)
+        elif startswith("git:") then . == $editor
+          or test("^git:github.com/gambtho/gambtho-skills@v[0-9]+[.][0-9]+[.][0-9]+$")
+          or test("^git:github.com/[^@]+$")
+        else false end)
+    and ($sources | map(select(startswith("git:github.com/gambtho/gambtho-skills@"))) | length == 1)
     and ($sources | map(select(. == $editor)) | length == 1)
     and ($sources | map(select(contains("pi-sandbox"))) | length == 0)
   ' "$REPO_ROOT/ai/pi/settings.json"
   [ "$status" -eq 0 ]
+}
+
+skills_pins() {
+  jq -r '.packages[] | if type == "string" then . else .source end
+    | select(startswith("git:github.com/gambtho/gambtho-skills@")) | sub(".*@"; "")' "$1/ai/pi/settings.json"
+  sed -n 's/^SKILLS_TAG=//p' "$1/ai/claude/install.sh"
+}
+
+@test "Pi and Claude Code pin the same skills release" {
+  run skills_pins "$REPO_ROOT"
+  [ "$status" -eq 0 ]
+  [ "${#lines[@]}" -eq 2 ]
+  [[ "${lines[0]}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+  [ "${lines[0]}" = "${lines[1]}" ]
+}
+
+@test "skills-pin rewrites both pins and keeps the Claude installer executable" {
+  local fixture="$TEST_ROOT/pin"
+  mkdir -p "$fixture/ai/pi" "$fixture/ai/claude"
+  cp "$REPO_ROOT/Makefile" "$fixture/"
+  cp "$REPO_ROOT/ai/pi/settings.json" "$fixture/ai/pi/"
+  cp -p "$REPO_ROOT/ai/claude/install.sh" "$fixture/ai/claude/"
+  cp "$fixture/ai/pi/settings.json" "$TEST_ROOT/settings-before.json"
+
+  run make -C "$fixture" skills-pin VERSION=v1.2.3
+  [ "$status" -eq 0 ]
+  run skills_pins "$fixture"
+  [ "$output" = $'v1.2.3\nv1.2.3' ]
+  [ -x "$fixture/ai/claude/install.sh" ]
+  # Only the skills source changed in the Pi settings.
+  run diff "$TEST_ROOT/settings-before.json" "$fixture/ai/pi/settings.json"
+  [ "$(printf '%s\n' "$output" | grep -c '^[<>]')" -eq 2 ]
+
+  for bad in "" 1.2.3 v1.2 v1.2.3.4 'v1.2.3;x'; do
+    run make -C "$fixture" skills-pin VERSION="$bad"
+    [ "$status" -ne 0 ]
+  done
+  run skills_pins "$fixture"
+  [ "$output" = $'v1.2.3\nv1.2.3' ]
 }
 
 @test "CI provisions isolated current candidates before SDK checks and fails on runtime regression" {
@@ -130,12 +171,21 @@ setup() {
     printf "{\"name\":\"@narumitw/pi-lsp\",\"version\":\"0.49.9\"}\n" >"$lsp/package.json"
     printf "provision\n" >>"$TEST_ROOT/ci-events"
   '
+  # The skills checkout clones the tag the Claude installer pins.
+  mkdir -p "$fixture/ai/claude"
+  cp "$REPO_ROOT/ai/claude/install.sh" "$fixture/ai/claude/install.sh"
+  export CI_SKILLS_TAG
+  CI_SKILLS_TAG=$(sed -n 's/^SKILLS_TAG=//p' "$REPO_ROOT/ai/claude/install.sh")
+  stub_command git '
+    [[ "$*" == "clone -q --depth 1 --branch $CI_SKILLS_TAG https://github.com/gambtho/gambtho-skills.git $RUNNER_TEMP/gambtho-skills" ]] || exit 89
+    mkdir -p "${!#}"'
   # Gate targets run the real Makefile recipe against the fixture's stub validator.
   REAL_MAKE=$(command -v make)
   export REAL_MAKE FIXTURE_ROOT="$fixture" MAKEFILE_UNDER_TEST="$REPO_ROOT/Makefile"
   stub_command make '
     [[ -f "$PI_TEST_HOST_ROOT/dist/index.js" ]] || { printf "SDK host not provisioned before checks\n" >&2; exit 84; }
     [[ "$(command -v pi)" == "$RUNNER_TEMP/pi-security-gate/bin/pi" ]] || { printf "selected Pi executable not on PATH before checks\n" >&2; exit 86; }
+    [[ "$SKILLS_PACKAGE_ROOT" == "$RUNNER_TEMP/gambtho-skills" && -d "$SKILLS_PACKAGE_ROOT" ]] || { printf "skills package not checked out before checks\n" >&2; exit 88; }
     for target in "$@"; do
       case "$target" in
         syntax | lint | validate | test | python-test) printf "%s\n" "$target" >>"$TEST_ROOT/ci-events" ;;
@@ -163,7 +213,7 @@ setup() {
   done
 
   replay_leg() {
-    unset PI_TEST_HOST_ROOT PI_TEST_PERMISSION_ROOT PI_TEST_SUBAGENTS_ROOT PI_TEST_LSP_ROOT
+    unset PI_TEST_HOST_ROOT PI_TEST_PERMISSION_ROOT PI_TEST_SUBAGENTS_ROOT PI_TEST_LSP_ROOT SKILLS_PACKAGE_ROOT
     rm -f "$TEST_ROOT/ci-events"
     printf '' >"$GITHUB_ENV"
     printf '' >"$GITHUB_PATH"

@@ -822,7 +822,7 @@ setup() {
     and ($sources | map(select(contains("pi-sandbox"))) | length == 0)
     and ($excluded | map(select(contains("pi-sandbox"))) | length == 0)
     and ($excluded | index("git:github.com/obra/superpowers") == null)
-    and ($excluded | index("~/.dotfiles/ai/marketplace/plugins/my") == null)
+    and ($excluded | map(select(startswith("git:github.com/gambtho/gambtho-skills@"))) | length == 0)
   ' "$SUBAGENT_CONFIG" "$SETTINGS"
   [ "$status" -eq 0 ]
 }

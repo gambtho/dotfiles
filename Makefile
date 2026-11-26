@@ -1,4 +1,4 @@
-.PHONY: install bootstrap update relink ai ai-check ai-heeler ai-heeler-check ai-heeler-setup automations automations-check automation-run pins pins-check pins-update check syntax lint test python-test pi-runtime-test pi-security-gate validate
+.PHONY: install bootstrap update relink ai ai-check skills-update skills-pin ai-heeler ai-heeler-check ai-heeler-setup automations automations-check automation-run pins pins-check pins-update check syntax lint test python-test pi-runtime-test pi-security-gate validate
 
 # ── Main targets ──────────────────────────────────────────────────────────────
 
@@ -75,19 +75,35 @@ agent-knowledge-sync: ## Explicit stopped-Pi fast-forward and verified pending p
 # Failures are aggregated rather than aborting the loop: one broken installer
 # must not block the rest, but it must still fail the target — a plain loop
 # reports only the last installer's status and hides every earlier failure.
-ai: ## Reconcile Pi configuration and bootstrap Copilot CLI
-	@failed=""; for installer in ai/pi/install.sh ai/copilot/install.sh; do \
+ai: ## Reconcile Pi, pin the skills plugin for Claude Code, bootstrap Copilot CLI
+	@failed=""; for installer in ai/pi/install.sh ai/claude/install.sh ai/copilot/install.sh; do \
 		echo "Running $$installer..."; \
 		bash "$$installer" || failed="$$failed $$installer"; \
 	done; \
 	if [ -n "$$failed" ]; then echo "make ai: failed:$$failed" >&2; exit 1; fi
 
 ai-check: ## Dry-run: show what the AI installers would do
-	@failed=""; for installer in ai/pi/install.sh ai/copilot/install.sh; do \
+	@failed=""; for installer in ai/pi/install.sh ai/claude/install.sh ai/copilot/install.sh; do \
 		echo "Checking $$installer..."; \
 		bash "$$installer" --check || failed="$$failed $$installer"; \
 	done; \
 	if [ -n "$$failed" ]; then echo "make ai-check: failed:$$failed" >&2; exit 1; fi
+
+# The skills package is pinned to one tag in two places: Pi's package source and
+# the Claude Code installer. tests/dependency_pins.bats keeps them equal.
+SKILLS_PIN_FILES = ai/pi/settings.json ai/claude/install.sh
+
+skills-update: ## Shortcut: fast-forward this checkout, then make ai (stop Pi first)
+	git pull --ff-only
+	$(MAKE) ai
+
+skills-pin: ## Pin the skills package for Pi and Claude Code: make skills-pin VERSION=v0.3.0
+	@printf '%s\n' "$(VERSION)" | grep -Eqx 'v[0-9]+\.[0-9]+\.[0-9]+' || { echo "usage: make skills-pin VERSION=vX.Y.Z" >&2; exit 2; }
+	@sed -E 's|(git:github.com/gambtho/gambtho-skills@)v[0-9]+\.[0-9]+\.[0-9]+|\1$(VERSION)|' ai/pi/settings.json >ai/pi/settings.json.tmp \
+		&& mv ai/pi/settings.json.tmp ai/pi/settings.json
+	@sed -E 's|^SKILLS_TAG=.*|SKILLS_TAG=$(VERSION)|' ai/claude/install.sh >ai/claude/install.sh.tmp \
+		&& cat ai/claude/install.sh.tmp >ai/claude/install.sh && rm ai/claude/install.sh.tmp
+	@grep -n 'gambtho-skills@\|^SKILLS_TAG=' $(SKILLS_PIN_FILES)
 
 ai-heeler: ## Prepare opt-in default Herdr/Heeler persistence without live takeover
 	bash tools/herdr/heeler/install.sh --apply
@@ -116,7 +132,7 @@ pins-check: ## Check managed dependency pins for updates
 pins-update: ## Interactively update managed dependency pins
 	bash libexec/versions update
 
-validate: ## Validate AI config structure (agents, commands, skills)
+validate: ## Validate tracked Pi configuration and repository symlinks
 	bash libexec/validate-ai --verbose
 
 # ── Verification ───────────────────────────────────────────────────────────────

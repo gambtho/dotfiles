@@ -23,8 +23,6 @@ setup() {
   export npm_config_logs_dir="$TEST_ROOT/npm-logs" npm_config_update_notifier=false
   printf '' >"$npm_config_userconfig"
   printf '' >"$npm_config_globalconfig"
-  mkdir -p "$HOME/.dotfiles/ai/marketplace/plugins/my"
-  cp "$REPO_ROOT/ai/marketplace/plugins/my/package.json" "$HOME/.dotfiles/ai/marketplace/plugins/my/package.json"
 }
 
 teardown() {

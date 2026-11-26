@@ -24,7 +24,7 @@ This migration does not read or rewrite the generated `models-store.json` catalo
 
 ## Capability stack
 
-Generic runtime behavior comes from floating npm and Git declarations, reconciled by Pi's native package CLI. Normal installation may advance packages, including unreleased Git changes according to Pi's tracking/ref behavior. Resource filters remain repository-owned. The local `my` package remains responsible for personal review and implementation workflows.
+Generic runtime behavior comes from floating npm and Git declarations, reconciled by Pi's native package CLI. Normal installation may advance packages, including unreleased Git changes according to Pi's tracking/ref behavior. Resource filters remain repository-owned. Personal review and implementation workflows come from `gambtho/gambtho-skills`, pinned to a release tag (see [Skills package](#skills-package)).
 
 | Capability | Implementation | Notes |
 |---|---|---|
@@ -41,6 +41,7 @@ Generic runtime behavior comes from floating npm and Git declarations, reconcile
 | Model/context/cost UI | `pi-powerline-footer`, `usage-extension`, `session-recap` | Display and away recaps; Herdr's state/prompt bridges own lifecycle status rather than tab-title heuristics |
 | Worktree create/switch/remove UI | `@narumitw/pi-worktree` | Parent-only; uses normal Git worktrees and preserves the active conversation on switch |
 | File selection and quotes | `@narumitw/pi-file-context` | Parent-only; F8 opens the file-context picker without taking native copy shortcuts |
+| Personal prompts and skills | `gambtho/gambtho-skills` at its pinned tag | Unfiltered; the same tag is installed for Claude Code as a plugin |
 | Click local files to edit | `gambtho/pi-file-editor@v0.1.0` | Parent-only; normal-click a local file link to open the configured external editor, then quit to return to Pi |
 | Native tool orchestration | Pi Codemode | Additive `+codemode`, mode `on`; ordinary tools remain available |
 | Primary-checkout write enforcement | `ai/pi/extensions/worktree-guard.ts` | Covers built-in writes and mutating `lsp_fix` with rooted path resolution |
@@ -67,7 +68,7 @@ The named `review` child is separate from the retained main-session `review` mod
 
 Each `subagent` invocation supplies one self-contained `prompt`, a 3–5 word `description`, and a `subagent_type`. Parallel work uses sibling calls with `run_in_background: true`; record each returned ID and poll with `get_subagent_result({ agent_id, wait: false })`. An explicit `model` is reserved for a user request or deliberate cross-family review.
 
-`rush`, `inspector`, `deep`, and `review` omit write/edit tools and allow routine inspection and verification silently. Their explicit rules deny selected repository and remote mutations; other recognized risky operations follow the composed permission policy instead of an absolute read-only guarantee. `smart` otherwise inherits the permissive global attention policy. Every named child hard-denies Bash commands containing unresolved `$` expansion so a curated reader cannot hide a sensitive operand from path extraction. Children cannot recursively dispatch more children. Worktree and file-context UI packages are excluded from children; permission-system, worktree-guard, and the selected skills remain inherited. Full Superpowers is the process router; the filtered agent-skills router and commands are not loaded. The local `my` selection provides prompts and skills, with no extensions; see the [package inventory](marketplace/plugins/my/README.md) for the complete list.
+`rush`, `inspector`, `deep`, and `review` omit write/edit tools and allow routine inspection and verification silently. Their explicit rules deny selected repository and remote mutations; other recognized risky operations follow the composed permission policy instead of an absolute read-only guarantee. `smart` otherwise inherits the permissive global attention policy. Every named child hard-denies Bash commands containing unresolved `$` expansion so a curated reader cannot hide a sensitive operand from path extraction. Children cannot recursively dispatch more children. Worktree and file-context UI packages are excluded from children; permission-system, worktree-guard, and the selected skills remain inherited. Full Superpowers is the process router; the filtered agent-skills router and commands are not loaded. The pinned `gambtho-skills` package provides prompts and skills, with no extensions; its README lists them.
 
 ### Exact runtime metadata queries
 
@@ -323,10 +324,8 @@ ai/
     install.sh
     migrate-security-stack.sh
     migrate-runtime-config.sh
-  marketplace/plugins/my/
-    package.json
-    prompts/
-    skills/
+  claude/
+    install.sh
 ```
 
 Immutable guidance, keybindings, named agents, and the four authored extensions are individual links. The installer owns these **six mutable runtime files** as regular machine-local files:
@@ -368,7 +367,7 @@ Stop all Pi sessions before changing links/resources, including ordinary reconci
 make ai
 ```
 
-The installer refuses a production-agent-dir apply—including one reached through a resolved path alias—when invoked from a different linked implementation worktree while the canonical checkout exists. Before integration, use an **isolated pre-integration smoke** with an absolute temporary `PI_CODING_AGENT_DIR`, separate HOME and XDG paths, and `DOTFILES` pointed at the reviewed checkout so the local `my` package remains available. Package installation and the installed-runtime gate pipeline do not require Copilot authentication. An agent command must not read or copy production `auth.json`; defer interactive model-facing smoke to canonical rollout unless the operator provisions isolated credentials outside the agent command. Canonical integration and rollout need separate authorization; do not apply from an implementation worktree or a running production Pi session.
+The installer refuses a production-agent-dir apply—including one reached through a resolved path alias—when invoked from a different linked implementation worktree while the canonical checkout exists. Before integration, use an **isolated pre-integration smoke** with an absolute temporary `PI_CODING_AGENT_DIR`, separate HOME and XDG paths, and `DOTFILES` pointed at the reviewed checkout. Package installation and the installed-runtime gate pipeline do not require Copilot authentication. An agent command must not read or copy production `auth.json`; defer interactive model-facing smoke to canonical rollout unless the operator provisions isolated credentials outside the agent command. Canonical integration and rollout need separate authorization; do not apply from an implementation worktree or a running production Pi session.
 
 ### Native package convergence
 
@@ -442,7 +441,7 @@ make ai-check
 
 `make check` runs shell syntax, ShellCheck/shfmt, all Bats suites, Python tests, and AI validation. Installer/migration fixtures require the selected Pi 1.1+ public SDK (and its bundled Jiti) through `PI_TEST_HOST_ROOT` or an available `pi` executable; they do not download one automatically. Full checks also need a current Neovim for the existing `vim.system()`-based tree-sitter guard tests. Keep Git's global config fixture-owned under the isolated HOME, not an unwritable `/dev/null` override. Use an independent HOME/XDG/cache environment and remove shared candidate `PI_CODING_AGENT_DIR`, `DOTFILES`, and candidate `PI_TEST_*` selections before Bats/full checks. Fixtures must own their writable SDK/package roots; the original host SDK is a read-only prerequisite, not a fixture destination.
 
-`make pi-runtime-test` is separate from `make check`. It requires the four explicitly selected `PI_TEST_HOST_ROOT`, `PI_TEST_PERMISSION_ROOT`, `PI_TEST_SUBAGENTS_ROOT`, and `PI_TEST_LSP_ROOT` roots. CI provisions current candidates and records their identities in four parallel legs that together run `make check`, the installed schema/evaluator (`make pi-security-gate`), and the native gate; the `validate` job passes only when every leg passes. The gate includes stock CLI missing npm/Git convergence and one bounded public-SDK resource-filter/local-my/retired-source proof with isolated transport and allowlisted environments; it does not modify the selected SDK or shared package graph.
+`make pi-runtime-test` is separate from `make check`. It requires the four explicitly selected `PI_TEST_HOST_ROOT`, `PI_TEST_PERMISSION_ROOT`, `PI_TEST_SUBAGENTS_ROOT`, and `PI_TEST_LSP_ROOT` roots. CI provisions current candidates and records their identities in four parallel legs that together run `make check`, the installed schema/evaluator (`make pi-security-gate`), and the native gate; the `validate` job passes only when every leg passes. The gate includes stock CLI missing npm/Git convergence and one bounded public-SDK resource-filter/pinned-skills/retired-source proof with isolated transport and allowlisted environments; it does not modify the selected SDK or shared package graph.
 
 The tested Pi 1.3.0 graph exercises real Codemode nested tool calls, all five named child sessions, permission forwarding, inherited worktree enforcement, and current-layout fail-closed behavior. Optional runtime probes use the public interactive frontend and actual upstream F8 picker/worktree commands with deterministic provider, terminal-transport and user-dialog boundaries. They verify file quote delivery, active branch entry/history preservation, cwd/service rebinding, primary-write denial and linked/switched relative writes, current/main exclusion, dirty-removal refusal before confirmation, and clean removal only after Yes (No preserves it; branch survives). This is native SDK/extension behavior, not paid model, human TTY or OS clipboard certification. macOS/Windows live behavior remains untested. Caffeinate 0.49.11 failed actual WSL default inhibition (systemd denied; ScreenSaver D-Bus service absent) and was removed by operator decision; that is not a supported-platform pass or a backend adaptation.
 
@@ -550,6 +549,21 @@ PI_CODING_AGENT_DIR="$AGENT_DIR" pi update --extensions
 ```
 
 Every restored JSON file is staged and validated before the first destination changes, and each destination is replaced through a same-directory atomic rename. No portable filesystem operation can commit all three destinations as one transaction, so keep Pi stopped and rerun the complete sequence if any publication fails. Amp subagents, the reverted Amp package inventory, the Amp policy file, and enabled permission state **must be restored together** before launching Pi. Restoring Amp subagents with a missing policy file or YOLO state is forbidden.
+
+## Skills package
+
+Personal prompts and skills live in [gambtho/gambtho-skills](https://github.com/gambtho/gambtho-skills). One release tag is pinned twice: as Pi's package source `git:github.com/gambtho/gambtho-skills@<tag>` in `ai/pi/settings.json`, and as `SKILLS_TAG` in `ai/claude/install.sh`. `make skills-pin VERSION=<tag>` rewrites both; `tests/dependency_pins.bats` fails if they differ. Pi keeps a pinned Git package at its tag through `pi update`, and `pi list` prints where it is checked out.
+
+`ai/claude/install.sh` runs from `make ai`, `make ai-check` (as `--check`) and the full installer. Without `claude` on PATH it prints a notice and exits. Otherwise it adds the `gambtho-skills` marketplace at the tag and installs `gambtho-skills@gambtho-skills` at user scope. When the marketplace points at another ref, it re-pins: `claude plugin marketplace remove gambtho-skills` (which also uninstalls the plugin), then add and install again. It then requires `claude plugin list` to show the plugin enabled at the tag's version; if not, it fails and changes nothing else. Only then does it remove every `~/.claude/skills` link that points into `~/.dotfiles`, after appending their names to `~/.local/state/dotfiles/claude-legacy-links.txt`. A second run changes nothing.
+
+To update one machine: stop Pi, then run `bin/dot-update` (or the shorter `make skills-update`). Check that `pi list` shows `git:github.com/gambtho/gambtho-skills@<tag>`, `claude plugin list` shows `gambtho-skills@gambtho-skills` at that version, and no `~/.claude/skills` link points into `~/.dotfiles`.
+
+To undo on one machine after reverting the pin change: run `make skills-update`, then `claude plugin marketplace remove gambtho-skills`, and recreate the old links from the recorded names if the old copy is back:
+
+```bash
+while read -r n; do ln -s "$HOME/.dotfiles/ai/marketplace/plugins/my/skills/$n" "$HOME/.claude/skills/$n"; done \
+  < ~/.local/state/dotfiles/claude-legacy-links.txt
+```
 
 ## Removed scope
 

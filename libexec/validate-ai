@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
-# Validate the personal Pi package: prompt templates, skills, and manifest.
+# Validate the tracked Pi configuration baselines and repository symlinks.
+# The skills package lives in gambtho/gambtho-skills and validates itself.
 # Usage: libexec/validate-ai [--verbose]
 
 set -euo pipefail
 
 DOTFILES_ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
-PLUGIN_DIR="$DOTFILES_ROOT/ai/marketplace/plugins/my"
-PACKAGE_FILE="$PLUGIN_DIR/package.json"
 ERRORS=0
 WARNINGS=0
 VERBOSE=false
@@ -38,21 +37,6 @@ resolve_existing_path() {
     attempts=$((attempts + 1))
   done
   return 1
-}
-
-validate_frontmatter() {
-  local file=$1 label=$2 require_name=$3
-  if ! head -1 "$file" | grep -q '^---$'; then
-    error "$label: missing frontmatter"
-    return
-  fi
-  if ! grep -q '^description:' "$file"; then
-    error "$label: missing 'description' in frontmatter"
-  fi
-  if [[ "$require_name" == true ]] && ! grep -q '^name:' "$file"; then
-    error "$label: missing 'name' in frontmatter"
-  fi
-  info "$label"
 }
 
 validate_pi_json() {
@@ -87,77 +71,7 @@ validate_web_security_baseline() {
   done
 }
 
-manifest_inventory() {
-  local kind=$1 pattern=$2 expected_prefix=$3 declared=() actual=() path
-
-  while IFS= read -r path; do
-    declared+=("$path")
-  done < <(jq -r ".pi.${kind}[]?" "$PACKAGE_FILE" | sort)
-
-  while IFS= read -r path; do
-    actual+=("$path")
-  done < <(
-    for file in $pattern; do
-      [ -f "$file" ] || continue
-      printf '%s%s\n' "$expected_prefix" "${file#*\/${kind}/}"
-    done | sort
-  )
-
-  for path in "${declared[@]}"; do
-    case "$kind:$path" in
-      prompts:./prompts/*.md | skills:./skills/*/SKILL.md) ;;
-      *)
-        error "package.json: invalid Pi ${kind%?} path: $path"
-        continue
-        ;;
-    esac
-    if [ ! -f "$PLUGIN_DIR/${path#./}" ]; then
-      error "package.json: declared Pi ${kind%?} does not exist: $path"
-    fi
-  done
-
-  while IFS= read -r path; do
-    [ -n "$path" ] && error "package.json: Pi manifest omits ${kind%?}: $path"
-  done < <(comm -23 <(printf '%s\n' "${actual[@]}") <(printf '%s\n' "${declared[@]}"))
-
-  if [ "${#declared[@]}" -ne "$(printf '%s\n' "${declared[@]}" | sort -u | wc -l)" ]; then
-    error "package.json: Pi $kind inventory contains duplicates"
-  elif [ "$(printf '%s\n' "${declared[@]}")" = "$(printf '%s\n' "${actual[@]}")" ]; then
-    info "package.json: exhaustive Pi $kind inventory"
-  fi
-}
-
-echo "=== Validating personal Pi package ==="
-
-echo
-echo "Prompts:"
-for prompt in "$PLUGIN_DIR"/prompts/*.md; do
-  [ -f "$prompt" ] || continue
-  validate_frontmatter "$prompt" "$(basename "$prompt")" false
-done
-
-echo
-echo "Skills:"
-for skill_dir in "$PLUGIN_DIR"/skills/*/; do
-  [ -d "$skill_dir" ] || continue
-  skill_name=$(basename "$skill_dir")
-  if [ ! -f "$skill_dir/SKILL.md" ]; then
-    error "$skill_name: missing SKILL.md"
-    continue
-  fi
-  validate_frontmatter "$skill_dir/SKILL.md" "$skill_name/SKILL.md" true
-done
-
-echo
-echo "Manifest:"
-if ! command -v jq &>/dev/null; then
-  error "package.json: jq is required for Pi manifest validation"
-elif ! jq empty "$PACKAGE_FILE" 2>/dev/null; then
-  error "package.json: invalid JSON"
-else
-  manifest_inventory prompts "$PLUGIN_DIR/prompts/*.md" "./prompts/"
-  manifest_inventory skills "$PLUGIN_DIR/skills/*/SKILL.md" "./skills/"
-fi
+echo "=== Validating Pi configuration ==="
 
 echo
 echo "Pi JSON:"
@@ -205,10 +119,6 @@ done < <(git -C "$DOTFILES_ROOT" ls-files -s -z)
 
 echo
 echo "=== Summary ==="
-prompt_count=$(find -H "$PLUGIN_DIR/prompts" -maxdepth 1 -name '*.md' -type f | wc -l)
-skill_count=$(find "$PLUGIN_DIR/skills" -mindepth 1 -maxdepth 1 -type d | wc -l)
-echo "  Prompts:  $prompt_count"
-echo "  Skills:   $skill_count"
 echo "  Errors:   $ERRORS"
 echo "  Warnings: $WARNINGS"
 

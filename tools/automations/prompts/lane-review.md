@@ -3,7 +3,7 @@ You are doing the weekly review of a lane coordination system: one coordinator s
 Your working directory is a private repository that stores this report: {{REPO}}
 Evidence, read-only: {{EVIDENCE}}
 
-- `skills/`: `lane-coordinator` and the skills it relies on, from the dotfiles repository.
+- `skills/`: `lane-coordinator` and the skills it relies on, from the `gambtho/gambtho-skills` release pinned in dotfiles.
 - `survey.md`: per-project counts, sizes, scripts and recent commits. A value starting `UNKNOWN` means a check failed; say so and never guess.
 - `project-groups.md`: physical aliases and explicitly declared frozen-archive owners, with the detection rule. Review each coordinator once; keep archive evidence historical and do not count aliases or copied corrections as independent incidents.
 - `projects/<name>/`: each project's `AGENTS.md`, `STATE.md`, `COORDINATION.md`, `lanes/COMMON-RULES.md` and guaranteed `reports/SKILL-FRICTION.md` where present; `memory/<source-folder>/*.md` contains bounded Claude memory notes, not transcripts. These are first-hand correction records, not current state or grants of authority. `recent-activity/` holds the start of recently changed lane records and reports.
@@ -33,7 +33,7 @@ This report goes to a private GitHub repository, but some of these projects have
 
 ## What to change
 
-Change nothing except the report. Project rule files have a single writer, and the skill lives in a public repository, so a fix cannot land from here. For each skill change, include a short unified diff in the finding with paths relative to the dotfiles repository root (`ai/marketplace/plugins/my/skills/<skill>/...`, corresponding to evidence `skills/<skill>/...`), written so it could go in a public repository: no project names, no lane numbers and nothing private.
+Change nothing except the report. Project rule files have a single writer, and the skill lives in a public repository, so a fix cannot land from here. For each skill change, include a short unified diff in the finding with paths relative to the `gambtho/gambtho-skills` repository root (`skills/<skill>/...`, the same as in evidence), written so it could go in a public repository: no project names, no lane numbers and nothing private.
 
 ## Report
 

@@ -5,9 +5,6 @@ load test_helper
 setup() {
   setup_dotfiles_test
   PI_GUIDANCE="$REPO_ROOT/ai/pi/AGENTS.md"
-  BLINDSPOT_SKILL="$REPO_ROOT/ai/marketplace/plugins/my/skills/blindspot-pass/SKILL.md"
-  POLISH_SKILL="$REPO_ROOT/ai/marketplace/plugins/my/skills/polish-core/SKILL.md"
-  EXPLAINER_SKILL="$REPO_ROOT/ai/marketplace/plugins/my/skills/change-explainer/SKILL.md"
 }
 
 @test "Pi configuration publishes individual guarded extension links" {
@@ -27,35 +24,6 @@ setup() {
 
 @test "lane-started Pi uses the native layout without changing interactive Pi" {
   run node --experimental-strip-types --test "$REPO_ROOT/tests/pi_lane_native_editor.test.mjs"
-  [ "$status" -eq 0 ]
-}
-
-@test "personal skills advertise their automatic workflow phases" {
-  run grep -F "Use proactively during discovery for non-trivial work" "$BLINDSPOT_SKILL"
-  [ "$status" -eq 0 ]
-
-  run grep -F "Run proactively with --fix after non-trivial implementation" "$POLISH_SKILL"
-  [ "$status" -eq 0 ]
-
-  run grep -F "Use proactively after polish and fresh verification" "$EXPLAINER_SKILL"
-  [ "$status" -eq 0 ]
-
-  run grep -F "Run proactively after writing or substantially revising a non-trivial spec or implementation plan" \
-    "$REPO_ROOT/ai/marketplace/plugins/my/skills/second-opinion-core/SKILL.md"
-  [ "$status" -eq 0 ]
-}
-
-@test "blindspot workflow pauses only for material unresolved decisions" {
-  run grep -F "Automatic workflow mode" "$BLINDSPOT_SKILL"
-  [ "$status" -eq 0 ]
-  run grep -F "findings and continue into design for routine work. Pause only when an" "$BLINDSPOT_SKILL"
-  [ "$status" -eq 0 ]
-}
-
-@test "change explainer limits knowledge checks to substantial changes" {
-  run grep -F "For substantial changes, include exactly five questions" "$EXPLAINER_SKILL"
-  [ "$status" -eq 0 ]
-  run grep -F "about the change, without answers. For routine non-trivial changes, omit the" "$EXPLAINER_SKILL"
   [ "$status" -eq 0 ]
 }
 
@@ -79,27 +47,6 @@ setup() {
   [ "$status" -eq 0 ]
   run grep -F 'ai/pi/permissions.json' "$guidance"
   [ "$status" -eq 1 ]
-}
-
-@test "overnight workflow requires permission preflight and restoration" {
-  local skill="$REPO_ROOT/ai/marketplace/plugins/my/skills/overnight-improve/SKILL.md"
-  local preflight="$REPO_ROOT/ai/marketplace/plugins/my/skills/overnight-improve/references/preflight-checklist.md"
-  run rg -n '/permission-system|YOLO' "$skill" "$preflight"
-  [ "$status" -eq 0 ]
-  run rg -n '/reload|new Pi session' "$skill" "$preflight"
-  [ "$status" -eq 0 ]
-  run grep -F '/sandbox' "$skill" "$preflight"
-  [ "$status" -eq 1 ]
-  run grep -F 'representative' "$preflight"
-  [ "$status" -eq 0 ]
-  run grep -F 'linked worktree' "$preflight"
-  [ "$status" -eq 0 ]
-  run rg -n 'blocked|prompt timeout|permission deny' "$skill" "$preflight"
-  [ "$status" -eq 0 ]
-  run rg -n 'disable.*YOLO|YOLO.*off' "$skill" "$preflight"
-  [ "$status" -eq 0 ]
-  run grep -F 'before every early exit' "$skill" "$preflight"
-  [ "$status" -eq 0 ]
 }
 
 @test "primary README documents current package update and native Astra behavior" {

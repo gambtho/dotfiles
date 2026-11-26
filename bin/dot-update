@@ -1,5 +1,27 @@
 #!/usr/bin/env bash
+# Fast-forward this checkout from its upstream, then run the pulled dot-install.
+# It stops before pulling when the checkout is not on main or has uncommitted
+# changes to tracked files.
 
 set -euo pipefail
 
-exec "$(dirname "$0")/dot-install" "$@"
+# Everything runs from one function: bash parses it whole before the pull can
+# rewrite this file.
+main() {
+  local here branch
+  here=$(dirname "$0")
+  branch=$(git -C "$here" symbolic-ref --quiet --short HEAD) || branch=""
+  if [[ "$branch" != main ]]; then
+    echo "dot-update: the dotfiles checkout is on ${branch:-a detached HEAD}, not main; nothing changed." >&2
+    return 1
+  fi
+  if [[ -n "$(git -C "$here" status --porcelain --untracked-files=no)" ]]; then
+    echo "dot-update: the dotfiles checkout has uncommitted changes; commit or stash them first. Nothing changed." >&2
+    return 1
+  fi
+  git -C "$here" pull --ff-only
+  exec "$(dirname "$0")/dot-install" "$@"
+}
+
+main "$@"
+exit

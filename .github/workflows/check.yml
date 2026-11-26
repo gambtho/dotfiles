@@ -84,6 +84,14 @@ jobs:
           console.log(JSON.stringify({ pi, permission, subagents, lsp }, null, 2));
           JS
           cat "$RUNNER_TEMP/pi-candidates.json"
+      # tests/pi_modes.bats checks the agent names the pinned skills package uses.
+      - name: Check out the pinned skills package
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag=$(sed -n 's/^SKILLS_TAG=//p' ai/claude/install.sh)
+          git clone -q --depth 1 --branch "$tag" https://github.com/gambtho/gambtho-skills.git "$RUNNER_TEMP/gambtho-skills"
+          printf 'SKILLS_PACKAGE_ROOT=%s\n' "$RUNNER_TEMP/gambtho-skills" >>"$GITHUB_ENV"
       - name: Run checks
         env:
           CHECK_TARGETS: ${{ matrix.targets }}
