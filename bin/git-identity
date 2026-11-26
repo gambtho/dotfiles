@@ -83,7 +83,8 @@ done < <(git config --get-regexp '^remote\..*\.url$' 2>/dev/null | cut -d' ' -f2
 
 if ! GH_CONFIG_DIR="$configdir" gh auth status >/dev/null 2>&1; then
   printf 'status:   TOKEN INVALID OR MISSING\n'
-  printf 'Run: GH_CONFIG_DIR=%s gh auth login\n' "$configdir"
+  printf 'Run: GH_CONFIG_DIR=%s gh auth login --web --scopes repo,workflow,read:public_key\n' "$configdir"
+  printf '%s\n' 'Swap read:public_key for a read-only scope no other machine uses, sign in one machine at a time, and check gh auth status with the same GH_CONFIG_DIR before the next (README: Signing in on more than one machine).'
   exit 4
 fi
 
