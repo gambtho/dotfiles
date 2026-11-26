@@ -136,6 +136,9 @@ write_fixture_installer() {
 # The bad order seen over plain SSH: the pull removes the files old Claude skill
 # links point at, then the installer cannot find claude to replace them.
 @test "with a bare environment, dot-update refuses to pull while a set-up Claude Code is missing" {
+  if [[ -x /usr/bin/claude || -x /bin/claude ]]; then
+    skip "this host has a system claude"
+  fi
   make_update_fixture
   mkdir -p "$UPSTREAM/skills/pr-closeout"
   git -C "$CHECKOUT" pull -q --ff-only
@@ -205,6 +208,17 @@ write_fixture_installer() {
   ' _ "$REPO_ROOT"
   [ "$status" -eq 0 ]
   [ "$output" = "$HOME/.pi/agent/bin:$HOME/.local/bin:/usr/bin:/bin" ]
+}
+
+@test "an added tool directory does not move ahead of the gh identity shim" {
+  mkdir -p "$HOME/.local/bin" "$HOME/.pi/agent/bin" "$HOME/.dotfiles/bin"
+  run env -i HOME="$HOME" PATH="/usr/local/bin:$HOME/.dotfiles/bin:/usr/bin:/bin" bash -c '
+    source "$1/libexec/lib/tool-path.sh"
+    prepend_managed_tool_path
+    printf "%s\n" "$PATH"
+  ' _ "$REPO_ROOT"
+  [ "$status" -eq 0 ]
+  [ "$output" = "$HOME/.pi/agent/bin:$HOME/.dotfiles/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin" ]
 }
 
 @test "dot-update refuses a pull that is not a fast-forward" {

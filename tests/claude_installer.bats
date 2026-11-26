@@ -189,6 +189,9 @@ plugin install gambtho-skills@gambtho-skills --scope user" ]
 }
 
 @test "a machine that had Claude Code fails loudly when claude is missing, and keeps the old links" {
+  if [[ -x /usr/bin/claude || -x /bin/claude ]]; then
+    skip "this host has a system claude"
+  fi
   legacy_links
   rm "$STUB_BIN/claude"
 

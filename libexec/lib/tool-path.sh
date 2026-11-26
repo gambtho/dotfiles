@@ -9,14 +9,27 @@
 # exist, in the order the login profiles use, without reading any rc file.
 
 # Put each existing managed tool directory on PATH, in front, unless it is
-# already there. Ends with ~/.pi/agent/bin first, as the login profiles do.
+# already there. As in the login profiles, ~/.pi/agent/bin ends up first, and a
+# ~/.dotfiles/bin already on PATH stays ahead of the rest, so its gh identity
+# shim keeps winning.
 prepend_managed_tool_path() {
   local mise_data=${MISE_DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/mise}
-  local dir
-  for dir in "$mise_data/shims" "$HOME/.local/bin" "${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/bin"; do
+  local dotfiles_bin="$HOME/.dotfiles/bin" dir
+  for dir in "$mise_data/shims" "$HOME/.local/bin"; do
     [[ -d "$dir" && ":$PATH:" != *":$dir:"* ]] || continue
     PATH="$dir${PATH:+:$PATH}"
   done
+  if [[ ":$PATH:" == *":$dotfiles_bin:"* ]]; then
+    PATH=":$PATH:"
+    PATH=${PATH//":$dotfiles_bin:"/:}
+    PATH=${PATH#:}
+    PATH=${PATH%:}
+    PATH="$dotfiles_bin${PATH:+:$PATH}"
+  fi
+  dir="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/bin"
+  if [[ -d "$dir" && ":$PATH:" != *":$dir:"* ]]; then
+    PATH="$dir${PATH:+:$PATH}"
+  fi
   export PATH
 }
 
