@@ -7,6 +7,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/../libexec/common.sh"
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 DOTFILES_ROOT=$(pwd -P)
 source "$DOTFILES_ROOT/libexec/lib/wsl-packages.sh"
+source "$DOTFILES_ROOT/libexec/lib/tool-path.sh"
 
 # ── Phase 1: OS packages ──────────────────────────────────────────────────────
 
@@ -185,13 +186,9 @@ install_managed_tools() {
 install_languages() {
   log_info "Installing language runtimes via mise..."
   DOTFILES_PROFILE="$PROFILE" bash "$DOTFILES_ROOT/languages/mise/install.sh" || return
-  # A shell that never ran `mise activate` (cloud-init, a first run before the
-  # login shell is set up) cannot see the runtimes just installed, and later
-  # phases need node and npm. Append, so anything already on PATH still wins.
-  local shims="${MISE_DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/mise}/shims"
-  if [[ -d "$shims" && ":$PATH:" != *":$shims:"* ]]; then
-    export PATH="$PATH:$shims"
-  fi
+  # On a first run the shims directory appears only now, and later phases
+  # need node and npm.
+  prepend_managed_tool_path
 }
 
 # ── Phase 3: Shell setup ──────────────────────────────────────────────────────
@@ -269,11 +266,14 @@ setup_agent_knowledge() {
   bash "$DOTFILES_ROOT/libexec/agent-knowledge" ensure
 }
 
+# Pi and Claude Code are required where they were already set up: their old
+# skill links may point at files the pull just removed. A first Pi install
+# stays optional, and the Claude installer skips machines without Claude Code.
 setup_ai() {
-  log_info "Setting up Pi..."
-  run_phase optional ai-pi bash "$DOTFILES_ROOT/ai/pi/install.sh"
-  log_success "Pi setup complete."
-  run_phase optional ai-claude bash "$DOTFILES_ROOT/ai/claude/install.sh"
+  local pi_requirement=optional
+  ! pi_was_set_up || pi_requirement=required
+  run_phase "$pi_requirement" ai-pi bash "$DOTFILES_ROOT/ai/pi/install.sh"
+  run_phase required ai-claude bash "$DOTFILES_ROOT/ai/claude/install.sh"
   run_phase optional ai-copilot bash "$DOTFILES_ROOT/ai/copilot/install.sh"
 }
 
@@ -300,6 +300,8 @@ main() {
     PROFILE=$(tr -d '[:space:]' <"$HOME/.dotfiles-profile")
   fi
   log_info "Running install for profile: $PROFILE"
+  # A plain `ssh host dot-install` has no login PATH; find the tools anyway.
+  prepend_managed_tool_path
   detect_os
 
   run_phase required packages install_platform_packages

@@ -24,8 +24,12 @@ CLAUDE_DIR=${CLAUDE_CONFIG_DIR:-$HOME/.claude}
 LEGACY_LOG=${XDG_STATE_HOME:-$HOME/.local/state}/dotfiles/claude-legacy-links.txt
 VERSION=${SKILLS_TAG#v}
 
+# shellcheck source=libexec/lib/tool-path.sh
+source "$(dirname "${BASH_SOURCE[0]}")/../../libexec/lib/tool-path.sh"
+prepend_managed_tool_path
+check_claude_tool
 if ! command -v claude >/dev/null 2>&1; then
-  echo "Claude Code not found; skipping the $MARKETPLACE plugin."
+  echo "Claude Code is not set up on this machine; skipping the $MARKETPLACE plugin."
   exit 0
 fi
 if ! command -v jq >/dev/null 2>&1; then

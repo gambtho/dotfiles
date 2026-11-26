@@ -15,6 +15,8 @@ source "$ROOT/ai/pi/migrate-security-stack.sh"
 source "$ROOT/libexec/lib/pi-runtime.sh"
 # shellcheck source=ai/pi/migrate-runtime-config.sh
 source "$ROOT/ai/pi/migrate-runtime-config.sh"
+# shellcheck source=libexec/lib/tool-path.sh
+source "$ROOT/libexec/lib/tool-path.sh"
 
 MODE=apply
 PI_HOST_ROOT=""
@@ -893,6 +895,8 @@ main() {
     return 2
   fi
   resolve_pi_paths
+  prepend_managed_tool_path
+  check_pi_tool
   validate_permission_before_publish_test_hook
   require_permission_validation_dependencies
   assert_safe_pi_source

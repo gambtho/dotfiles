@@ -62,6 +62,9 @@ setup_dotfiles_test() {
   unset MISE_SHELL __MISE_SESSION __MISE_ORIG_PATH __MISE_DIFF \
     __MISE_ZSH_PRECMD_RUN __MISE_ZSH_CHPWD_RAN \
     __MISE_ZSH_ACTIVATE_PATH __MISE_ZSH_ACTIVATE_ENV
+  # The installers look for Claude Code, Pi and mise through these; the host's
+  # values would point a sandboxed run at the real configuration.
+  unset CLAUDE_CONFIG_DIR PI_CODING_AGENT_DIR MISE_DATA_DIR
 }
 
 stub_command() {
