@@ -180,11 +180,42 @@ plugin install gambtho-skills@gambtho-skills --scope user" ]
 
 @test "a machine without Claude Code is skipped with a notice" {
   rm "$STUB_BIN/claude"
+  rm -r "$HOME/.claude"
 
   run bash "$INSTALLER"
 
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Claude Code not found; skipping"* ]]
+  [[ "$output" == *"Claude Code is not set up on this machine; skipping"* ]]
+}
+
+@test "a machine that had Claude Code fails loudly when claude is missing, and keeps the old links" {
+  if [[ -x /usr/bin/claude || -x /bin/claude ]]; then
+    skip "this host has a system claude"
+  fi
+  legacy_links
+  rm "$STUB_BIN/claude"
+
+  run bash "$INSTALLER"
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"ERROR: Claude Code is set up here"* ]]
+  [[ "$output" == *"https://claude.ai/install.sh"* ]]
+  [[ "$output" != *"skipping"* ]]
+  [ -L "$HOME/.claude/skills/pr-closeout" ]
+}
+
+@test "with a bare environment, claude and jq are found in ~/.local/bin" {
+  legacy_links
+  mkdir -p "$HOME/.local/bin"
+  mv "$STUB_BIN/claude" "$HOME/.local/bin/claude"
+  ln -s "$(command -v jq)" "$HOME/.local/bin/jq"
+
+  run env -i HOME="$HOME" XDG_STATE_HOME="$XDG_STATE_HOME" STATE="$STATE" PATH=/usr/bin:/bin \
+    bash "$INSTALLER"
+
+  [ "$status" -eq 0 ]
+  [ "$(cat "$STATE/version")" = "${TAG#v}" ]
+  assert_only_unrelated_skills_remain
 }
 
 @test "unsupported arguments are rejected" {

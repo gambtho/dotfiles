@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Fast-forward this checkout from its upstream, then run the pulled dot-install.
 # It stops before pulling when the checkout is not on main or has uncommitted
-# changes to tracked files.
+# changes to tracked files, or when an AI harness set up on this machine is
+# missing a tool it needs: the pull can remove what old skill links point at,
+# and only the AI installers replace them.
 
 set -euo pipefail
 
@@ -17,6 +19,13 @@ main() {
   fi
   if [[ -n "$(git -C "$here" status --porcelain --untracked-files=no)" ]]; then
     echo "dot-update: the dotfiles checkout has uncommitted changes; commit or stash them first. Nothing changed." >&2
+    return 1
+  fi
+  # A plain `ssh host dot-update` has no login PATH; find the tools anyway.
+  source "$here/../libexec/lib/tool-path.sh"
+  prepend_managed_tool_path
+  if ! check_ai_tools; then
+    echo "dot-update: fix the missing tools above, then rerun. Nothing changed." >&2
     return 1
   fi
   git -C "$here" pull --ff-only

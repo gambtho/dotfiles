@@ -13,7 +13,7 @@ run_installer() {
   mkdir -p "$fixture/bin" "$fixture/libexec"
   cp "$REPO_ROOT/bin/dot-install" "$fixture/bin/dot-install"
   mkdir -p "$fixture/libexec/lib"
-  cp "$REPO_ROOT/libexec/lib/wsl-packages.sh" "$fixture/libexec/lib/"
+  cp "$REPO_ROOT/libexec/lib/wsl-packages.sh" "$REPO_ROOT/libexec/lib/tool-path.sh" "$fixture/libexec/lib/"
   # Execute the real entrypoint, but stop at its first provisioning boundary.
   # Even dropping "$@" at that entrypoint must fail safely, not configure a host.
   cat >"$fixture/libexec/common.sh" <<'SCRIPT'
@@ -81,11 +81,12 @@ make_update_fixture() {
   export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.com GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.com
   UPSTREAM="$TEST_ROOT/upstream"
   CHECKOUT="$TEST_ROOT/checkout"
-  mkdir -p "$UPSTREAM/bin"
+  mkdir -p "$UPSTREAM/bin" "$UPSTREAM/libexec/lib"
   git -C "$UPSTREAM" init -q -b main
   cp "$REPO_ROOT/bin/dot-update" "$UPSTREAM/bin/dot-update"
+  cp "$REPO_ROOT/libexec/lib/tool-path.sh" "$UPSTREAM/libexec/lib/tool-path.sh"
   write_fixture_installer old
-  git -C "$UPSTREAM" add bin
+  git -C "$UPSTREAM" add bin libexec
   git -C "$UPSTREAM" commit -qm old
   git clone -q "$UPSTREAM" "$CHECKOUT"
   write_fixture_installer new
@@ -130,6 +131,105 @@ write_fixture_installer() {
   [ "$status" -eq 1 ]
   [[ "$output" == *"detached HEAD"* ]]
   [ "$(git -C "$CHECKOUT" rev-parse HEAD)" = "$before" ]
+}
+
+# The bad order seen over plain SSH: the pull removes the files old Claude skill
+# links point at, then the installer cannot find claude to replace them.
+@test "with a bare environment, dot-update refuses to pull while a set-up Claude Code is missing" {
+  if [[ -x /usr/bin/claude || -x /bin/claude ]]; then
+    skip "this host has a system claude"
+  fi
+  make_update_fixture
+  mkdir -p "$UPSTREAM/skills/pr-closeout"
+  git -C "$CHECKOUT" pull -q --ff-only
+  printf 'x\n' >"$UPSTREAM/skills/pr-closeout/SKILL.md"
+  git -C "$UPSTREAM" add skills
+  git -C "$UPSTREAM" commit -qm "add skill"
+  git -C "$CHECKOUT" pull -q --ff-only
+  git -C "$UPSTREAM" rm -rq skills
+  git -C "$UPSTREAM" commit -qm "move skills out"
+  mkdir -p "$HOME/.claude/skills"
+  ln -s "$CHECKOUT/skills/pr-closeout" "$HOME/.claude/skills/pr-closeout"
+  local before
+  before=$(git -C "$CHECKOUT" rev-parse HEAD)
+
+  run env -i HOME="$HOME" PATH=/usr/bin:/bin bash "$CHECKOUT/bin/dot-update"
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"ERROR: Claude Code is set up here"* ]]
+  [[ "$output" == *"Fix: "* && "$output" == *"Nothing changed."* ]]
+  [ "$(git -C "$CHECKOUT" rev-parse HEAD)" = "$before" ]
+  [ -e "$HOME/.claude/skills/pr-closeout/SKILL.md" ]
+
+  # Claude Code in ~/.local/bin is found without a login shell.
+  mkdir -p "$HOME/.local/bin"
+  printf '#!/bin/sh\nexit 0\n' >"$HOME/.local/bin/claude"
+  chmod +x "$HOME/.local/bin/claude"
+  run env -i HOME="$HOME" PATH=/usr/bin:/bin bash "$CHECKOUT/bin/dot-update"
+
+  [ "$status" -eq 37 ]
+  [[ "$output" == *"new:"* || "$output" == *"new"* ]]
+  [ "$(git -C "$CHECKOUT" rev-parse HEAD)" = "$(git -C "$UPSTREAM" rev-parse HEAD)" ]
+}
+
+@test "with a bare environment, dot-update refuses to pull while a set-up Pi has no node" {
+  if [[ -x /usr/bin/node || -x /bin/node ]]; then
+    skip "this host has a system node"
+  fi
+  make_update_fixture
+  mkdir -p "$HOME/.pi/agent"
+  printf '{}\n' >"$HOME/.pi/agent/settings.json"
+  local before
+  before=$(git -C "$CHECKOUT" rev-parse HEAD)
+
+  run env -i HOME="$HOME" PATH=/usr/bin:/bin bash "$CHECKOUT/bin/dot-update"
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"no working node was found"* && "$output" == *"mise install node"* ]]
+  [ "$(git -C "$CHECKOUT" rev-parse HEAD)" = "$before" ]
+
+  # A shim that cannot run node does not count.
+  mkdir -p "$HOME/.local/share/mise/shims"
+  printf '#!/bin/sh\nexit 1\n' >"$HOME/.local/share/mise/shims/node"
+  chmod +x "$HOME/.local/share/mise/shims/node"
+  run env -i HOME="$HOME" PATH=/usr/bin:/bin bash "$CHECKOUT/bin/dot-update"
+  [ "$status" -eq 1 ]
+  [ "$(git -C "$CHECKOUT" rev-parse HEAD)" = "$before" ]
+
+  # A node behind mise's shims is found without a login shell.
+  mkdir -p "$HOME/.local/share/mise/shims"
+  printf '#!/bin/sh\nexit 0\n' >"$HOME/.local/share/mise/shims/node"
+  chmod +x "$HOME/.local/share/mise/shims/node"
+  run env -i HOME="$HOME" PATH=/usr/bin:/bin bash "$CHECKOUT/bin/dot-update"
+
+  [ "$status" -eq 37 ]
+  [ "$(git -C "$CHECKOUT" rev-parse HEAD)" = "$(git -C "$UPSTREAM" rev-parse HEAD)" ]
+}
+
+@test "the managed tool directories are prepended only when they exist, once, Pi first" {
+  mkdir -p "$HOME/.local/bin" "$HOME/.pi/agent/bin"
+  run env -i HOME="$HOME" PATH=/usr/bin:/bin bash -c '
+    source "$1/libexec/lib/tool-path.sh"
+    prepend_managed_tool_path
+    prepend_managed_tool_path
+    printf "%s\n" "$PATH"
+  ' _ "$REPO_ROOT"
+  [ "$status" -eq 0 ]
+  [ "$output" = "$HOME/.pi/agent/bin:$HOME/.local/bin:/usr/bin:/bin" ]
+}
+
+@test "an added tool directory does not move ahead of the gh identity shim" {
+  mkdir -p "$HOME/.local/bin" "$HOME/.pi/agent/bin" "$HOME/.dotfiles/bin"
+  run env -i HOME="$HOME" PATH="/usr/local/bin:$HOME/.dotfiles/bin:/usr/bin:/bin" bash -c '
+    source "$1/libexec/lib/tool-path.sh"
+    prepend_managed_tool_path
+    first=$PATH
+    prepend_managed_tool_path
+    [[ "$PATH" == "$first" ]] || echo "SECOND CALL CHANGED PATH: $PATH"
+    printf "%s\n" "$PATH"
+  ' _ "$REPO_ROOT"
+  [ "$status" -eq 0 ]
+  [ "$output" = "$HOME/.pi/agent/bin:$HOME/.dotfiles/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin" ]
 }
 
 @test "dot-update refuses a pull that is not a fast-forward" {
@@ -347,14 +447,23 @@ write_fixture_installer() {
   [ "$(<"$fixture/copilot-args")" = --check ]
 }
 
-@test "dot-install installs the Claude Code skills plugin as an optional AI phase" {
+@test "dot-install requires the Claude phase, and the Pi phase once Pi is set up" {
   INSTALL_SOURCE_ONLY=1 run bash -c '
     source "$1/bin/dot-install"
     run_phase() { printf "%s\n" "$*"; }
     setup_ai
   ' _ "$REPO_ROOT"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"optional ai-pi bash $REPO_ROOT/ai/pi/install.sh"*"optional ai-claude bash $REPO_ROOT/ai/claude/install.sh"* ]]
+  [[ "$output" == *"optional ai-pi bash $REPO_ROOT/ai/pi/install.sh"*"required ai-claude bash $REPO_ROOT/ai/claude/install.sh"*"optional ai-copilot"* ]]
+
+  mkdir -p "$HOME/.pi/agent"
+  printf '{}\n' >"$HOME/.pi/agent/settings.json"
+  INSTALL_SOURCE_ONLY=1 run bash -c '
+    source "$1/bin/dot-install"
+    run_phase() { printf "%s\n" "$*"; }
+    setup_ai
+  ' _ "$REPO_ROOT"
+  [[ "$output" == *"required ai-pi bash $REPO_ROOT/ai/pi/install.sh"* ]]
 }
 
 @test "remote installer is denied without explicit consent" {
@@ -757,7 +866,7 @@ CASES
     before=$PATH
     install_languages
     install_languages
-    [[ "$PATH" == "$before:$2" ]]
+    [[ "$PATH" == "$2:$before" ]]
     env fixture-runtime
   ' _ "$REPO_ROOT" "$shims"
 
