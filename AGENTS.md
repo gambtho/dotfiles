@@ -50,6 +50,7 @@ The package's prompts dispatch the named agents in `ai/pi/agents/`. Renaming or 
 - Astra uses the tested Pi 1.1.0 native Responses catalog entry. The one-time runtime `models.json` retirement removes only Copilot `gpt-6-astra`, preserves other models/metadata, and records a private migration receipt; never manage the generated models store as a baseline.
 - Superpowers planning is a process, not a read-only security/UI mode. Shitty (including clipboard/memory/planner) and caffeinate are retired; user plans remain untouched. Package caches follow native Pi reconciliation. Codemode nested tool calls use permission/worktree tripwires, while classifier/image models and extension-internal execution retain separate ambient authority.
 - Normal `make ai` removes the ignored top-level `graceTurns` key without setting `wrapUpTurns` or changing turn budgets. Selective refresh does not migrate turn-budget preferences: `wrapUpTurns` warns before the hard limit, unlike retired `graceTurns` after a soft limit. Choose existing subagent settings deliberately. File-context uses F8 without taking native copy keys; custom shortcuts survive.
+- `@gotgenes/pi-permission-system` is pinned to an exact release in `ai/pi/settings.json`, and CI tests that pin. Move it only after `make pi-security-gate` passes on the new release; 44.0.0 changed how agent rules override global rules.
 - Never commit `auth.json`, sessions, trust decisions, generated model catalogs, or package caches.
 - After changing Pi configuration, run `make validate` and the relevant tests.
 

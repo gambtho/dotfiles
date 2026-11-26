@@ -845,6 +845,42 @@ update_pi_extensions() {
   return "$status"
 }
 
+# Exact-version npm sources in the package baseline, such as the permission
+# evaluator, whose 44.x rule placement our agent policies don't support yet.
+pinned_npm_sources() {
+  jq -r '
+    .packages[] | if type == "object" then .source else . end
+    | select(test("^npm:(@[^/@]+/)?[^/@]+@[0-9]+\\.[0-9]+\\.[0-9]+$"))
+  ' "$ROOT/ai/pi/settings.json"
+}
+
+permission_package_source() {
+  pinned_npm_sources | grep -m1 '^npm:@gotgenes/pi-permission-system@' ||
+    printf 'npm:@gotgenes/pi-permission-system\n'
+}
+
+# `pi update` skips exact-version npm sources, so a copy that is missing or was
+# installed before the pin stays as it is. Install each pin that differs.
+install_pinned_npm_packages() {
+  local source spec name want have cwd status
+  while IFS= read -r source; do
+    spec=${source#npm:}
+    name=${spec%@*}
+    want=${spec##*@}
+    have=$(jq -r '.version // empty' "$PI_AGENT_DIR/npm/node_modules/$name/package.json" 2>/dev/null || true)
+    [[ "$have" != "$want" ]] || continue
+    log_info "Installing pinned $source (installed: ${have:-none})"
+    cwd=$(mktemp -d "${TMPDIR:-/tmp}/pi-package-install.XXXXXX") || return 1
+    status=0
+    (cd "$cwd" && PI_CODING_AGENT_DIR="$PI_AGENT_DIR" "$PI_BINARY" install "$source") || status=$?
+    rmdir -- "$cwd" || return 1
+    if ((status != 0)); then
+      log_warning "Installing pinned $source failed; inspect the output and rerun."
+      return "$status"
+    fi
+  done < <(pinned_npm_sources)
+}
+
 preflight_destinations() {
   # Dynamic scope makes existing reconcilers inspect their destinations without writes.
   local MODE=check
@@ -882,7 +918,7 @@ validate_selected_runtime() {
   if ! bash "$ROOT/libexec/validate-pi-security-runtime" \
     --package-root "$PI_AGENT_DIR/npm/node_modules/@gotgenes/pi-permission-system" \
     --pi-package-root "$PI_HOST_ROOT" --python "$PERMISSION_PYTHON"; then
-    log_warning "Installed Pi permission runtime is incompatible or incomplete; repair with pi install npm:@gotgenes/pi-permission-system and rerun before starting Pi."
+    log_warning "Installed Pi permission runtime is incompatible or incomplete; repair with pi install $(permission_package_source) and rerun before starting Pi."
     return 1
   fi
 }
@@ -935,6 +971,7 @@ main() {
   reconcile_pi_settings "$ROOT/ai/pi/settings.json" "$PI_AGENT_DIR/settings.json"
   if [[ "$MODE" == apply ]]; then
     update_pi_extensions
+    install_pinned_npm_packages
     resolve_pi_runtime "$PI_BINARY"
     PI_HOST_ROOT=$PI_RUNTIME_PACKAGE_ROOT
     validate_selected_runtime

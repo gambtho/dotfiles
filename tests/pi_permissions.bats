@@ -817,7 +817,7 @@ setup() {
         "git:github.com/gambtho/pi-file-editor@v0.1.0"
       ]
     and all($excluded[]; . as $source | $sources | index($source) != null)
-    and ($excluded | index("npm:@gotgenes/pi-permission-system") == null)
+    and ($excluded | map(select(startswith("npm:@gotgenes/pi-permission-system"))) | length == 0)
     and ($excluded | index("npm:@gotgenes/pi-subagents") == null)
     and ($sources | map(select(contains("pi-sandbox"))) | length == 0)
     and ($excluded | map(select(contains("pi-sandbox"))) | length == 0)
