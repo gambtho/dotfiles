@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 # tools/coordinator-vm/deploy.sh -- preview or create the coordinator VM.
 #
-# Usage: deploy.sh [what-if|create] --subscription ID --ssh-key FILE.pub [--admin-user NAME] [--location REGION]
+# Usage: deploy.sh [what-if|create] --subscription ID --ssh-key FILE.pub [--admin-user NAME] [--location REGION] [--resource-group NAME] [--vm-name NAME]
 #
 # The default is what-if, which changes nothing in Azure. The admin account is
-# tng unless --admin-user names another. The Git name and
+# tng unless --admin-user names another. The resource group defaults to
+# rg-coordinator and the VM to coordinator. Both modes refuse a resource group
+# that already exists in another region: Azure group names ignore case, so a
+# second coordinator elsewhere needs its own --resource-group. The Git name and
 # email written into cloud-init come from this machine's global Git config.
 # The VM clones the public repository and checks out this checkout's HEAD, so
 # create first fetches that repository's main and needs HEAD to be on it: a
@@ -24,6 +27,8 @@ subscription=""
 admin_user=tng
 ssh_key_file=""
 location=eastus2
+resource_group=rg-coordinator
+vm_name=coordinator
 
 case "${1:-}" in
   what-if | create)
@@ -33,7 +38,7 @@ case "${1:-}" in
 esac
 while (($# > 0)); do
   case "$1" in
-    --subscription | --admin-user | --ssh-key | --location)
+    --subscription | --admin-user | --ssh-key | --location | --resource-group | --vm-name)
       if (($# < 2)); then
         usage
         exit 2
@@ -43,6 +48,8 @@ while (($# > 0)); do
         --admin-user) admin_user=$2 ;;
         --ssh-key) ssh_key_file=$2 ;;
         --location) location=$2 ;;
+        --resource-group) resource_group=$2 ;;
+        --vm-name) vm_name=$2 ;;
       esac
       shift 2
       ;;
@@ -52,7 +59,7 @@ while (($# > 0)); do
       ;;
   esac
 done
-if [[ -z "$subscription" || -z "$admin_user" || -z "$ssh_key_file" ]]; then
+if [[ -z "$subscription" || -z "$admin_user" || -z "$ssh_key_file" || -z "$resource_group" || -z "$vm_name" ]]; then
   usage
   exit 2
 fi
@@ -91,6 +98,31 @@ if [[ "$mode" == create ]]; then
   fi
 fi
 
+# Azure writes a region as eastus2 and also accepts "East US 2".
+region_key() {
+  tr -d ' ' <<<"$1" | tr '[:upper:]' '[:lower:]'
+}
+
+# Group names ignore case, so a second coordinator in another region with the
+# default name would aim at the first one's group. Refuse that before Azure is
+# asked to deploy anything. Read-only: these calls change nothing.
+group_exists=$(az group exists --subscription "$subscription" --name "$resource_group")
+case "$group_exists" in
+  false) ;;
+  true)
+    existing=$(az group show --subscription "$subscription" --name "$resource_group" --query location --output tsv)
+    if [[ "$(region_key "$existing")" != "$(region_key "$location")" ]]; then
+      printf 'deploy.sh: resource group %s already exists in %s, not %s. Name a new group with --resource-group.\n' \
+        "$resource_group" "$existing" "$location" >&2
+      exit 1
+    fi
+    ;;
+  *)
+    printf 'deploy.sh: could not tell whether resource group %s exists.\n' "$resource_group" >&2
+    exit 1
+    ;;
+esac
+
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 jq -n \
@@ -99,6 +131,8 @@ jq -n \
   --arg git_email "$git_email" \
   --arg revision "$revision" \
   --arg location "$location" \
+  --arg resource_group "$resource_group" \
+  --arg vm_name "$vm_name" \
   --arg admin_user "$admin_user" \
   --arg ssh_key "$ssh_key" \
   '{
@@ -106,6 +140,8 @@ jq -n \
     contentVersion: "1.0.0.0",
     parameters: {
       location: {value: $location},
+      resourceGroupName: {value: $resource_group},
+      vmName: {value: $vm_name},
       adminUsername: {value: $admin_user},
       adminSshPublicKey: {value: $ssh_key},
       cloudInit: {
@@ -117,9 +153,12 @@ jq -n \
     }
   }' >"$work/parameters.json"
 
+printf 'deploy.sh: %s VM %s in resource group %s, %s.\n' "$mode" "$vm_name" "$resource_group" "$location" >&2
+# A subscription deployment's name is bound to the region it first ran in, so
+# reusing one name in a second region fails. One name per region avoids that.
 az deployment sub "$mode" \
   --subscription "$subscription" \
   --location "$location" \
-  --name coordinator-vm \
+  --name "coordinator-vm-$(region_key "$location")" \
   --template-file "$here/azuredeploy.json" \
   --parameters "@$work/parameters.json"
