@@ -4,7 +4,8 @@
 # needs only one slice) can see which functions form which contract:
 #
 #   libexec/lib/system.sh       command_exists, detect_os
-#   libexec/lib/apt.sh          sudo_apt, APT calls that wait for package locks
+#   libexec/lib/apt.sh          sudo_apt, APT calls that wait for package locks;
+#                               ensure_en_us_locale
 #   libexec/lib/phases.sh       run_phase / finish_phases install-phase runner
 #   libexec/lib/links.sh        the managed-symlink contract and shared link loop
 #   libexec/lib/artifacts.sh    pinned, digest-verified artifact acquisition

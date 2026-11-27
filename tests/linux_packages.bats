@@ -632,3 +632,65 @@ run_sudo_apt() {
     --glob '*.sh' --glob 'bin/*' --glob 'libexec/*' --glob '!lib/apt.sh'
   [ "$status" -eq 1 ]
 }
+
+# --- the en_US.UTF-8 locale ---------------------------------------------------
+#
+# Fresh WSL and minimal Ubuntu generate only C.UTF-8. With LANG=en_US.UTF-8 from
+# the terminal, every perl apt starts warns "Setting locale failed".
+
+run_locale() {
+  run env EVENTS="$TEST_ROOT/events" LOCALES="$1" LOCALE_GEN="$2" bash -c '
+    source "$1/libexec/common.sh"
+    locale() { [[ "$*" == -a ]] && printf "%b" "$LOCALES"; }
+    sudo() { printf "%s\n" "$*" >>"$EVENTS"; }
+    ensure_en_us_locale
+  ' _ "$REPO_ROOT"
+}
+
+@test "a generated en_US.UTF-8 locale is left alone" {
+  local generator="$TEST_ROOT/locale-gen"
+  printf '#!/bin/sh\n' >"$generator"
+  chmod +x "$generator"
+
+  run_locale 'C\nC.utf8\nen_US.utf8\nPOSIX\n' "$generator"
+
+  [ "$status" -eq 0 ]
+  [ ! -e "$TEST_ROOT/events" ]
+}
+
+@test "a missing en_US.UTF-8 locale is generated, installing locales only when needed" {
+  local generator="$TEST_ROOT/locale-gen"
+  printf '#!/bin/sh\n' >"$generator"
+  chmod +x "$generator"
+
+  run_locale 'C\nC.utf8\nPOSIX\n' "$generator"
+  [ "$status" -eq 0 ]
+  [ "$(<"$TEST_ROOT/events")" = "$generator en_US.UTF-8" ]
+
+  rm "$generator" "$TEST_ROOT/events"
+  run_locale 'C\nC.utf8\nPOSIX\n' "$generator"
+  [ "$status" -eq 0 ]
+  [ "$(<"$TEST_ROOT/events")" = "apt-get update -o DPkg::Lock::Timeout=600
+apt-get install -o DPkg::Lock::Timeout=600 -y locales
+$generator en_US.UTF-8" ]
+}
+
+@test "bootstrap and the normal install generate the locale before APT, and go on if it fails" {
+  local entry
+  for entry in bootstrap install; do
+    run env EVENTS="$TEST_ROOT/events" bash -c '
+      export BOOTSTRAP_SOURCE_ONLY=1 INSTALL_SOURCE_ONLY=1
+      if [[ "$2" == bootstrap ]]; then source "$1/libexec/bootstrap"; else source "$1/bin/dot-install"; fi
+      OS=Ubuntu PROFILE=personal
+      ensure_en_us_locale() { printf "locale\n" >>"$EVENTS"; return 1; }
+      sudo_apt() { printf "%s\n" "$*" >>"$EVENTS"; return 42; }
+      setup_package_repositories() { :; }
+      if [[ "$2" == bootstrap ]]; then linux_prep; else install_apt_packages; fi
+    ' _ "$REPO_ROOT" "$entry"
+    [ "$status" -eq 42 ]
+    [ "$(head -1 "$TEST_ROOT/events")" = locale ]
+    [ "$(sed -n 2p "$TEST_ROOT/events")" = "apt update" ]
+    [[ "$output" == *"Could not generate the en_US.UTF-8 locale"* ]]
+    rm "$TEST_ROOT/events"
+  done
+}
