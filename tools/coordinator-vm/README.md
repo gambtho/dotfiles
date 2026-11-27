@@ -14,7 +14,7 @@ Everything needed to build it again is in this folder.
 
 ## What gets created
 
-- A resource group (`rg-coordinator`) holding everything below.
+- A resource group (`rg-coordinator`, or `--resource-group NAME`) holding everything below.
 - An Ubuntu 24.04 LTS VM, `Standard_D4as_v5` (4 vCPU, 16 GB), with a 128 GB
   Premium SSD, Trusted Launch and encryption at host.
 - A network interface with **no public IP**, and a security group whose only
@@ -59,7 +59,11 @@ bash tools/coordinator-vm/deploy.sh create  --subscription SUBSCRIPTION_ID --ssh
 ```
 
 `what-if` changes nothing. The admin account is `tng`; `--admin-user NAME`
-picks another, and then replaces `tng` in the SSH commands below. Both read your global Git name and email and write
+picks another, and then replaces `tng` in the SSH commands below.
+`--resource-group NAME` (default `rg-coordinator`) and `--vm-name NAME`
+(default `coordinator`) name the group and the VM; the commands below use the
+defaults. Both modes first check, read-only, whether the group already exists,
+and stop if it is in a region other than `--location`. Both read your global Git name and email and write
 them into cloud-init, because bootstrap needs a Git identity. cloud-init is
 stored with the VM and readable by anyone who can read the VM, so it holds no
 secrets.
@@ -200,6 +204,32 @@ keeps pushing to its private repository; that push is the only off-box copy.
   SSH then offers with `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` run
   through `az vm run-command invoke`.
 - **Removal:** delete the resource group.
+
+### Build a replacement beside the old one
+
+To move the coordinator to another region, build the new VM first and keep the
+old one until the new one works. Give the new one its own resource group:
+group names ignore case, so the default `rg-coordinator` is the old VM's group,
+and `deploy.sh` refuses it in another region.
+
+```sh
+bash tools/coordinator-vm/deploy.sh what-if --subscription SUBSCRIPTION_ID --ssh-key ~/.ssh/KEY.pub \
+  --location westus3 --resource-group rg-coordinator-westus3
+bash tools/coordinator-vm/deploy.sh create  --subscription SUBSCRIPTION_ID --ssh-key ~/.ssh/KEY.pub \
+  --location westus3 --resource-group rg-coordinator-westus3
+```
+
+The preview should list only new resources in `rg-coordinator-westus3`. Then
+follow "First boot" with `-g rg-coordinator-westus3` in the `run-command`
+lines. The new VM is a separate machine: it needs its own sign-ins, registry
+and pairings.
+
+The VM name can stay `coordinator`, but the old VM keeps that name in Tailscale
+until you remove it, so the new one joins under another name, usually
+`coordinator-1`: use the name the Tailscale admin console shows for SSH meanwhile. Once the old VM is gone, delete its resource group
+and its Tailscale device, then rename the new device to `coordinator` in the
+Tailscale admin console. `--vm-name` gives the new VM a different name instead,
+for good.
 
 ## Not tested yet
 

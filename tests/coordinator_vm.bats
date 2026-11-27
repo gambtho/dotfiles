@@ -33,8 +33,19 @@ make_checkout() {
 
 stub_deploy_tools() {
   # Keep the rendered parameters: deploy.sh removes its own copy on exit.
+  # GROUP_LOCATION, when set, is the region of an existing group named
+  # RG-COORDINATOR. GROUP_EXISTS replaces the answer to "group exists".
   stub_command az '
 printf "%s\n" "$*" >>"$CALLS"
+group=$(printf "%s" "$6" | tr "[:lower:]" "[:upper:]")
+case "$1 $2" in
+  "group exists")
+    if [ -n "${GROUP_EXISTS+set}" ]; then printf "%s" "$GROUP_EXISTS"
+    elif [ -n "${GROUP_LOCATION:-}" ] && [ "$group" = RG-COORDINATOR ]; then echo true
+    else echo false; fi
+    exit 0 ;;
+  "group show") [ "$group" = RG-COORDINATOR ] || exit 3; printf "%s\n" "${GROUP_LOCATION:-}"; exit 0 ;;
+esac
 for arg in "$@"; do
   case "$arg" in @*) cp "${arg#@}" "$TEST_ROOT/parameters.json" ;; esac
 done'
@@ -132,11 +143,15 @@ esac'
   write_public_key
   run bash "$DEPLOY" --subscription sub-id --ssh-key "$TEST_ROOT/key.pub"
   [ "$status" -eq 0 ]
-  # No fetch and no second az call: a preview touches nothing.
-  [ "$(wc -l <"$CALLS")" -eq 1 ]
-  grep -q '^deployment sub what-if --subscription sub-id --location eastus2 ' "$CALLS"
-  run jq -r '.parameters | .adminUsername.value, .location.value, (.adminSshPublicKey.value | split(" ")[0])' "$TEST_ROOT/parameters.json"
-  [ "$output" = $'tng\neastus2\nssh-ed25519' ]
+  # No fetch, and only a read before the preview: a preview touches nothing.
+  [ "$(wc -l <"$CALLS")" -eq 2 ]
+  [ "$(head -n 1 "$CALLS")" = "group exists --subscription sub-id --name rg-coordinator --output tsv" ]
+  grep -q '^deployment sub what-if --subscription sub-id --location eastus2 --name coordinator-vm-eastus2 ' "$CALLS"
+  run jq -r '.parameters | .adminUsername.value, .location.value, .resourceGroupName.value, .vmName.value, (.adminSshPublicKey.value | split(" ")[0])' "$TEST_ROOT/parameters.json"
+  [ "$output" = $'tng\neastus2\nrg-coordinator\ncoordinator\nssh-ed25519' ]
+  # The script's defaults are the template's.
+  run jq -r '.parameters | .resourceGroupName.defaultValue, .vmName.defaultValue' "$TEMPLATE"
+  [ "$output" = $'rg-coordinator\ncoordinator' ]
   run jq -r '.parameters.cloudInit.value' "$TEST_ROOT/parameters.json"
   [[ "$output" == *"name = Test Person"* ]]
   [[ "$output" == *"email = test@example.com"* ]]
@@ -150,9 +165,71 @@ esac'
   run bash "$DEPLOY" create --subscription sub-id --admin-user coordinatoradmin --ssh-key "$TEST_ROOT/key.pub" --location westus3
   [ "$status" -eq 0 ]
   [ "$(head -n 1 "$CALLS")" = ls-remote ]
-  grep -q '^deployment sub create --subscription sub-id --location westus3 ' "$CALLS"
+  grep -q '^deployment sub create --subscription sub-id --location westus3 --name coordinator-vm-westus3 ' "$CALLS"
   # The script and cloud-init must name the same repository.
   grep -Fq 'git clone https://github.com/gambtho/dotfiles.git ' "$SRC/cloud-init.yaml"
+}
+
+@test "deploy passes the resource group and VM name to the template" {
+  stub_deploy_tools
+  write_public_key
+  run bash "$DEPLOY" what-if --subscription sub-id --ssh-key "$TEST_ROOT/key.pub" \
+    --location westus3 --resource-group rg-coordinator-westus3 --vm-name coordinator2
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"what-if VM coordinator2 in resource group rg-coordinator-westus3, westus3."* ]]
+  grep -q '^group exists --subscription sub-id --name rg-coordinator-westus3 --output tsv$' "$CALLS"
+  run jq -r '.parameters | .resourceGroupName.value, .vmName.value, .location.value' "$TEST_ROOT/parameters.json"
+  [ "$output" = $'rg-coordinator-westus3\ncoordinator2\nwestus3' ]
+  # Every parameter deploy.sh sets is one the template declares.
+  run jq -e --slurpfile t "$TEMPLATE" '.parameters | keys - ($t[0].parameters | keys) == []' "$TEST_ROOT/parameters.json"
+  [ "$status" -eq 0 ]
+
+  run bash "$DEPLOY" --subscription sub-id --ssh-key "$TEST_ROOT/key.pub" --resource-group ''
+  [ "$status" -eq 2 ]
+  run bash "$DEPLOY" --subscription sub-id --ssh-key "$TEST_ROOT/key.pub" --vm-name
+  [ "$status" -eq 2 ]
+}
+
+@test "deploy refuses a resource group that exists in another region" {
+  stub_deploy_tools
+  write_public_key
+  local mode
+  for mode in what-if create; do
+    : >"$CALLS"
+    GROUP_LOCATION=eastus2 run bash "$DEPLOY" "$mode" --subscription sub-id --ssh-key "$TEST_ROOT/key.pub" \
+      --location westus3 --resource-group RG-COORDINATOR
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"resource group RG-COORDINATOR already exists in eastus2, not westus3"* ]]
+    [[ "$output" == *"--resource-group"* ]]
+    grep -q '^group show --subscription sub-id --name RG-COORDINATOR --query location --output tsv$' "$CALLS"
+    # Only reads reached Azure.
+    run grep -v -e '^ls-remote$' -e '^group exists ' -e '^group show ' "$CALLS"
+    [ "$status" -eq 1 ]
+  done
+
+  # The old group does not stand in the way of a new one.
+  GROUP_LOCATION=eastus2 run bash "$DEPLOY" create --subscription sub-id --ssh-key "$TEST_ROOT/key.pub" \
+    --location westus3 --resource-group rg-coordinator-westus3
+  [ "$status" -eq 0 ]
+  grep -q '^deployment sub create .* --name coordinator-vm-westus3 ' "$CALLS"
+
+  # An answer it cannot read stops it; a CRLF one is still read.
+  : >"$CALLS"
+  GROUP_EXISTS='' run bash "$DEPLOY" --subscription sub-id --ssh-key "$TEST_ROOT/key.pub"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"could not tell whether resource group rg-coordinator exists"* ]]
+  GROUP_EXISTS=$'true\r' GROUP_LOCATION='' run bash "$DEPLOY" --subscription sub-id --ssh-key "$TEST_ROOT/key.pub" --resource-group RG-COORDINATOR
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"could not read the region of resource group RG-COORDINATOR"* ]]
+  GROUP_EXISTS=$'false\r' run bash "$DEPLOY" --subscription sub-id --ssh-key "$TEST_ROOT/key.pub" --location ' '
+  [ "$status" -eq 2 ]
+  ! grep -q '^deployment ' "$CALLS"
+
+  # The same region, however it is written, is a rebuild and goes ahead.
+  : >"$CALLS"
+  GROUP_LOCATION=eastus2 run bash "$DEPLOY" create --subscription sub-id --ssh-key "$TEST_ROOT/key.pub" --location 'East US 2'
+  [ "$status" -eq 0 ]
+  grep -q '^deployment sub create .* --name coordinator-vm-eastus2 ' "$CALLS"
 }
 
 @test "deploy refuses to create from a commit the public main does not have" {
