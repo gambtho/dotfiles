@@ -200,3 +200,50 @@ with zipfile.ZipFile(sys.argv[1], "w") as z:
   [[ "$output" != *"gsettings set was called"* ]]
   [ "$(cat "$FONT_DIR/installed-version")" = v3.4.0 ]
 }
+
+@test "macOS installs fonts where macOS reads them, elsewhere the XDG directory" {
+  run env -u FONT_DIR FONT_INSTALL_SOURCE_ONLY=1 bash -c '
+    uname() { printf "Darwin\n"; }
+    source "$1/fonts/install.sh"
+    printf "%s\n" "$FONT_DIR"
+  ' _ "$REPO_ROOT"
+  [ "$status" -eq 0 ]
+  [ "$output" = "$HOME/Library/Fonts/NerdFonts" ]
+
+  run env -u FONT_DIR FONT_INSTALL_SOURCE_ONLY=1 bash -c '
+    uname() { printf "Linux\n"; }
+    source "$1/fonts/install.sh"
+    printf "%s\n" "$FONT_DIR"
+  ' _ "$REPO_ROOT"
+  [ "$status" -eq 0 ]
+  [ "$output" = "$HOME/.local/share/fonts/NerdFonts" ]
+}
+
+@test "the old macOS font copy is removed only when this installer made it" {
+  local legacy="$HOME/.local/share/fonts/NerdFonts"
+  mkdir -p "$legacy"
+  printf 'font\n' >"$legacy/old.ttf"
+
+  run env FONT_INSTALL_SOURCE_ONLY=1 FONT_DIR="$HOME/Library/Fonts/NerdFonts" bash -c '
+    source "$1/fonts/install.sh"
+    remove_legacy_fonts
+  ' _ "$REPO_ROOT"
+  [ "$status" -eq 0 ]
+  [ -f "$legacy/old.ttf" ]
+
+  printf 'v3.4.0\n' >"$legacy/installed-version"
+  run env FONT_INSTALL_SOURCE_ONLY=1 FONT_DIR="$HOME/Library/Fonts/NerdFonts" bash -c '
+    source "$1/fonts/install.sh"
+    remove_legacy_fonts
+  ' _ "$REPO_ROOT"
+  [ "$status" -eq 0 ]
+  [ ! -e "$legacy" ]
+
+  mkdir -p "$legacy"
+  printf 'v3.4.0\n' >"$legacy/installed-version"
+  run env FONT_INSTALL_SOURCE_ONLY=1 FONT_DIR="$legacy" bash -c '
+    source "$1/fonts/install.sh"
+    remove_legacy_fonts
+  ' _ "$REPO_ROOT"
+  [ -f "$legacy/installed-version" ]
+}

@@ -6,7 +6,16 @@ source "$(dirname "${BASH_SOURCE[0]}")/../libexec/common.sh"
 # shellcheck source=config/versions.env
 source "$(dirname "${BASH_SOURCE[0]}")/../config/versions.env"
 
-FONT_DIR="${FONT_DIR:-$HOME/.local/share/fonts/NerdFonts}"
+# macOS reads fonts from ~/Library/Fonts (and its subfolders), not the XDG
+# font directory. Earlier installs put them in the XDG directory on macOS too.
+LEGACY_FONT_DIR="$HOME/.local/share/fonts/NerdFonts"
+if [[ -z "${FONT_DIR:-}" ]]; then
+  if [[ "$(uname -s)" == Darwin ]]; then
+    FONT_DIR="$HOME/Library/Fonts/NerdFonts"
+  else
+    FONT_DIR="$LEGACY_FONT_DIR"
+  fi
+fi
 DEFAULT_FONT="CaskaydiaMono Nerd Font 10"
 
 font_digest() {
@@ -91,6 +100,16 @@ install_fonts() {
   log_success "Installed Nerd Fonts $NERD_FONTS_VERSION."
 }
 
+# Remove the copy an earlier install left where macOS never looks, once the
+# fonts are in place. Only a directory carrying this installer's version file.
+remove_legacy_fonts() {
+  [[ "$FONT_DIR" != "$LEGACY_FONT_DIR" ]] || return 0
+  [[ -d "$LEGACY_FONT_DIR" && ! -L "$LEGACY_FONT_DIR" && -f "$LEGACY_FONT_DIR/installed-version" ]] || return 0
+  rm -rf -- "$LEGACY_FONT_DIR"
+  log_info "Removed the old Nerd Fonts copy at $LEGACY_FONT_DIR."
+}
+
 if [[ "${FONT_INSTALL_SOURCE_ONLY:-0}" != 1 ]]; then
   install_fonts
+  [[ "$(uname -s)" != Darwin ]] || remove_legacy_fonts
 fi
