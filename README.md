@@ -752,14 +752,7 @@ Pi's always-loaded global working agreement is `ai/pi/AGENTS.md`; project instru
 
 ### Lanes worker box
 
-A lanes worker that runs Claude Code lanes needs only the skills plugin and the review CLIs, not a full install. On such a box, with no other setup:
-
-```bash
-git clone https://github.com/gambtho/dotfiles ~/.dotfiles
-bash ~/.dotfiles/tools/lane-worker/install.sh --check   # then --apply
-```
-
-It installs the pinned `gambtho-skills` plugin and pinned `codex` and `coderabbit` binaries in `~/.local/bin`, with no `sudo` and no shell, PATH, service, Herdr or lanes changes. See [tools/lane-worker](tools/lane-worker/README.md) for sign-in steps and details.
+A lanes worker needs only the skills plugin and the review CLIs, not a full install: `git clone https://github.com/gambtho/dotfiles ~/.dotfiles`, then `bash ~/.dotfiles/tools/lane-worker/install.sh --check` and `--apply`. See [tools/lane-worker](tools/lane-worker/README.md) for what it installs and the sign-in steps.
 
 ### Validation
 

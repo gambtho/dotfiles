@@ -105,7 +105,7 @@ skills-pin: ## Pin the skills package for Pi and Claude Code: make skills-pin VE
 		&& cat ai/claude/install.sh.tmp >ai/claude/install.sh && rm ai/claude/install.sh.tmp
 	@grep -n 'gambtho-skills@\|^SKILLS_TAG=' $(SKILLS_PIN_FILES)
 
-lane-worker: ## Lanes worker box: pinned skills plugin plus review CLIs (codex, coderabbit) in ~/.local/bin
+lane-worker: ## Lanes worker box: pinned skills plugin plus review CLIs (codex, coderabbit) linked from ~/.local/bin
 	bash tools/lane-worker/install.sh --apply
 
 lane-worker-check: ## Dry-run: show what make lane-worker would install

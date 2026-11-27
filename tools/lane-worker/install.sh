@@ -1,19 +1,20 @@
 #!/usr/bin/env bash
 # Set up a lanes worker box for review rounds, and nothing else: the pinned
 # gambtho-skills plugin for Claude Code (through ai/claude/install.sh), and the
-# review CLIs its skills call, as pinned, digest-checked binaries in
-# ~/.local/bin (where claude already lives on a worker):
+# review CLIs its skills call, pinned and digest-checked:
 #   codex       cross-family review (lane-coordinator/scripts/codex-review.sh)
 #   coderabbit  local CodeRabbit review round (pr-closeout)
 #   jq          only when missing; the plugin installer and pr_snapshot.sh use it
 #
-# No sudo, no sign-in. It does not touch the login shell, shell profiles, PATH
-# files, systemd user units, Herdr, lanes or ~/.developerlanes. It writes only
-# ~/.local/bin/{codex,coderabbit,jq}, its receipt under ~/.local/state/dotfiles,
-# and whatever `claude plugin` writes under ~/.claude.
+# Each tool unpacks into its own versioned folder under
+# ~/.local/share/lane-worker, and ~/.local/bin/<tool> (where claude already
+# lives on a worker) links to it. Codex keeps its whole release package, so it
+# finds its bundled bwrap sandbox helper.
 #
-# A binary in ~/.local/bin it did not install is left alone, and so is a tool
-# that is already on PATH somewhere else. Linux only.
+# No sudo, no sign-in. It does not touch the login shell, shell profiles, PATH
+# files, systemd user units, Herdr, lanes or ~/.developerlanes. A file in
+# ~/.local/bin it did not link is left alone, and so is a tool lanes already
+# find on their PATH. Linux only.
 set -euo pipefail
 
 usage() {
@@ -39,13 +40,16 @@ esac
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 BIN_DIR="$HOME/.local/bin"
-RECEIPT="${XDG_STATE_HOME:-$HOME/.local/state}/dotfiles/lane-worker-tools"
+SHARE_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/lane-worker"
+# The PATH a systemd user service gets, plus ~/.local/bin. A tool found only
+# through an interactive shell's PATH (mise shims, npm or bun bins) would not
+# be found by a lane, so it does not count as present. Tests replace the
+# system part with LANE_WORKER_SYSTEM_PATH.
+LANE_PATH="$BIN_DIR:${LANE_WORKER_SYSTEM_PATH:-/usr/local/bin:/usr/bin:/bin}"
 ORIGINAL_PATH="$PATH"
 
 # shellcheck source=libexec/lib/artifacts.sh
 source "$REPO_ROOT/libexec/lib/artifacts.sh"
-# shellcheck source=libexec/lib/tool-path.sh
-source "$REPO_ROOT/libexec/lib/tool-path.sh"
 # shellcheck source=config/versions.env
 source "$REPO_ROOT/config/versions.env"
 
@@ -58,16 +62,16 @@ die() {
 [[ "$(uname -s)" == Linux ]] || die "Linux only."
 case "${ARTIFACT_ARCH:-$(uname -m)}" in
   x86_64)
-    CODEX_ASSET=codex-x86_64-unknown-linux-musl
-    CODEX_SHA256=$CODEX_LINUX_X86_64_SHA256
+    CODEX_ASSET=codex-package-x86_64-unknown-linux-musl.tar.gz
+    CODEX_SHA256=$CODEX_PACKAGE_LINUX_X86_64_SHA256
     CODERABBIT_ASSET=coderabbit-linux-x64.zip
     CODERABBIT_SHA256=$CODERABBIT_LINUX_X64_SHA256
     JQ_ASSET=jq-linux-amd64
     JQ_SHA256=$JQ_LINUX_AMD64_SHA256
     ;;
   aarch64 | arm64)
-    CODEX_ASSET=codex-aarch64-unknown-linux-musl
-    CODEX_SHA256=$CODEX_LINUX_AARCH64_SHA256
+    CODEX_ASSET=codex-package-aarch64-unknown-linux-musl.tar.gz
+    CODEX_SHA256=$CODEX_PACKAGE_LINUX_AARCH64_SHA256
     CODERABBIT_ASSET=coderabbit-linux-arm64.zip
     CODERABBIT_SHA256=$CODERABBIT_LINUX_ARM64_SHA256
     JQ_ASSET=jq-linux-arm64
@@ -76,123 +80,115 @@ case "${ARTIFACT_ARCH:-$(uname -m)}" in
   *) die "unsupported architecture: ${ARTIFACT_ARCH:-$(uname -m)}" ;;
 esac
 
-[[ "$MODE" == check ]] || mkdir -p "$BIN_DIR"
-prepend_managed_tool_path
+# Each unpacker fills the folder given as $1; the second word is the binary's
+# path inside it.
+declare -A ENTRY=([codex]=bin/codex [coderabbit]=coderabbit [jq]=jq)
 
 # What to do with one tool. Prints one word, then a path for the last two:
-#   current   ~/.local/bin/<name> is the pinned build this script installed
-#   install   nothing by that name anywhere on PATH
-#   replace   ~/.local/bin/<name> is an older build this script installed
-#   foreign   ~/.local/bin/<name> is not a build this script installed (it may
-#             have self-updated); it stays
-#   external  ~/.local/bin/<name> is absent and <name> is on PATH elsewhere
+#   current   ~/.local/bin/<name> links to this version's folder
+#   install   no ~/.local/bin/<name>, and lanes find no <name> elsewhere
+#   replace   ~/.local/bin/<name> links to another version this script installed
+#   foreign   ~/.local/bin/<name> is something this script did not link
+#   external  no ~/.local/bin/<name>, but lanes find <name> elsewhere
 tool_state() {
-  local name="$1" version="$2" target="$BIN_DIR/$1" found current recorded
-  if [[ ! -e "$target" && ! -L "$target" ]]; then
-    if found=$(command -v "$name" 2>/dev/null); then
+  local name="$1" version="$2" link="$BIN_DIR/$1" target found
+  if [[ ! -e "$link" && ! -L "$link" ]]; then
+    if found=$(PATH="$LANE_PATH" command -v "$name" 2>/dev/null); then
       echo "external $found"
     else
       echo install
     fi
     return
   fi
-  current=$(sha256_file "$target" 2>/dev/null) || current=""
-  recorded=""
-  [[ ! -f "$RECEIPT" ]] || recorded=$(awk -v name="$name" '$1 == name { print $2, $3 }' "$RECEIPT")
-  if [[ -n "$current" && "$recorded" == "$version $current" ]]; then
+  target=$(readlink "$link" 2>/dev/null) || target=""
+  if [[ "$target" == "$SHARE_DIR/$name-$version/${ENTRY[$name]}" && -x "$target" ]]; then
     echo current
-  elif [[ -n "$current" && -n "$recorded" && "${recorded#* }" == "$current" ]]; then
+  elif [[ "$target" == "$SHARE_DIR/$name-"* ]]; then
     echo replace
   else
-    echo "foreign $target"
+    echo "foreign $link"
   fi
 }
 
-record_receipt() {
-  local name="$1" version="$2" digest
-  digest=$(sha256_file "$BIN_DIR/$name")
-  mkdir -p "$(dirname "$RECEIPT")"
-  {
-    [[ ! -f "$RECEIPT" ]] || awk -v name="$name" '$1 != name' "$RECEIPT"
-    printf '%s %s %s\n' "$name" "$version" "$digest"
-  } >"$RECEIPT.tmp"
-  mv -f "$RECEIPT.tmp" "$RECEIPT"
-}
-
-WORK_DIR=""
-cleanup() { [[ -z "$WORK_DIR" ]] || rm -rf -- "$WORK_DIR"; }
+STAGE=""
+cleanup() { [[ -z "$STAGE" ]] || rm -rf -- "$STAGE"; }
 trap cleanup EXIT
 
-# Stage the binary next to its destination, then rename it into place.
-publish_binary() {
-  local source="$1" name="$2" staged
-  staged=$(mktemp "$BIN_DIR/.$name.XXXXXX")
-  cp -- "$source" "$staged"
-  chmod 0755 "$staged"
-  publish_staged_file "$staged" "$BIN_DIR/$name" || {
-    rm -f -- "$staged"
-    return 1
-  }
+unpack_jq() {
+  download_verified_artifact "$JQ_RELEASE_BASE/$JQ_ASSET" "$JQ_SHA256" "$1/jq" 0755
 }
 
-install_jq() {
-  download_verified_artifact "$JQ_RELEASE_BASE/$JQ_ASSET" "$JQ_SHA256" "$WORK_DIR/jq" 0755
-  publish_binary "$WORK_DIR/jq" jq
+unpack_codex() {
+  download_verified_artifact "$CODEX_RELEASE_BASE/$CODEX_ASSET" "$CODEX_SHA256" "$STAGE/codex.tar.gz"
+  tar -xzf "$STAGE/codex.tar.gz" -C "$1"
 }
 
-install_codex() {
-  download_verified_artifact "$CODEX_RELEASE_BASE/$CODEX_ASSET.tar.gz" "$CODEX_SHA256" "$WORK_DIR/codex.tar.gz"
-  tar -xzf "$WORK_DIR/codex.tar.gz" -C "$WORK_DIR" "$CODEX_ASSET"
-  publish_binary "$WORK_DIR/$CODEX_ASSET" codex
-}
-
-install_coderabbit() {
-  download_verified_artifact "$CODERABBIT_RELEASE_BASE/$CODERABBIT_ASSET" "$CODERABBIT_SHA256" "$WORK_DIR/coderabbit.zip"
+unpack_coderabbit() {
+  download_verified_artifact "$CODERABBIT_RELEASE_BASE/$CODERABBIT_ASSET" "$CODERABBIT_SHA256" "$STAGE/coderabbit.zip"
   # Workers often have no unzip; python3's zipfile reads the one member.
   python3 -I -c 'import sys, zipfile
 with zipfile.ZipFile(sys.argv[1]) as archive, open(sys.argv[2], "wb") as out:
-    out.write(archive.read("coderabbit"))' "$WORK_DIR/coderabbit.zip" "$WORK_DIR/coderabbit"
-  publish_binary "$WORK_DIR/coderabbit" coderabbit
+    out.write(archive.read("coderabbit"))' "$STAGE/coderabbit.zip" "$1/coderabbit"
+  chmod 0755 "$1/coderabbit"
 }
 
-# One tool: report in --check, act in --apply. jq is wanted only when missing,
-# so a jq on PATH anywhere is enough; codex and coderabbit follow the same rule.
+# Unpack into a staging folder beside the versioned one, rename it into place,
+# then swap the link in ~/.local/bin with one rename. An interrupted run leaves
+# only staging, which the next run removes. Older versions stay, because a
+# running lane may still use them.
+install_tool() {
+  local name="$1" version="$2" dir="$SHARE_DIR/$1-$2" tool needed=(curl)
+  case "$name" in
+    codex) needed+=(tar) ;;
+    coderabbit) needed+=(python3) ;;
+  esac
+  for tool in "${needed[@]}"; do
+    command -v "$tool" >/dev/null 2>&1 || die "$tool is needed to install $name. Install it first; this script does not use sudo."
+  done
+  mkdir -p "$SHARE_DIR" "$BIN_DIR"
+  rm -rf -- "$SHARE_DIR"/.staging-*
+  STAGE=$(mktemp -d "$SHARE_DIR/.staging-XXXXXX")
+  mkdir "$STAGE/$name"
+  "unpack_$name" "$STAGE/$name"
+  [[ -x "$STAGE/$name/${ENTRY[$name]}" ]] || die "$name: ${ENTRY[$name]} is missing from the download."
+  if [[ ! -d "$dir" ]]; then
+    mv -T -- "$STAGE/$name" "$dir"
+  fi
+  ln -s -- "$dir/${ENTRY[$name]}" "$STAGE/link"
+  publish_staged_file "$STAGE/link" "$BIN_DIR/$name"
+  rm -rf -- "$STAGE"
+  STAGE=""
+}
+
 converge_tool() {
-  local name="$1" version="$2" installer="$3" state
+  local name="$1" version="$2" state
   state=$(tool_state "$name" "$version")
   case "$state" in
-    current) say "$name $version is installed in $BIN_DIR." ;;
-    external\ *) say "$name is already on PATH at ${state#external }; leaving it." ;;
-    foreign\ *) say "${state#foreign } is not a build this script installed; leaving it. Move it aside and rerun to use the pinned $name $version." ;;
+    current) say "$name $version is installed." ;;
+    external\ *) say "$name is already at ${state#external }; leaving it." ;;
+    foreign\ *)
+      say "${state#foreign } was not installed by this script; leaving it."
+      [[ "$name" == jq ]] || say "  Move it aside and rerun to use the pinned $name $version."
+      ;;
     install | replace)
       if [[ "$MODE" == check ]]; then
-        say "[dry-run] Would ${state} $name $version in $BIN_DIR."
+        say "[dry-run] Would $state $name $version."
         return 0
       fi
-      if [[ -z "$WORK_DIR" ]]; then
-        WORK_DIR=$(mktemp -d)
-      fi
-      "$installer"
-      record_receipt "$name" "$version"
-      say "Installed $name $version in $BIN_DIR."
+      install_tool "$name" "$version"
+      say "Installed $name $version: $BIN_DIR/$name -> $SHARE_DIR/$name-$version/${ENTRY[$name]}"
       ;;
   esac
 }
 
-# Fail before downloading anything when a tool the downloads need is missing.
-missing=()
-command -v claude >/dev/null 2>&1 || missing+=("claude (Claude Code, which a worker runs lanes with)")
-for tool in curl tar python3; do
-  command -v "$tool" >/dev/null 2>&1 || missing+=("$tool")
-done
-if ((${#missing[@]})); then
-  if [[ "$MODE" == apply ]]; then
-    die "missing: ${missing[*]}. Install them first; this script does not use sudo."
-  fi
-  say "[dry-run] Missing, so --apply would stop: ${missing[*]}"
+# Claude Code runs the lanes; without it there is nothing to set up.
+[[ ":$PATH:" == *":$BIN_DIR:"* ]] || PATH="$BIN_DIR:$PATH"
+if ! command -v claude >/dev/null 2>&1; then
+  [[ "$MODE" == check ]] || die "claude is missing. A lanes worker runs lanes with Claude Code; install it first."
+  say "[dry-run] claude is missing, so --apply would stop."
 fi
 
-converge_tool jq "$JQ_VERSION" install_jq
+converge_tool jq "$JQ_VERSION"
 
 if [[ "$MODE" == check ]]; then
   if command -v jq >/dev/null 2>&1 && command -v claude >/dev/null 2>&1; then
@@ -204,8 +200,8 @@ else
   bash "$REPO_ROOT/ai/claude/install.sh"
 fi
 
-converge_tool codex "$CODEX_VERSION" install_codex
-converge_tool coderabbit "$CODERABBIT_CLI_VERSION" install_coderabbit
+converge_tool codex "$CODEX_VERSION"
+converge_tool coderabbit "$CODERABBIT_CLI_VERSION"
 
 if [[ ":$ORIGINAL_PATH:" != *":$BIN_DIR:"* ]]; then
   say "Note: $BIN_DIR is not on this shell's PATH. Lanes find claude there; this script does not change PATH."

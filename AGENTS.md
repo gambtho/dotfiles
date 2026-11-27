@@ -60,7 +60,7 @@ The package's prompts dispatch the named agents in `ai/pi/agents/`. Renaming or 
 
 ## Lanes worker box
 
-`tools/lane-worker/install.sh --check|--apply` (`make lane-worker[-check]`) gives a lanes worker only the pinned skills plugin and pinned review CLIs (`codex`, `coderabbit`, `jq` when missing) in `~/.local/bin`. It must stay free of sudo, sign-in, shell-profile, PATH-file, systemd, Herdr and lanes changes; `tests/lane_worker_install.bats` checks that. Pins live in `config/versions.env`.
+`tools/lane-worker/install.sh --check|--apply` (`make lane-worker[-check]`) gives a lanes worker only the pinned skills plugin and pinned review CLIs (`codex`, `coderabbit`, `jq` when missing), unpacked under `~/.local/share/lane-worker` and linked from `~/.local/bin`. It must stay free of sudo, sign-in, shell-profile, PATH-file, systemd, Herdr and lanes changes; `tests/lane_worker_install.bats` checks that. Pins live in `config/versions.env`.
 
 ## Coordinator VM
 
