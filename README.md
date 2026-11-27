@@ -38,7 +38,8 @@ silicon, `/usr/local` on Intel). New shells find it without a manual step: on
 Apple silicon the Homebrew installer writes `/etc/paths.d/homebrew`, and
 `/usr/local/bin` is already in `/etc/paths`.
 
-After bootstrap, run `bin/dot-install` (or `bin/dot-update`) to install packages and language runtimes.
+After bootstrap, open a new terminal so it picks up Homebrew's PATH, then run
+`bin/dot-install` (or `bin/dot-update`) to install packages and language runtimes.
 
 ### WSL service prerequisites
 

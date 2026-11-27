@@ -815,10 +815,13 @@ CASES
     command_exists() { [[ "$1" == brew ]] && command -v brew >/dev/null; }
     mac_prep
     command -v brew
+    printf "PATH=%s\n" "$PATH"
   ' _ "$REPO_ROOT"
 
   [ "$status" -eq 0 ]
   [[ "$output" == *"$prefix/bin/brew"* ]]
+  # Appended, so commands already on PATH (the gh identity shim) keep precedence.
+  [[ "$output" == *"PATH=/usr/bin:/bin:$prefix/bin:$prefix/sbin"* ]]
   grep -Fxq 'install zsh' "$brew_log"
   grep -Fxq 'install mise' "$brew_log"
 }

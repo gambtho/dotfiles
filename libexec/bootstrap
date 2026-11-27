@@ -432,7 +432,8 @@ linux_prep() {
 
 # Homebrew's installer does not change the PATH of the shell that ran it, so a
 # fresh install is invisible to the rest of this run. Apple silicon installs
-# under /opt/homebrew, Intel under /usr/local.
+# under /opt/homebrew, Intel under /usr/local. Appended, not prepended: no brew
+# was on PATH, and the gh identity shim must keep its precedence.
 HOMEBREW_PREFIXES=(/opt/homebrew /usr/local)
 
 activate_homebrew() {
@@ -440,7 +441,7 @@ activate_homebrew() {
   command_exists brew && return 0
   for prefix in "${HOMEBREW_PREFIXES[@]}"; do
     [[ -x "$prefix/bin/brew" ]] || continue
-    export PATH="$prefix/bin:$prefix/sbin:$PATH"
+    export PATH="$PATH:$prefix/bin:$prefix/sbin"
     return 0
   done
   return 1
@@ -500,7 +501,7 @@ main() {
   setup_profile
   install_dotfiles
 
-  log_success "Bootstrap complete. Run 'bin/dot-install' to complete setup."
+  log_success "Bootstrap complete. Open a new terminal, then run 'bin/dot-install' to complete setup."
 }
 
 if [[ "${BOOTSTRAP_SOURCE_ONLY:-0}" != 1 ]]; then

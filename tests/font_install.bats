@@ -139,6 +139,46 @@ with zipfile.ZipFile(sys.argv[1], "w") as z:
   [ "$(cat "$FONT_DIR/installed-version")" = v3.4.0 ]
 }
 
+@test "a locked GNOME font key does not fail the install" {
+  run env FONT_INSTALL_SOURCE_ONLY=1 FONT_DIR="$FONT_DIR" bash -c '
+    source "$1/fonts/install.sh"
+    download_verified_artifact() { printf archive >"$3"; }
+    unzip() {
+      local archive="$2" destination="$4"
+      printf font >"$destination/${archive##*/}.ttf"
+    }
+    fc-cache() { :; }
+    gsettings() {
+      [[ "$1" == writable ]] || { printf "gsettings set was called\n" >&2; return 1; }
+      printf "false\n"
+    }
+    install_fonts
+  ' _ "$REPO_ROOT"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"gsettings set was called"* ]]
+  [ "$(cat "$FONT_DIR/installed-version")" = v3.4.0 ]
+}
+
+@test "a writable GNOME font key is set" {
+  run env FONT_INSTALL_SOURCE_ONLY=1 FONT_DIR="$FONT_DIR" bash -c '
+    source "$1/fonts/install.sh"
+    download_verified_artifact() { printf archive >"$3"; }
+    unzip() {
+      local archive="$2" destination="$4"
+      printf font >"$destination/${archive##*/}.ttf"
+    }
+    fc-cache() { :; }
+    gsettings() {
+      if [[ "$1" == writable ]]; then printf "true\n"; else printf "set %s\n" "$*"; fi
+    }
+    install_fonts
+  ' _ "$REPO_ROOT"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"set set org.gnome.desktop.interface monospace-font-name CaskaydiaMono Nerd Font 10"* ]]
+}
+
 @test "gsettings without the GNOME interface schema does not fail the install" {
   run env FONT_INSTALL_SOURCE_ONLY=1 FONT_DIR="$FONT_DIR" bash -c '
     source "$1/fonts/install.sh"

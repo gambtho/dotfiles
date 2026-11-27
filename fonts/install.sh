@@ -76,9 +76,10 @@ install_fonts() {
     return 1
   fi
   # Homebrew's glib puts gsettings on PATH on macOS, where no GNOME schema
-  # exists; setting the key there fails, so set it only where the key exists.
+  # exists; setting the key there fails, so set it only where the key exists
+  # and is writable. `writable` prints true or false; it exits 0 for both.
   if command -v gsettings >/dev/null 2>&1 &&
-    gsettings writable org.gnome.desktop.interface monospace-font-name >/dev/null 2>&1; then
+    [[ "$(gsettings writable org.gnome.desktop.interface monospace-font-name 2>/dev/null)" == true ]]; then
     if ! gsettings set org.gnome.desktop.interface monospace-font-name "$DEFAULT_FONT"; then
       rm -rf -- "$FONT_DIR"
       [[ -e "$previous" || -L "$previous" ]] && mv -- "$previous" "$FONT_DIR"
