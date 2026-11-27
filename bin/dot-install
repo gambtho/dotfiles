@@ -63,6 +63,7 @@ install_apt_packages() {
 
   log_info "Updating composed APT packages for $OS/$PROFILE..."
   ensure_wsl_ssh_closed || return
+  ensure_en_us_locale || log_warning "Could not generate the en_US.UTF-8 locale; apt may warn about it."
   setup_package_repositories || return
   sudo_apt apt update >/dev/null || return
   if [[ "$PROFILE" == work ]]; then
