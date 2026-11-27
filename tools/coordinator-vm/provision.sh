@@ -29,6 +29,43 @@ fi
 
 bash "$DOTFILES_ROOT/bin/dot-install"
 
+# shellcheck source=libexec/lib/artifacts.sh
+source "$DOTFILES_ROOT/libexec/lib/artifacts.sh"
+# shellcheck source=config/versions.env
+source "$DOTFILES_ROOT/config/versions.env"
+
+# Claude Code runs the coordinator sessions. Full machines no longer install it
+# (ai/README.md); this box exists to run it, as it exists to run Herdr. Its
+# official installer is unpinned, and Claude Code updates itself afterwards.
+if [[ ! -x "$HOME/.local/bin/claude" ]]; then
+  ALLOW_REMOTE_INSTALLERS=1 run_remote_installer https://claude.ai/install.sh bash
+  [[ -x "$HOME/.local/bin/claude" ]] || {
+    printf '%s\n' 'provision.sh: the Claude Code installer did not leave ~/.local/bin/claude.' >&2
+    exit 1
+  }
+fi
+
+# uv installs lanes later (make coordinator-lanes), once GitHub is signed in.
+# Pinned and digest-checked, like the other release downloads.
+if [[ ! -x "$HOME/.local/bin/uv" ]]; then
+  case "$(uname -m)" in
+    x86_64) uv_target=x86_64-unknown-linux-gnu uv_sha256=$UV_LINUX_X86_64_SHA256 ;;
+    aarch64 | arm64) uv_target=aarch64-unknown-linux-gnu uv_sha256=$UV_LINUX_AARCH64_SHA256 ;;
+    *)
+      printf 'provision.sh: no uv build for %s.\n' "$(uname -m)" >&2
+      exit 1
+      ;;
+  esac
+  uv_stage=$(mktemp -d)
+  download_verified_artifact "$UV_RELEASE_BASE/uv-$uv_target.tar.gz" "$uv_sha256" "$uv_stage/uv.tar.gz"
+  tar -xzf "$uv_stage/uv.tar.gz" -C "$uv_stage"
+  mkdir -p "$HOME/.local/bin"
+  for uv_tool in uvx uv; do
+    publish_staged_file "$uv_stage/uv-$uv_target/$uv_tool" "$HOME/.local/bin/$uv_tool"
+  done
+  rm -rf -- "$uv_stage"
+fi
+
 # dot-install treats Herdr as optional; this box exists to run it.
 if [[ ! -x "$HOME/.local/bin/herdr" ]]; then
   printf '%s\n' 'provision.sh: Herdr was not installed; see the dot-install output above.' >&2

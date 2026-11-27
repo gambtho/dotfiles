@@ -273,14 +273,29 @@ esac'
   [ ! -s "$CALLS" ]
 }
 
-@test "provision bootstraps the server profile, installs, then enables the Herdr service" {
+# A stand-in checkout for provision.sh: bootstrap and dot-install only record
+# that they ran.
+make_provision_checkout() {
   local checkout="$HOME/.dotfiles"
-  mkdir -p "$checkout/tools/coordinator-vm" "$checkout/libexec" "$checkout/bin" "$checkout/core/git"
+  mkdir -p "$checkout/tools/coordinator-vm" "$checkout/libexec/lib" "$checkout/bin" "$checkout/core/git" "$checkout/config"
   cp "$SRC/provision.sh" "$SRC/coordinator-herdr.service" "$checkout/tools/coordinator-vm/"
+  cp "$REPO_ROOT/libexec/lib/artifacts.sh" "$checkout/libexec/lib/"
+  cp "$REPO_ROOT/config/versions.env" "$checkout/config/"
   printf '#!/usr/bin/env bash\nprintf "bootstrap %%s global=%%s\\n" "$*" "${GIT_CONFIG_GLOBAL:-}" >>"$CALLS"\n' >"$checkout/libexec/bootstrap"
   printf '#!/usr/bin/env bash\nprintf "dot-install\\n" >>"$CALLS"\n' >"$checkout/bin/dot-install"
   stub_command systemctl 'printf "systemctl %s\n" "$*" >>"$CALLS"'
   stub_command sleep ':'
+}
+
+@test "provision bootstraps the server profile, installs, then enables the Herdr service" {
+  local checkout="$HOME/.dotfiles"
+  make_provision_checkout
+  # Already installed: this test is about the Herdr service.
+  mkdir -p "$HOME/.local/bin"
+  printf '#!/bin/sh\n' >"$HOME/.local/bin/claude"
+  printf '#!/bin/sh\n' >"$HOME/.local/bin/uv"
+  chmod +x "$HOME/.local/bin/claude" "$HOME/.local/bin/uv"
+  stub_command curl 'exit 97'
 
   # dot-install can succeed without Herdr; provisioning must not.
   run bash "$checkout/tools/coordinator-vm/provision.sh" "$TEST_ROOT/identity"
@@ -289,7 +304,6 @@ esac'
   [ "$(tail -n 1 "$CALLS")" = dot-install ]
 
   : >"$CALLS"
-  mkdir -p "$HOME/.local/bin"
   printf '#!/bin/sh\n[ "${HERDR_DOWN:-0}" != 1 ]\n' >"$HOME/.local/bin/herdr"
   chmod +x "$HOME/.local/bin/herdr"
   run bash "$checkout/tools/coordinator-vm/provision.sh" "$TEST_ROOT/identity"
@@ -314,4 +328,93 @@ systemctl --user enable --now coordinator-herdr.service" ]
   run bash "$checkout/tools/coordinator-vm/provision.sh" "$TEST_ROOT/identity"
   [ "$status" -eq 0 ]
   grep -Fxq 'bootstrap --non-interactive --profile server global=' "$CALLS"
+}
+
+@test "provision installs Claude Code with its installer and a digest-checked uv" {
+  local checkout="$HOME/.dotfiles" tarball="$TEST_ROOT/uv.tar.gz" target
+  make_provision_checkout
+  mkdir -p "$HOME/.local/bin"
+  printf '#!/bin/sh\n' >"$HOME/.local/bin/herdr"
+  chmod +x "$HOME/.local/bin/herdr"
+  case "$(uname -m)" in
+    x86_64) target=x86_64-unknown-linux-gnu ;;
+    *) target=aarch64-unknown-linux-gnu ;;
+  esac
+  mkdir -p "$TEST_ROOT/uv-src/uv-$target"
+  printf '#!/bin/sh\necho uv\n' >"$TEST_ROOT/uv-src/uv-$target/uv"
+  printf '#!/bin/sh\necho uvx\n' >"$TEST_ROOT/uv-src/uv-$target/uvx"
+  chmod +x "$TEST_ROOT/uv-src/uv-$target/"*
+  tar -czf "$tarball" -C "$TEST_ROOT/uv-src" "uv-$target"
+  sed -i -E "s/^(UV_LINUX_(X86_64|AARCH64)_SHA256)=.*/\\1=$(sha256sum "$tarball" | cut -d' ' -f1)/" "$checkout/config/versions.env"
+  export TARBALL="$tarball"
+  stub_command curl '
+url=""; out=""
+while [ $# -gt 0 ]; do
+  case "$1" in --output) out=$2; shift ;; https://*) url=$1 ;; esac
+  shift
+done
+printf "curl %s\n" "$url" >>"$CALLS"
+case "$url" in
+  https://claude.ai/install.sh)
+    printf "mkdir -p \"\$HOME/.local/bin\"; printf \"#!/bin/sh\\n\" >\"\$HOME/.local/bin/claude\"; chmod +x \"\$HOME/.local/bin/claude\"\n" >"$out" ;;
+  https://github.com/astral-sh/uv/releases/download/*) cp "$TARBALL" "$out" ;;
+  *) exit 97 ;;
+esac'
+
+  run bash "$checkout/tools/coordinator-vm/provision.sh" "$TEST_ROOT/identity"
+  [ "$status" -eq 0 ]
+  grep -Fxq 'curl https://claude.ai/install.sh' "$CALLS"
+  # shellcheck source=config/versions.env
+  source "$REPO_ROOT/config/versions.env"
+  grep -Fxq "curl $UV_RELEASE_BASE/uv-$target.tar.gz" "$CALLS"
+  [ -x "$HOME/.local/bin/claude" ]
+  [ "$("$HOME/.local/bin/uv")" = uv ]
+  [ "$("$HOME/.local/bin/uvx")" = uvx ]
+
+  # A rerun downloads nothing.
+  : >"$CALLS"
+  run bash "$checkout/tools/coordinator-vm/provision.sh" "$TEST_ROOT/identity"
+  [ "$status" -eq 0 ]
+  run grep -c '^curl' "$CALLS"
+  [ "$output" = 0 ]
+
+  # A uv download that does not match its digest is refused.
+  rm "$HOME/.local/bin/uv"
+  printf 'tampered' >>"$tarball"
+  run bash "$checkout/tools/coordinator-vm/provision.sh" "$TEST_ROOT/identity"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"checksum mismatch"* ]]
+  [ ! -e "$HOME/.local/bin/uv" ]
+}
+
+@test "install-lanes needs OWNER/REPO, uv and a GitHub sign-in, then installs from main with Relay" {
+  local script="$SRC/install-lanes.sh"
+  stub_command uv 'printf "uv %s\n" "$*" >>"$CALLS"; [ "${NO_LANE:-0}" = 1 ] || { mkdir -p "$HOME/.local/bin"; : >"$HOME/.local/bin/lane"; chmod +x "$HOME/.local/bin/lane"; }'
+  stub_command gh 'printf "gh %s\n" "$*" >>"$CALLS"; [ "${GH_SIGNED_OUT:-0}" != 1 ]'
+
+  run bash "$script"
+  [ "$status" -eq 2 ]
+  run bash "$script" 'not a repo'
+  [ "$status" -eq 2 ]
+  [ ! -s "$CALLS" ]
+
+  GH_SIGNED_OUT=1 run bash "$script" owner/lanes
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"gh auth login"* ]]
+  [ "$(cat "$CALLS")" = "gh auth status --hostname github.com" ]
+
+  : >"$CALLS"
+  run bash "$script" owner/lanes
+  [ "$status" -eq 0 ]
+  [ "$(cat "$CALLS")" = "gh auth status --hostname github.com
+uv tool install --reinstall --python 3.11 developerlanes[relay] @ git+https://github.com/owner/lanes.git@main" ]
+  [[ "$output" == *"lane doctor"* ]]
+
+  rm "$HOME/.local/bin/lane"
+  NO_LANE=1 run bash "$script" owner/lanes
+  [ "$status" -eq 1 ]
+
+  run make -s -C "$REPO_ROOT" coordinator-lanes
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"LANES_REPO=OWNER/REPO"* ]]
 }

@@ -1,4 +1,4 @@
-.PHONY: install bootstrap update relink ai ai-check skills-update skills-pin lane-worker lane-worker-check ai-heeler ai-heeler-check ai-heeler-setup automations automations-check automation-run pins pins-check pins-update check syntax lint test python-test pi-runtime-test pi-security-gate validate
+.PHONY: install bootstrap update relink ai ai-check skills-update skills-pin lane-worker lane-worker-check coordinator-lanes ai-heeler ai-heeler-check ai-heeler-setup automations automations-check automation-run pins pins-check pins-update check syntax lint test python-test pi-runtime-test pi-security-gate validate
 
 # ── Main targets ──────────────────────────────────────────────────────────────
 
@@ -110,6 +110,10 @@ lane-worker: ## Lanes worker box: pinned skills plugin plus review CLIs (codex, 
 
 lane-worker-check: ## Dry-run: show what make lane-worker would install
 	bash tools/lane-worker/install.sh --check
+
+coordinator-lanes: ## Coordinator VM, after gh auth login: install lanes from main with Relay: make coordinator-lanes LANES_REPO=OWNER/REPO
+	@[ -n "$(LANES_REPO)" ] || { echo "usage: make coordinator-lanes LANES_REPO=OWNER/REPO" >&2; exit 2; }
+	bash tools/coordinator-vm/install-lanes.sh "$(LANES_REPO)"
 
 ai-heeler: ## Prepare opt-in default Herdr/Heeler persistence without live takeover
 	bash tools/herdr/heeler/install.sh --apply

@@ -1587,6 +1587,28 @@ effective_github_helper() {
   [ "$output" = 'global=<>' ]
 }
 
+@test "auth login is not redirected and warns when it changes the tracked config" {
+  setup_setup_git
+  # A login that finds a helper other than gh's offers Git setup and writes --global.
+  cat >"$STUB_BIN/real/gh" <<'EOF'
+#!/usr/bin/env bash
+printf 'global=<%s>\n' "${GIT_CONFIG_GLOBAL-unset}"
+[ "${WRITE_HELPER:-0}" = 1 ] && git config --global --add credential.https://github.com.helper "!$0 auth git-credential"
+exit 7
+EOF
+  cd "$TEST_ROOT/default"
+  run "$REPO_ROOT/bin/gh" auth login --hostname github.com
+  [ "$status" -eq 7 ]
+  [ "$output" = 'global=<unset>' ]
+  cmp "$TEST_ROOT/tracked.before" "$DOTFILES/core/git/gitconfig.symlink"
+
+  WRITE_HELPER=1 run "$REPO_ROOT/bin/gh" auth login --hostname github.com
+  [ "$status" -eq 7 ]
+  [[ "$output" == *"gh: auth login changed the tracked Git config $DOTFILES/core/git/gitconfig.symlink."* ]]
+  [[ "$output" == *"checkout -- core/git/gitconfig.symlink"* ]]
+  ! cmp -s "$TEST_ROOT/tracked.before" "$DOTFILES/core/git/gitconfig.symlink"
+}
+
 @test "non-setup commands retain their global config environment arguments and exit status" {
   setup_setup_git
   cat >"$STUB_BIN/real/gh" <<'EOF'
