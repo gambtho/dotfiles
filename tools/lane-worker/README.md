@@ -73,9 +73,11 @@ in your own terminal on the box, as the lane user:
 read -rs CR_KEY && coderabbit auth login --api-key "$CR_KEY"; unset CR_KEY
 ```
 
-The key is briefly visible in the process list while that runs, so do it in
-your own terminal, not in a lane. Then run `coderabbit auth status` from a lane
-again. Do not pass `--api-key` to `coderabbit review`: the key would show up in
+CodeRabbit 0.9.7 takes the key only as an argument (it has no
+`--api-key-file` or stdin option), so while that command runs, any user on the
+box who can list processes can see it. Run it only on a worker where you are
+the only ordinary user, and in your own terminal, not in a lane. Then run
+`coderabbit auth status` from a lane again. Do not pass `--api-key` to `coderabbit review`: the key would show up in
 the lane's transcript.
 
 ### Codex sandbox
