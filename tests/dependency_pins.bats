@@ -27,6 +27,7 @@ setup() {
   [[ "$output" == *"artifact yq v4.45.1"* ]]
   [[ "$output" == *"artifact win32yank v0.1.1"* ]]
   [[ "$output" == *"artifact herdr v0.9.5"* ]]
+  [[ "$output" == *"artifact uv $UV_VERSION"* ]]
   [[ "$output" == *"artifact neovim $NVIM_VERSION"* ]]
   [[ "$output" == *"artifact tree-sitter-cli $TREE_SITTER_VERSION"* ]]
   [[ "$output" == *"artifact codex $CODEX_VERSION"* ]]
@@ -365,6 +366,7 @@ case "$url" in
   *equalsraf/win32yank*) printf '{"tag_name":"v0.1.1"}\n' ;;
   *ryanoasis/nerd-fonts*) printf '{"tag_name":"v3.4.0"}\n' ;;
   *herdrdev/herdr*) printf '{"tag_name":"v0.9.5"}\n' ;;
+  *astral-sh/uv*) printf '{"tag_name":"0.13.8"}\n' ;;
   *neovim/neovim*) printf '{"tag_name":"v0.12.4"}\n' ;;
   *tree-sitter/tree-sitter*) printf '{"tag_name":"v0.26.11"}\n' ;;
   *openai/codex*) printf '{"tag_name":"rust-v0.169.0"}\n' ;;
@@ -385,6 +387,7 @@ SCRIPT
   [[ "$output" == *"current artifact yq v4.45.1"* ]]
   [[ "$output" == *"current artifact win32yank v0.1.1"* ]]
   [[ "$output" == *"current artifact herdr v0.9.5"* ]]
+  [[ "$output" == *"current artifact uv 0.13.8"* ]]
   [[ "$output" == *"current artifact neovim v0.12.4"* ]]
   [[ "$output" == *"current artifact tree-sitter-cli v0.26.11"* ]]
   [[ "$output" == *"current artifact codex rust-v0.169.0"* ]]
