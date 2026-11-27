@@ -1,4 +1,4 @@
-.PHONY: install bootstrap update relink ai ai-check skills-update skills-pin ai-heeler ai-heeler-check ai-heeler-setup automations automations-check automation-run pins pins-check pins-update check syntax lint test python-test pi-runtime-test pi-security-gate validate
+.PHONY: install bootstrap update relink ai ai-check skills-update skills-pin lane-worker lane-worker-check ai-heeler ai-heeler-check ai-heeler-setup automations automations-check automation-run pins pins-check pins-update check syntax lint test python-test pi-runtime-test pi-security-gate validate
 
 # ── Main targets ──────────────────────────────────────────────────────────────
 
@@ -104,6 +104,12 @@ skills-pin: ## Pin the skills package for Pi and Claude Code: make skills-pin VE
 	@sed -E 's|^SKILLS_TAG=.*|SKILLS_TAG=$(VERSION)|' ai/claude/install.sh >ai/claude/install.sh.tmp \
 		&& cat ai/claude/install.sh.tmp >ai/claude/install.sh && rm ai/claude/install.sh.tmp
 	@grep -n 'gambtho-skills@\|^SKILLS_TAG=' $(SKILLS_PIN_FILES)
+
+lane-worker: ## Lanes worker box: pinned skills plugin plus review CLIs (codex, coderabbit) linked from ~/.local/bin
+	bash tools/lane-worker/install.sh --apply
+
+lane-worker-check: ## Dry-run: show what make lane-worker would install
+	bash tools/lane-worker/install.sh --check
 
 ai-heeler: ## Prepare opt-in default Herdr/Heeler persistence without live takeover
 	bash tools/herdr/heeler/install.sh --apply

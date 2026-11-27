@@ -750,6 +750,10 @@ Review, planning, document-understanding, and lane-coordination prompts and skil
 
 Pi's always-loaded global working agreement is `ai/pi/AGENTS.md`; project instructions override it through repository `AGENTS.md` files. Native iPhone access to the actual default Herdr/Pi terminal uses the opt-in [Heeler setup](tools/herdr/heeler/README.md), with explicit boot preparation and operator-only SSH publication. No browser backend, reverse proxy or DNS-provider API credential is required.
 
+### Lanes worker box
+
+A lanes worker needs only the skills plugin and the review CLIs, not a full install: `git clone https://github.com/gambtho/dotfiles ~/.dotfiles`, then `bash ~/.dotfiles/tools/lane-worker/install.sh --check` and `--apply`. See [tools/lane-worker](tools/lane-worker/README.md) for what it installs and the sign-in steps.
+
 ### Validation
 
 ```bash

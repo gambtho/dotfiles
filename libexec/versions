@@ -52,6 +52,9 @@ list_pins() {
   printf 'artifact herdr %s\n' "$HERDR_VERSION"
   printf 'artifact neovim %s\n' "$NVIM_VERSION"
   printf 'artifact tree-sitter-cli %s\n' "$TREE_SITTER_VERSION"
+  printf 'artifact codex %s\n' "$CODEX_VERSION"
+  printf 'artifact coderabbit %s\n' "$CODERABBIT_CLI_VERSION"
+  printf 'artifact jq %s\n' "$JQ_VERSION"
   printf 'artifact nerd-fonts %s\n' "$NERD_FONTS_VERSION"
   printf 'artifact nerd-font-cascadia-mono %s %s\n' "$NERD_FONTS_VERSION" "$NERD_FONT_CASCADIA_MONO_SHA256"
   printf 'artifact nerd-font-hack %s %s\n' "$NERD_FONTS_VERSION" "$NERD_FONT_HACK_SHA256"
@@ -177,6 +180,20 @@ check_pins() {
   check_artifact_release herdr herdrdev/herdr "$HERDR_VERSION"
   check_artifact_release neovim neovim/neovim "v$NVIM_VERSION"
   check_artifact_release tree-sitter-cli tree-sitter/tree-sitter "v$TREE_SITTER_VERSION"
+  check_artifact_release codex openai/codex "rust-v$CODEX_VERSION"
+  check_artifact_release jq jqlang/jq "jq-$JQ_VERSION"
+  check_coderabbit_release
+}
+
+# CodeRabbit publishes releases on its own site, not GitHub.
+check_coderabbit_release() {
+  local latest
+  latest=$(curl "${CURL_DOWNLOAD_ARGS[@]}" --silent https://cli.coderabbit.ai/releases/latest/VERSION) &&
+    [[ "$latest" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+    printf 'error artifact coderabbit: unable to query latest release\n' >&2
+    return 1
+  }
+  report_artifact_release coderabbit "$CODERABBIT_CLI_VERSION" "$latest"
 }
 
 update_pin() {
