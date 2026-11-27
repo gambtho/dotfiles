@@ -136,8 +136,9 @@ real `gh`. Do not run `gh auth setup-git`: the tracked Git config already makes
 tracked file, which leaves `~/.dotfiles` dirty. The shim sends it to
 `~/.gitconfig.local` instead, and warns if `gh auth login` changes the tracked
 file. If `git -C ~/.dotfiles status` shows `core/git/gitconfig.symlink`
-changed, check `git -C ~/.dotfiles diff`; if it is only credential helper
-lines, undo it with `git -C ~/.dotfiles checkout -- core/git/gitconfig.symlink`.
+changed, check `git -C ~/.dotfiles diff`. If the file had no other changes
+before, undo it with `git -C ~/.dotfiles checkout -- core/git/gitconfig.symlink`;
+otherwise drop only the helper lines with `git -C ~/.dotfiles checkout -p`.
 
 ### 3. Install lanes and start a fresh registry
 
