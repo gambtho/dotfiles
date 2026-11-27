@@ -50,8 +50,11 @@ install_fonts() {
     }
   done
 
+  # The archives share README.md and LICENSE.txt. Without -o, unzip stops at
+  # an overwrite prompt (or fails with no terminal), the version is never
+  # recorded, and every later run downloads the fonts again.
   for asset in "${assets[@]}"; do
-    unzip -q "$archives/$asset" -d "$staged_fonts" || {
+    unzip -qo "$archives/$asset" -d "$staged_fonts" </dev/null || {
       rm -rf -- "$staging"
       return 1
     }
@@ -72,7 +75,10 @@ install_fonts() {
     rm -rf -- "$staging"
     return 1
   fi
-  if command -v gsettings >/dev/null 2>&1; then
+  # Homebrew's glib puts gsettings on PATH on macOS, where no GNOME schema
+  # exists; setting the key there fails, so set it only where the key exists.
+  if command -v gsettings >/dev/null 2>&1 &&
+    gsettings writable org.gnome.desktop.interface monospace-font-name >/dev/null 2>&1; then
     if ! gsettings set org.gnome.desktop.interface monospace-font-name "$DEFAULT_FONT"; then
       rm -rf -- "$FONT_DIR"
       [[ -e "$previous" || -L "$previous" ]] && mv -- "$previous" "$FONT_DIR"

@@ -430,12 +430,29 @@ linux_prep() {
   fi
 }
 
+# Homebrew's installer does not change the PATH of the shell that ran it, so a
+# fresh install is invisible to the rest of this run. Apple silicon installs
+# under /opt/homebrew, Intel under /usr/local.
+HOMEBREW_PREFIXES=(/opt/homebrew /usr/local)
+
+activate_homebrew() {
+  local prefix
+  command_exists brew && return 0
+  for prefix in "${HOMEBREW_PREFIXES[@]}"; do
+    [[ -x "$prefix/bin/brew" ]] || continue
+    export PATH="$prefix/bin:$prefix/sbin:$PATH"
+    return 0
+  done
+  return 1
+}
+
 mac_prep() {
   log_info "Preparing macOS environment"
 
-  if ! command_exists brew; then
+  if ! activate_homebrew; then
     log_info "Installing Homebrew"
     run_remote_installer https://raw.githubusercontent.com/Homebrew/install/master/install.sh /bin/bash
+    activate_homebrew || log_error "Homebrew installed, but no brew was found in ${HOMEBREW_PREFIXES[*]}."
     log_success "Homebrew installed"
   else
     log_info "Homebrew already installed"

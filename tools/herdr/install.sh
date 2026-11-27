@@ -54,21 +54,25 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Upstream also publishes macOS assets, but this repo installs Herdr on Linux
-# only: the machines that run it are WSL2, and an untested darwin path is worse
-# than an honest refusal. macOS would come through platforms/macos/brewfile.
-require_platform() {
-  local os arch
-  os="${HERDR_OS:-$(uname -s)}"
-  arch="${HERDR_ARCH:-$(uname -m)}"
+# The binary and config install runs on Linux and macOS, from the pinned
+# upstream asset for each. The dashboard and lanes modes stay Linux-only: their
+# version-directory swaps rely on GNU mv -T.
+herdr_asset_os() {
+  local os="${HERDR_OS:-$(uname -s)}"
+  case "$os" in
+    Linux | linux) printf 'linux\n' ;;
+    Darwin | darwin) printf 'macos\n' ;;
+    *)
+      printf 'Herdr is installed on Linux and macOS only here; refusing to install on: %s\n' "$os" >&2
+      return 1
+      ;;
+  esac
+}
 
-  if [[ "$os" != Linux && "$os" != linux ]]; then
-    printf 'Herdr is installed on Linux only here; refusing to install on: %s\n' "$os" >&2
-    return 1
-  fi
-
-  # Upstream names its assets by uname arch (herdr-linux-x86_64), so both
-  # spellings normalise to the uname form rather than to amd64/arm64.
+# Upstream names its assets by uname arch (herdr-linux-x86_64), so both
+# spellings normalise to the uname form rather than to amd64/arm64.
+herdr_asset_arch() {
+  local arch="${HERDR_ARCH:-$(uname -m)}"
   case "$arch" in
     x86_64 | amd64) arch=x86_64 ;;
     aarch64 | arm64) arch=aarch64 ;;
@@ -77,8 +81,17 @@ require_platform() {
       return 1
       ;;
   esac
-
   printf '%s\n' "$arch"
+}
+
+require_platform() {
+  local os
+  os="${HERDR_OS:-$(uname -s)}"
+  if [[ "$os" != Linux && "$os" != linux ]]; then
+    printf 'This Herdr mode is installed on Linux only here; refusing to install on: %s\n' "$os" >&2
+    return 1
+  fi
+  herdr_asset_arch
 }
 
 prepare_destination_directory() {
@@ -133,20 +146,17 @@ write_marker() {
 }
 
 install_pinned_binary() {
-  local arch="$1" asset digest bin_dir
+  local arch="$1" os="${2:-linux}" asset digest bin_dir
   bin_dir=$(dirname "$HERDR_BIN")
 
-  case "$arch" in
-    x86_64)
-      asset="herdr-linux-x86_64"
-      digest="$HERDR_LINUX_X86_64_SHA256"
-      ;;
-    aarch64)
-      asset="herdr-linux-aarch64"
-      digest="$HERDR_LINUX_AARCH64_SHA256"
-      ;;
-    *) log_error "Unsupported Herdr architecture: $arch" ;;
+  case "$os/$arch" in
+    linux/x86_64) digest="$HERDR_LINUX_X86_64_SHA256" ;;
+    linux/aarch64) digest="$HERDR_LINUX_AARCH64_SHA256" ;;
+    macos/x86_64) digest="$HERDR_MACOS_X86_64_SHA256" ;;
+    macos/aarch64) digest="$HERDR_MACOS_AARCH64_SHA256" ;;
+    *) log_error "Unsupported Herdr platform: $os/$arch" ;;
   esac
+  asset="herdr-$os-$arch"
 
   prepare_destination_directory "$bin_dir"
   prepare_destination_directory "$HERDR_STATE_ROOT"
@@ -165,7 +175,7 @@ install_pinned_binary() {
   command -v curl >/dev/null 2>&1 || log_error "curl is required to install Herdr."
 
   DOWNLOAD_DIR=$(mktemp -d)
-  log_info "Downloading Herdr $HERDR_VERSION for linux/$arch..."
+  log_info "Downloading Herdr $HERDR_VERSION for $os/$arch..."
   download_verified_artifact "$HERDR_RELEASE_BASE/$asset" "$digest" "$DOWNLOAD_DIR/$asset" 0755
 
   STAGED_BIN=$(mktemp "$bin_dir/.herdr.XXXXXX")
@@ -372,10 +382,11 @@ main() {
   # Split from the assignment on purpose: `local arch=$(...)` takes the exit
   # status of `local`, not of the command, so the platform refusal would be
   # swallowed and the install would continue on an unsupported host.
-  local arch
-  arch=$(require_platform)
+  local os arch
+  os=$(herdr_asset_os)
+  arch=$(herdr_asset_arch)
 
-  install_pinned_binary "$arch"
+  install_pinned_binary "$arch" "$os"
   install_config
 }
 

@@ -28,20 +28,62 @@ source_installer() {
   [[ "$output" == *"Linux only"* ]]
 }
 
-@test "a non-Linux host is refused before anything is written" {
-  # Goes through main (not require_platform directly) so the assertion below
+@test "an unsupported host is refused before anything is written" {
+  # Goes through main (not herdr_asset_os directly) so the assertion below
   # exercises the ordering the test name claims: the platform gate runs before
   # install_pinned_binary and install_config, so neither published artifact
   # should exist afterward.
-  source_installer HERDR_OS=Darwin bash -c '
+  source_installer HERDR_OS=FreeBSD bash -c '
     source "$1/tools/herdr/install.sh"
     main
   ' _ "$REPO_ROOT"
 
   [ "$status" -ne 0 ]
-  [[ "$output" == *"Linux only"* ]]
+  [[ "$output" == *"Linux and macOS only"* ]]
   [ ! -e "$TEST_ROOT/bin/herdr" ]
   [ ! -e "$TEST_ROOT/config/herdr/config.toml" ]
+}
+
+@test "macOS installs the pinned macOS asset and the config" {
+  local arch digest
+  while read -r arch digest; do
+    source_installer HERDR_OS=Darwin HERDR_ARCH="$arch" \
+      HERDR_EXPECTED_URL="https://github.com/herdrdev/herdr/releases/download/v0.9.5/herdr-macos-$arch" \
+      HERDR_EXPECTED_SHA256="$digest" bash -c '
+      source "$1/tools/herdr/install.sh"
+      download_verified_artifact() {
+        [[ "$1" == "$HERDR_EXPECTED_URL" && "$2" == "$HERDR_EXPECTED_SHA256" && "$4" == 0755 ]] || {
+          printf "Unexpected Herdr artifact request: %s %s %s\n" "$1" "$2" "$4" >&2
+          return 1
+        }
+        printf "verified-asset\n" >"$3"
+        chmod "$4" "$3"
+      }
+      main
+    ' _ "$REPO_ROOT"
+
+    [ "$status" -eq 0 ]
+    [ "$(<"$TEST_ROOT/bin/herdr")" = verified-asset ]
+    [ "$(<"$TEST_ROOT/state/installed-version")" = v0.9.5 ]
+    [ -f "$TEST_ROOT/config/herdr/config.toml" ]
+    rm -r "$TEST_ROOT/bin" "$TEST_ROOT/state" "$TEST_ROOT/config"
+  done <<'ASSETS'
+x86_64 5fb0a908ec7f6745e3e245738b06bfad56c46391c391ab3c0955fbead01f1369
+aarch64 fb77c2232a05a8035421382c894392f4174e4e38a18e48af3dd0290157c3a7e2
+ASSETS
+}
+
+@test "the dashboard and lanes modes stay Linux-only on macOS" {
+  local mode
+  for mode in --install-dashboard --install-lanes; do
+    source_installer HERDR_OS=Darwin bash -c '
+      source "$1/tools/herdr/install.sh"
+      main "$2"
+    ' _ "$REPO_ROOT" "$mode"
+
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Linux only"* ]]
+  done
 }
 
 @test "an unsupported architecture is refused" {
