@@ -501,7 +501,7 @@ main() {
   setup_profile
   install_dotfiles
 
-  log_success "Bootstrap complete. Open a new terminal, then run 'bin/dot-install' to complete setup."
+  log_success "Bootstrap complete. Open a new terminal, then run '$DOTFILES_ROOT/bin/dot-install' to complete setup."
 }
 
 if [[ "${BOOTSTRAP_SOURCE_ONLY:-0}" != 1 ]]; then

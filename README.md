@@ -39,7 +39,8 @@ Apple silicon the Homebrew installer writes `/etc/paths.d/homebrew`, and
 `/usr/local/bin` is already in `/etc/paths`.
 
 After bootstrap, open a new terminal so it picks up Homebrew's PATH, then run
-`bin/dot-install` (or `bin/dot-update`) to install packages and language runtimes.
+`~/.dotfiles/bin/dot-install` (or `~/.dotfiles/bin/dot-update`) to install
+packages and language runtimes.
 
 ### WSL service prerequisites
 
