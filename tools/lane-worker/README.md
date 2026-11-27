@@ -113,8 +113,10 @@ itself. This script makes no system change.
 
 It writes the tool folders, their links in `~/.local/bin` (and the `python` link), and what `ai/claude/install.sh`
 and the `claude` CLI write. On a box where the plugin is already at the pinned tag,
-that is nothing. Otherwise `ai/claude/install.sh`:
+that, plus attribution already turned off, is nothing. Otherwise `ai/claude/install.sh`:
 
+- sets `attribution` in `~/.claude/settings.json` so Claude Code adds no commit trailer
+  or pull request line, keeping every other setting;
 - adds the marketplace and installs the plugin at user scope;
 - when the marketplace points at another ref (a later pin bump), removes it, which
   uninstalls the plugin, then adds and installs it again. Run a pin bump when no lane is

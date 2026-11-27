@@ -230,14 +230,14 @@ plugin install gambtho-skills@gambtho-skills --scope user" ]
 
   [ "$status" -eq 0 ]
   [ ! -e "$TEST_ROOT/forbidden" ]
-  # Nothing changed or disappeared; everything new is a tool link or lives
-  # under the tool folder.
+  # Nothing changed or disappeared; everything new is a tool link, Claude's
+  # settings file (attribution off) or lives under the tool folder.
   run diff "$TEST_ROOT/before" <(snapshot_home)
   [[ "$output" == *"> ./.local/bin/codex -> "* ]]
   [ -z "$(grep '^<' <<<"$output")" ]
   [ -z "$(grep '^>' <<<"$output" | grep -v -e '^> ./.local/bin/codex -> ' -e '^> ./.local/bin/coderabbit -> ' \
     -e '^> ./.local/bin/jq -> ' -e '^> ./.local/bin/git-lfs -> ' -e '^> ./.local/bin/python -> ' \
-    -e '^> ./.local/share/lane-worker[/ ]')" ]
+    -e '^> ./.local/share/lane-worker[/ ]' -e '^> ./.claude/ ' -e '^> ./.claude/settings.json ')" ]
 }
 
 @test "a file it did not link, or a tool lanes already find, is left alone" {

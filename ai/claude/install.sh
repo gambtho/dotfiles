@@ -6,6 +6,9 @@
 # `claude plugin list` shows the plugin at the pinned version, skill links in
 # ~/.claude/skills that point into ~/.dotfiles are removed. Their names are
 # appended to the legacy-links file first, so they can be recreated.
+#
+# It also turns off the commit and pull request attribution in Claude Code's
+# user settings, keeping every other setting.
 set -euo pipefail
 
 SKILLS_TAG=v0.2.0
@@ -35,6 +38,51 @@ fi
 if ! command -v jq >/dev/null 2>&1; then
   echo "jq is required to install the $MARKETPLACE plugin for Claude Code." >&2
   exit 1
+fi
+
+# Claude Code adds a Co-Authored-By trailer to commits and a "Generated with
+# Claude Code" line to pull requests. Empty strings hide both, and sessionUrl
+# false drops the session link; the settings reference gives this object form
+# for files that older Claude Code versions also read. Only this key changes.
+SETTINGS="$CLAUDE_DIR/settings.json"
+NO_ATTRIBUTION='{"commit": "", "pr": "", "sessionUrl": false}'
+
+attribution_is_off() {
+  [[ -f "$SETTINGS" ]] &&
+    jq -e '.attribution | type == "object" and .commit == "" and .pr == "" and .sessionUrl == false' \
+      "$SETTINGS" >/dev/null 2>&1
+}
+
+turn_off_attribution() {
+  local target=$SETTINGS tmp
+  [[ ! -L "$target" ]] || target=$(readlink -f -- "$target")
+  if [[ -e "$target" ]] && ! jq -e 'type == "object"' "$target" >/dev/null 2>&1; then
+    echo "$SETTINGS is not a JSON object; leaving it alone. Fix it, then rerun." >&2
+    return 1
+  fi
+  mkdir -p "$(dirname "$target")"
+  tmp=$(mktemp "$target.XXXXXX")
+  if [[ -e "$target" ]]; then
+    cp -p -- "$target" "$tmp"
+    jq --argjson want "$NO_ATTRIBUTION" \
+      '.attribution = ((if (.attribution | type) == "object" then .attribution else {} end) + $want)' \
+      "$target" >"$tmp" || {
+      rm -f -- "$tmp"
+      return 1
+    }
+  else
+    jq -n --argjson want "$NO_ATTRIBUTION" '{attribution: $want}' >"$tmp"
+  fi
+  mv -- "$tmp" "$target"
+  echo "Turned off Claude Code commit and pull request attribution in $SETTINGS."
+}
+
+if ! attribution_is_off; then
+  if [[ "$MODE" == check ]]; then
+    echo "[dry-run] Would turn off Claude Code commit and pull request attribution in $SETTINGS"
+  else
+    turn_off_attribution
+  fi
 fi
 
 # Prints "<repo> <ref>" for the marketplace, or nothing when it is absent.
