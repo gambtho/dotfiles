@@ -102,10 +102,16 @@ install_fonts() {
 
 # Remove the copy an earlier install left where macOS never looks, once the
 # fonts are in place. Only a directory carrying this installer's version file,
-# and never the active one, even when FONT_DIR is a link to it.
+# and never one that holds the active fonts: FONT_DIR may be the old directory,
+# a link to it, or a directory inside it.
 remove_legacy_fonts() {
-  [[ "$FONT_DIR" != "$LEGACY_FONT_DIR" && ! "$FONT_DIR" -ef "$LEGACY_FONT_DIR" ]] || return 0
+  local active legacy
   [[ -d "$LEGACY_FONT_DIR" && ! -L "$LEGACY_FONT_DIR" && -f "$LEGACY_FONT_DIR/installed-version" ]] || return 0
+  legacy=$(cd -P -- "$LEGACY_FONT_DIR" && pwd) || return 0
+  active=$(cd -P -- "$FONT_DIR" 2>/dev/null && pwd) || active=$FONT_DIR
+  case "$active/" in
+    "$legacy/"*) return 0 ;;
+  esac
   rm -rf -- "$LEGACY_FONT_DIR"
   log_info "Removed the old Nerd Fonts copy at $LEGACY_FONT_DIR."
 }

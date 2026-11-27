@@ -249,6 +249,14 @@ with zipfile.ZipFile(sys.argv[1], "w") as z:
   [ "$status" -eq 0 ]
   [ -f "$legacy/installed-version" ]
 
+  mkdir -p "$legacy/custom"
+  run env FONT_INSTALL_SOURCE_ONLY=1 FONT_DIR="$legacy/custom" bash -c '
+    source "$1/fonts/install.sh"
+    remove_legacy_fonts
+  ' _ "$REPO_ROOT"
+  [ "$status" -eq 0 ]
+  [ -d "$legacy/custom" ]
+
   run env FONT_INSTALL_SOURCE_ONLY=1 FONT_DIR="$legacy" bash -c '
     source "$1/fonts/install.sh"
     remove_legacy_fonts
