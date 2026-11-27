@@ -29,6 +29,9 @@ setup() {
   [[ "$output" == *"artifact herdr v0.9.5"* ]]
   [[ "$output" == *"artifact neovim $NVIM_VERSION"* ]]
   [[ "$output" == *"artifact tree-sitter-cli $TREE_SITTER_VERSION"* ]]
+  [[ "$output" == *"artifact codex $CODEX_VERSION"* ]]
+  [[ "$output" == *"artifact coderabbit $CODERABBIT_CLI_VERSION"* ]]
+  [[ "$output" == *"artifact jq $JQ_VERSION"* ]]
   [[ "$output" != *"herdr-devcontainer"* ]]
   [[ "$output" != *"paseo"* ]]
   [[ "$output" != *"npm "* ]]
@@ -364,6 +367,9 @@ case "$url" in
   *herdrdev/herdr*) printf '{"tag_name":"v0.9.5"}\n' ;;
   *neovim/neovim*) printf '{"tag_name":"v0.12.4"}\n' ;;
   *tree-sitter/tree-sitter*) printf '{"tag_name":"v0.26.11"}\n' ;;
+  *openai/codex*) printf '{"tag_name":"rust-v0.169.0"}\n' ;;
+  *jqlang/jq*) printf '{"tag_name":"jq-1.8.2"}\n' ;;
+  *cli.coderabbit.ai/releases/latest/VERSION) printf '0.9.7\n' ;;
 
   *tmustier/pi-queue-steer*|*registry.npmjs.org/pi-web-access/*|*registry.npmjs.org/@narumitw/pi-lsp/*|*registry.npmjs.org/@gotgenes/pi-subagents/*|*registry.npmjs.org/@gotgenes/pi-permission-system/*) exit 91 ;;
   *registry.npmjs.org*) exit 92 ;;
@@ -381,6 +387,9 @@ SCRIPT
   [[ "$output" == *"current artifact herdr v0.9.5"* ]]
   [[ "$output" == *"current artifact neovim v0.12.4"* ]]
   [[ "$output" == *"current artifact tree-sitter-cli v0.26.11"* ]]
+  [[ "$output" == *"current artifact codex rust-v0.169.0"* ]]
+  [[ "$output" == *"current artifact jq jq-1.8.2"* ]]
+  [[ "$output" == *"current artifact coderabbit 0.9.7"* ]]
   [[ "$output" != *"herdr-devcontainer"* ]]
   [[ "$output" == *"current artifact nerd-fonts v3.4.0"* ]]
   [[ "$output" != *"paseo"* ]]
@@ -408,6 +417,7 @@ SCRIPT
         esac
         ;;
       *dl.k8s.io*) printf "v1.37.0\n" ;;
+      *cli.coderabbit.ai*) printf "0.9.7\n" ;;
       *registry.npmjs.org*) exit 92 ;;
       *api.github.com*) printf "{\"tag_name\":\"v0.0.0\"}\n" ;;
       *) exit 91 ;;
@@ -431,7 +441,41 @@ SCRIPT
   done <<'PINS'
 neovim neovim/neovim artifact v0.12.4
 tree-sitter-cli tree-sitter/tree-sitter artifact v0.26.11
+codex openai/codex artifact rust-v0.169.0
+jq jqlang/jq artifact jq-1.8.2
 PINS
+}
+
+@test "versions check reports CodeRabbit release drift and lookup failures" {
+  stub_command mise 'exit 0'
+  stub_command git 'printf "0000000000000000000000000000000000000000\tHEAD\n"'
+  stub_command curl '
+    url="${@: -1}"
+    case "$url" in
+      *cli.coderabbit.ai*)
+        case "$CODERABBIT_RESULT" in
+          outdated) printf "9.9.9\n" ;;
+          transport) exit 22 ;;
+          response) printf "<html>\n" ;;
+        esac
+        ;;
+      *dl.k8s.io*) printf "v1.37.0\n" ;;
+      *api.github.com*) printf "{\"tag_name\":\"v0.0.0\"}\n" ;;
+      *) exit 91 ;;
+    esac
+  '
+
+  local result
+  for result in outdated transport response; do
+    run env CODERABBIT_RESULT="$result" bash "$REPO_ROOT/libexec/versions" check
+    if [[ "$result" == outdated ]]; then
+      [ "$status" -eq 0 ]
+      [[ "$output" == *"outdated artifact coderabbit $CODERABBIT_CLI_VERSION -> 9.9.9"* ]]
+    else
+      [ "$status" -ne 0 ]
+      [[ "$output" == *"error artifact coderabbit: unable to query latest release"* ]]
+    fi
+  done
 }
 
 @test "versions check reports artifact release lookup failures clearly" {

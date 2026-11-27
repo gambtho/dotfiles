@@ -750,6 +750,17 @@ Review, planning, document-understanding, and lane-coordination prompts and skil
 
 Pi's always-loaded global working agreement is `ai/pi/AGENTS.md`; project instructions override it through repository `AGENTS.md` files. Native iPhone access to the actual default Herdr/Pi terminal uses the opt-in [Heeler setup](tools/herdr/heeler/README.md), with explicit boot preparation and operator-only SSH publication. No browser backend, reverse proxy or DNS-provider API credential is required.
 
+### Lanes worker box
+
+A lanes worker that runs Claude Code lanes needs only the skills plugin and the review CLIs, not a full install. On such a box, with no other setup:
+
+```bash
+git clone https://github.com/gambtho/dotfiles ~/.dotfiles
+bash ~/.dotfiles/tools/lane-worker/install.sh --check   # then --apply
+```
+
+It installs the pinned `gambtho-skills` plugin and pinned `codex` and `coderabbit` binaries in `~/.local/bin`, with no `sudo` and no shell, PATH, service, Herdr or lanes changes. See [tools/lane-worker](tools/lane-worker/README.md) for sign-in steps and details.
+
 ### Validation
 
 ```bash
