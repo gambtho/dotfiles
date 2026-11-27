@@ -3,9 +3,9 @@
 set -euo pipefail
 
 # Source the common functions, including detect_os and command_exists
-source "$(dirname "$0")/../../libexec/common.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/../../libexec/common.sh"
 
-ROOT="$(cd "$(dirname "$0")/../.." && pwd -P)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 # shellcheck source=config/versions.env
 source "$ROOT/config/versions.env"
 
@@ -24,7 +24,9 @@ set_default_shell_to_zsh() {
     macOS)
       local current_shell
       current_shell=$(dscl . -read "/Users/$USER" UserShell | awk '{print $2}')
-      if [ "$current_shell" != "$zsh_path" ]; then
+      # Any zsh will do. Which one `which` finds depends on PATH order, and
+      # chsh asks for a password, so never swap one zsh for the other.
+      if [[ "$(basename "${current_shell:-}")" != zsh ]]; then
         if ! grep -q "$zsh_path" /etc/shells; then
           log_info "Adding zsh to /etc/shells..."
           echo "$zsh_path" | sudo tee -a /etc/shells
@@ -100,4 +102,6 @@ main() {
   log_success "Zsh dependencies installed."
 }
 
-main "$@"
+if [[ "${SHELL_INSTALL_SOURCE_ONLY:-0}" != 1 ]]; then
+  main "$@"
+fi

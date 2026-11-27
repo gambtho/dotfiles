@@ -999,3 +999,45 @@ CASES
   [ "$status" -eq 0 ]
   [[ "$output" == *RUNTIME_RAN* ]]
 }
+
+@test "macOS packages snapshot every Homebrew package type and only warn when the snapshot fails" {
+  run bash -c '
+    INSTALL_SOURCE_ONLY=1 source "$1/bin/dot-install"
+    brew() { printf "brew %s\n" "$*"; [[ "$1 ${2:-}" != "bundle dump" ]]; }
+    update_homebrew
+  ' _ "$REPO_ROOT"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"brew bundle dump --force --file="*"/tmp/brewfile"* ]]
+  [[ "$output" != *"--all"* ]]
+  [[ "$output" == *"Could not write the Homebrew snapshot"* ]]
+
+  run bash -c '
+    INSTALL_SOURCE_ONLY=1 source "$1/bin/dot-install"
+    brew() { printf "brew %s\n" "$*"; [[ "$*" != "bundle --file="* ]]; }
+    update_homebrew
+  ' _ "$REPO_ROOT"
+  [ "$status" -ne 0 ]
+  [[ "$output" != *"bundle dump"* ]]
+}
+
+@test "macOS shell setup keeps any zsh login shell and changes only a non-zsh one" {
+  local shell
+  for shell in /opt/homebrew/bin/zsh /bin/zsh /bin/bash; do
+    run bash -c '
+      SHELL_INSTALL_SOURCE_ONLY=1 source "$1/core/shell/install.sh"
+      login_shell=$2
+      detect_os() { OS=macOS; }
+      dscl() { printf "UserShell: %s\n" "$login_shell"; }
+      which() { printf "/bin/zsh\n"; }
+      chsh() { printf "chsh %s\n" "$*"; }
+      sudo() { cat >/dev/null; }
+      set_default_shell_to_zsh
+    ' _ "$REPO_ROOT" "$shell"
+    [ "$status" -eq 0 ]
+    if [[ "$shell" == */zsh ]]; then
+      [[ "$output" != *chsh* ]]
+    else
+      [[ "$output" == *"chsh -s /bin/zsh"* ]]
+    fi
+  done
+}
