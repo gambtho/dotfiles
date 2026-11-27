@@ -100,18 +100,25 @@ fi
 
 # Azure writes a region as eastus2 and also accepts "East US 2".
 region_key() {
-  tr -d ' ' <<<"$1" | tr '[:upper:]' '[:lower:]'
+  tr -d ' \r' <<<"$1" | tr '[:upper:]' '[:lower:]'
 }
+if [[ -z "$(region_key "$location")" ]]; then
+  usage
+  exit 2
+fi
 
 # Group names ignore case, so a second coordinator in another region with the
 # default name would aim at the first one's group. Refuse that before Azure is
 # asked to deploy anything. Read-only: these calls change nothing.
-group_exists=$(az group exists --subscription "$subscription" --name "$resource_group")
-case "$group_exists" in
+group_exists=$(az group exists --subscription "$subscription" --name "$resource_group" --output tsv)
+case "${group_exists%$'\r'}" in
   false) ;;
   true)
     existing=$(az group show --subscription "$subscription" --name "$resource_group" --query location --output tsv)
-    if [[ "$(region_key "$existing")" != "$(region_key "$location")" ]]; then
+    if [[ -z "$(region_key "$existing")" ]]; then
+      printf 'deploy.sh: could not read the region of resource group %s.\n' "$resource_group" >&2
+      exit 1
+    elif [[ "$(region_key "$existing")" != "$(region_key "$location")" ]]; then
       printf 'deploy.sh: resource group %s already exists in %s, not %s. Name a new group with --resource-group.\n' \
         "$resource_group" "$existing" "$location" >&2
       exit 1

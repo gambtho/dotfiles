@@ -225,8 +225,8 @@ lines. The new VM is a separate machine: it needs its own sign-ins, registry
 and pairings.
 
 The VM name can stay `coordinator`, but the old VM keeps that name in Tailscale
-until you remove it, so the new one joins as `coordinator-1`: use that name for
-SSH meanwhile. Once the old VM is gone, delete its resource group
+until you remove it, so the new one joins under another name, usually
+`coordinator-1`: use the name the Tailscale admin console shows for SSH meanwhile. Once the old VM is gone, delete its resource group
 and its Tailscale device, then rename the new device to `coordinator` in the
 Tailscale admin console. `--vm-name` gives the new VM a different name instead,
 for good.
