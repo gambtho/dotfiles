@@ -16,8 +16,11 @@ update_homebrew() {
   brew update &&
     brew upgrade &&
     brew cleanup &&
-    brew bundle --file="$DOTFILES_ROOT/platforms/macos/brewfile" &&
-    brew bundle dump --all --force --file="$DOTFILES_ROOT/tmp/brewfile"
+    brew bundle --file="$DOTFILES_ROOT/platforms/macos/brewfile" || return
+  # The snapshot only records what is installed, so failing to write it warns
+  # instead of failing the phase. Homebrew dumps every package type by default.
+  brew bundle dump --force --file="$DOTFILES_ROOT/tmp/brewfile" ||
+    log_warning "Could not write the Homebrew snapshot to tmp/brewfile; packages are installed."
 }
 
 compose_apt_packages() {
