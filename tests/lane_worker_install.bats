@@ -40,6 +40,15 @@ with zipfile.ZipFile(sys.argv[1], "w") as z:
   for arch in amd64 arm64; do
     printf '#!/bin/sh\nexec %s "$@"\n' "$REAL_JQ" >"$PAYLOADS/jq-linux-$arch"
   done
+  local lfs_version
+  lfs_version=$(sed -n 's/^GIT_LFS_VERSION=//p' "$REPO_ROOT/config/versions.env")
+  for arch in amd64 arm64; do
+    mkdir -p "$TEST_ROOT/lfs-$arch/git-lfs-$lfs_version"
+    printf '#!/bin/sh\necho git-lfs %s\n' "$arch" >"$TEST_ROOT/lfs-$arch/git-lfs-$lfs_version/git-lfs"
+    printf 'readme\n' >"$TEST_ROOT/lfs-$arch/git-lfs-$lfs_version/README.md"
+    chmod +x "$TEST_ROOT/lfs-$arch/git-lfs-$lfs_version/git-lfs"
+    tar -czf "$PAYLOADS/git-lfs-linux-$arch-v$lfs_version.tar.gz" -C "$TEST_ROOT/lfs-$arch" "git-lfs-$lfs_version"
+  done
   write_pins
 
   stub_command curl '
@@ -97,6 +106,9 @@ CODERABBIT_LINUX_ARM64_SHA256=$(digest "$PAYLOADS/coderabbit-linux-arm64.zip")
 JQ_RELEASE_BASE=https://example.test/jq
 JQ_LINUX_AMD64_SHA256=$(digest "$PAYLOADS/jq-linux-amd64")
 JQ_LINUX_ARM64_SHA256=$(digest "$PAYLOADS/jq-linux-arm64")
+GIT_LFS_RELEASE_BASE=https://example.test/git-lfs
+GIT_LFS_LINUX_AMD64_SHA256=$(digest "$PAYLOADS/git-lfs-linux-amd64-v$(sed -n 's/^GIT_LFS_VERSION=//p' "$REPO_ROOT/config/versions.env").tar.gz")
+GIT_LFS_LINUX_ARM64_SHA256=$(digest "$PAYLOADS/git-lfs-linux-arm64-v$(sed -n 's/^GIT_LFS_VERSION=//p' "$REPO_ROOT/config/versions.env").tar.gz")
 EOF
   source "$FIXTURE/config/versions.env"
 }
@@ -199,7 +211,8 @@ plugin install gambtho-skills@gambtho-skills --scope user" ]
   [[ "$output" == *"> ./.local/bin/codex -> "* ]]
   [ -z "$(grep '^<' <<<"$output")" ]
   [ -z "$(grep '^>' <<<"$output" | grep -v -e '^> ./.local/bin/codex -> ' -e '^> ./.local/bin/coderabbit -> ' \
-    -e '^> ./.local/bin/jq -> ' -e '^> ./.local/share/lane-worker[/ ]')" ]
+    -e '^> ./.local/bin/jq -> ' -e '^> ./.local/bin/git-lfs -> ' -e '^> ./.local/bin/python -> ' \
+    -e '^> ./.local/share/lane-worker[/ ]')" ]
 }
 
 @test "a file it did not link, or a tool lanes already find, is left alone" {
@@ -339,4 +352,60 @@ plugin install gambtho-skills@gambtho-skills --scope user" ]
   [[ "$output" == *"Claude Code has gambtho-skills@gambtho-skills ${TAG#v}."* ]]
   [ "$(head -1 "$PAYLOADS/downloads")" = "https://example.test/jq/jq-linux-amd64" ]
   [ "$(readlink "$HOME/.local/bin/jq")" = "$SHARE/jq-$JQ_VERSION/jq" ]
+}
+
+@test "git-lfs is installed where lanes find none, and its pin follows mise" {
+  system_jq
+  run bash "$INSTALLER" --check
+  [[ "$output" == *"[dry-run] Would install git-lfs $GIT_LFS_VERSION."* ]]
+
+  run bash "$INSTALLER" --apply
+  [ "$status" -eq 0 ]
+  [ "$(readlink "$HOME/.local/bin/git-lfs")" = "$SHARE/git-lfs-$GIT_LFS_VERSION/git-lfs-$GIT_LFS_VERSION/git-lfs" ]
+  [ "$("$HOME/.local/bin/git-lfs")" = "git-lfs amd64" ]
+  # Only the binary is unpacked.
+  [ "$(find "$SHARE/git-lfs-$GIT_LFS_VERSION" -type f)" = "$SHARE/git-lfs-$GIT_LFS_VERSION/git-lfs-$GIT_LFS_VERSION/git-lfs" ]
+  grep -Eq "^git-lfs = \"$GIT_LFS_VERSION\"$" "$REPO_ROOT/config/mise/config.toml"
+
+  rm "$HOME/.local/bin/git-lfs"
+  printf '#!/bin/sh\n' >"$SYSTEM_BIN/git-lfs"
+  chmod +x "$SYSTEM_BIN/git-lfs"
+  run bash "$INSTALLER" --apply
+  [[ "$output" == *"git-lfs is already at $SYSTEM_BIN/git-lfs; leaving it."* ]]
+  [ ! -e "$HOME/.local/bin/git-lfs" ]
+}
+
+@test "python links to the system python3 only when lanes find no python" {
+  system_jq
+  run bash "$INSTALLER" --apply
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"No python3 where lanes look"* ]]
+  [ ! -e "$HOME/.local/bin/python" ]
+
+  printf '#!/bin/sh\necho system python3\n' >"$SYSTEM_BIN/python3"
+  chmod +x "$SYSTEM_BIN/python3"
+  run bash "$INSTALLER" --check
+  [[ "$output" == *"[dry-run] Would link $HOME/.local/bin/python to $SYSTEM_BIN/python3."* ]]
+  [ ! -e "$HOME/.local/bin/python" ]
+
+  run bash "$INSTALLER" --apply
+  [ "$status" -eq 0 ]
+  [ "$(readlink "$HOME/.local/bin/python")" = "$SYSTEM_BIN/python3" ]
+  [ "$("$HOME/.local/bin/python")" = "system python3" ]
+  run bash "$INSTALLER" --apply
+  [[ "$output" == *"python links to $SYSTEM_BIN/python3."* ]]
+
+  # A python lanes already find, or a file it did not make, is left alone.
+  rm "$HOME/.local/bin/python"
+  printf '#!/bin/sh\n' >"$SYSTEM_BIN/python"
+  chmod +x "$SYSTEM_BIN/python"
+  run bash "$INSTALLER" --apply
+  [[ "$output" == *"python is already at $SYSTEM_BIN/python; leaving it."* ]]
+  [ ! -e "$HOME/.local/bin/python" ]
+  rm "$SYSTEM_BIN/python"
+  printf '#!/bin/sh\necho own\n' >"$HOME/.local/bin/python"
+  chmod +x "$HOME/.local/bin/python"
+  run bash "$INSTALLER" --apply
+  [[ "$output" == *"$HOME/.local/bin/python was not installed by this script; leaving it."* ]]
+  [ "$("$HOME/.local/bin/python")" = own ]
 }
