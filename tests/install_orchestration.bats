@@ -325,6 +325,61 @@ write_fixture_installer() {
   done
 }
 
+# The last thing dot-install prints on a machine with lanes is how to get the
+# review CLIs lanes call, when lanes cannot find them. It never runs it.
+run_install_main_for_lane_worker() {
+  INSTALL_SOURCE_ONLY=1 run bash -c '
+    source "$1/bin/dot-install"
+    detect_os() { OS=Ubuntu; }
+    install_platform_packages() { :; }
+    install_managed_tools() { :; }
+    check_unsaved_apt_packages() { :; }
+    setup_flatpak() { :; }
+    setup_shell() { :; }
+    setup_git() { :; }
+    install_languages() { :; }
+    setup_neovim() { :; }
+    setup_fonts() { :; }
+    setup_work() { :; }
+    setup_agent_knowledge() { :; }
+    setup_ai() { :; }
+    bash() {
+      [[ "$*" != *lane-worker* ]] || printf "LANE_WORKER_RAN\n"
+      return 0
+    }
+    main
+  ' _ "$REPO_ROOT"
+}
+
+@test "dot-install ends by naming make lane-worker when lanes cannot find the review CLIs" {
+  local system="$TEST_ROOT/lane-system-bin"
+  mkdir -p "$system"
+  export LANE_WORKER_SYSTEM_PATH="$system"
+
+  # No lanes: nothing is said.
+  run_install_main_for_lane_worker
+  [ "$status" -eq 0 ]
+  [[ "$output" != *lane-worker* ]]
+
+  # Lanes, and codex only on the interactive PATH, as mise or npm would put it.
+  stub_command lane 'exit 0'
+  stub_command codex 'exit 0'
+  run_install_main_for_lane_worker
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Install complete."*"lanes cannot find: codex coderabbit."*"make -C \"$REPO_ROOT\" lane-worker"* ]]
+  [[ "$output" != *LANE_WORKER_RAN* ]]
+
+  # Both where lanes look: nothing more to say.
+  printf '#!/bin/sh\n' >"$system/codex"
+  mkdir -p "$HOME/.local/bin"
+  printf '#!/bin/sh\n' >"$HOME/.local/bin/coderabbit"
+  chmod +x "$system/codex" "$HOME/.local/bin/coderabbit"
+  run_install_main_for_lane_worker
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Install complete."* ]]
+  [[ "$output" != *lane-worker* ]]
+}
+
 @test "Linux managed tools provision pinned yq despite an incompatible namesake" {
   local os
   for os in Ubuntu WSL; do

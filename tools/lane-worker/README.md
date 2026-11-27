@@ -2,7 +2,7 @@
 
 A lanes worker runs lanes with Claude Code but is not a full dotfiles machine. For a
 lane's review round it needs the `gambtho-skills` plugin and the review CLIs those
-skills call. `install.sh` installs only those:
+skills call. `install.sh` installs only those, on Linux or macOS, x86_64 or arm64:
 
 | What | Why | Where |
 |---|---|---|
@@ -11,13 +11,15 @@ skills call. `install.sh` installs only those:
 | `coderabbit` (pinned) | the local CodeRabbit review round in `pr-closeout` | `~/.local/bin/coderabbit` |
 | `jq` (pinned), only if lanes find none | the plugin installer and `pr_snapshot.sh` | `~/.local/bin/jq` |
 | `git-lfs` (pinned, same version as the mise pin), only if lanes find none | repositories with Git LFS hooks warn on every commit without it | `~/.local/bin/git-lfs` |
-| `python`, only if lanes find none | lanes run `python`; Ubuntu ships only `python3` | `~/.local/bin/python`, a link to the system `python3` (what `python-is-python3` does, without sudo) |
+| `python`, only if lanes find none | lanes run `python`; Ubuntu and macOS ship only `python3` | `~/.local/bin/python`, a link to the system `python3` (what `python-is-python3` does, without sudo) |
 
 Each tool unpacks into `~/.local/share/lane-worker/<tool>-<version>/`, and
 `~/.local/bin/<tool>` links to it. Codex keeps its whole package there, including the
 `bwrap` helper its read-only sandbox uses. Versions and SHA-256 digests live in
-`config/versions.env`; `make pins-check` reports newer releases. Every download is
-checked against its digest before anything is unpacked.
+`config/versions.env`, one per OS and architecture; `make pins-check` reports newer
+releases. Every download is checked against its digest before anything is unpacked.
+On macOS the same pinned versions come from the releases' macOS builds. The script
+avoids Bash 4 features, so the `bash` 3.2 that macOS ships can run it.
 
 ## First run on a box without dotfiles
 
@@ -38,6 +40,11 @@ second run with the same pins downloads and changes nothing. Later,
 
 Do not run `make install`, `make bootstrap` or `make ai` on a worker. They set up a
 whole machine.
+
+A full dotfiles machine can also run lanes. There, `dot-install` (and so `dot-update`)
+ends by printing `make -C ~/.dotfiles lane-worker` as the next step when `lane` is
+installed and lanes cannot find `codex` or `coderabbit`. It does not run it, because
+`--apply` may re-pin the skills plugin while a lane is in a review.
 
 ## Sign-in afterwards
 
@@ -82,6 +89,7 @@ the lane's transcript.
 
 ### Codex sandbox
 
+On macOS, Codex uses the system Seatbelt sandbox and needs nothing more. On Linux,
 Codex runs review commands in a `bwrap` sandbox. Ubuntu 24.04 restricts
 unprivileged user namespaces through AppArmor, and when that is on, the bundled
 `bwrap` cannot start. Then every command Codex runs fails, so it reports that it
@@ -124,8 +132,8 @@ file, systemd user units, Herdr, lanes or `~/.developerlanes`, and it runs no `s
 
 A tool counts as present when lanes would find it: in `~/.local/bin` or the system
 directories a systemd user service has on PATH (`/usr/local/bin`, `/usr/bin`, `/bin`).
-One found only through an interactive shell (mise shims, npm or bun folders) does not
-count, so the pinned build is installed. A file in `~/.local/bin` that is not a link
+One found only through an interactive shell (mise shims, npm or bun folders, Homebrew's
+`/opt/homebrew/bin` on Apple silicon) does not count, so the pinned build is installed. A file in `~/.local/bin` that is not a link
 this script made is left alone; move it aside and rerun to get the pinned build. If
 `~/.local/bin` is not on the shell's PATH, the script says so and does not fix it.
 
