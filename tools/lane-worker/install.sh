@@ -16,7 +16,8 @@
 # No sudo, no sign-in. It does not touch the login shell, shell profiles, PATH
 # files, systemd user units, Herdr, lanes or ~/.developerlanes. A file in
 # ~/.local/bin it did not link is left alone, and so is a tool lanes already
-# find on their PATH. Linux only.
+# find on their PATH. Linux and macOS, x86_64 and arm64. Bash 3.2, as macOS
+# ships it, runs it too.
 set -euo pipefail
 
 usage() {
@@ -44,9 +45,9 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 BIN_DIR="$HOME/.local/bin"
 SHARE_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/lane-worker"
 # The PATH a systemd user service gets, plus ~/.local/bin. A tool found only
-# through an interactive shell's PATH (mise shims, npm or bun bins) would not
-# be found by a lane, so it does not count as present. Tests replace the
-# system part with LANE_WORKER_SYSTEM_PATH.
+# through an interactive shell's PATH (mise shims, npm or bun bins, Homebrew on
+# Apple silicon) would not be found by a lane, so it does not count as present.
+# Tests replace the system part with LANE_WORKER_SYSTEM_PATH.
 LANE_PATH="$BIN_DIR:${LANE_WORKER_SYSTEM_PATH:-/usr/local/bin:/usr/bin:/bin}"
 ORIGINAL_PATH="$PATH"
 
@@ -61,9 +62,9 @@ die() {
   exit 1
 }
 
-[[ "$(uname -s)" == Linux ]] || die "Linux only."
-case "${ARTIFACT_ARCH:-$(uname -m)}" in
-  x86_64)
+ARCH="${ARTIFACT_ARCH:-$(uname -m)}"
+case "$(uname -s)/$ARCH" in
+  Linux/x86_64)
     CODEX_ASSET=codex-package-x86_64-unknown-linux-musl.tar.gz
     CODEX_SHA256=$CODEX_PACKAGE_LINUX_X86_64_SHA256
     CODERABBIT_ASSET=coderabbit-linux-x64.zip
@@ -73,7 +74,7 @@ case "${ARTIFACT_ARCH:-$(uname -m)}" in
     GIT_LFS_ASSET=git-lfs-linux-amd64-v$GIT_LFS_VERSION.tar.gz
     GIT_LFS_SHA256=$GIT_LFS_LINUX_AMD64_SHA256
     ;;
-  aarch64 | arm64)
+  Linux/aarch64 | Linux/arm64)
     CODEX_ASSET=codex-package-aarch64-unknown-linux-musl.tar.gz
     CODEX_SHA256=$CODEX_PACKAGE_LINUX_AARCH64_SHA256
     CODERABBIT_ASSET=coderabbit-linux-arm64.zip
@@ -83,12 +84,39 @@ case "${ARTIFACT_ARCH:-$(uname -m)}" in
     GIT_LFS_ASSET=git-lfs-linux-arm64-v$GIT_LFS_VERSION.tar.gz
     GIT_LFS_SHA256=$GIT_LFS_LINUX_ARM64_SHA256
     ;;
-  *) die "unsupported architecture: ${ARTIFACT_ARCH:-$(uname -m)}" ;;
+  Darwin/x86_64)
+    CODEX_ASSET=codex-package-x86_64-apple-darwin.tar.gz
+    CODEX_SHA256=$CODEX_PACKAGE_DARWIN_X86_64_SHA256
+    CODERABBIT_ASSET=coderabbit-darwin-x64.zip
+    CODERABBIT_SHA256=$CODERABBIT_DARWIN_X64_SHA256
+    JQ_ASSET=jq-macos-amd64
+    JQ_SHA256=$JQ_MACOS_AMD64_SHA256
+    GIT_LFS_ASSET=git-lfs-darwin-amd64-v$GIT_LFS_VERSION.zip
+    GIT_LFS_SHA256=$GIT_LFS_DARWIN_AMD64_SHA256
+    ;;
+  Darwin/arm64 | Darwin/aarch64)
+    CODEX_ASSET=codex-package-aarch64-apple-darwin.tar.gz
+    CODEX_SHA256=$CODEX_PACKAGE_DARWIN_AARCH64_SHA256
+    CODERABBIT_ASSET=coderabbit-darwin-arm64.zip
+    CODERABBIT_SHA256=$CODERABBIT_DARWIN_ARM64_SHA256
+    JQ_ASSET=jq-macos-arm64
+    JQ_SHA256=$JQ_MACOS_ARM64_SHA256
+    GIT_LFS_ASSET=git-lfs-darwin-arm64-v$GIT_LFS_VERSION.zip
+    GIT_LFS_SHA256=$GIT_LFS_DARWIN_ARM64_SHA256
+    ;;
+  Linux/* | Darwin/*) die "unsupported architecture: $ARCH" ;;
+  *) die "Linux and macOS only." ;;
 esac
 
-# Each unpacker fills the folder given as $1; the second word is the binary's
-# path inside it.
-declare -A ENTRY=([codex]=bin/codex [coderabbit]=coderabbit [jq]=jq ["git-lfs"]="git-lfs-$GIT_LFS_VERSION/git-lfs")
+# Each unpacker fills the folder given as $1; this is the binary's path inside
+# it. A function, not an associative array, because macOS ships bash 3.2.
+entry() {
+  case "$1" in
+    codex) echo bin/codex ;;
+    git-lfs) echo "git-lfs-$GIT_LFS_VERSION/git-lfs" ;;
+    *) echo "$1" ;;
+  esac
+}
 
 # What to do with one tool. Prints one word, then a path for the last two:
 #   current   ~/.local/bin/<name> links to this version's folder
@@ -107,7 +135,7 @@ tool_state() {
     return
   fi
   target=$(readlink "$link" 2>/dev/null) || target=""
-  if [[ "$target" == "$SHARE_DIR/$name-$version/${ENTRY[$name]}" && -x "$target" ]]; then
+  if [[ "$target" == "$SHARE_DIR/$name-$version/$(entry "$name")" && -x "$target" ]]; then
     echo current
   elif [[ "$target" == "$SHARE_DIR/$name-"* ]]; then
     echo replace
@@ -124,9 +152,29 @@ unpack_jq() {
   download_verified_artifact "$JQ_RELEASE_BASE/$JQ_ASSET" "$JQ_SHA256" "$1/jq" 0755
 }
 
+# Extract one member of a zip as an executable. Workers often have no unzip,
+# and python3's zipfile reads it on Linux and macOS alike.
+unzip_member() {
+  local archive="$1" member="$2" out="$3"
+  mkdir -p "$(dirname "$out")"
+  python3 -I -c 'import sys, zipfile
+with zipfile.ZipFile(sys.argv[1]) as archive, open(sys.argv[3], "wb") as out:
+    out.write(archive.read(sys.argv[2]))' "$archive" "$member" "$out"
+  chmod 0755 "$out"
+}
+
 unpack_git-lfs() {
-  download_verified_artifact "$GIT_LFS_RELEASE_BASE/$GIT_LFS_ASSET" "$GIT_LFS_SHA256" "$STAGE/git-lfs.tar.gz"
-  tar -xzf "$STAGE/git-lfs.tar.gz" -C "$1" "git-lfs-$GIT_LFS_VERSION/git-lfs"
+  local member="git-lfs-$GIT_LFS_VERSION/git-lfs"
+  case "$GIT_LFS_ASSET" in
+    *.zip)
+      download_verified_artifact "$GIT_LFS_RELEASE_BASE/$GIT_LFS_ASSET" "$GIT_LFS_SHA256" "$STAGE/git-lfs.zip"
+      unzip_member "$STAGE/git-lfs.zip" "$member" "$1/$member"
+      ;;
+    *)
+      download_verified_artifact "$GIT_LFS_RELEASE_BASE/$GIT_LFS_ASSET" "$GIT_LFS_SHA256" "$STAGE/git-lfs.tar.gz"
+      tar -xzf "$STAGE/git-lfs.tar.gz" -C "$1" "$member"
+      ;;
+  esac
 }
 
 unpack_codex() {
@@ -136,11 +184,7 @@ unpack_codex() {
 
 unpack_coderabbit() {
   download_verified_artifact "$CODERABBIT_RELEASE_BASE/$CODERABBIT_ASSET" "$CODERABBIT_SHA256" "$STAGE/coderabbit.zip"
-  # Workers often have no unzip; python3's zipfile reads the one member.
-  python3 -I -c 'import sys, zipfile
-with zipfile.ZipFile(sys.argv[1]) as archive, open(sys.argv[2], "wb") as out:
-    out.write(archive.read("coderabbit"))' "$STAGE/coderabbit.zip" "$1/coderabbit"
-  chmod 0755 "$1/coderabbit"
+  unzip_member "$STAGE/coderabbit.zip" coderabbit "$1/coderabbit"
 }
 
 # Unpack into a staging folder beside the versioned one, rename it into place,
@@ -149,9 +193,9 @@ with zipfile.ZipFile(sys.argv[1]) as archive, open(sys.argv[2], "wb") as out:
 # running lane may still use them.
 install_tool() {
   local name="$1" version="$2" dir="$SHARE_DIR/$1-$2" tool needed=(curl)
-  case "$name" in
-    codex | git-lfs) needed+=(tar) ;;
-    coderabbit) needed+=(python3) ;;
+  case "$name/$GIT_LFS_ASSET" in
+    codex/* | git-lfs/*.tar.gz) needed+=(tar) ;;
+    coderabbit/* | git-lfs/*.zip) needed+=(python3) ;;
   esac
   for tool in "${needed[@]}"; do
     command -v "$tool" >/dev/null 2>&1 || die "$tool is needed to install $name. Install it first; this script does not use sudo."
@@ -161,16 +205,18 @@ install_tool() {
   STAGE=$(mktemp -d "$SHARE_DIR/.staging-XXXXXX")
   mkdir "$STAGE/$name"
   "unpack_$name" "$STAGE/$name"
-  [[ -x "$STAGE/$name/${ENTRY[$name]}" ]] || die "$name: ${ENTRY[$name]} is missing from the download."
+  [[ -x "$STAGE/$name/$(entry "$name")" ]] || die "$name: $(entry "$name") is missing from the download."
   # A folder for this version without its binary is broken, so no lane can be
   # using it; set it aside with the staging, which is removed below.
-  if [[ -d "$dir" && ! -x "$dir/${ENTRY[$name]}" ]]; then
-    mv -T -- "$dir" "$STAGE/broken"
+  # publish_staged_file renames the way both GNU and macOS mv support; neither
+  # destination exists here.
+  if [[ -d "$dir" && ! -x "$dir/$(entry "$name")" ]]; then
+    publish_staged_file "$dir" "$STAGE/broken"
   fi
   if [[ ! -d "$dir" ]]; then
-    mv -T -- "$STAGE/$name" "$dir"
+    publish_staged_file "$STAGE/$name" "$dir"
   fi
-  ln -s -- "$dir/${ENTRY[$name]}" "$STAGE/link"
+  ln -s -- "$dir/$(entry "$name")" "$STAGE/link"
   publish_staged_file "$STAGE/link" "$BIN_DIR/$name"
   rm -rf -- "$STAGE"
   STAGE=""
@@ -192,12 +238,12 @@ converge_tool() {
         return 0
       fi
       install_tool "$name" "$version"
-      say "Installed $name $version: $BIN_DIR/$name -> $SHARE_DIR/$name-$version/${ENTRY[$name]}"
+      say "Installed $name $version: $BIN_DIR/$name -> $SHARE_DIR/$name-$version/$(entry "$name")"
       ;;
   esac
 }
 
-# Lanes run `python`; Ubuntu ships only python3. Link ~/.local/bin/python to
+# Lanes run `python`; Ubuntu and macOS ship only python3. Link ~/.local/bin/python to
 # the python3 lanes find, like python-is-python3 but without sudo.
 converge_python() {
   local link="$BIN_DIR/python" found python3_path

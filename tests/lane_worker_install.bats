@@ -24,30 +24,47 @@ setup() {
   INSTALLER="$FIXTURE/tools/lane-worker/install.sh"
   TAG=$(sed -n 's/^SKILLS_TAG=//p' "$FIXTURE/ai/claude/install.sh")
 
-  local arch
-  for arch in x86_64 aarch64; do
-    mkdir -p "$TEST_ROOT/build-$arch/bin" "$TEST_ROOT/build-$arch/codex-resources"
-    printf '#!/bin/sh\necho codex-cli %s\n' "$arch" >"$TEST_ROOT/build-$arch/bin/codex"
-    printf 'bwrap\n' >"$TEST_ROOT/build-$arch/codex-resources/bwrap"
-    chmod +x "$TEST_ROOT/build-$arch/bin/codex"
-    tar -czf "$PAYLOADS/codex-package-$arch-unknown-linux-musl.tar.gz" -C "$TEST_ROOT/build-$arch" bin codex-resources
+  local arch os
+  for os in unknown-linux-musl apple-darwin; do
+    for arch in x86_64 aarch64; do
+      mkdir -p "$TEST_ROOT/build-$os-$arch/bin" "$TEST_ROOT/build-$os-$arch/codex-resources"
+      printf '#!/bin/sh\necho codex-cli %s %s\n' "$os" "$arch" >"$TEST_ROOT/build-$os-$arch/bin/codex"
+      printf 'bwrap\n' >"$TEST_ROOT/build-$os-$arch/codex-resources/bwrap"
+      chmod +x "$TEST_ROOT/build-$os-$arch/bin/codex"
+      tar -czf "$PAYLOADS/codex-package-$arch-$os.tar.gz" -C "$TEST_ROOT/build-$os-$arch" bin codex-resources
+    done
   done
-  for arch in x64 arm64; do
-    python3 -I -c 'import sys, zipfile
+  for os in linux darwin; do
+    for arch in x64 arm64; do
+      python3 -I -c 'import sys, zipfile
 with zipfile.ZipFile(sys.argv[1], "w") as z:
-    z.writestr("coderabbit", "#!/bin/sh\necho coderabbit %s\n" % sys.argv[2])' "$PAYLOADS/coderabbit-linux-$arch.zip" "$arch"
+    z.writestr("coderabbit", "#!/bin/sh\necho coderabbit %s\n" % sys.argv[2])' "$PAYLOADS/coderabbit-$os-$arch.zip" "$os $arch"
+    done
   done
-  for arch in amd64 arm64; do
-    printf '#!/bin/sh\nexec %s "$@"\n' "$REAL_JQ" >"$PAYLOADS/jq-linux-$arch"
+  for os in linux macos; do
+    for arch in amd64 arm64; do
+      printf '#!/bin/sh\nexec %s "$@"\n' "$REAL_JQ" >"$PAYLOADS/jq-$os-$arch"
+    done
   done
   local lfs_version
   lfs_version=$(sed -n 's/^GIT_LFS_VERSION=//p' "$REPO_ROOT/config/versions.env")
+  for os in linux darwin; do
+    for arch in amd64 arm64; do
+      mkdir -p "$TEST_ROOT/lfs-$os-$arch/git-lfs-$lfs_version"
+      printf '#!/bin/sh\necho git-lfs %s %s\n' "$os" "$arch" >"$TEST_ROOT/lfs-$os-$arch/git-lfs-$lfs_version/git-lfs"
+      printf 'readme\n' >"$TEST_ROOT/lfs-$os-$arch/git-lfs-$lfs_version/README.md"
+      chmod +x "$TEST_ROOT/lfs-$os-$arch/git-lfs-$lfs_version/git-lfs"
+    done
+  done
   for arch in amd64 arm64; do
-    mkdir -p "$TEST_ROOT/lfs-$arch/git-lfs-$lfs_version"
-    printf '#!/bin/sh\necho git-lfs %s\n' "$arch" >"$TEST_ROOT/lfs-$arch/git-lfs-$lfs_version/git-lfs"
-    printf 'readme\n' >"$TEST_ROOT/lfs-$arch/git-lfs-$lfs_version/README.md"
-    chmod +x "$TEST_ROOT/lfs-$arch/git-lfs-$lfs_version/git-lfs"
-    tar -czf "$PAYLOADS/git-lfs-linux-$arch-v$lfs_version.tar.gz" -C "$TEST_ROOT/lfs-$arch" "git-lfs-$lfs_version"
+    tar -czf "$PAYLOADS/git-lfs-linux-$arch-v$lfs_version.tar.gz" -C "$TEST_ROOT/lfs-linux-$arch" "git-lfs-$lfs_version"
+    # The macOS release is a zip with the same layout; keep the exec bit.
+    python3 -I -c 'import os, sys, zipfile
+root, name = sys.argv[2], sys.argv[3]
+with zipfile.ZipFile(sys.argv[1], "w") as z:
+    for member in (name + "/git-lfs", name + "/README.md"):
+        z.write(os.path.join(root, member), member)' \
+      "$PAYLOADS/git-lfs-darwin-$arch-v$lfs_version.zip" "$TEST_ROOT/lfs-darwin-$arch" "git-lfs-$lfs_version"
   done
   write_pins
 
@@ -100,15 +117,23 @@ write_pins() {
 CODEX_RELEASE_BASE=https://example.test/codex
 CODEX_PACKAGE_LINUX_X86_64_SHA256=$(digest "$PAYLOADS/codex-package-x86_64-unknown-linux-musl.tar.gz")
 CODEX_PACKAGE_LINUX_AARCH64_SHA256=$(digest "$PAYLOADS/codex-package-aarch64-unknown-linux-musl.tar.gz")
+CODEX_PACKAGE_DARWIN_X86_64_SHA256=$(digest "$PAYLOADS/codex-package-x86_64-apple-darwin.tar.gz")
+CODEX_PACKAGE_DARWIN_AARCH64_SHA256=$(digest "$PAYLOADS/codex-package-aarch64-apple-darwin.tar.gz")
 CODERABBIT_RELEASE_BASE=https://example.test/coderabbit
 CODERABBIT_LINUX_X64_SHA256=$(digest "$PAYLOADS/coderabbit-linux-x64.zip")
 CODERABBIT_LINUX_ARM64_SHA256=$(digest "$PAYLOADS/coderabbit-linux-arm64.zip")
+CODERABBIT_DARWIN_X64_SHA256=$(digest "$PAYLOADS/coderabbit-darwin-x64.zip")
+CODERABBIT_DARWIN_ARM64_SHA256=$(digest "$PAYLOADS/coderabbit-darwin-arm64.zip")
 JQ_RELEASE_BASE=https://example.test/jq
 JQ_LINUX_AMD64_SHA256=$(digest "$PAYLOADS/jq-linux-amd64")
 JQ_LINUX_ARM64_SHA256=$(digest "$PAYLOADS/jq-linux-arm64")
+JQ_MACOS_AMD64_SHA256=$(digest "$PAYLOADS/jq-macos-amd64")
+JQ_MACOS_ARM64_SHA256=$(digest "$PAYLOADS/jq-macos-arm64")
 GIT_LFS_RELEASE_BASE=https://example.test/git-lfs
 GIT_LFS_LINUX_AMD64_SHA256=$(digest "$PAYLOADS/git-lfs-linux-amd64-v$(sed -n 's/^GIT_LFS_VERSION=//p' "$REPO_ROOT/config/versions.env").tar.gz")
 GIT_LFS_LINUX_ARM64_SHA256=$(digest "$PAYLOADS/git-lfs-linux-arm64-v$(sed -n 's/^GIT_LFS_VERSION=//p' "$REPO_ROOT/config/versions.env").tar.gz")
+GIT_LFS_DARWIN_AMD64_SHA256=$(digest "$PAYLOADS/git-lfs-darwin-amd64-v$(sed -n 's/^GIT_LFS_VERSION=//p' "$REPO_ROOT/config/versions.env").zip")
+GIT_LFS_DARWIN_ARM64_SHA256=$(digest "$PAYLOADS/git-lfs-darwin-arm64-v$(sed -n 's/^GIT_LFS_VERSION=//p' "$REPO_ROOT/config/versions.env").zip")
 EOF
   source "$FIXTURE/config/versions.env"
 }
@@ -171,8 +196,8 @@ snapshot_home() {
 plugin install gambtho-skills@gambtho-skills --scope user" ]
   [ "$(readlink "$HOME/.local/bin/codex")" = "$SHARE/codex-$CODEX_VERSION/bin/codex" ]
   [ "$(readlink "$HOME/.local/bin/coderabbit")" = "$SHARE/coderabbit-$CODERABBIT_CLI_VERSION/coderabbit" ]
-  [ "$("$HOME/.local/bin/codex")" = "codex-cli x86_64" ]
-  [ "$("$HOME/.local/bin/coderabbit")" = "coderabbit x64" ]
+  [ "$("$HOME/.local/bin/codex")" = "codex-cli unknown-linux-musl x86_64" ]
+  [ "$("$HOME/.local/bin/coderabbit")" = "coderabbit linux x64" ]
   # Codex keeps its package layout, so it finds its bundled sandbox helper.
   [ -f "$SHARE/codex-$CODEX_VERSION/codex-resources/bwrap" ]
   [ ! -e "$HOME/.local/bin/jq" ]
@@ -265,7 +290,7 @@ plugin install gambtho-skills@gambtho-skills --scope user" ]
   run bash "$INSTALLER" --apply
 
   [ "$status" -eq 0 ]
-  [ "$("$HOME/.local/bin/codex")" = "codex-cli x86_64" ]
+  [ "$("$HOME/.local/bin/codex")" = "codex-cli unknown-linux-musl x86_64" ]
   [ -z "$(find "$SHARE" -mindepth 1 -maxdepth 1 -name '.staging-*')" ]
 }
 
@@ -291,15 +316,15 @@ plugin install gambtho-skills@gambtho-skills --scope user" ]
 
   [ "$status" -eq 0 ]
   [ ! -e "$SHARE/.staging-old" ]
-  [ "$("$HOME/.local/bin/codex")" = "codex-cli x86_64" ]
+  [ "$("$HOME/.local/bin/codex")" = "codex-cli unknown-linux-musl x86_64" ]
 }
 
 @test "aarch64 boxes get the arm64 builds" {
   ARTIFACT_ARCH=aarch64 run bash "$INSTALLER" --apply
 
   [ "$status" -eq 0 ]
-  [ "$("$HOME/.local/bin/codex")" = "codex-cli aarch64" ]
-  [ "$("$HOME/.local/bin/coderabbit")" = "coderabbit arm64" ]
+  [ "$("$HOME/.local/bin/codex")" = "codex-cli unknown-linux-musl aarch64" ]
+  [ "$("$HOME/.local/bin/coderabbit")" = "coderabbit linux arm64" ]
   grep -qx 'https://example.test/jq/jq-linux-arm64' "$PAYLOADS/downloads"
 }
 
@@ -362,7 +387,7 @@ plugin install gambtho-skills@gambtho-skills --scope user" ]
   run bash "$INSTALLER" --apply
   [ "$status" -eq 0 ]
   [ "$(readlink "$HOME/.local/bin/git-lfs")" = "$SHARE/git-lfs-$GIT_LFS_VERSION/git-lfs-$GIT_LFS_VERSION/git-lfs" ]
-  [ "$("$HOME/.local/bin/git-lfs")" = "git-lfs amd64" ]
+  [ "$("$HOME/.local/bin/git-lfs")" = "git-lfs linux amd64" ]
   # Only the binary is unpacked.
   [ "$(find "$SHARE/git-lfs-$GIT_LFS_VERSION" -type f)" = "$SHARE/git-lfs-$GIT_LFS_VERSION/git-lfs-$GIT_LFS_VERSION/git-lfs" ]
   grep -Eq "^git-lfs = \"$GIT_LFS_VERSION\"$" "$REPO_ROOT/config/mise/config.toml"
@@ -408,4 +433,79 @@ plugin install gambtho-skills@gambtho-skills --scope user" ]
   run bash "$INSTALLER" --apply
   [[ "$output" == *"$HOME/.local/bin/python was not installed by this script; leaving it."* ]]
   [ "$("$HOME/.local/bin/python")" = own ]
+}
+
+# macOS reports Darwin and arm64 or x86_64. The stub answers uname -s;
+# ARTIFACT_ARCH stands in for uname -m.
+stub_darwin() {
+  stub_command uname 'case "$1" in -s) echo Darwin ;; *) echo "${ARTIFACT_ARCH:-arm64}" ;; esac'
+}
+
+@test "macOS on Apple silicon gets the pinned darwin arm64 builds" {
+  stub_darwin
+  system_jq
+  ARTIFACT_ARCH=arm64 run bash "$INSTALLER" --apply
+
+  [ "$status" -eq 0 ]
+  [ "$("$HOME/.local/bin/codex")" = "codex-cli apple-darwin aarch64" ]
+  [ "$("$HOME/.local/bin/coderabbit")" = "coderabbit darwin arm64" ]
+  # The macOS git-lfs release is a zip; only the binary is unpacked.
+  [ "$("$HOME/.local/bin/git-lfs")" = "git-lfs darwin arm64" ]
+  [ "$(find "$SHARE/git-lfs-$GIT_LFS_VERSION" -type f)" = "$SHARE/git-lfs-$GIT_LFS_VERSION/git-lfs-$GIT_LFS_VERSION/git-lfs" ]
+  grep -qx "https://example.test/codex/codex-package-aarch64-apple-darwin.tar.gz" "$PAYLOADS/downloads"
+  grep -qx "https://example.test/coderabbit/coderabbit-darwin-arm64.zip" "$PAYLOADS/downloads"
+  ! grep -q linux "$PAYLOADS/downloads"
+  [ ! -e "$TEST_ROOT/forbidden" ]
+
+  rm -f "$PAYLOADS/downloads"
+  ARTIFACT_ARCH=arm64 run bash "$INSTALLER" --apply
+  [ "$status" -eq 0 ]
+  [ ! -e "$PAYLOADS/downloads" ]
+}
+
+@test "macOS on Intel gets the darwin x86_64 builds, and jq when lanes find none" {
+  stub_darwin
+  ARTIFACT_ARCH=x86_64 run bash "$INSTALLER" --check
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"[dry-run] Would install codex $CODEX_VERSION."* ]]
+  [ ! -e "$PAYLOADS/downloads" ]
+
+  ARTIFACT_ARCH=x86_64 run bash "$INSTALLER" --apply
+
+  [ "$status" -eq 0 ]
+  [ "$("$HOME/.local/bin/codex")" = "codex-cli apple-darwin x86_64" ]
+  [ "$("$HOME/.local/bin/coderabbit")" = "coderabbit darwin x64" ]
+  [ "$("$HOME/.local/bin/git-lfs")" = "git-lfs darwin amd64" ]
+  grep -qx 'https://example.test/jq/jq-macos-amd64' "$PAYLOADS/downloads"
+}
+
+@test "macOS links python to the system python3 like Linux" {
+  stub_darwin
+  system_jq
+  printf '#!/bin/sh\necho system python3\n' >"$SYSTEM_BIN/python3"
+  chmod +x "$SYSTEM_BIN/python3"
+
+  run bash "$INSTALLER" --apply
+
+  [ "$status" -eq 0 ]
+  [ "$(readlink "$HOME/.local/bin/python")" = "$SYSTEM_BIN/python3" ]
+}
+
+@test "another OS or architecture stops before any change" {
+  stub_command uname 'case "$1" in -s) echo FreeBSD ;; *) echo amd64 ;; esac'
+  run bash "$INSTALLER" --apply
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Linux and macOS only."* ]]
+
+  stub_darwin
+  ARTIFACT_ARCH=ppc run bash "$INSTALLER" --apply
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"unsupported architecture: ppc"* ]]
+  [ ! -e "$PAYLOADS/downloads" ]
+  [ ! -e "$HOME/.local/bin" ]
+}
+
+@test "the installer avoids Bash 4 and GNU-only constructs, since macOS runs it with bash 3.2" {
+  run grep -nE 'declare -A|local -A|mapfile|readarray|mv -T|\$\{[A-Za-z_]+(,,|\^\^)' "$REPO_ROOT/tools/lane-worker/install.sh"
+  [ "$status" -eq 1 ]
 }

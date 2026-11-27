@@ -63,6 +63,7 @@ install_apt_packages() {
 
   log_info "Updating composed APT packages for $OS/$PROFILE..."
   ensure_wsl_ssh_closed || return
+  ensure_en_us_locale || log_warning "Could not generate the en_US.UTF-8 locale; apt may warn about it."
   setup_package_repositories || return
   sudo_apt apt update >/dev/null || return
   if [[ "$PROFILE" == work ]]; then
@@ -277,6 +278,26 @@ setup_ai() {
   run_phase optional ai-copilot bash "$DOTFILES_ROOT/ai/copilot/install.sh"
 }
 
+# ── Last: lanes worker next step ─────────────────────────────────────────────
+
+# A machine with lanes runs review rounds that call codex and coderabbit, and a
+# lane finds them only in ~/.local/bin or the system directories, not through
+# mise or npm. tools/lane-worker installs them there. This only says so: it
+# never runs it, because that also re-pins the skills plugin, which a lane may
+# be using mid-review, so the person picks the moment. The system part matches
+# the lane-worker installer, including LANE_WORKER_SYSTEM_PATH for tests.
+suggest_lane_worker() {
+  local lane_path="$HOME/.local/bin:${LANE_WORKER_SYSTEM_PATH:-/usr/local/bin:/usr/bin:/bin}"
+  local tool missing=""
+  command -v lane >/dev/null 2>&1 || return 0
+  for tool in codex coderabbit; do
+    PATH="$lane_path" command -v "$tool" >/dev/null 2>&1 || missing="$missing $tool"
+  done
+  [[ -n "$missing" ]] || return 0
+  log_info "lanes is installed, but lanes cannot find:$missing."
+  log_info "Next: make -C \"$DOTFILES_ROOT\" lane-worker   (installs the pinned review CLIs; see tools/lane-worker/README.md)"
+}
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 usage() {
@@ -341,6 +362,7 @@ main() {
 
   finish_phases || exit 1
   log_success "Install complete."
+  suggest_lane_worker
 }
 
 if [[ "${INSTALL_SOURCE_ONLY:-0}" != 1 ]]; then

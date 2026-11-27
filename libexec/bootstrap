@@ -408,6 +408,7 @@ linux_prep() {
   log_info "Preparing Linux environment"
   ensure_wsl_ssh_closed || return
 
+  ensure_en_us_locale || log_warning "Could not generate the en_US.UTF-8 locale; apt may warn about it."
   sudo_apt apt update
   sudo_apt apt-get install -y ca-certificates curl gnupg build-essential \
     libssl-dev libreadline-dev zlib1g-dev libyaml-dev
