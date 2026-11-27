@@ -274,6 +274,13 @@ plugin install gambtho-skills@gambtho-skills --scope user" ]
   [[ "$output" == *"is not a JSON object; leaving it alone"* ]]
   [ "$(cat "$HOME/.claude/settings.json")" = 'not json' ]
   [ ! -e "$STATE/calls" ]
+
+  echo '[]' >"$HOME/.claude/settings.json"
+  run bash "$INSTALLER" --check
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"is not a JSON object"* ]]
+  [[ "$output" != *"Would turn off"* ]]
 }
 
 @test "a machine without Claude Code gets no settings file" {

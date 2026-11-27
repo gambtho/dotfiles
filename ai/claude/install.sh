@@ -53,13 +53,16 @@ attribution_is_off() {
       "$SETTINGS" >/dev/null 2>&1
 }
 
-turn_off_attribution() {
-  local target=$SETTINGS tmp
-  [[ ! -L "$target" ]] || target=$(readlink -f -- "$target")
-  if [[ -e "$target" ]] && ! jq -e 'type == "object"' "$target" >/dev/null 2>&1; then
+settings_usable() {
+  if [[ -e "$SETTINGS" ]] && ! jq -e 'type == "object"' "$SETTINGS" >/dev/null 2>&1; then
     echo "$SETTINGS is not a JSON object; leaving it alone. Fix it, then rerun." >&2
     return 1
   fi
+}
+
+turn_off_attribution() {
+  local target=$SETTINGS tmp
+  [[ ! -L "$target" ]] || target=$(readlink -f -- "$target")
   mkdir -p "$(dirname "$target")"
   tmp=$(mktemp "$target.XXXXXX")
   if [[ -e "$target" ]]; then
@@ -78,6 +81,7 @@ turn_off_attribution() {
 }
 
 if ! attribution_is_off; then
+  settings_usable
   if [[ "$MODE" == check ]]; then
     echo "[dry-run] Would turn off Claude Code commit and pull request attribution in $SETTINGS"
   else
