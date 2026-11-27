@@ -113,17 +113,28 @@ exec_real_gh() {
 }
 
 run_login_and_check_tracked_config() {
-  local tracked="$IDENTITY_DOTFILES_ROOT/core/git/gitconfig.symlink" before after status
-  before="$(cksum <"$tracked" 2>/dev/null)" || exec "$real_gh" "$@"
+  local config dir root path before after status clean=false
+  # gh writes Git settings to the global config; follow it to a tracked file.
+  config="$(identity_realpath "${GIT_CONFIG_GLOBAL:-$HOME/.gitconfig}" 2>/dev/null)" || exec "$real_gh" "$@"
+  dir="$(dirname "$config")"
+  root="$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null)" || exec "$real_gh" "$@"
+  path="${config#"$root"/}"
+  git -C "$root" ls-files --error-unmatch -- "$path" >/dev/null 2>&1 || exec "$real_gh" "$@"
+  before="$({ cksum <"$config"; } 2>/dev/null)" || exec "$real_gh" "$@"
+  git -C "$root" diff --quiet HEAD -- "$path" 2>/dev/null && clean=true
   "$real_gh" "$@"
   status=$?
-  after="$(cksum <"$tracked" 2>/dev/null)" || after=""
+  after="$({ cksum <"$config"; } 2>/dev/null)" || after=""
   if [ "$after" != "$before" ]; then
-    printf 'gh: auth login changed the tracked Git config %s.\n' "$tracked" >&2
-    printf 'gh: that file already makes gh Git'"'"'s credential helper, and holds no token.\n' >&2
-    printf 'gh: check the change:   git -C %q diff -- core/git/gitconfig.symlink\n' "$IDENTITY_DOTFILES_ROOT" >&2
-    printf 'gh: if it is only credential helper lines, undo it:\n' >&2
-    printf 'gh:                     git -C %q checkout -- core/git/gitconfig.symlink\n' "$IDENTITY_DOTFILES_ROOT" >&2
+    printf 'gh: the tracked Git config %s changed during auth login.\n' "$config" >&2
+    printf 'gh: it already makes gh Git'"'"'s credential helper. Check the change:\n' >&2
+    printf 'gh:   git -C %q diff -- %q\n' "$root" "$path" >&2
+    if [ "$clean" = true ]; then
+      printf 'gh: it had no other changes before login; if this is only credential helper lines, undo it:\n' >&2
+      printf 'gh:   git -C %q checkout -- %q\n' "$root" "$path" >&2
+    else
+      printf 'gh: it already had uncommitted changes, so remove only the helper lines (git checkout -p).\n' >&2
+    fi
   fi
   exit "$status"
 }

@@ -1602,11 +1602,29 @@ EOF
   [ "$output" = 'global=<unset>' ]
   cmp "$TEST_ROOT/tracked.before" "$DOTFILES/core/git/gitconfig.symlink"
 
+  # An untracked global config is not this check's business.
   WRITE_HELPER=1 run "$REPO_ROOT/bin/gh" auth login --hostname github.com
   [ "$status" -eq 7 ]
-  [[ "$output" == *"gh: auth login changed the tracked Git config $DOTFILES/core/git/gitconfig.symlink."* ]]
+  [[ "$output" != *"changed during auth login"* ]]
+
+  # Once the file is tracked, a write is reported with the commands to undo it.
+  cp "$TEST_ROOT/tracked.before" "$DOTFILES/core/git/gitconfig.symlink"
+  git -C "$DOTFILES" init -q
+  git -C "$DOTFILES" add core/git/gitconfig.symlink
+  git -C "$DOTFILES" -c user.name=t -c user.email=t@example.com commit -q -m base
+  WRITE_HELPER=1 run "$REPO_ROOT/bin/gh" auth login --hostname github.com
+  [ "$status" -eq 7 ]
+  [[ "$output" == *"gh: the tracked Git config $DOTFILES/core/git/gitconfig.symlink changed during auth login."* ]]
   [[ "$output" == *"checkout -- core/git/gitconfig.symlink"* ]]
-  ! cmp -s "$TEST_ROOT/tracked.before" "$DOTFILES/core/git/gitconfig.symlink"
+  git -C "$DOTFILES" checkout -q -- core/git/gitconfig.symlink
+
+  # Edits made before login must not be thrown away by the advice.
+  printf '[alias]\n  mine = status\n' >>"$DOTFILES/core/git/gitconfig.symlink"
+  WRITE_HELPER=1 run "$REPO_ROOT/bin/gh" auth login --hostname github.com
+  [ "$status" -eq 7 ]
+  [[ "$output" == *"changed during auth login"* ]]
+  [[ "$output" != *"checkout -- "* ]]
+  [[ "$output" == *"git checkout -p"* ]]
 }
 
 @test "non-setup commands retain their global config environment arguments and exit status" {
