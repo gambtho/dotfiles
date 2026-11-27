@@ -53,6 +53,7 @@ The package's prompts dispatch the named agents in `ai/pi/agents/`. Renaming or 
 - `@gotgenes/pi-permission-system` is pinned to an exact release in `ai/pi/settings.json`, and CI tests that pin. Move it only after `make pi-security-gate` passes on the new release; 44.0.0 changed how agent rules override global rules.
 - Never commit `auth.json`, sessions, trust decisions, generated model catalogs, or package caches.
 - After changing Pi configuration, run `make validate` and the relevant tests.
+- After changing `platforms/macos/brewfile`, run `brew bundle check --verbose --file=platforms/macos/brewfile` on a Mac. Homebrew refuses casks from third-party taps until someone runs `brew trust`, so do not add such taps without that decision.
 
 ## Weekly Automations
 

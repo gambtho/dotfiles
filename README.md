@@ -31,11 +31,18 @@ explicitly:
 ALLOW_REMOTE_INSTALLERS=1 make bootstrap
 ```
 
-Without that consent, `make bootstrap` fails at the Homebrew install step with
-`Remote installer execution is disabled. Re-run with ALLOW_REMOTE_INSTALLERS=1
-after reviewing the installer source.`
+Without that consent, `make bootstrap` stops at the Homebrew install step with
+`Remote installer execution is disabled.`, the script's URL, and the command to
+rerun. Bootstrap puts a fresh Homebrew on its own PATH (`/opt/homebrew` on Apple
+silicon, `/usr/local` on Intel). New shells find it without a manual step: on
+Apple silicon the Homebrew installer writes `/etc/paths.d/homebrew`, and
+`/usr/local/bin` is already in `/etc/paths`. An older Apple silicon install may
+lack that file; then run `eval "$(/opt/homebrew/bin/brew shellenv)"` in the new
+terminal first.
 
-After bootstrap, run `bin/dot-install` (or `bin/dot-update`) to install packages and language runtimes.
+After bootstrap, open a new terminal so it picks up Homebrew's PATH, then run
+`~/.dotfiles/bin/dot-install` (or `~/.dotfiles/bin/dot-update`) to install
+packages and language runtimes.
 
 ### WSL service prerequisites
 

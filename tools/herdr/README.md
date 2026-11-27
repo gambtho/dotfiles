@@ -14,9 +14,10 @@ already has it.
 
 `install.sh` runs as the `herdr` phase of `bin/dot-install`:
 
-1. Refuses anything but Linux. Upstream ships macOS assets too, but the
-   machines this repo bootstraps are WSL2 and an untested darwin path is worse
-   than an honest refusal. macOS would come through `platforms/macos/brewfile`.
+1. Refuses anything but Linux and macOS, and picks the upstream asset for the
+   host (`herdr-linux-*` or `herdr-macos-*`). The `--install-dashboard` and
+   `--install-lanes` modes stay Linux-only: they swap directories with GNU
+   `mv -T`.
 2. Downloads the release pinned in `config/versions.env`, verifies it against
    the committed digest, and publishes it to `~/.local/bin/herdr` through a
    stage-then-rename so no partial binary ever appears on `PATH`.
@@ -419,7 +420,7 @@ The advisory never contacts the running Herdr server or changes pins/binaries.
 `make pins-check` remains the comprehensive check for all dependencies.
 
 To advance Herdr, review the release and edit `HERDR_VERSION`, its release URL,
-and both `HERDR_LINUX_*_SHA256` values together, then verify before deploying.
+and all four `HERDR_LINUX_*_SHA256` and `HERDR_MACOS_*_SHA256` values together, then verify before deploying.
 `make pins-update` does not advance checksum-reviewed artifacts. Upstream
 publishes no checksum file, so these digests are computed from downloaded
 artifacts and are trust-on-first-use. Replacing a binary does not itself upgrade
@@ -453,13 +454,16 @@ client does not pick up environment changes through `herdr server reload-config`
 ### Reviewed release pin
 
 The repository pins [Herdr v0.9.5](https://github.com/herdrdev/herdr/releases/tag/v0.9.5)
-for Linux. Both assets were downloaded from that release and hashed with
-`sha256sum`; the measured values also match the release API's asset digests:
+for Linux and macOS. Each asset was downloaded from that release and hashed with
+`sha256sum` or `shasum -a 256`; the measured values also match the release API's
+asset digests:
 
 | Asset | SHA-256 |
 |---|---|
 | `herdr-linux-x86_64` | `14d9e8bc8b4a9e0118d77c32266f76d461f09b40342eb23752960bd89f59929d` |
 | `herdr-linux-aarch64` | `17d7536f2da50859523680ef279dffcac8e4a235f4e46fe8da6c2ec44141897c` |
+| `herdr-macos-x86_64` | `5fb0a908ec7f6745e3e245738b06bfad56c46391c391ab3c0955fbead01f1369` |
+| `herdr-macos-aarch64` | `fb77c2232a05a8035421382c894392f4174e4e38a18e48af3dd0290157c3a7e2` |
 
 API digests corroborate the downloaded bytes, not independent provenance or a
 signature. Matching hashes and installer tests do not certify a running-server

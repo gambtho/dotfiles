@@ -526,6 +526,13 @@ run_install_main_for_lane_worker() {
   [ "$status" -ne 0 ]
 }
 
+@test "remote installer refusal names the script and the command to rerun" {
+  run bash -c 'source "$1/libexec/common.sh"; run_remote_installer https://example.test/install.sh bash' _ "$REPO_ROOT"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"https://example.test/install.sh"* ]]
+  [[ "$output" == *"ALLOW_REMOTE_INSTALLERS=1 dot-update"* ]]
+}
+
 @test "remote installer is allowed with explicit consent" {
   run env ALLOW_REMOTE_INSTALLERS=1 bash -c 'source "$1/libexec/common.sh"; require_remote_installers' _ "$REPO_ROOT"
   [ "$status" -eq 0 ]
@@ -846,6 +853,51 @@ CASES
 
   [ "$status" -eq 42 ]
   [ "$(cat "$path_result")" = "$original_path" ]
+}
+
+@test "bootstrap puts a freshly installed Homebrew on PATH for the rest of the run" {
+  local prefix="$TEST_ROOT/homebrew" brew_log="$TEST_ROOT/brew-log"
+
+  run env BOOTSTRAP_SOURCE_ONLY=1 HOME="$HOME" PATH="/usr/bin:/bin" \
+    PREFIX="$prefix" BREW_LOG="$brew_log" "$BASH" -c '
+    source "$1/libexec/bootstrap"
+    HOMEBREW_PREFIXES=("$PREFIX")
+    run_remote_installer() {
+      mkdir -p "$PREFIX/bin"
+      printf "#!/bin/sh\nprintf \"%%s\\n\" \"\$*\" >>\"\$BREW_LOG\"\n" >"$PREFIX/bin/brew"
+      chmod +x "$PREFIX/bin/brew"
+    }
+    command_exists() { [[ "$1" == brew ]] && command -v brew >/dev/null; }
+    mac_prep
+    command -v brew
+    printf "PATH=%s\n" "$PATH"
+  ' _ "$REPO_ROOT"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"$prefix/bin/brew"* ]]
+  # Appended, so commands already on PATH (the gh identity shim) keep precedence.
+  [[ "$output" == *"PATH=/usr/bin:/bin:$prefix/bin:$prefix/sbin"* ]]
+  grep -Fxq 'install zsh' "$brew_log"
+  grep -Fxq 'install mise' "$brew_log"
+}
+
+@test "bootstrap uses an installed Homebrew that is not on PATH instead of reinstalling" {
+  local prefix="$TEST_ROOT/homebrew"
+  mkdir -p "$prefix/bin"
+  printf '#!/bin/sh\nexit 0\n' >"$prefix/bin/brew"
+  chmod +x "$prefix/bin/brew"
+
+  run env BOOTSTRAP_SOURCE_ONLY=1 HOME="$HOME" PATH="/usr/bin:/bin" PREFIX="$prefix" "$BASH" -c '
+    source "$1/libexec/bootstrap"
+    HOMEBREW_PREFIXES=("$PREFIX")
+    run_remote_installer() { printf "installer ran\n"; return 1; }
+    command_exists() { command -v "$1" >/dev/null; }
+    mac_prep
+  ' _ "$REPO_ROOT"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"installer ran"* ]]
+  [[ "$output" == *"Homebrew already installed"* ]]
 }
 
 @test "the server profile installs the pinned git-lfs the global git config calls" {

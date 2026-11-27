@@ -42,6 +42,15 @@ setup() {
   [ "$status" -eq 1 ]
 }
 
+@test "macOS Brewfile has no entries current Homebrew and VS Code reject" {
+  # Emptied official taps, renamed or removed casks, a formula that became a
+  # cask, and extensions that are gone or now built into VS Code all fail
+  # brew bundle on a new Mac.
+  run grep -En '^tap "homebrew/|^cask "(docker|skype|spectacle)"|^brew "(azure-cli|terraform)"|^vscode "(felixfbecker\.php-intellisense|GitHub\.copilot|GitHub\.copilot-chat|mindaro\.mindaro|mindaro-dev\.file-downloader|ms-dotnettools\.dotnet-interactive-vscode)"$' \
+    "$REPO_ROOT/platforms/macos/brewfile"
+  [ "$status" -eq 1 ]
+}
+
 @test "mise versions are concrete" {
   run rg -n '= "(latest|stable)"' "$REPO_ROOT/config/mise/config.toml"
   [ "$status" -eq 1 ]

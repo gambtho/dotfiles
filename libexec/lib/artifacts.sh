@@ -15,9 +15,16 @@ CURL_DOWNLOAD_ARGS=(
   --retry 3
 )
 
+# A remote installer runs a script fetched at run time, unpinned and unverified,
+# so it runs only when the person asks for it. Say which script and what to run.
 require_remote_installers() {
+  local url="${1:-}"
   if [[ "${ALLOW_REMOTE_INSTALLERS:-0}" != 1 ]]; then
-    printf '%s\n' "Remote installer execution is disabled. Re-run with ALLOW_REMOTE_INSTALLERS=1 after reviewing the installer source." >&2
+    printf '%s\n' \
+      "Remote installer execution is disabled.${url:+ This step runs the install script at $url.}" \
+      "  Remote install scripts are not pinned or checksum-verified, so they run only with your consent." \
+      "  Review the script, then rerun the same command with ALLOW_REMOTE_INSTALLERS=1 in front," \
+      "  for example: ALLOW_REMOTE_INSTALLERS=1 make bootstrap, or ALLOW_REMOTE_INSTALLERS=1 dot-update." >&2
     return 1
   fi
 }
@@ -147,7 +154,7 @@ run_remote_installer() {
   fi
   command=("$@")
 
-  require_remote_installers || return 1
+  require_remote_installers "$url" || return 1
   script=$(mktemp) || return 1
 
   if ! curl "${CURL_DOWNLOAD_ARGS[@]}" "$url" --output "$script"; then
