@@ -121,7 +121,8 @@ run_login_and_check_tracked_config() {
   path="${config#"$root"/}"
   git -C "$root" ls-files --error-unmatch -- "$path" >/dev/null 2>&1 || exec "$real_gh" "$@"
   before="$({ cksum <"$config"; } 2>/dev/null)" || exec "$real_gh" "$@"
-  git -C "$root" diff --quiet HEAD -- "$path" 2>/dev/null && clean=true
+  git -C "$root" diff --quiet -- "$path" 2>/dev/null &&
+    git -C "$root" diff --cached --quiet HEAD -- "$path" 2>/dev/null && clean=true
   "$real_gh" "$@"
   status=$?
   after="$({ cksum <"$config"; } 2>/dev/null)" || after=""
@@ -133,7 +134,8 @@ run_login_and_check_tracked_config() {
       printf 'gh: it had no other changes before login; if this is only credential helper lines, undo it:\n' >&2
       printf 'gh:   git -C %q checkout -- %q\n' "$root" "$path" >&2
     else
-      printf 'gh: it already had uncommitted changes, so remove only the helper lines (git checkout -p).\n' >&2
+      printf 'gh: it already had uncommitted changes, so remove only the helper lines:\n' >&2
+      printf 'gh:   git -C %q checkout -p -- %q\n' "$root" "$path" >&2
     fi
   fi
   exit "$status"

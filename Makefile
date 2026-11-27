@@ -111,9 +111,11 @@ lane-worker: ## Lanes worker box: pinned skills plugin plus review CLIs (codex, 
 lane-worker-check: ## Dry-run: show what make lane-worker would install
 	bash tools/lane-worker/install.sh --check
 
+# Passed through the environment, so the shell never parses the value.
+coordinator-lanes: export LANES_REPO := $(LANES_REPO)
 coordinator-lanes: ## Coordinator VM, after gh auth login: install lanes from main with Relay: make coordinator-lanes LANES_REPO=OWNER/REPO
-	@[ -n "$(LANES_REPO)" ] || { echo "usage: make coordinator-lanes LANES_REPO=OWNER/REPO" >&2; exit 2; }
-	bash tools/coordinator-vm/install-lanes.sh "$(LANES_REPO)"
+	@[ -n "$$LANES_REPO" ] || { echo "usage: make coordinator-lanes LANES_REPO=OWNER/REPO" >&2; exit 2; }
+	bash tools/coordinator-vm/install-lanes.sh "$$LANES_REPO"
 
 ai-heeler: ## Prepare opt-in default Herdr/Heeler persistence without live takeover
 	bash tools/herdr/heeler/install.sh --apply

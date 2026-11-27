@@ -417,4 +417,8 @@ uv tool install --reinstall --python 3.11 developerlanes[relay] @ git+https://gi
   run make -s -C "$REPO_ROOT" coordinator-lanes
   [ "$status" -eq 2 ]
   [[ "$output" == *"LANES_REPO=OWNER/REPO"* ]]
+  # The value reaches the script as data, never as shell text.
+  run make -s -C "$REPO_ROOT" coordinator-lanes 'LANES_REPO=$(touch '"$TEST_ROOT"'/injected)'
+  [ "$status" -eq 2 ]
+  [ ! -e "$TEST_ROOT/injected" ]
 }

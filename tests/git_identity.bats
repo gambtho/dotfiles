@@ -1624,7 +1624,16 @@ EOF
   [ "$status" -eq 7 ]
   [[ "$output" == *"changed during auth login"* ]]
   [[ "$output" != *"checkout -- "* ]]
-  [[ "$output" == *"git checkout -p"* ]]
+  [[ "$output" == *"checkout -p -- core/git/gitconfig.symlink"* ]]
+  git -C "$DOTFILES" checkout -q -- core/git/gitconfig.symlink
+
+  # A staged edit counts as an earlier change too.
+  printf '[alias]\n  staged = status\n' >>"$DOTFILES/core/git/gitconfig.symlink"
+  git -C "$DOTFILES" add core/git/gitconfig.symlink
+  git -C "$DOTFILES" show HEAD:core/git/gitconfig.symlink >"$DOTFILES/core/git/gitconfig.symlink"
+  WRITE_HELPER=1 run "$REPO_ROOT/bin/gh" auth login --hostname github.com
+  [[ "$output" == *"checkout -p -- core/git/gitconfig.symlink"* ]]
+  [[ "$output" != *"checkout -- "* ]]
 }
 
 @test "non-setup commands retain their global config environment arguments and exit status" {
