@@ -33,6 +33,7 @@ setup() {
   [[ "$output" == *"artifact codex $CODEX_VERSION"* ]]
   [[ "$output" == *"artifact coderabbit $CODERABBIT_CLI_VERSION"* ]]
   [[ "$output" == *"artifact jq $JQ_VERSION"* ]]
+  [[ "$output" == *"artifact git-lfs $GIT_LFS_VERSION"* ]]
   [[ "$output" != *"herdr-devcontainer"* ]]
   [[ "$output" != *"paseo"* ]]
   [[ "$output" != *"npm "* ]]
@@ -371,6 +372,7 @@ case "$url" in
   *tree-sitter/tree-sitter*) printf '{"tag_name":"v0.26.11"}\n' ;;
   *openai/codex*) printf '{"tag_name":"rust-v0.169.0"}\n' ;;
   *jqlang/jq*) printf '{"tag_name":"jq-1.8.2"}\n' ;;
+  *git-lfs/git-lfs*) printf '{"tag_name":"v3.7.1"}\n' ;;
   *cli.coderabbit.ai/releases/latest/VERSION) printf '0.9.7\n' ;;
 
   *tmustier/pi-queue-steer*|*registry.npmjs.org/pi-web-access/*|*registry.npmjs.org/@narumitw/pi-lsp/*|*registry.npmjs.org/@gotgenes/pi-subagents/*|*registry.npmjs.org/@gotgenes/pi-permission-system/*) exit 91 ;;
@@ -392,6 +394,7 @@ SCRIPT
   [[ "$output" == *"current artifact tree-sitter-cli v0.26.11"* ]]
   [[ "$output" == *"current artifact codex rust-v0.169.0"* ]]
   [[ "$output" == *"current artifact jq jq-1.8.2"* ]]
+  [[ "$output" == *"current artifact git-lfs v3.7.1"* ]]
   [[ "$output" == *"current artifact coderabbit 0.9.7"* ]]
   [[ "$output" != *"herdr-devcontainer"* ]]
   [[ "$output" == *"current artifact nerd-fonts v3.4.0"* ]]

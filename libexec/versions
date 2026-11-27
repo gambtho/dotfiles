@@ -56,6 +56,7 @@ list_pins() {
   printf 'artifact codex %s\n' "$CODEX_VERSION"
   printf 'artifact coderabbit %s\n' "$CODERABBIT_CLI_VERSION"
   printf 'artifact jq %s\n' "$JQ_VERSION"
+  printf 'artifact git-lfs %s\n' "$GIT_LFS_VERSION"
   printf 'artifact nerd-fonts %s\n' "$NERD_FONTS_VERSION"
   printf 'artifact nerd-font-cascadia-mono %s %s\n' "$NERD_FONTS_VERSION" "$NERD_FONT_CASCADIA_MONO_SHA256"
   printf 'artifact nerd-font-hack %s %s\n' "$NERD_FONTS_VERSION" "$NERD_FONT_HACK_SHA256"
@@ -184,6 +185,7 @@ check_pins() {
   check_artifact_release tree-sitter-cli tree-sitter/tree-sitter "v$TREE_SITTER_VERSION"
   check_artifact_release codex openai/codex "rust-v$CODEX_VERSION"
   check_artifact_release jq jqlang/jq "jq-$JQ_VERSION"
+  check_artifact_release git-lfs git-lfs/git-lfs "v$GIT_LFS_VERSION"
   check_coderabbit_release
 }
 

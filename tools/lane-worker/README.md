@@ -10,6 +10,8 @@ skills call. `install.sh` installs only those:
 | `codex` (pinned, whole release package) | cross-family review through `codex-review.sh` | `~/.local/bin/codex` |
 | `coderabbit` (pinned) | the local CodeRabbit review round in `pr-closeout` | `~/.local/bin/coderabbit` |
 | `jq` (pinned), only if lanes find none | the plugin installer and `pr_snapshot.sh` | `~/.local/bin/jq` |
+| `git-lfs` (pinned, same version as the mise pin), only if lanes find none | repositories with Git LFS hooks warn on every commit without it | `~/.local/bin/git-lfs` |
+| `python`, only if lanes find none | lanes run `python`; Ubuntu ships only `python3` | `~/.local/bin/python`, a link to the system `python3` (what `python-is-python3` does, without sudo) |
 
 Each tool unpacks into `~/.local/share/lane-worker/<tool>-<version>/`, and
 `~/.local/bin/<tool>` links to it. Codex keeps its whole package there, including the
@@ -51,15 +53,57 @@ coderabbit auth login       # CodeRabbit, for the local review round
 Running Claude Code sessions keep the skills they loaded; a new lane started after
 the run loads `gambtho-skills`.
 
-To check Codex's sandbox once on a new box:
-`codex exec --skip-git-repo-check --sandbox read-only - <<<'run ls'`. If it
-reports that bubblewrap cannot run, the box's AppArmor policy blocks unprivileged user
-namespaces; that needs an owner decision (for example a system `bubblewrap` package),
-not this script.
+Only the `git-lfs` binary is installed. That is enough for LFS hooks. This script
+does not run `git lfs install`, because that writes the LFS filters to `~/.gitconfig`.
+
+### CodeRabbit inside a lane
+
+A lane runs CodeRabbit without a terminal. If CodeRabbit finds no sign-in there,
+it cannot open a browser, so it stops with
+`Non-interactive environment. Use --api-key for authentication.`
+(`coderabbit review --agent` says `environment_unsupported`). So check from
+inside a lane, not only from your SSH shell: ask a lane to run
+`coderabbit auth status`, which should show your account.
+
+If the lane is not signed in although your shell is, sign in with an API key,
+which needs no browser. Make an Agentic API key in the CodeRabbit web app, then
+in your own terminal on the box, as the lane user:
+
+```bash
+read -rs CR_KEY && coderabbit auth login --api-key "$CR_KEY"; unset CR_KEY
+```
+
+CodeRabbit 0.9.7 takes the key only as an argument (it has no
+`--api-key-file` or stdin option), so while that command runs, any user on the
+box who can list processes can see it. Run it only on a worker where you are
+the only ordinary user, and in your own terminal, not in a lane. Then run
+`coderabbit auth status` from a lane again. Do not pass `--api-key` to `coderabbit review`: the key would show up in
+the lane's transcript.
+
+### Codex sandbox
+
+Codex runs review commands in a `bwrap` sandbox. Ubuntu 24.04 restricts
+unprivileged user namespaces through AppArmor, and when that is on, the bundled
+`bwrap` cannot start. Then every command Codex runs fails, so it reports that it
+cannot read the worktree. `install.sh` prints a note when the restriction is on.
+To check it, run this in a lane's worktree:
+
+```bash
+sysctl kernel.apparmor_restrict_unprivileged_userns   # 1 means restricted
+codex sandbox linux -- ls                            # should list the worktree
+```
+
+With the restriction on, the second command fails, for example with
+`bwrap: setting up uid map: Permission denied` or
+`bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted`. Until the
+owner decides on a system-level fix (an AppArmor profile for a system
+`bubblewrap`, or turning the restriction off), put everything the reviewer needs
+in its prompt, such as the diff and the changed files. It cannot read them
+itself. This script makes no system change.
 
 ## What it changes, and what it leaves alone
 
-It writes the tool folders, their links in `~/.local/bin`, and what `ai/claude/install.sh`
+It writes the tool folders, their links in `~/.local/bin` (and the `python` link), and what `ai/claude/install.sh`
 and the `claude` CLI write. On a box where the plugin is already at the pinned tag,
 that is nothing. Otherwise `ai/claude/install.sh`:
 
@@ -87,5 +131,6 @@ this script made is left alone; move it aside and rerun to get the pinned build.
 
 Old version folders stay after a pin bump, because a running lane may still use them.
 Delete them once no lane does. To undo everything: remove the links in `~/.local/bin`
-that point into `~/.local/share/lane-worker`, that folder, then run
+that point into `~/.local/share/lane-worker`, the `~/.local/bin/python` link it
+made, that folder, then run
 `claude plugin marketplace remove gambtho-skills`.
