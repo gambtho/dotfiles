@@ -1587,6 +1587,55 @@ effective_github_helper() {
   [ "$output" = 'global=<>' ]
 }
 
+@test "auth login is not redirected and warns when it changes the tracked config" {
+  setup_setup_git
+  # A login that finds a helper other than gh's offers Git setup and writes --global.
+  cat >"$STUB_BIN/real/gh" <<'EOF'
+#!/usr/bin/env bash
+printf 'global=<%s>\n' "${GIT_CONFIG_GLOBAL-unset}"
+[ "${WRITE_HELPER:-0}" = 1 ] && git config --global --add credential.https://github.com.helper "!$0 auth git-credential"
+exit 7
+EOF
+  cd "$TEST_ROOT/default"
+  run "$REPO_ROOT/bin/gh" auth login --hostname github.com
+  [ "$status" -eq 7 ]
+  [ "$output" = 'global=<unset>' ]
+  cmp "$TEST_ROOT/tracked.before" "$DOTFILES/core/git/gitconfig.symlink"
+
+  # An untracked global config is not this check's business.
+  WRITE_HELPER=1 run "$REPO_ROOT/bin/gh" auth login --hostname github.com
+  [ "$status" -eq 7 ]
+  [[ "$output" != *"changed during auth login"* ]]
+
+  # Once the file is tracked, a write is reported with the commands to undo it.
+  cp "$TEST_ROOT/tracked.before" "$DOTFILES/core/git/gitconfig.symlink"
+  git -C "$DOTFILES" init -q
+  git -C "$DOTFILES" add core/git/gitconfig.symlink
+  git -C "$DOTFILES" -c user.name=t -c user.email=t@example.com commit -q -m base
+  WRITE_HELPER=1 run "$REPO_ROOT/bin/gh" auth login --hostname github.com
+  [ "$status" -eq 7 ]
+  [[ "$output" == *"gh: the tracked Git config $DOTFILES/core/git/gitconfig.symlink changed during auth login."* ]]
+  [[ "$output" == *"checkout -- core/git/gitconfig.symlink"* ]]
+  git -C "$DOTFILES" checkout -q -- core/git/gitconfig.symlink
+
+  # Edits made before login must not be thrown away by the advice.
+  printf '[alias]\n  mine = status\n' >>"$DOTFILES/core/git/gitconfig.symlink"
+  WRITE_HELPER=1 run "$REPO_ROOT/bin/gh" auth login --hostname github.com
+  [ "$status" -eq 7 ]
+  [[ "$output" == *"changed during auth login"* ]]
+  [[ "$output" != *"checkout -- "* ]]
+  [[ "$output" == *"checkout -p -- core/git/gitconfig.symlink"* ]]
+  git -C "$DOTFILES" checkout -q -- core/git/gitconfig.symlink
+
+  # A staged edit counts as an earlier change too.
+  printf '[alias]\n  staged = status\n' >>"$DOTFILES/core/git/gitconfig.symlink"
+  git -C "$DOTFILES" add core/git/gitconfig.symlink
+  git -C "$DOTFILES" show HEAD:core/git/gitconfig.symlink >"$DOTFILES/core/git/gitconfig.symlink"
+  WRITE_HELPER=1 run "$REPO_ROOT/bin/gh" auth login --hostname github.com
+  [[ "$output" == *"checkout -p -- core/git/gitconfig.symlink"* ]]
+  [[ "$output" != *"checkout -- "* ]]
+}
+
 @test "non-setup commands retain their global config environment arguments and exit status" {
   setup_setup_git
   cat >"$STUB_BIN/real/gh" <<'EOF'

@@ -569,4 +569,4 @@ while read -r n; do ln -s "$HOME/.dotfiles/ai/marketplace/plugins/my/skills/$n" 
 
 ## Removed scope
 
-This migration does not restore Claude project overlays, Claude agent teams, devcontainer seeding, the Vekil proxy, or Claude Code/Codex CLI installation on full machines (a lanes worker box gets a pinned Codex CLI from [tools/lane-worker](../tools/lane-worker/README.md)). Existing machine-local authentication, histories, and sessions outside positively identified retired links remain untouched.
+This migration does not restore Claude project overlays, Claude agent teams, devcontainer seeding, the Vekil proxy, or Claude Code/Codex CLI installation on full machines (a lanes worker box gets a pinned Codex CLI from [tools/lane-worker](../tools/lane-worker/README.md), and the coordinator VM recipe installs Claude Code for its own sessions; see [tools/coordinator-vm](../tools/coordinator-vm/README.md)). Existing machine-local authentication, histories, and sessions outside positively identified retired links remain untouched.

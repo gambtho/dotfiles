@@ -8,7 +8,8 @@ Everything needed to build it again is in this folder.
 | `azuredeploy.json` | The Azure resources, as one subscription-level template |
 | `deploy.sh` | Previews the template (`what-if`, the default) or creates it (`create`) |
 | `cloud-init.yaml` | First boot: basic packages, a clone of this repository, `provision.sh` |
-| `provision.sh` | Runs bootstrap and `dot-install` with the `server` profile, then enables the Herdr service |
+| `provision.sh` | Runs bootstrap and `dot-install` with the `server` profile, installs Claude Code and uv, then enables the Herdr service |
+| `install-lanes.sh` | After the GitHub sign-in, installs lanes from its main branch with the Relay extra (`make coordinator-lanes`) |
 | `coordinator-herdr.service` | User service that starts one Herdr session at boot |
 | `dotfiles-keyring-unlock.service` | Template for the system service that unlocks the keyring at boot; `make keyring-seal` installs it |
 
@@ -76,7 +77,12 @@ commit; `git -C ~/.dotfiles switch main` when you want it to follow main.
 
 cloud-init takes a while (it builds language runtimes). Its log is
 `/var/log/coordinator-provision.log`; `cloud-init status --long` shows the
-result. Nothing below is automatic. **Lanes** marks a `lane` command; **Manual**
+result. When it finishes, `~/.local/bin` holds `claude` and `uv` as well as
+Herdr. Claude Code comes from its official installer, which is not pinned;
+Claude Code updates itself after that. uv is a pinned, digest-checked release
+from `config/versions.env`. Full machines no longer install Claude Code (see
+`ai/README.md`); this VM does because running Claude Code coordinator sessions
+is its job, and only this recipe does it. Nothing below is automatic. **Lanes** marks a `lane` command; **Manual**
 marks everything else.
 
 ### 1. Get a first shell (Manual)
@@ -109,7 +115,7 @@ the account first (portal: **Reset password**).
 | Tailscale | done in step 1 |
 | GitHub | `make -C ~/.dotfiles keyring-init` in a human terminal if the login keyring is absent (`make -C ~/.dotfiles keyring-check`), then `gh auth login --hostname github.com --web --scopes read:public_key`, swapping `read:public_key` for a read-only scope no other machine uses (see "Signing in on more than one machine" in the top-level README) |
 | Azure | `az login --use-device-code`, as yourself. Azure Relay needs a user sign-in; the VM's own identity has no roles |
-| Claude Code | install it the way its documentation says, then run `claude` and sign in |
+| Claude Code | run `claude` and sign in; `provision.sh` installed it |
 
 Your tenant may block device-code sign-in. If `az login --use-device-code` is
 refused, sign in with the browser on your own machine through a forwarded port:
@@ -123,10 +129,24 @@ refused, sign in with the browser on your own machine through a forwarded port:
 4. Open the printed address in your own browser and sign in. The last
    redirect, to `localhost:PORT`, now reaches `az` on the VM.
 
+Run `gh` from a login shell (an interactive `ssh`, or `zsh -lc '...'`), so the
+`gh` shim in `~/.dotfiles/bin` runs. A plain `ssh coordinator 'gh ...'` runs the
+real `gh`. Do not run `gh auth setup-git`: the tracked Git config already makes
+`gh` Git's credential helper, and the real `gh` writes that setting into the
+tracked file, which leaves `~/.dotfiles` dirty. The shim sends it to
+`~/.gitconfig.local` instead, and warns if `gh auth login` changes the tracked
+file. If `git -C ~/.dotfiles status` shows `core/git/gitconfig.symlink`
+changed, check `git -C ~/.dotfiles diff`. If the file had no other changes
+before, undo it with `git -C ~/.dotfiles checkout -- core/git/gitconfig.symlink`;
+otherwise drop only the helper lines with `git -C ~/.dotfiles checkout -p`.
+
 ### 3. Install lanes and start a fresh registry
 
-- **Manual:** install `developerlanes` from its main branch with its documented
-  installer, including the Relay extra.
+- **Manual:** after the GitHub sign-in, install lanes from its main branch
+  with the Relay extra, naming the private repository it is published from:
+  `make -C ~/.dotfiles coordinator-lanes LANES_REPO=OWNER/REPO`. It uses the
+  uv that `provision.sh` installed and Python 3.11, which uv downloads, and puts
+  `lane` in `~/.local/bin`. Run it again to move to the current main.
 - **Lanes:** `lane doctor`. The registry is the default `~/.developerlanes`;
   do not copy one from another machine.
 - **Manual:** clone the first project's coordinator folder from its private
@@ -236,4 +256,6 @@ for good.
 No VM has been created from this. cloud-init passes `cloud-init schema`, and
 `what-if` accepts the template, but first boot, `dot-install` on a clean
 Ubuntu server, the Tailscale sign-in link through run-command and the
-forwarded-port sign-in have not run for real. Expect to fix something on the first build.
+forwarded-port sign-in have not run for real. Neither have the Claude Code and
+uv installs in `provision.sh` or `make coordinator-lanes`. Expect to fix
+something on the first build.

@@ -169,7 +169,7 @@ table below) that resolves the current repository's remote owner and exports
 from scripts, editors, and AI tool shells, not just interactive zsh. It
 refuses to run rather than guess when a repository has remotes under two
 different mapped owners.
-`gh auth setup-git` writes to `~/.gitconfig.local` unless `GIT_CONFIG_GLOBAL` is already set; `auth login` is not redirected because its helper reads influence credential-store selection.
+`gh auth setup-git` writes to `~/.gitconfig.local` unless `GIT_CONFIG_GLOBAL` is already set; `auth login` is not redirected because its helper reads influence credential-store selection. Login leaves Git's config alone when it finds gh's own helper, which the tracked config sets; if it changes a tracked global config anyway, the shim says so and how to undo it without losing earlier edits. Only the shim does this: a shell without `~/.dotfiles/bin` first on PATH (such as a plain `ssh host 'gh ...'`) runs the real `gh`, which writes through `~/.gitconfig` into the tracked file.
 
 `GH_CONFIG_DIR` also partitions **non-repo** `gh` state, not just
 credentials: inside a secondary-identity repository, `gh extension list` and
