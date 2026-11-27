@@ -845,6 +845,25 @@ CASES
   [[ "$output" == *"Homebrew already installed"* ]]
 }
 
+@test "the server profile installs the pinned git-lfs the global git config calls" {
+  printf '#!/bin/sh\nprintf "%%s\\n" "$*" >>"%s"\n' "$TEST_ROOT/mise-calls" >"$STUB_BIN/mise"
+  chmod +x "$STUB_BIN/mise"
+
+  DOTFILES_PROFILE=server run bash "$REPO_ROOT/languages/mise/install.sh"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$TEST_ROOT/mise-calls")" = "install --yes node python git-lfs" ]
+
+  # The filter and hooks are global on every profile, so the tool must be
+  # pinned for mise to install it.
+  grep -Fq 'process = git-lfs filter-process' "$REPO_ROOT/core/git/gitconfig.symlink"
+  grep -Eq '^git-lfs = "[0-9.]+"$' "$REPO_ROOT/config/mise/config.toml"
+
+  rm "$TEST_ROOT/mise-calls"
+  DOTFILES_PROFILE=personal run bash "$REPO_ROOT/languages/mise/install.sh"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$TEST_ROOT/mise-calls")" = "install --yes" ]
+}
+
 # --- work profile Krew bootstrap --------------------------------------------
 #
 # The ctx/ns plugins are installed through Krew, and Linux/WSL has no package
