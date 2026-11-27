@@ -271,7 +271,7 @@ plugin install gambtho-skills@gambtho-skills --scope user" ]
   run bash "$INSTALLER"
 
   [ "$status" -ne 0 ]
-  [[ "$output" == *"is not a JSON object; leaving it alone"* ]]
+  [[ "$output" == *"is not a single JSON object; leaving it alone"* ]]
   [ "$(cat "$HOME/.claude/settings.json")" = 'not json' ]
   [ ! -e "$STATE/calls" ]
 
@@ -279,8 +279,28 @@ plugin install gambtho-skills@gambtho-skills --scope user" ]
   run bash "$INSTALLER" --check
 
   [ "$status" -ne 0 ]
-  [[ "$output" == *"is not a JSON object"* ]]
+  [[ "$output" == *"is not a single JSON object"* ]]
   [[ "$output" != *"Would turn off"* ]]
+}
+
+@test "a settings file with more than one JSON value is left alone, even if the last one is already right" {
+  printf '{}\n{"attribution": {"commit": "", "pr": "", "sessionUrl": false}}\n' >"$HOME/.claude/settings.json"
+  cp "$HOME/.claude/settings.json" "$TEST_ROOT/settings-before"
+
+  run bash "$INSTALLER"
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"is not a single JSON object"* ]]
+  cmp "$TEST_ROOT/settings-before" "$HOME/.claude/settings.json"
+}
+
+@test "an empty settings file gets attribution turned off" {
+  : >"$HOME/.claude/settings.json"
+
+  run bash "$INSTALLER"
+
+  [ "$status" -eq 0 ]
+  [ "$(jq -c . "$HOME/.claude/settings.json")" = '{"attribution":{"commit":"","pr":"","sessionUrl":false}}' ]
 }
 
 @test "a machine without Claude Code gets no settings file" {

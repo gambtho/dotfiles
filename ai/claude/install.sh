@@ -53,9 +53,11 @@ attribution_is_off() {
       "$SETTINGS" >/dev/null 2>&1
 }
 
+# One JSON object, or an empty file.
 settings_usable() {
-  if [[ -e "$SETTINGS" ]] && ! jq -e 'type == "object"' "$SETTINGS" >/dev/null 2>&1; then
-    echo "$SETTINGS is not a JSON object; leaving it alone. Fix it, then rerun." >&2
+  if [[ -e "$SETTINGS" ]] &&
+    ! jq -se 'length == 0 or (length == 1 and (.[0] | type) == "object")' "$SETTINGS" >/dev/null 2>&1; then
+    echo "$SETTINGS is not a single JSON object; leaving it alone. Fix it, then rerun." >&2
     return 1
   fi
 }
@@ -67,8 +69,8 @@ turn_off_attribution() {
   tmp=$(mktemp "$target.XXXXXX")
   if [[ -e "$target" ]]; then
     cp -p -- "$target" "$tmp"
-    jq --argjson want "$NO_ATTRIBUTION" \
-      '.attribution = ((if (.attribution | type) == "object" then .attribution else {} end) + $want)' \
+    jq -s --argjson want "$NO_ATTRIBUTION" \
+      '(.[0] // {}) | .attribution = ((if (.attribution | type) == "object" then .attribution else {} end) + $want)' \
       "$target" >"$tmp" || {
       rm -f -- "$tmp"
       return 1
@@ -80,8 +82,8 @@ turn_off_attribution() {
   echo "Turned off Claude Code commit and pull request attribution in $SETTINGS."
 }
 
+settings_usable
 if ! attribution_is_off; then
-  settings_usable
   if [[ "$MODE" == check ]]; then
     echo "[dry-run] Would turn off Claude Code commit and pull request attribution in $SETTINGS"
   else
