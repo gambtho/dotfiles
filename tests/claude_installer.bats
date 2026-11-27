@@ -218,6 +218,101 @@ plugin install gambtho-skills@gambtho-skills --scope user" ]
   assert_only_unrelated_skills_remain
 }
 
+@test "a missing settings file is created with attribution turned off" {
+  export CLAUDE_CONFIG_DIR="$TEST_ROOT/claude-config"
+
+  run bash "$INSTALLER"
+
+  [ "$status" -eq 0 ]
+  [ "$(jq -c . "$CLAUDE_CONFIG_DIR/settings.json")" = '{"attribution":{"commit":"","pr":"","sessionUrl":false}}' ]
+}
+
+@test "turning off attribution keeps every other setting" {
+  echo '{"theme": "auto", "tui": "fullscreen", "attribution": {"commit": "x", "extra": 1}}' >"$HOME/.claude/settings.json"
+  echo keep >"$HOME/.claude/other.json"
+
+  run bash "$INSTALLER"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Turned off Claude Code commit and pull request attribution"* ]]
+  [ "$(jq -c . "$HOME/.claude/settings.json")" = '{"theme":"auto","tui":"fullscreen","attribution":{"commit":"","extra":1,"pr":"","sessionUrl":false}}' ]
+  [ "$(cat "$HOME/.claude/other.json")" = keep ]
+  [ "$(ls "$HOME/.claude" | tr '\n' ' ')" = "other.json settings.json skills " ]
+}
+
+@test "a second run leaves the settings file untouched" {
+  echo '{"theme": "auto"}' >"$HOME/.claude/settings.json"
+  run bash "$INSTALLER"
+  [ "$status" -eq 0 ]
+  cp -p "$HOME/.claude/settings.json" "$TEST_ROOT/settings-before"
+  inode=$(ls -i "$HOME/.claude/settings.json" | awk '{print $1}')
+
+  run bash "$INSTALLER"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"attribution"* ]]
+  cmp "$TEST_ROOT/settings-before" "$HOME/.claude/settings.json"
+  [ "$(ls -i "$HOME/.claude/settings.json" | awk '{print $1}')" = "$inode" ]
+}
+
+@test "check mode reports the attribution change and writes nothing" {
+  echo '{"theme": "auto"}' >"$HOME/.claude/settings.json"
+
+  run bash "$INSTALLER" --check
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Would turn off Claude Code commit and pull request attribution"* ]]
+  [ "$(cat "$HOME/.claude/settings.json")" = '{"theme": "auto"}' ]
+}
+
+@test "a settings file that is not a JSON object is left alone" {
+  echo 'not json' >"$HOME/.claude/settings.json"
+
+  run bash "$INSTALLER"
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"is not a single JSON object; leaving it alone"* ]]
+  [ "$(cat "$HOME/.claude/settings.json")" = 'not json' ]
+  [ ! -e "$STATE/calls" ]
+
+  echo '[]' >"$HOME/.claude/settings.json"
+  run bash "$INSTALLER" --check
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"is not a single JSON object"* ]]
+  [[ "$output" != *"Would turn off"* ]]
+}
+
+@test "a settings file with more than one JSON value is left alone, even if the last one is already right" {
+  printf '{}\n{"attribution": {"commit": "", "pr": "", "sessionUrl": false}}\n' >"$HOME/.claude/settings.json"
+  cp "$HOME/.claude/settings.json" "$TEST_ROOT/settings-before"
+
+  run bash "$INSTALLER"
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"is not a single JSON object"* ]]
+  cmp "$TEST_ROOT/settings-before" "$HOME/.claude/settings.json"
+}
+
+@test "an empty settings file gets attribution turned off" {
+  : >"$HOME/.claude/settings.json"
+
+  run bash "$INSTALLER"
+
+  [ "$status" -eq 0 ]
+  [ "$(jq -c . "$HOME/.claude/settings.json")" = '{"attribution":{"commit":"","pr":"","sessionUrl":false}}' ]
+}
+
+@test "a machine without Claude Code gets no settings file" {
+  rm "$STUB_BIN/claude"
+  rm -r "$HOME/.claude"
+
+  run bash "$INSTALLER"
+
+  [ "$status" -eq 0 ]
+  [ ! -e "$HOME/.claude" ]
+}
+
 @test "unsupported arguments are rejected" {
   run bash "$INSTALLER" --force
   [ "$status" -eq 2 ]
