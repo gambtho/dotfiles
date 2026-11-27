@@ -36,7 +36,9 @@ Without that consent, `make bootstrap` stops at the Homebrew install step with
 rerun. Bootstrap puts a fresh Homebrew on its own PATH (`/opt/homebrew` on Apple
 silicon, `/usr/local` on Intel). New shells find it without a manual step: on
 Apple silicon the Homebrew installer writes `/etc/paths.d/homebrew`, and
-`/usr/local/bin` is already in `/etc/paths`.
+`/usr/local/bin` is already in `/etc/paths`. An older Apple silicon install may
+lack that file; then run `eval "$(/opt/homebrew/bin/brew shellenv)"` in the new
+terminal first.
 
 After bootstrap, open a new terminal so it picks up Homebrew's PATH, then run
 `~/.dotfiles/bin/dot-install` (or `~/.dotfiles/bin/dot-update`) to install
