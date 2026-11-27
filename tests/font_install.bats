@@ -239,8 +239,16 @@ with zipfile.ZipFile(sys.argv[1], "w") as z:
   [ "$status" -eq 0 ]
   [ ! -e "$legacy" ]
 
-  mkdir -p "$legacy"
+  mkdir -p "$legacy" "$HOME/Library/Fonts"
   printf 'v3.4.0\n' >"$legacy/installed-version"
+  ln -s "$legacy" "$HOME/Library/Fonts/NerdFonts"
+  run env FONT_INSTALL_SOURCE_ONLY=1 FONT_DIR="$HOME/Library/Fonts/NerdFonts" bash -c '
+    source "$1/fonts/install.sh"
+    remove_legacy_fonts
+  ' _ "$REPO_ROOT"
+  [ "$status" -eq 0 ]
+  [ -f "$legacy/installed-version" ]
+
   run env FONT_INSTALL_SOURCE_ONLY=1 FONT_DIR="$legacy" bash -c '
     source "$1/fonts/install.sh"
     remove_legacy_fonts
