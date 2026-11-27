@@ -151,6 +151,11 @@ install_tool() {
   mkdir "$STAGE/$name"
   "unpack_$name" "$STAGE/$name"
   [[ -x "$STAGE/$name/${ENTRY[$name]}" ]] || die "$name: ${ENTRY[$name]} is missing from the download."
+  # A folder for this version without its binary is broken, so no lane can be
+  # using it; set it aside with the staging, which is removed below.
+  if [[ -d "$dir" && ! -x "$dir/${ENTRY[$name]}" ]]; then
+    mv -T -- "$dir" "$STAGE/broken"
+  fi
   if [[ ! -d "$dir" ]]; then
     mv -T -- "$STAGE/$name" "$dir"
   fi

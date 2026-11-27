@@ -245,6 +245,17 @@ plugin install gambtho-skills@gambtho-skills --scope user" ]
   [ -x "$SHARE/codex-0.0.1/bin/codex" ]
 }
 
+@test "a broken folder for the pinned version is replaced, not reused" {
+  system_jq
+  mkdir -p "$SHARE/codex-$CODEX_VERSION/bin"
+
+  run bash "$INSTALLER" --apply
+
+  [ "$status" -eq 0 ]
+  [ "$("$HOME/.local/bin/codex")" = "codex-cli x86_64" ]
+  [ -z "$(find "$SHARE" -mindepth 1 -maxdepth 1 -name '.staging-*')" ]
+}
+
 @test "a digest mismatch fails and links nothing" {
   system_jq
   printf 'tampered\n' >>"$PAYLOADS/codex-package-x86_64-unknown-linux-musl.tar.gz"

@@ -52,7 +52,7 @@ Running Claude Code sessions keep the skills they loaded; a new lane started aft
 the run loads `gambtho-skills`.
 
 To check Codex's sandbox once on a new box:
-`codex exec --skip-git-repo-check --sandbox read-only - <<<'run ls' </dev/null`. If it
+`codex exec --skip-git-repo-check --sandbox read-only - <<<'run ls'`. If it
 reports that bubblewrap cannot run, the box's AppArmor policy blocks unprivileged user
 namespaces; that needs an owner decision (for example a system `bubblewrap` package),
 not this script.
