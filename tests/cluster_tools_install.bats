@@ -57,8 +57,8 @@ setup() {
       shift
     done
     case "$url" in
-      */dists/trixie/InRelease) exit 22 ;;
-      */InRelease) exit 0 ;;
+      */dists/trixie/InRelease) printf 404; exit 0 ;;
+      */InRelease) printf "${FAKE_MS_STATUS:-200}"; exit 0 ;;
     esac
     echo "$url" >>"$STATE/downloads"
     case "$url" in
@@ -83,10 +83,12 @@ setup() {
     exec "$@"
   '
   stub_command gpg '
+    [[ ! -f "$STATE/gpg-fails" ]] || exit 2
     out="" src=""
     while (($#)); do
       case "$1" in
         --output) out=$2; shift ;;
+        --homedir) shift ;;
         --*) ;;
         *) src=$1 ;;
       esac
@@ -351,6 +353,42 @@ assert data == {
   [ ! -e "$APT_ETC/sources.list.d/azure-cli.sources" ]
   ! grep -q azure-cli "$STATE/installed"
   grep -qx docker-ce "$STATE/installed"
+}
+
+@test "a Microsoft outage stops the run instead of skipping the Azure CLI" {
+  FAKE_MS_STATUS=503 run bash "$INSTALLER" --apply
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"could not check https://packages.microsoft.com/repos/azure-cli/dists/noble/InRelease (HTTP 503)."* ]]
+  [ ! -e "$STATE/apt" ]
+}
+
+@test "a key that fails to convert leaves the existing key in place" {
+  mkdir -p "$APT_ETC/keyrings"
+  printf 'working key\n' >"$APT_ETC/keyrings/docker.gpg"
+  touch "$STATE/gpg-fails"
+
+  run bash -c 'source "$1"; setup_docker_repository' _ "$FIXTURE/libexec/lib/apt-repositories.sh"
+
+  [ "$status" -ne 0 ]
+  [ "$(cat "$APT_ETC/keyrings/docker.gpg")" = "working key" ]
+  [ ! -e "$APT_ETC/sources.list.d/docker.list" ]
+}
+
+@test "a symlinked daemon.json is updated where it points and stays a link" {
+  printf '%s\n' docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin runsc azure-cli >"$STATE/installed"
+  mkdir -p "$(dirname "$CLUSTER_TOOLS_DAEMON_JSON")" "$TEST_ROOT/etc/docker-config"
+  printf '{"log-driver": "local"}\n' >"$TEST_ROOT/etc/docker-config/daemon.json"
+  chmod 0600 "$TEST_ROOT/etc/docker-config/daemon.json"
+  ln -s "$TEST_ROOT/etc/docker-config/daemon.json" "$CLUSTER_TOOLS_DAEMON_JSON"
+
+  run bash "$INSTALLER" --apply
+
+  [ "$status" -eq 0 ]
+  [ -L "$CLUSTER_TOOLS_DAEMON_JSON" ]
+  [ "$(stat -c %a "$TEST_ROOT/etc/docker-config/daemon.json")" = 600 ]
+  grep -q '"runsc"' "$TEST_ROOT/etc/docker-config/daemon.json"
+  grep -q '"log-driver": "local"' "$TEST_ROOT/etc/docker-config/daemon.json"
 }
 
 @test "a failed Docker reload is retried by the next run" {

@@ -90,7 +90,12 @@ case "$ARCH" in
 esac
 
 STAGE=""
-cleanup() { [[ -z "$STAGE" ]] || rm -rf -- "$STAGE"; }
+# Private (0700) scratch space, for a copy of daemon.json among others.
+SCRATCH=$(mktemp -d)
+cleanup() {
+  [[ -z "$STAGE" ]] || rm -rf -- "$STAGE"
+  rm -rf -- "$SCRATCH"
+}
 trap cleanup EXIT
 
 # ── apt packages ─────────────────────────────────────────────────────────────
@@ -111,9 +116,17 @@ listing_source() {
 
 # Microsoft publishes the Azure CLI only for some releases (not Debian trixie,
 # for one). Adding a source for another release would stop every apt update.
+# Only a 404 means the suite is not served; any other failure stops the run.
 azure_cli_suite_served() {
-  curl --fail --silent --head --location --connect-timeout 10 --max-time 30 --output /dev/null \
-    "https://packages.microsoft.com/repos/azure-cli/dists/$(os_codename)/InRelease"
+  local url code
+  url="https://packages.microsoft.com/repos/azure-cli/dists/$(os_codename)/InRelease"
+  code=$(curl --silent --head --location --connect-timeout 10 --max-time 30 --retry 3 \
+    --output /dev/null --write-out '%{http_code}' "$url") || code=failed
+  case "$code" in
+    2??) return 0 ;;
+    404) return 1 ;;
+    *) die "could not check $url (HTTP $code). Try again later." ;;
+  esac
 }
 
 # One line per repository: label, its source file, the host another source
@@ -246,23 +259,24 @@ reload_docker() {
 }
 
 converge_runsc_runtime() {
-  local state source="$DAEMON_JSON" temporary mode=0644 owner=0 group=0
-  temporary=$(mktemp)
-  # A daemon.json only root can read is read with sudo, and only by --apply.
-  if [[ -e "$DAEMON_JSON" && ! -r "$DAEMON_JSON" ]]; then
+  # A symlinked daemon.json is updated where it points.
+  local target state source merged="$SCRATCH/daemon.json" mode=0644 owner=0 group=0
+  target=$(readlink -m -- "$DAEMON_JSON")
+  source=$target
+  # A daemon.json only root can read is read with sudo, and only by --apply,
+  # into the private scratch folder.
+  if [[ -e "$target" && ! -r "$target" ]]; then
     if [[ "$MODE" == check ]]; then
-      rm -f -- "$temporary"
       say "[dry-run] Only root can read $DAEMON_JSON; --apply reads it with sudo and adds runsc if it is missing."
       return 0
     fi
-    source="$temporary.current"
-    # shellcheck disable=SC2024  # the copy is meant to be the user's own temporary file
-    sudo cat -- "$DAEMON_JSON" >"$source"
+    source="$SCRATCH/daemon.json.current"
+    # shellcheck disable=SC2024  # the copy is meant to be the user's own private file
+    sudo cat -- "$target" >"$source"
   fi
   state=$(daemon_json check "$source")
   case "$state" in
     present)
-      rm -f -- "$temporary" "$temporary.current"
       say "runsc is a Docker runtime in $DAEMON_JSON."
       if [[ -e "$RELOAD_PENDING" ]]; then
         if [[ "$MODE" == check ]]; then
@@ -274,29 +288,23 @@ converge_runsc_runtime() {
       return 0
       ;;
     invalid)
-      rm -f -- "$temporary" "$temporary.current"
       [[ "$MODE" == check ]] || die "$DAEMON_JSON is not a JSON object with a runtimes object, so runsc was not added. Fix it, then rerun."
       say "[dry-run] $DAEMON_JSON is not a JSON object with a runtimes object; --apply would stop here."
       return 0
       ;;
   esac
   if [[ "$MODE" == check ]]; then
-    rm -f -- "$temporary"
     say "[dry-run] Would add runsc ($RUNSC_PATH) to the runtimes in $DAEMON_JSON, keeping its other settings."
     return 0
   fi
-  daemon_json merge "$source" "$temporary" || {
-    rm -f -- "$temporary" "$temporary.current"
-    die "could not merge runsc into $DAEMON_JSON."
-  }
+  daemon_json merge "$source" "$merged" || die "could not merge runsc into $DAEMON_JSON."
   # Keep the owner and mode of an existing file; it may hold proxy credentials.
-  if [[ -e "$DAEMON_JSON" ]]; then
-    read -r mode owner group < <(stat -c '%a %u %g' "$DAEMON_JSON")
+  if [[ -e "$target" ]]; then
+    read -r mode owner group < <(stat -c '%a %u %g' "$target")
   fi
   mkdir -p "$(dirname "$RELOAD_PENDING")"
   touch "$RELOAD_PENDING"
-  sudo install -D -m "$mode" -o "$owner" -g "$group" "$temporary" "$DAEMON_JSON"
-  rm -f -- "$temporary" "$temporary.current"
+  sudo install -D -m "$mode" -o "$owner" -g "$group" "$merged" "$target"
   say "Added runsc to the runtimes in $DAEMON_JSON."
   reload_docker
 }

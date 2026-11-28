@@ -6,19 +6,16 @@
 
 : "${APT_ETC:=/etc/apt}"
 
+# Convert the key in a private folder and replace DESTINATION only once that
+# worked, so a bad download never overwrites a working key.
 download_apt_key() {
-  local url="$1" destination="$2" temporary
-  temporary=$(mktemp) || return
-  if ! curl --fail --show-error --location --connect-timeout 10 --max-time 120 --retry 3 "$url" --output "$temporary"; then
-    rm -f -- "$temporary"
-    return 1
-  fi
-  if ! sudo gpg --dearmor --yes --output "$destination" "$temporary"; then
-    rm -f -- "$temporary"
-    return 1
-  fi
-  rm -f -- "$temporary"
-  sudo chmod a+r "$destination"
+  local url="$1" destination="$2" folder status=0
+  folder=$(mktemp -d) || return
+  curl --fail --show-error --location --connect-timeout 10 --max-time 120 --retry 3 "$url" --output "$folder/key" &&
+    gpg --batch --no-options --homedir "$folder" --dearmor --output "$folder/key.gpg" "$folder/key" &&
+    sudo install -m 0644 "$folder/key.gpg" "$destination" || status=$?
+  rm -rf -- "$folder"
+  return "$status"
 }
 
 # OS_RELEASE_FILE lets tests describe another release.
