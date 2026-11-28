@@ -144,3 +144,71 @@ Delete them once no lane does. To undo everything: remove the links in `~/.local
 that point into `~/.local/share/lane-worker`, the `~/.local/bin/python` link it
 made, that folder, then run
 `claude plugin marketplace remove gambtho-skills`.
+
+## Cluster tools (opt-in)
+
+Some lanes build container images and run kind clusters, some of them with
+gVisor. A worker that takes those lanes needs Docker and the Kubernetes tools.
+`cluster-tools.sh` installs them, on Ubuntu or Debian (amd64 or arm64) only. It
+uses `sudo`, so it is separate from `install.sh`, and nothing runs it unless you
+do; `dot-install` and `make lane-worker` never do.
+
+| What | From | Where |
+|---|---|---|
+| Docker Engine (`docker-ce`, CLI, `containerd.io`, buildx and compose plugins) | Docker's apt repository | apt |
+| gVisor `runsc`, registered as the Docker runtime `runsc` | gVisor's apt repository | apt; `/etc/docker/daemon.json` |
+| Azure CLI (`azure-cli`) | Microsoft's apt repository | apt |
+| `kind` (pinned) | kind release | `~/.local/bin/kind` |
+| `kubectl` (pinned, the `KUBERNETES_CHANNEL` minor) | dl.k8s.io | `~/.local/bin/kubectl` |
+| Go (pinned, the minor of the `go` pin in `config/mise/config.toml`) | go.dev | `~/.local/bin/go`, `~/.local/bin/gofmt` |
+
+The apt repositories are the ones the work profile adds, with the same files:
+each key goes to `/etc/apt/keyrings` and its source names it with `signed-by`.
+If another source file already lists one of them, that one is used instead.
+The apt packages follow their repositories, and the normal `apt upgrade` moves
+them. `kind`, `kubectl` and Go are pinned and digest-checked in
+`config/versions.env` and unpack under `~/.local/share/lane-worker`, like the
+review CLIs; lanes do not see mise's shims, so Go comes from here too.
+
+```bash
+make -C ~/.dotfiles cluster-tools-check   # reads only: says what is present and what it would do
+make -C ~/.dotfiles cluster-tools         # installs; a second run changes nothing
+```
+
+It adds `runsc` to the `runtimes` in `/etc/docker/daemon.json` and keeps every
+other setting there, then reloads Docker, which leaves running containers alone.
+A `runsc` entry that is already there is left as it is. If the file is not valid
+JSON, it stops and changes nothing there.
+
+### The docker group needs a new login
+
+The script adds you to the `docker` group, but only sessions that start after
+that have it. Until then `docker` needs `sudo`. Lanes run under Herdr, which can
+outlive a login as a user service, so the simplest step is a reboot. Then check,
+from a lane or a new login:
+
+```bash
+docker run --rm hello-world
+docker run --rm --runtime=runsc hello-world
+kind create cluster && kubectl get nodes && kind delete cluster
+az version
+go version
+```
+
+Membership of the `docker` group is the same as root on that machine. Use this
+only on a worker whose lanes you trust with that.
+
+### Undo
+
+```bash
+sudo apt-get purge docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin runsc azure-cli
+sudo rm /etc/apt/sources.list.d/{docker.list,gvisor.list,azure-cli.sources} \
+  /etc/apt/keyrings/{docker.gpg,gvisor-archive-keyring.gpg,microsoft.gpg}
+sudo gpasswd -d "$USER" docker
+rm ~/.local/bin/{kind,kubectl,go,gofmt}
+rm -rf ~/.local/share/lane-worker/{kind,kubectl,go}-*
+```
+
+Purging Docker keeps images and volumes in `/var/lib/docker` and
+`/var/lib/containerd`; remove those too to free the space. On a work-profile
+machine, keep `docker.list` and `azure-cli.sources`, which that profile uses.

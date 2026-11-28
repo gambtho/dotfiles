@@ -34,6 +34,9 @@ setup() {
   [[ "$output" == *"artifact coderabbit $CODERABBIT_CLI_VERSION"* ]]
   [[ "$output" == *"artifact jq $JQ_VERSION"* ]]
   [[ "$output" == *"artifact git-lfs $GIT_LFS_VERSION"* ]]
+  [[ "$output" == *"artifact kind $KIND_VERSION"* ]]
+  [[ "$output" == *"artifact kubectl $KUBECTL_VERSION"* ]]
+  [[ "$output" == *"artifact go $GO_VERSION"* ]]
   [[ "$output" != *"herdr-devcontainer"* ]]
   [[ "$output" != *"paseo"* ]]
   [[ "$output" != *"npm "* ]]
@@ -373,6 +376,7 @@ case "$url" in
   *openai/codex*) printf '{"tag_name":"rust-v0.169.0"}\n' ;;
   *jqlang/jq*) printf '{"tag_name":"jq-1.8.2"}\n' ;;
   *git-lfs/git-lfs*) printf '{"tag_name":"v3.7.1"}\n' ;;
+  *kubernetes-sigs/kind*) printf '{"tag_name":"v0.33.0"}\n' ;;
   *cli.coderabbit.ai/releases/latest/VERSION) printf '0.9.7\n' ;;
 
   *tmustier/pi-queue-steer*|*registry.npmjs.org/pi-web-access/*|*registry.npmjs.org/@narumitw/pi-lsp/*|*registry.npmjs.org/@gotgenes/pi-subagents/*|*registry.npmjs.org/@gotgenes/pi-permission-system/*) exit 91 ;;
@@ -395,6 +399,7 @@ SCRIPT
   [[ "$output" == *"current artifact codex rust-v0.169.0"* ]]
   [[ "$output" == *"current artifact jq jq-1.8.2"* ]]
   [[ "$output" == *"current artifact git-lfs v3.7.1"* ]]
+  [[ "$output" == *"current artifact kind v0.33.0"* ]]
   [[ "$output" == *"current artifact coderabbit 0.9.7"* ]]
   [[ "$output" != *"herdr-devcontainer"* ]]
   [[ "$output" == *"current artifact nerd-fonts v3.4.0"* ]]

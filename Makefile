@@ -1,4 +1,4 @@
-.PHONY: install bootstrap update relink ai ai-check skills-update skills-pin lane-worker lane-worker-check coordinator-lanes ai-heeler ai-heeler-check ai-heeler-setup automations automations-check automation-run pins pins-check pins-update check syntax lint test python-test pi-runtime-test pi-security-gate validate
+.PHONY: install bootstrap update relink ai ai-check skills-update skills-pin lane-worker lane-worker-check cluster-tools cluster-tools-check coordinator-lanes ai-heeler ai-heeler-check ai-heeler-setup automations automations-check automation-run pins pins-check pins-update check syntax lint test python-test pi-runtime-test pi-security-gate validate
 
 # ── Main targets ──────────────────────────────────────────────────────────────
 
@@ -110,6 +110,12 @@ lane-worker: ## Lanes worker box: pinned skills plugin plus review CLIs (codex, 
 
 lane-worker-check: ## Dry-run: show what make lane-worker would install
 	bash tools/lane-worker/install.sh --check
+
+cluster-tools: ## Opt-in, Ubuntu/Debian lanes worker: Docker with gVisor runsc, kind, kubectl, Azure CLI and Go (sudo)
+	bash tools/lane-worker/cluster-tools.sh --apply
+
+cluster-tools-check: ## Dry-run: show what make cluster-tools would install or change
+	bash tools/lane-worker/cluster-tools.sh --check
 
 # Passed through the environment, so the shell never parses the value.
 coordinator-lanes: export LANES_REPO := $(LANES_REPO)
