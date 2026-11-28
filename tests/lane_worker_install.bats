@@ -483,6 +483,88 @@ plugin install gambtho-skills@gambtho-skills --scope user" ]
   [ "$("$HOME/.local/bin/python")" = own ]
 }
 
+# A fake mise whose `mise where go` names $MISE_GO when that has bin/go, as
+# the real one does for an installed Go and fails for a missing one.
+stub_mise_go() {
+  MISE_INSTALLS="$HOME/.local/share/mise/installs/go"
+  stub_command mise '
+    [[ "$*" == "where go" && "$PWD" == "$HOME" && -x "$MISE_GO/bin/go" ]] || { echo "go not installed" >&2; exit 1; }
+    echo "$MISE_GO"
+  '
+}
+
+mise_go_version() {
+  mkdir -p "$MISE_INSTALLS/$1/bin"
+  printf '#!/bin/sh\necho go %s\n' "$1" >"$MISE_INSTALLS/$1/bin/go"
+  printf '#!/bin/sh\necho gofmt %s\n' "$1" >"$MISE_INSTALLS/$1/bin/gofmt"
+  chmod +x "$MISE_INSTALLS/$1/bin/"*
+}
+
+@test "go links to mise's Go only when mise has one, and follows a new mise version" {
+  system_jq
+  stub_mise_go
+  export MISE_GO="$MISE_INSTALLS/1.26.1"
+  run bash "$INSTALLER" --apply
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"mise has no Go installed, so no go link. Run mise install go first."* ]]
+  [ ! -e "$HOME/.local/bin/go" ]
+
+  mise_go_version 1.26.1
+  run bash "$INSTALLER" --check
+  [[ "$output" == *"[dry-run] Would link $HOME/.local/bin/go to $MISE_GO/bin/go."* ]]
+  [[ "$output" == *"[dry-run] Would link $HOME/.local/bin/gofmt to $MISE_GO/bin/gofmt."* ]]
+  [ ! -e "$HOME/.local/bin/go" ]
+
+  run bash "$INSTALLER" --apply
+  [ "$status" -eq 0 ]
+  [ "$("$HOME/.local/bin/go")" = "go 1.26.1" ]
+  [ "$("$HOME/.local/bin/gofmt")" = "gofmt 1.26.1" ]
+  run bash "$INSTALLER" --apply
+  [[ "$output" == *"go links to $MISE_GO/bin/go."* ]]
+
+  # mise moves to a new patch release; the links follow it.
+  mise_go_version 1.26.2
+  rm -rf "$MISE_GO"
+  export MISE_GO="$MISE_INSTALLS/1.26.2"
+  run bash "$INSTALLER" --apply
+  [ "$status" -eq 0 ]
+  [ "$("$HOME/.local/bin/go")" = "go 1.26.2" ]
+  [ "$(readlink "$HOME/.local/bin/gofmt")" = "$MISE_GO/bin/gofmt" ]
+  [ -z "$(find "$SHARE" "$HOME/.local/bin" -mindepth 1 -name '.*')" ]
+}
+
+@test "a go lanes already find, or a go link it did not make, is left alone" {
+  system_jq
+  stub_mise_go
+  mise_go_version 1.26.1
+  export MISE_GO="$MISE_INSTALLS/1.26.1"
+  printf '#!/bin/sh\necho system go\n' >"$SYSTEM_BIN/go"
+  chmod +x "$SYSTEM_BIN/go"
+  run bash "$INSTALLER" --apply
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"go is already at $SYSTEM_BIN/go; leaving it."* ]]
+  [ ! -e "$HOME/.local/bin/go" ]
+  # gofmt is not in the system folder, so it is linked.
+  [ "$(readlink "$HOME/.local/bin/gofmt")" = "$MISE_GO/bin/gofmt" ]
+
+  # A go link the cluster tools made points into lane-worker, not mise.
+  rm "$SYSTEM_BIN/go"
+  mkdir -p "$SHARE/go-1.26.1/go/bin"
+  ln -s "$SHARE/go-1.26.1/go/bin/go" "$HOME/.local/bin/go"
+  run bash "$INSTALLER" --apply
+  [[ "$output" == *"$HOME/.local/bin/go was not installed by this script; leaving it."* ]]
+  [ "$(readlink "$HOME/.local/bin/go")" = "$SHARE/go-1.26.1/go/bin/go" ]
+
+  # Without mise, a go lanes find is reported and nothing changes.
+  rm "$STUB_BIN/mise"
+  printf '#!/bin/sh\n' >"$SYSTEM_BIN/go"
+  chmod +x "$SYSTEM_BIN/go"
+  rm "$HOME/.local/bin/go"
+  run bash "$INSTALLER" --apply
+  [[ "$output" == *"go is already at $SYSTEM_BIN/go; leaving it."* ]]
+  [ ! -e "$HOME/.local/bin/go" ]
+}
+
 # macOS reports Darwin and arm64 or x86_64. The stub answers uname -s;
 # ARTIFACT_ARCH stands in for uname -m.
 stub_darwin() {

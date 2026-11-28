@@ -9,7 +9,8 @@
 #   kubectl     pinned to the Kubernetes channel
 #   az          the Azure CLI: on Linux `uv tool install azure-cli==<pin>` (uv
 #               pinned, unpacked privately), on macOS Homebrew; sign-in stays manual
-# and links ~/.local/bin/python to the system python3 when lanes find no python.
+# and links ~/.local/bin/python to the system python3 when lanes find no python,
+# and ~/.local/bin/go and gofmt to mise's Go when mise has one installed.
 #
 # Each tool unpacks into its own versioned folder under
 # ~/.local/share/lane-worker, and ~/.local/bin/<tool> (where claude already
@@ -392,25 +393,62 @@ converge_python() {
   elif [[ "$MODE" == check ]]; then
     say "[dry-run] Would link $link to $python3_path."
   else
-    mkdir -p "$BIN_DIR"
-    rm -rf -- "$SHARE_DIR"/.staging-*
-    mkdir -p "$SHARE_DIR"
-    STAGE=$(mktemp -d "$SHARE_DIR/.staging-XXXXXX")
-    ln -s -- "$python3_path" "$STAGE/link"
-    publish_staged_file "$STAGE/link" "$link"
-    rm -rf -- "$STAGE"
-    STAGE=""
-    say "Linked $link -> $python3_path"
+    link_to "$link" "$python3_path"
   fi
 }
 
-# Codex's bundled bwrap needs unprivileged user namespaces, which Ubuntu's
-# AppArmor policy can deny. Then every command in its read-only sandbox fails.
+# link_to LINK TARGET: point LINK at TARGET, replacing what LINK pointed at.
+link_to() {
+  mkdir -p "$BIN_DIR"
+  rm -rf -- "$SHARE_DIR"/.staging-*
+  mkdir -p "$SHARE_DIR"
+  STAGE=$(mktemp -d "$SHARE_DIR/.staging-XXXXXX")
+  ln -s -- "$2" "$STAGE/link"
+  publish_staged_file "$STAGE/link" "$1"
+  rm -rf -- "$STAGE"
+  STAGE=""
+  say "Linked $1 -> $2"
+}
+
+# Lanes do not see mise's shims, so they miss a Go that mise installed. Link
+# go and gofmt to mise's Go when it has one (the README names a pinned
+# alternative). A link into another mise Go version is ours to move.
+converge_go() {
+  local root name link target found
+  if ! command -v mise >/dev/null 2>&1 ||
+    ! root=$(cd "$HOME" && mise where go 2>/dev/null </dev/null) || [[ ! -x "$root/bin/go" ]]; then
+    if found=$(PATH="$LANE_PATH" command -v go 2>/dev/null); then
+      say "go is already at $found; leaving it."
+    else
+      say "mise has no Go installed, so no go link. Run mise install go first."
+    fi
+    return 0
+  fi
+  for name in go gofmt; do
+    link="$BIN_DIR/$name"
+    target=$(readlink "$link" 2>/dev/null) || target=""
+    if [[ "$target" == "$root/bin/$name" ]]; then
+      say "$name links to $target."
+    elif [[ -e "$link" || -L "$link" ]] && [[ "$target" != "${root%/*}/"*"/bin/$name" ]]; then
+      say "$link was not installed by this script; leaving it."
+    elif [[ -z "$target" ]] && found=$(PATH="$LANE_PATH" command -v "$name" 2>/dev/null); then
+      say "$name is already at $found; leaving it."
+    elif [[ "$MODE" == check ]]; then
+      say "[dry-run] Would link $link to $root/bin/$name."
+    else
+      link_to "$link" "$root/bin/$name"
+    fi
+  done
+}
+
+# Codex's bwrap needs unprivileged user namespaces, which Ubuntu's AppArmor
+# policy can deny. Then every command in its read-only sandbox fails.
+# codex-sandbox.sh fixes that with sudo; this script only says so.
 note_codex_sandbox() {
   local knob=/proc/sys/kernel/apparmor_restrict_unprivileged_userns
   [[ -r "$knob" && "$(cat "$knob")" == 1 ]] || return 0
   say "Note: AppArmor restricts unprivileged user namespaces here, so Codex's sandbox"
-  say "  probably cannot run commands. Check it from a lane worktree (README, \"Codex sandbox\")."
+  say "  may not run commands. make codex-sandbox-check says; make codex-sandbox fixes it (sudo)."
 }
 
 # Claude Code runs the lanes; without it there is nothing to set up.
@@ -442,6 +480,7 @@ else
   converge_az_linux
 fi
 converge_python
+converge_go
 note_codex_sandbox
 
 if [[ ":$ORIGINAL_PATH:" != *":$BIN_DIR:"* ]]; then
