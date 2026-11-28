@@ -142,8 +142,9 @@ AppArmor profile for that program, and leaves
   install `apparmor-profiles`, which would also turn on about 20 unrelated
   profiles. AppArmor loads the file again at every boot.
 
-It stops without changing the file if `/etc/apparmor.d/bwrap-userns-restrict`
-is already there with other content. On a box without the restriction, or on
+If `/usr/bin/bwrap` can already set up its sandbox, for example through
+another profile, it installs no profile. It stops without changing the file if
+`/etc/apparmor.d/bwrap-userns-restrict` is already there with other content. On a box without the restriction, or on
 macOS, it says there is nothing to do. At the end it runs
 `codex sandbox -- true` and says whether that works.
 

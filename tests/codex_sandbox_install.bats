@@ -92,7 +92,6 @@ setup() {
   run bash "$SCRIPT" --apply
   [ "$status" -eq 0 ]
   [[ "$output" == *"bubblewrap is installed."* ]]
-  [[ "$output" == *"$PROFILE is installed."* ]]
   [[ "$output" == *"$SYSTEM_BIN/bwrap can set up its sandbox."* ]]
   [ ! -e "$STATE/sudo" ]
   run bash "$SCRIPT" --check
@@ -109,6 +108,20 @@ setup() {
   run bash "$SCRIPT" --apply
   [ "$status" -eq 0 ]
   [ "$(cat "$STATE/parsed")" = "$PROFILE" ]
+}
+
+@test "a bwrap that already works gets no profile" {
+  echo bubblewrap >"$STATE/installed"
+  printf '#!/bin/sh\nexit 0\n' >"$SYSTEM_BIN/bwrap"
+  chmod +x "$SYSTEM_BIN/bwrap"
+  touch "$STATE/loaded" # so the fake codex works too
+  run bash "$SCRIPT" --apply
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"$SYSTEM_BIN/bwrap can set up its sandbox."* ]]
+  [[ "$output" == *"Codex's sandbox runs commands."* ]]
+  [ ! -e "$PROFILE" ]
+  [ ! -e "$STATE/parsed" ]
+  [ ! -e "$STATE/sudo" ]
 }
 
 @test "a different file at the profile path is left alone" {

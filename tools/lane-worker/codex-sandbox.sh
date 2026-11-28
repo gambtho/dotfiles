@@ -89,9 +89,18 @@ fi
 
 # ── AppArmor profile ─────────────────────────────────────────────────────────
 
+# A bwrap that already works needs no profile from here; another profile may
+# already attach to it, and a second attachment could break it.
 LOAD=false
-if [[ -e "$PROFILE" ]] && cmp -s "$PROFILE_SOURCE" "$PROFILE"; then
+if bwrap_works; then
+  say "$BWRAP can set up its sandbox."
+elif [[ -e "$PROFILE" ]] && cmp -s "$PROFILE_SOURCE" "$PROFILE"; then
   say "$PROFILE is installed."
+  if [[ "$MODE" == check ]]; then
+    say "[dry-run] $BWRAP cannot set up its sandbox yet; --apply would load $PROFILE."
+  else
+    LOAD=true
+  fi
 elif [[ -e "$PROFILE" ]]; then
   die "$PROFILE is there but is not Ubuntu's profile this script installs, so it was left alone. Compare it with $PROFILE_SOURCE."
 elif [[ "$MODE" == check ]]; then
@@ -99,16 +108,6 @@ elif [[ "$MODE" == check ]]; then
 else
   sudo install -m 0644 "$PROFILE_SOURCE" "$PROFILE"
   say "Installed $PROFILE."
-  LOAD=true
-fi
-
-if bwrap_works; then
-  say "$BWRAP can set up its sandbox."
-elif [[ "$MODE" == check ]]; then
-  if [[ -e "$PROFILE" ]]; then
-    say "[dry-run] $BWRAP cannot set up its sandbox yet; --apply would load $PROFILE."
-  fi
-else
   LOAD=true
 fi
 if [[ "$LOAD" == true ]]; then
