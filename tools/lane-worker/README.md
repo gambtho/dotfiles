@@ -15,6 +15,7 @@ those, on Linux or macOS, x86_64 or arm64, without `sudo`:
 | `kubectl` (pinned, the `KUBERNETES_CHANNEL` minor) | lanes that work with Kubernetes clusters | `~/.local/bin/kubectl` |
 | Azure CLI `az` (pinned on Linux) | lanes that work with Azure | Linux: `uv tool install azure-cli==<pin>`, in `~/.local/share/uv/tools/azure-cli`, linked as `~/.local/bin/az`. macOS: Homebrew's `azure-cli`, linked as `~/.local/bin/az` when lanes do not see Homebrew's folder |
 | `python`, only if lanes find none | lanes run `python`; Ubuntu and macOS ship only `python3` | `~/.local/bin/python`, a link to the system `python3` (what `python-is-python3` does, without sudo) |
+| `go` and `gofmt`, only if mise has Go installed and lanes find none | lanes do not see mise's shims | `~/.local/bin/go`, `~/.local/bin/gofmt`, links into mise's Go (`mise where go`, run from `~`) |
 
 Each tool unpacks into `~/.local/share/lane-worker/<tool>-<version>/`, and
 `~/.local/bin/<tool>` links to it. Codex keeps its whole package there, including the
@@ -111,20 +112,53 @@ To check it, run this in a lane's worktree:
 
 ```bash
 sysctl kernel.apparmor_restrict_unprivileged_userns   # 1 means restricted
-codex sandbox linux -- ls                            # should list the worktree
+codex sandbox -- ls                                  # should list the worktree
 ```
 
 With the restriction on, the second command fails, for example with
 `bwrap: setting up uid map: Permission denied` or
-`bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted`. Until the
-owner decides on a system-level fix (an AppArmor profile for a system
-`bubblewrap`, or turning the restriction off), put everything the reviewer needs
-in its prompt, such as the diff and the changed files. It cannot read them
-itself. This script makes no system change.
+`bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted`, and the kernel
+log shows `apparmor="DENIED" ... profile="unprivileged_userns" comm="bwrap"`.
+`install.sh` makes no system change. The opt-in `codex-sandbox.sh` does, with
+`sudo`; nothing runs it unless you do:
+
+```bash
+make -C ~/.dotfiles codex-sandbox-check   # reads only: says whether the sandbox runs, and what it would change
+make -C ~/.dotfiles codex-sandbox         # fixes it; a second run changes nothing
+```
+
+It follows Ubuntu's approach for one program that needs user namespaces, an
+AppArmor profile for that program, and leaves
+`kernel.apparmor_restrict_unprivileged_userns` on:
+
+- installs `bubblewrap` from the distribution, so Codex uses `/usr/bin/bwrap`
+  instead of the copy bundled with it, which lives in a folder you can write to;
+- installs `bwrap-userns-restrict.apparmor` as
+  `/etc/apparmor.d/bwrap-userns-restrict` and loads it with `apparmor_parser -r`.
+  The file is a verbatim copy of the profile Ubuntu ships in
+  `/usr/share/apparmor/extra-profiles/` (package `apparmor-profiles`). It lets
+  `/usr/bin/bwrap` create user namespaces and strips capabilities from the
+  programs bwrap runs, so other programs stay restricted. The script does not
+  install `apparmor-profiles`, which would also turn on about 20 unrelated
+  profiles. AppArmor loads the file again at every boot.
+
+If `/usr/bin/bwrap` can already set up its sandbox, for example through
+another profile, it installs no profile. It stops without changing the file if
+`/etc/apparmor.d/bwrap-userns-restrict` is already there with other content. On a box without the restriction, or on
+macOS, it says there is nothing to do. At the end it runs
+`codex sandbox -- true` and says whether that works.
+
+To undo it:
+
+```bash
+sudo apparmor_parser -R /etc/apparmor.d/bwrap-userns-restrict
+sudo rm /etc/apparmor.d/bwrap-userns-restrict
+sudo apt-get purge bubblewrap   # if nothing else needs it (Flatpak does)
+```
 
 ## What it changes, and what it leaves alone
 
-It writes the tool folders, their links in `~/.local/bin` (and the `python` link), what
+It writes the tool folders, their links in `~/.local/bin` (and the `python`, `go` and `gofmt` links), what
 `uv tool install` or `brew install` writes for the Azure CLI, and what `ai/claude/install.sh`
 and the `claude` CLI write. On a box where the plugin is already at the pinned tag,
 that, plus attribution already turned off, is nothing. Otherwise `ai/claude/install.sh`:
@@ -159,7 +193,7 @@ Linux `uv tool uninstall azure-cli` (with no other `uv`, use
 `~/.local/share/lane-worker/uv-<version>/uv`). On macOS, run `brew uninstall azure-cli`
 only if the script installed it (it said "Installed azure-cli with Homebrew"), and
 remove `~/.local/bin/az` only if it links into Homebrew's `bin` folder. Then remove the links in `~/.local/bin` that point
-into `~/.local/share/lane-worker`, the `~/.local/bin/python` link it made, that
+into `~/.local/share/lane-worker`, the `~/.local/bin/python`, `go` and `gofmt` links it made, that
 folder, and run `claude plugin marketplace remove gambtho-skills`.
 
 ## Cluster tools (opt-in)
@@ -184,7 +218,8 @@ with `signed-by`. If another source file already lists one of them, that one is 
 instead. The apt packages follow their repositories, and the normal `apt upgrade`
 moves them. `kind` and Go are pinned and digest-checked in
 `config/versions.env` and unpack under `~/.local/share/lane-worker`, like the
-review CLIs; lanes do not see mise's shims, so Go comes from here too.
+review CLIs. Lanes do not see mise's shims; `make lane-worker` links mise's Go
+when mise has one, and otherwise Go comes from here.
 
 ```bash
 make -C ~/.dotfiles cluster-tools-check   # reads only: says what is present and what it would do
