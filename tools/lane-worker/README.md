@@ -156,8 +156,9 @@ this script made is left alone; move it aside and rerun to get the pinned build.
 Old version folders stay after a pin bump, because a running lane may still use them.
 Delete them once no lane does. To undo everything, first remove the Azure CLI: on
 Linux `uv tool uninstall azure-cli` (with no other `uv`, use
-`~/.local/share/lane-worker/uv-<version>/uv`), on macOS `brew uninstall azure-cli`
-and the `~/.local/bin/az` link. Then remove the links in `~/.local/bin` that point
+`~/.local/share/lane-worker/uv-<version>/uv`). On macOS, run `brew uninstall azure-cli`
+only if the script installed it (it said "Installed azure-cli with Homebrew"), and
+remove `~/.local/bin/az` only if it links into Homebrew's `bin` folder. Then remove the links in `~/.local/bin` that point
 into `~/.local/share/lane-worker`, the `~/.local/bin/python` link it made, that
 folder, and run `claude plugin marketplace remove gambtho-skills`.
 
