@@ -204,7 +204,8 @@ only on a worker whose lanes you trust with that.
 ### Undo
 
 ```bash
-sudo apt-get purge docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin runsc azure-cli
+sudo apt-get purge docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin runsc
+sudo apt-get purge azure-cli   # skip this where the script said it skipped the Azure CLI
 sudo rm /etc/apt/sources.list.d/gvisor.list /etc/apt/keyrings/gvisor-archive-keyring.gpg
 sudo gpasswd -d "$USER" docker
 for tool in kind kubectl go gofmt; do   # only the links this script made
