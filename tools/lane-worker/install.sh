@@ -6,6 +6,9 @@
 #   coderabbit  local CodeRabbit review round (pr-closeout)
 #   jq          only when missing; the plugin installer and pr_snapshot.sh use it
 #   git-lfs     only when missing; repositories with LFS hooks warn on every commit
+#   kubectl     pinned to the Kubernetes channel
+#   az          the Azure CLI: on Linux `uv tool install azure-cli==<pin>` (uv
+#               pinned, unpacked privately), on macOS Homebrew; sign-in stays manual
 # and links ~/.local/bin/python to the system python3 when lanes find no python.
 #
 # Each tool unpacks into its own versioned folder under
@@ -73,6 +76,10 @@ case "$(uname -s)/$ARCH" in
     JQ_SHA256=$JQ_LINUX_AMD64_SHA256
     GIT_LFS_ASSET=git-lfs-linux-amd64-v$GIT_LFS_VERSION.tar.gz
     GIT_LFS_SHA256=$GIT_LFS_LINUX_AMD64_SHA256
+    KUBECTL_PLATFORM=linux/amd64
+    KUBECTL_SHA256=$KUBECTL_LINUX_AMD64_SHA256
+    UV_TARGET=x86_64-unknown-linux-gnu
+    UV_SHA256=$UV_LINUX_X86_64_SHA256
     ;;
   Linux/aarch64 | Linux/arm64)
     CODEX_ASSET=codex-package-aarch64-unknown-linux-musl.tar.gz
@@ -83,6 +90,10 @@ case "$(uname -s)/$ARCH" in
     JQ_SHA256=$JQ_LINUX_ARM64_SHA256
     GIT_LFS_ASSET=git-lfs-linux-arm64-v$GIT_LFS_VERSION.tar.gz
     GIT_LFS_SHA256=$GIT_LFS_LINUX_ARM64_SHA256
+    KUBECTL_PLATFORM=linux/arm64
+    KUBECTL_SHA256=$KUBECTL_LINUX_ARM64_SHA256
+    UV_TARGET=aarch64-unknown-linux-gnu
+    UV_SHA256=$UV_LINUX_AARCH64_SHA256
     ;;
   Darwin/x86_64)
     CODEX_ASSET=codex-package-x86_64-apple-darwin.tar.gz
@@ -93,6 +104,8 @@ case "$(uname -s)/$ARCH" in
     JQ_SHA256=$JQ_MACOS_AMD64_SHA256
     GIT_LFS_ASSET=git-lfs-darwin-amd64-v$GIT_LFS_VERSION.zip
     GIT_LFS_SHA256=$GIT_LFS_DARWIN_AMD64_SHA256
+    KUBECTL_PLATFORM=darwin/amd64
+    KUBECTL_SHA256=$KUBECTL_DARWIN_AMD64_SHA256
     ;;
   Darwin/arm64 | Darwin/aarch64)
     CODEX_ASSET=codex-package-aarch64-apple-darwin.tar.gz
@@ -103,6 +116,8 @@ case "$(uname -s)/$ARCH" in
     JQ_SHA256=$JQ_MACOS_ARM64_SHA256
     GIT_LFS_ASSET=git-lfs-darwin-arm64-v$GIT_LFS_VERSION.zip
     GIT_LFS_SHA256=$GIT_LFS_DARWIN_ARM64_SHA256
+    KUBECTL_PLATFORM=darwin/arm64
+    KUBECTL_SHA256=$KUBECTL_DARWIN_ARM64_SHA256
     ;;
   Linux/* | Darwin/*) die "unsupported architecture: $ARCH" ;;
   *) die "Linux and macOS only." ;;
@@ -147,6 +162,10 @@ tool_state() {
 STAGE=""
 cleanup() { [[ -z "$STAGE" ]] || rm -rf -- "$STAGE"; }
 trap cleanup EXIT
+
+unpack_kubectl() {
+  download_verified_artifact "$KUBECTL_RELEASE_BASE/$KUBECTL_PLATFORM/kubectl" "$KUBECTL_SHA256" "$1/kubectl" 0755
+}
 
 unpack_jq() {
   download_verified_artifact "$JQ_RELEASE_BASE/$JQ_ASSET" "$JQ_SHA256" "$1/jq" 0755
@@ -243,6 +262,120 @@ converge_tool() {
   esac
 }
 
+# ── Azure CLI ────────────────────────────────────────────────────────────────
+
+UV_TOOLS="${UV_TOOL_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/uv/tools}"
+
+# Sets UV to the uv this script uses on Linux: one lanes find, or the pinned
+# build unpacked under ~/.local/share/lane-worker and not linked anywhere.
+# Not called through $(...), so the EXIT trap still removes its staging.
+find_or_unpack_uv() {
+  local dir="$SHARE_DIR/uv-$UV_VERSION"
+  if UV=$(PATH="$LANE_PATH" command -v uv 2>/dev/null); then
+    return 0
+  fi
+  if [[ ! -x "$dir/uv" ]]; then
+    command -v tar >/dev/null 2>&1 || die "tar is needed to install uv. Install it first; this script does not use sudo."
+    mkdir -p "$SHARE_DIR"
+    STAGE=$(mktemp -d "$SHARE_DIR/.staging-XXXXXX")
+    download_verified_artifact "$UV_RELEASE_BASE/uv-$UV_TARGET.tar.gz" "$UV_SHA256" "$STAGE/uv.tar.gz"
+    tar -xzf "$STAGE/uv.tar.gz" -C "$STAGE"
+    [[ -x "$STAGE/uv-$UV_TARGET/uv" ]] || die "uv: uv-$UV_TARGET/uv is missing from the download."
+    [[ ! -d "$dir" ]] || publish_staged_file "$dir" "$STAGE/broken"
+    publish_staged_file "$STAGE/uv-$UV_TARGET" "$dir"
+    rm -rf -- "$STAGE"
+    STAGE=""
+  fi
+  UV="$dir/uv"
+}
+
+# Linux: `uv tool install` puts the Azure CLI in its own environment under
+# $UV_TOOLS/azure-cli and links ~/.local/bin/az to it. A different pin
+# replaces it there.
+converge_az_linux() {
+  local link="$BIN_DIR/az" target found
+  if [[ ! -e "$link" && ! -L "$link" ]]; then
+    if found=$(PATH="$LANE_PATH" command -v az 2>/dev/null); then
+      say "az is already at $found; leaving it."
+      return 0
+    fi
+  else
+    target=$(readlink "$link" 2>/dev/null) || target=""
+    if [[ "$target" != "$UV_TOOLS/azure-cli/bin/az" ]]; then
+      say "$link was not installed by uv; leaving it."
+      return 0
+    fi
+    set -- "$UV_TOOLS"/azure-cli/lib/python*/site-packages/azure_cli-"$AZURE_CLI_VERSION".dist-info
+    if [[ -d "$1" ]]; then
+      say "az (azure-cli $AZURE_CLI_VERSION) is installed."
+      return 0
+    fi
+  fi
+  if [[ "$MODE" == check ]]; then
+    say "[dry-run] Would run: uv tool install azure-cli==$AZURE_CLI_VERSION (into $UV_TOOLS, linked from $BIN_DIR)."
+    return 0
+  fi
+  find_or_unpack_uv
+  mkdir -p "$BIN_DIR"
+  UV_TOOL_DIR="$UV_TOOLS" UV_TOOL_BIN_DIR="$BIN_DIR" "$UV" tool install --quiet "azure-cli==$AZURE_CLI_VERSION" ||
+    die "uv could not install azure-cli $AZURE_CLI_VERSION."
+  say "Installed azure-cli $AZURE_CLI_VERSION with uv: $link"
+}
+
+# macOS: Homebrew's azure-cli, without sudo. Lanes do not see /opt/homebrew/bin,
+# so ~/.local/bin/az links to it there.
+# Where Homebrew lives when it is not on PATH. Tests replace the list.
+BREW_CANDIDATES="${LANE_WORKER_BREW_CANDIDATES-/opt/homebrew/bin/brew /usr/local/bin/brew}"
+
+converge_az_macos() {
+  local link="$BIN_DIR/az" brew="" prefix found
+  # shellcheck disable=SC2086  # a space-separated list of paths
+  for found in "$(command -v brew 2>/dev/null || true)" $BREW_CANDIDATES; do
+    if [[ -n "$found" && -x "$found" ]]; then
+      brew=$found
+      break
+    fi
+  done
+  if [[ -z "$brew" ]]; then
+    if found=$(PATH="$LANE_PATH" command -v az 2>/dev/null); then
+      say "az is already at $found; leaving it."
+    else
+      say "Homebrew is missing, so no az. Install Homebrew, then rerun."
+    fi
+    return 0
+  fi
+  prefix=$("$brew" --prefix)
+  if [[ -z "$("$brew" list --versions azure-cli 2>/dev/null || true)" ]]; then
+    if found=$(PATH="$LANE_PATH" command -v az 2>/dev/null); then
+      say "az is already at $found; leaving it."
+      return 0
+    fi
+    if [[ "$MODE" == check ]]; then
+      say "[dry-run] Would run: brew install azure-cli"
+    else
+      "$brew" install azure-cli
+      say "Installed azure-cli with Homebrew."
+    fi
+  else
+    say "azure-cli is installed with Homebrew."
+  fi
+  # Link it where lanes look, unless they already find it or another az.
+  if [[ -L "$link" && "$(readlink "$link")" == "$prefix/bin/az" ]]; then
+    return 0
+  fi
+  if [[ -e "$link" || -L "$link" ]]; then
+    say "$link was not installed by this script; leaving it."
+  elif found=$(PATH="$LANE_PATH" command -v az 2>/dev/null); then
+    [[ "$found" == "$prefix/bin/az" ]] || say "Lanes find az at $found; not linking Homebrew's."
+  elif [[ "$MODE" == check ]]; then
+    say "[dry-run] Would link $link to $prefix/bin/az."
+  else
+    mkdir -p "$BIN_DIR"
+    ln -s -- "$prefix/bin/az" "$link"
+    say "Linked $link -> $prefix/bin/az"
+  fi
+}
+
 # Lanes run `python`; Ubuntu and macOS ship only python3. Link ~/.local/bin/python to
 # the python3 lanes find, like python-is-python3 but without sudo.
 converge_python() {
@@ -302,6 +435,12 @@ fi
 converge_tool codex "$CODEX_VERSION"
 converge_tool coderabbit "$CODERABBIT_CLI_VERSION"
 converge_tool git-lfs "$GIT_LFS_VERSION"
+converge_tool kubectl "$KUBECTL_VERSION"
+if [[ "$(uname -s)" == Darwin ]]; then
+  converge_az_macos
+else
+  converge_az_linux
+fi
 converge_python
 note_codex_sandbox
 
@@ -311,10 +450,11 @@ fi
 
 cat <<EOF
 
-Sign in once per box, as the user the lanes run as (this script does neither):
+Sign in once per box, as the user the lanes run as (this script signs in to nothing):
   gh auth status                   GitHub CLI; lanes already need it
   codex login --device-auth        Codex for codex-review.sh (headless sign-in)
   coderabbit auth login            CodeRabbit for the local review round
+  az login --use-device-code       Azure CLI, if the lanes need Azure
 Then check from inside a lane that coderabbit auth status shows your account.
 If a lane says "Non-interactive environment. Use --api-key", see the README.
 Then start a new lane: running sessions load the plugin on their next start.

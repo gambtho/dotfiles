@@ -66,6 +66,32 @@ with zipfile.ZipFile(sys.argv[1], "w") as z:
         z.write(os.path.join(root, member), member)' \
       "$PAYLOADS/git-lfs-darwin-$arch-v$lfs_version.zip" "$TEST_ROOT/lfs-darwin-$arch" "git-lfs-$lfs_version"
   done
+  for os in linux darwin; do
+    for arch in amd64 arm64; do
+      mkdir -p "$PAYLOADS/kubectl/$os/$arch"
+      printf '#!/bin/sh\necho kubectl %s %s\n' "$os" "$arch" >"$PAYLOADS/kubectl/$os/$arch/kubectl"
+    done
+  done
+  # A fake uv whose `tool install azure-cli==V` lays out what the real one
+  # does: an environment under UV_TOOL_DIR and a link in UV_TOOL_BIN_DIR.
+  for target in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu; do
+    mkdir -p "$TEST_ROOT/uv-build/uv-$target"
+    cat >"$TEST_ROOT/uv-build/uv-$target/uv" <<'UV'
+#!/usr/bin/env bash
+echo "uv $*" >>"$STATE/uv-calls"
+[[ "$1 $2" == "tool install" ]] || exit 3
+spec=${*: -1}
+version=${spec#azure-cli==}
+env=$UV_TOOL_DIR/azure-cli
+rm -rf "$env"
+mkdir -p "$env/bin" "$env/lib/python3.12/site-packages/azure_cli-$version.dist-info" "$UV_TOOL_BIN_DIR"
+printf '#!/bin/sh\necho az %s\n' "$version" >"$env/bin/az"
+chmod +x "$env/bin/az"
+ln -sfn "$env/bin/az" "$UV_TOOL_BIN_DIR/az"
+UV
+    chmod +x "$TEST_ROOT/uv-build/uv-$target/uv"
+    tar -czf "$PAYLOADS/uv-$target.tar.gz" -C "$TEST_ROOT/uv-build" "uv-$target"
+  done
   write_pins
 
   stub_command curl '
@@ -78,7 +104,10 @@ with zipfile.ZipFile(sys.argv[1], "w") as z:
       shift
     done
     echo "$url" >>"$PAYLOADS/downloads"
-    cp "$PAYLOADS/${url##*/}" "$out"
+    case "$url" in
+      */kubectl) cp "$PAYLOADS/kubectl/${url#*/kubectl-bin/}" "$out" ;;
+      *) cp "$PAYLOADS/${url##*/}" "$out" ;;
+    esac
   '
   stub_command claude '
     set -euo pipefail
@@ -129,6 +158,14 @@ JQ_LINUX_AMD64_SHA256=$(digest "$PAYLOADS/jq-linux-amd64")
 JQ_LINUX_ARM64_SHA256=$(digest "$PAYLOADS/jq-linux-arm64")
 JQ_MACOS_AMD64_SHA256=$(digest "$PAYLOADS/jq-macos-amd64")
 JQ_MACOS_ARM64_SHA256=$(digest "$PAYLOADS/jq-macos-arm64")
+KUBECTL_RELEASE_BASE=https://example.test/kubectl-bin
+KUBECTL_LINUX_AMD64_SHA256=$(digest "$PAYLOADS/kubectl/linux/amd64/kubectl")
+KUBECTL_LINUX_ARM64_SHA256=$(digest "$PAYLOADS/kubectl/linux/arm64/kubectl")
+KUBECTL_DARWIN_AMD64_SHA256=$(digest "$PAYLOADS/kubectl/darwin/amd64/kubectl")
+KUBECTL_DARWIN_ARM64_SHA256=$(digest "$PAYLOADS/kubectl/darwin/arm64/kubectl")
+UV_RELEASE_BASE=https://example.test/uv
+UV_LINUX_X86_64_SHA256=$(digest "$PAYLOADS/uv-x86_64-unknown-linux-gnu.tar.gz")
+UV_LINUX_AARCH64_SHA256=$(digest "$PAYLOADS/uv-aarch64-unknown-linux-gnu.tar.gz")
 GIT_LFS_RELEASE_BASE=https://example.test/git-lfs
 GIT_LFS_LINUX_AMD64_SHA256=$(digest "$PAYLOADS/git-lfs-linux-amd64-v$(sed -n 's/^GIT_LFS_VERSION=//p' "$REPO_ROOT/config/versions.env").tar.gz")
 GIT_LFS_LINUX_ARM64_SHA256=$(digest "$PAYLOADS/git-lfs-linux-arm64-v$(sed -n 's/^GIT_LFS_VERSION=//p' "$REPO_ROOT/config/versions.env").tar.gz")
@@ -182,6 +219,10 @@ snapshot_home() {
   [[ "$output" == *"jq is already at $SYSTEM_BIN/jq; leaving it."* ]]
   [[ "$output" == *"codex login --device-auth"* ]]
   [[ "$output" == *"coderabbit auth login"* ]]
+  [[ "$output" == *"[dry-run] Would install kubectl $KUBECTL_VERSION."* ]]
+  [[ "$output" == *"[dry-run] Would run: uv tool install azure-cli==$AZURE_CLI_VERSION"* ]]
+  [[ "$output" == *"az login --use-device-code"* ]]
+  [ ! -e "$STATE/uv-calls" ]
   [ ! -e "$PAYLOADS/downloads" ]
   [ ! -e "$STATE/calls" ]
   snapshot_home | diff "$TEST_ROOT/before" -
@@ -201,6 +242,9 @@ plugin install gambtho-skills@gambtho-skills --scope user" ]
   # Codex keeps its package layout, so it finds its bundled sandbox helper.
   [ -f "$SHARE/codex-$CODEX_VERSION/codex-resources/bwrap" ]
   [ ! -e "$HOME/.local/bin/jq" ]
+  [ "$(readlink "$HOME/.local/bin/kubectl")" = "$SHARE/kubectl-$KUBECTL_VERSION/kubectl" ]
+  [ "$("$HOME/.local/bin/kubectl")" = "kubectl linux amd64" ]
+  [ "$("$HOME/.local/bin/az")" = "az $AZURE_CLI_VERSION" ]
   [ -z "$(find "$SHARE" "$HOME/.local/bin" -mindepth 1 -name '.*')" ]
 
   rm -f "$PAYLOADS/downloads" "$STATE/calls"
@@ -210,8 +254,11 @@ plugin install gambtho-skills@gambtho-skills --scope user" ]
   [ "$status" -eq 0 ]
   [[ "$output" == *"codex $CODEX_VERSION is installed."* ]]
   [[ "$output" == *"coderabbit $CODERABBIT_CLI_VERSION is installed."* ]]
+  [[ "$output" == *"kubectl $KUBECTL_VERSION is installed."* ]]
+  [[ "$output" == *"az (azure-cli $AZURE_CLI_VERSION) is installed."* ]]
   [ ! -e "$PAYLOADS/downloads" ]
   [ ! -e "$STATE/calls" ]
+  [ "$(wc -l <"$STATE/uv-calls")" -eq 1 ]
   snapshot_home | diff "$TEST_ROOT/before" -
 }
 
@@ -237,6 +284,7 @@ plugin install gambtho-skills@gambtho-skills --scope user" ]
   [ -z "$(grep '^<' <<<"$output")" ]
   [ -z "$(grep '^>' <<<"$output" | grep -v -e '^> ./.local/bin/codex -> ' -e '^> ./.local/bin/coderabbit -> ' \
     -e '^> ./.local/bin/jq -> ' -e '^> ./.local/bin/git-lfs -> ' -e '^> ./.local/bin/python -> ' \
+    -e '^> ./.local/bin/kubectl -> ' -e '^> ./.local/bin/az -> ' -e '^> ./.local/share/uv[/ ]' \
     -e '^> ./.local/share/lane-worker[/ ]' -e '^> ./.claude/ ' -e '^> ./.claude/settings.json ')" ]
 }
 
@@ -439,6 +487,21 @@ plugin install gambtho-skills@gambtho-skills --scope user" ]
 # ARTIFACT_ARCH stands in for uname -m.
 stub_darwin() {
   stub_command uname 'case "$1" in -s) echo Darwin ;; *) echo "${ARTIFACT_ARCH:-arm64}" ;; esac'
+  # Homebrew under a prefix lanes do not see, as on Apple silicon; never the
+  # host's own Homebrew.
+  export BREW_PREFIX="$TEST_ROOT/homebrew" LANE_WORKER_BREW_CANDIDATES=""
+  stub_command brew '
+    echo "brew $*" >>"$STATE/brew-calls"
+    case "$*" in
+      --prefix) echo "$BREW_PREFIX" ;;
+      "list --versions azure-cli") [[ ! -x "$BREW_PREFIX/bin/az" ]] || echo "azure-cli 2.93.0" ;;
+      "install azure-cli")
+        mkdir -p "$BREW_PREFIX/bin"
+        printf "#!/bin/sh\necho brew az\n" >"$BREW_PREFIX/bin/az"
+        chmod +x "$BREW_PREFIX/bin/az" ;;
+      *) exit 1 ;;
+    esac
+  '
 }
 
 @test "macOS on Apple silicon gets the pinned darwin arm64 builds" {
@@ -454,13 +517,20 @@ stub_darwin() {
   [ "$(find "$SHARE/git-lfs-$GIT_LFS_VERSION" -type f)" = "$SHARE/git-lfs-$GIT_LFS_VERSION/git-lfs-$GIT_LFS_VERSION/git-lfs" ]
   grep -qx "https://example.test/codex/codex-package-aarch64-apple-darwin.tar.gz" "$PAYLOADS/downloads"
   grep -qx "https://example.test/coderabbit/coderabbit-darwin-arm64.zip" "$PAYLOADS/downloads"
+  [ "$("$HOME/.local/bin/kubectl")" = "kubectl darwin arm64" ]
+  # The Azure CLI comes from Homebrew, linked where lanes look; no uv.
+  grep -qx "brew install azure-cli" "$STATE/brew-calls"
+  [ "$(readlink "$HOME/.local/bin/az")" = "$BREW_PREFIX/bin/az" ]
+  [ "$("$HOME/.local/bin/az")" = "brew az" ]
+  [ ! -e "$STATE/uv-calls" ]
   ! grep -q linux "$PAYLOADS/downloads"
   [ ! -e "$TEST_ROOT/forbidden" ]
 
-  rm -f "$PAYLOADS/downloads"
+  rm -f "$PAYLOADS/downloads" "$STATE/brew-calls"
   ARTIFACT_ARCH=arm64 run bash "$INSTALLER" --apply
   [ "$status" -eq 0 ]
   [ ! -e "$PAYLOADS/downloads" ]
+  ! grep -q "^brew install" "$STATE/brew-calls"
 }
 
 @test "macOS on Intel gets the darwin x86_64 builds, and jq when lanes find none" {
@@ -476,6 +546,7 @@ stub_darwin() {
   [ "$("$HOME/.local/bin/codex")" = "codex-cli apple-darwin x86_64" ]
   [ "$("$HOME/.local/bin/coderabbit")" = "coderabbit darwin x64" ]
   [ "$("$HOME/.local/bin/git-lfs")" = "git-lfs darwin amd64" ]
+  [ "$("$HOME/.local/bin/kubectl")" = "kubectl darwin amd64" ]
   grep -qx 'https://example.test/jq/jq-macos-amd64' "$PAYLOADS/downloads"
 }
 
@@ -489,6 +560,90 @@ stub_darwin() {
 
   [ "$status" -eq 0 ]
   [ "$(readlink "$HOME/.local/bin/python")" = "$SYSTEM_BIN/python3" ]
+}
+
+@test "macOS without Homebrew says so and installs everything else" {
+  stub_darwin
+  system_jq
+  rm "$STUB_BIN/brew"
+
+  run bash "$INSTALLER" --apply
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Homebrew is missing, so no az. Install Homebrew, then rerun."* ]]
+  [ ! -e "$HOME/.local/bin/az" ]
+  [ -x "$HOME/.local/bin/kubectl" ]
+}
+
+@test "macOS leaves an az lanes already find, even with Homebrew's installed" {
+  stub_darwin
+  system_jq
+  printf '#!/bin/sh\necho system az\n' >"$SYSTEM_BIN/az"
+  chmod +x "$SYSTEM_BIN/az"
+  mkdir -p "$BREW_PREFIX/bin"
+  printf '#!/bin/sh\n' >"$BREW_PREFIX/bin/az"
+  chmod +x "$BREW_PREFIX/bin/az"
+
+  run bash "$INSTALLER" --apply
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Lanes find az at $SYSTEM_BIN/az; not linking Homebrew's."* ]]
+  [ ! -e "$HOME/.local/bin/az" ]
+  ! grep -q "^brew install" "$STATE/brew-calls"
+}
+
+@test "az on Linux: pinned uv unpacked privately, a new pin reinstalls, other installs are left alone" {
+  system_jq
+  run bash "$INSTALLER" --apply
+  [ "$status" -eq 0 ]
+  grep -qx "https://example.test/uv/uv-x86_64-unknown-linux-gnu.tar.gz" "$PAYLOADS/downloads"
+  # uv itself is not put on anyone's PATH.
+  [ ! -e "$HOME/.local/bin/uv" ]
+  [ "$(cat "$STATE/uv-calls")" = "uv tool install --quiet azure-cli==$AZURE_CLI_VERSION" ]
+
+  sed -i 's/^AZURE_CLI_VERSION=.*/AZURE_CLI_VERSION=9.9.9/' "$FIXTURE/config/versions.env"
+  rm -f "$PAYLOADS/downloads"
+  run bash "$INSTALLER" --check
+  [[ "$output" == *"[dry-run] Would run: uv tool install azure-cli==9.9.9"* ]]
+  run bash "$INSTALLER" --apply
+  [ "$status" -eq 0 ]
+  [ "$("$HOME/.local/bin/az")" = "az 9.9.9" ]
+  [ ! -e "$PAYLOADS/downloads" ]
+
+  # A ~/.local/bin/az that uv did not link is left alone.
+  rm "$HOME/.local/bin/az"
+  printf '#!/bin/sh\necho own az\n' >"$HOME/.local/bin/az"
+  rm "$STATE/uv-calls"
+  run bash "$INSTALLER" --apply
+  [[ "$output" == *"$HOME/.local/bin/az was not installed by uv; leaving it."* ]]
+  [ ! -e "$STATE/uv-calls" ]
+
+  # So is an az lanes already find elsewhere.
+  rm "$HOME/.local/bin/az"
+  printf '#!/bin/sh\n' >"$SYSTEM_BIN/az"
+  chmod +x "$SYSTEM_BIN/az"
+  run bash "$INSTALLER" --apply
+  [[ "$output" == *"az is already at $SYSTEM_BIN/az; leaving it."* ]]
+  [ ! -e "$STATE/uv-calls" ]
+}
+
+@test "a uv lanes already find is used instead of the pinned one" {
+  system_jq
+  cp "$TEST_ROOT/uv-build/uv-x86_64-unknown-linux-gnu/uv" "$SYSTEM_BIN/uv"
+
+  run bash "$INSTALLER" --apply
+
+  [ "$status" -eq 0 ]
+  ! grep -q '/uv/uv-' "$PAYLOADS/downloads"
+  [ ! -e "$SHARE/uv-$UV_VERSION" ]
+  [ "$("$HOME/.local/bin/az")" = "az $AZURE_CLI_VERSION" ]
+}
+
+@test "kubectl follows the Kubernetes channel and the Azure CLI pin is exact" {
+  source "$REPO_ROOT/config/versions.env"
+  [[ "$KUBECTL_VERSION" == "$KUBERNETES_CHANNEL".* ]]
+  [[ "$KUBECTL_RELEASE_BASE" == */"$KUBECTL_VERSION"/bin ]]
+  [[ "$AZURE_CLI_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
 }
 
 @test "another OS or architecture stops before any change" {

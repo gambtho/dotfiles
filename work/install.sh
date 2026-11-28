@@ -5,28 +5,8 @@ set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/../libexec/common.sh"
 # shellcheck source=config/versions.env
 source "$(dirname "${BASH_SOURCE[0]}")/../config/versions.env"
-
-download_apt_key() {
-  local url="$1" destination="$2" temporary
-  temporary=$(mktemp) || return
-  if ! curl --fail --show-error --location --connect-timeout 10 --max-time 120 --retry 3 "$url" --output "$temporary"; then
-    rm -f -- "$temporary"
-    return 1
-  fi
-  if ! sudo gpg --dearmor --yes --output "$destination" "$temporary"; then
-    rm -f -- "$temporary"
-    return 1
-  fi
-  rm -f -- "$temporary"
-  sudo chmod a+r "$destination"
-}
-
-setup_docker_repository() {
-  download_apt_key https://download.docker.com/linux/ubuntu/gpg /etc/apt/keyrings/docker.gpg || return
-  printf 'deb [arch=%s signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu %s stable\n' \
-    "$(dpkg --print-architecture)" "$(. /etc/os-release && printf '%s' "$VERSION_CODENAME")" |
-    sudo tee /etc/apt/sources.list.d/docker.list >/dev/null || return
-}
+# shellcheck source=libexec/lib/apt-repositories.sh
+source "$(dirname "${BASH_SOURCE[0]}")/../libexec/lib/apt-repositories.sh"
 
 setup_kubernetes_repository() {
   download_apt_key "https://pkgs.k8s.io/core:/stable:/$KUBERNETES_CHANNEL/deb/Release.key" /etc/apt/keyrings/kubernetes-apt-keyring.gpg || return
@@ -35,14 +15,7 @@ setup_kubernetes_repository() {
 }
 
 setup_microsoft_repositories() {
-  download_apt_key https://packages.microsoft.com/keys/microsoft.asc /etc/apt/keyrings/microsoft.gpg || return
-  # The azure-cli installer ships a deb822 azure-cli.sources. Write the same
-  # file rather than a legacy .list so the two cannot describe the same repo at
-  # once, which makes apt warn about duplicate targets on every update.
-  printf 'Types: deb\nURIs: https://packages.microsoft.com/repos/azure-cli/\nSuites: %s\nComponents: main\nArchitectures: %s\nSigned-By: /etc/apt/keyrings/microsoft.gpg\n' \
-    "$(. /etc/os-release && printf '%s' "$VERSION_CODENAME")" "$(dpkg --print-architecture)" |
-    sudo tee /etc/apt/sources.list.d/azure-cli.sources >/dev/null || return
-  sudo rm -f /etc/apt/sources.list.d/azure-cli.list || return
+  setup_azure_cli_repository || return
   printf '%s\n' 'deb [arch=amd64,arm64,armhf signed-by=/etc/apt/keyrings/microsoft.gpg] https://packages.microsoft.com/repos/code stable main' |
     sudo tee /etc/apt/sources.list.d/vscode.list >/dev/null
 }

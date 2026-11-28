@@ -57,6 +57,10 @@ list_pins() {
   printf 'artifact coderabbit %s\n' "$CODERABBIT_CLI_VERSION"
   printf 'artifact jq %s\n' "$JQ_VERSION"
   printf 'artifact git-lfs %s\n' "$GIT_LFS_VERSION"
+  printf 'artifact kind %s\n' "$KIND_VERSION"
+  printf 'artifact kubectl %s\n' "$KUBECTL_VERSION"
+  printf 'pypi azure-cli %s\n' "$AZURE_CLI_VERSION"
+  printf 'artifact go %s\n' "$GO_VERSION"
   printf 'artifact nerd-fonts %s\n' "$NERD_FONTS_VERSION"
   printf 'artifact nerd-font-cascadia-mono %s %s\n' "$NERD_FONTS_VERSION" "$NERD_FONT_CASCADIA_MONO_SHA256"
   printf 'artifact nerd-font-hack %s %s\n' "$NERD_FONTS_VERSION" "$NERD_FONT_HACK_SHA256"
@@ -186,6 +190,7 @@ check_pins() {
   check_artifact_release codex openai/codex "rust-v$CODEX_VERSION"
   check_artifact_release jq jqlang/jq "jq-$JQ_VERSION"
   check_artifact_release git-lfs git-lfs/git-lfs "v$GIT_LFS_VERSION"
+  check_artifact_release kind kubernetes-sigs/kind "$KIND_VERSION"
   check_coderabbit_release
 }
 
