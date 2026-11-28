@@ -154,13 +154,12 @@ this script made is left alone; move it aside and rerun to get the pinned build.
 `~/.local/bin` is not on the shell's PATH, the script says so and does not fix it.
 
 Old version folders stay after a pin bump, because a running lane may still use them.
-Delete them once no lane does. To undo everything: remove the links in `~/.local/bin`
-that point into `~/.local/share/lane-worker`, the `~/.local/bin/python` link it
-made, that folder, then run
-`claude plugin marketplace remove gambtho-skills`. Remove the Azure CLI with
-`uv tool uninstall azure-cli` (the pinned `uv` is
-`~/.local/share/lane-worker/uv-<version>/uv`) on Linux, or
-`brew uninstall azure-cli` and the `~/.local/bin/az` link on macOS.
+Delete them once no lane does. To undo everything, first remove the Azure CLI: on
+Linux `uv tool uninstall azure-cli` (with no other `uv`, use
+`~/.local/share/lane-worker/uv-<version>/uv`), on macOS `brew uninstall azure-cli`
+and the `~/.local/bin/az` link. Then remove the links in `~/.local/bin` that point
+into `~/.local/share/lane-worker`, the `~/.local/bin/python` link it made, that
+folder, and run `claude plugin marketplace remove gambtho-skills`.
 
 ## Cluster tools (opt-in)
 

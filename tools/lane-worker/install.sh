@@ -324,9 +324,13 @@ converge_az_linux() {
 
 # macOS: Homebrew's azure-cli, without sudo. Lanes do not see /opt/homebrew/bin,
 # so ~/.local/bin/az links to it there.
+# Where Homebrew lives when it is not on PATH. Tests replace the list.
+BREW_CANDIDATES="${LANE_WORKER_BREW_CANDIDATES-/opt/homebrew/bin/brew /usr/local/bin/brew}"
+
 converge_az_macos() {
   local link="$BIN_DIR/az" brew="" prefix found
-  for found in "$(command -v brew 2>/dev/null || true)" /opt/homebrew/bin/brew /usr/local/bin/brew; do
+  # shellcheck disable=SC2086  # a space-separated list of paths
+  for found in "$(command -v brew 2>/dev/null || true)" $BREW_CANDIDATES; do
     if [[ -n "$found" && -x "$found" ]]; then
       brew=$found
       break
@@ -355,13 +359,14 @@ converge_az_macos() {
   else
     say "azure-cli is installed with Homebrew."
   fi
-  # Link it where lanes look, unless they already find it there.
-  if [[ "$(PATH="$LANE_PATH" command -v az 2>/dev/null || true)" == "$prefix/bin/az" ]] ||
-    [[ -L "$link" && "$(readlink "$link")" == "$prefix/bin/az" ]]; then
+  # Link it where lanes look, unless they already find it or another az.
+  if [[ -L "$link" && "$(readlink "$link")" == "$prefix/bin/az" ]]; then
     return 0
   fi
   if [[ -e "$link" || -L "$link" ]]; then
     say "$link was not installed by this script; leaving it."
+  elif found=$(PATH="$LANE_PATH" command -v az 2>/dev/null); then
+    [[ "$found" == "$prefix/bin/az" ]] || say "Lanes find az at $found; not linking Homebrew's."
   elif [[ "$MODE" == check ]]; then
     say "[dry-run] Would link $link to $prefix/bin/az."
   else

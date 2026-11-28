@@ -487,8 +487,9 @@ plugin install gambtho-skills@gambtho-skills --scope user" ]
 # ARTIFACT_ARCH stands in for uname -m.
 stub_darwin() {
   stub_command uname 'case "$1" in -s) echo Darwin ;; *) echo "${ARTIFACT_ARCH:-arm64}" ;; esac'
-  # Homebrew under a prefix lanes do not see, as on Apple silicon.
-  export BREW_PREFIX="$TEST_ROOT/homebrew"
+  # Homebrew under a prefix lanes do not see, as on Apple silicon; never the
+  # host's own Homebrew.
+  export BREW_PREFIX="$TEST_ROOT/homebrew" LANE_WORKER_BREW_CANDIDATES=""
   stub_command brew '
     echo "brew $*" >>"$STATE/brew-calls"
     case "$*" in
@@ -572,6 +573,23 @@ stub_darwin() {
   [[ "$output" == *"Homebrew is missing, so no az. Install Homebrew, then rerun."* ]]
   [ ! -e "$HOME/.local/bin/az" ]
   [ -x "$HOME/.local/bin/kubectl" ]
+}
+
+@test "macOS leaves an az lanes already find, even with Homebrew's installed" {
+  stub_darwin
+  system_jq
+  printf '#!/bin/sh\necho system az\n' >"$SYSTEM_BIN/az"
+  chmod +x "$SYSTEM_BIN/az"
+  mkdir -p "$BREW_PREFIX/bin"
+  printf '#!/bin/sh\n' >"$BREW_PREFIX/bin/az"
+  chmod +x "$BREW_PREFIX/bin/az"
+
+  run bash "$INSTALLER" --apply
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Lanes find az at $SYSTEM_BIN/az; not linking Homebrew's."* ]]
+  [ ! -e "$HOME/.local/bin/az" ]
+  ! grep -q "^brew install" "$STATE/brew-calls"
 }
 
 @test "az on Linux: pinned uv unpacked privately, a new pin reinstalls, other installs are left alone" {
