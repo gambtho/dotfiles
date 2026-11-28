@@ -200,15 +200,19 @@ only on a worker whose lanes you trust with that.
 
 ### Undo
 
+On a work-profile machine, keep `docker.list`, `azure-cli.sources` and their
+keys `docker.gpg` and `microsoft.gpg`, which that profile uses. Otherwise:
+
 ```bash
 sudo apt-get purge docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin runsc azure-cli
 sudo rm /etc/apt/sources.list.d/{docker.list,gvisor.list,azure-cli.sources} \
   /etc/apt/keyrings/{docker.gpg,gvisor-archive-keyring.gpg,microsoft.gpg}
 sudo gpasswd -d "$USER" docker
-rm ~/.local/bin/{kind,kubectl,go,gofmt}
+for tool in kind kubectl go gofmt; do   # only the links this script made
+  [[ "$(readlink ~/.local/bin/$tool)" == ~/.local/share/lane-worker/* ]] && rm ~/.local/bin/$tool
+done
 rm -rf ~/.local/share/lane-worker/{kind,kubectl,go}-*
 ```
 
 Purging Docker keeps images and volumes in `/var/lib/docker` and
-`/var/lib/containerd`; remove those too to free the space. On a work-profile
-machine, keep `docker.list` and `azure-cli.sources`, which that profile uses.
+`/var/lib/containerd`; remove those too to free the space.

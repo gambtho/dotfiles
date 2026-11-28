@@ -312,6 +312,32 @@ assert data == {
   [ -e "$APT_ETC/sources.list.d/azure-cli.sources" ]
 }
 
+@test "a source file of ours with only comments gets the repository again" {
+  printf '# deb https://download.docker.com/linux/ubuntu noble stable\n' >"$APT_ETC/sources.list.d/docker.list"
+
+  run bash "$INSTALLER" --apply
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Installing Docker Engine (docker-ce"*"adding its repository."* ]]
+  grep -q '^deb \[arch=amd64 signed-by=' "$APT_ETC/sources.list.d/docker.list"
+}
+
+@test "a failed Docker reload says what is left to do" {
+  printf '%s\n' docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin runsc azure-cli >"$STATE/installed"
+  touch "$STATE/docker-active"
+  stub_command systemctl '
+    case "$*" in
+      "is-active --quiet docker") exit 0 ;;
+      *) exit 1 ;;
+    esac
+  '
+
+  run bash "$INSTALLER" --apply
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"runsc is in $CLUSTER_TOOLS_DAEMON_JSON, but Docker did not reload. Run: sudo systemctl reload docker"* ]]
+}
+
 @test "debian gets Docker's debian repository" {
   printf 'ID=debian\nVERSION_CODENAME=bookworm\n' >"$OS_RELEASE_FILE"
 

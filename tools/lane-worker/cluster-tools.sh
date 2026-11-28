@@ -99,11 +99,14 @@ package_installed() {
   [[ "$(dpkg-query -W -f='${Status}' "$1" 2>/dev/null || true)" == *" ok installed" ]]
 }
 
-# The first source file that lists HOST on a line that is not a comment. grep
-# exits 2 when one of the files is missing, so its status is not used.
+# listing_source HOST [FILE...]: the first of FILE (by default every APT source
+# file) that names HOST on a line that is not a comment. grep exits 2 when one
+# of the files is missing, so its status is not used.
 listing_source() {
-  { grep -lsE "^[[:space:]]*[^#[:space:]].*${1//./[.]}" "$APT_ETC/sources.list" \
-    "$APT_ETC/sources.list.d/"*.list "$APT_ETC/sources.list.d/"*.sources || true; } | head -n 1
+  local host="$1"
+  shift
+  (($#)) || set -- "$APT_ETC/sources.list" "$APT_ETC/sources.list.d/"*.list "$APT_ETC/sources.list.d/"*.sources
+  { grep -lsE "^[[:space:]]*[^#[:space:]].*${host//./[.]}" "$@" || true; } | head -n 1
 }
 
 # One line per repository: label, its source file, the host another source
@@ -129,7 +132,7 @@ converge_apt() {
       continue
     fi
     missing+=("${wanted[@]}")
-    if [[ -e "$APT_ETC/sources.list.d/$file" ]]; then
+    if [[ -n "$(listing_source "$host" "$APT_ETC/sources.list.d/$file")" ]]; then
       listed="its repository is listed"
     elif listed=$(listing_source "$host") && [[ -n "$listed" ]]; then
       # Another file already lists it. A second source with another key would
@@ -147,6 +150,12 @@ converge_apt() {
   done
   [[ "$MODE" == apply && ${#missing[@]} -gt 0 ]] || return 0
   sudo install -m 0755 -d "$APT_ETC/keyrings"
+  # The repository keys are imported with gpg, which a minimal Debian lacks.
+  if ((${#repositories[@]} > 0)) && ! command -v gpg >/dev/null 2>&1; then
+    say "Installing gnupg from the distribution to import the repository keys."
+    sudo_apt apt-get update >/dev/null
+    sudo_apt apt-get install -y gnupg >/dev/null
+  fi
   for setup in ${repositories[@]+"${repositories[@]}"}; do
     # shellcheck disable=SC2086  # "function argument" from the table above
     $setup
@@ -238,7 +247,10 @@ converge_runsc_runtime() {
   say "Added runsc to the runtimes in $DAEMON_JSON."
   # Docker rereads runtimes on reload, so running containers keep running.
   if systemctl is-active --quiet docker 2>/dev/null; then
-    sudo systemctl reload docker
+    # A later run finds runsc in the file and does not reload again, so say
+    # what is left to do.
+    sudo systemctl reload docker ||
+      die "runsc is in $DAEMON_JSON, but Docker did not reload. Run: sudo systemctl reload docker"
     say "Reloaded Docker."
   else
     say "Docker is not running; it reads the runtime when it starts."
