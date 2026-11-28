@@ -123,10 +123,10 @@ fi
 
 if [[ "$MODE" == apply ]] || bwrap_works; then
   if codex=$(PATH="$LANE_PATH" command -v codex 2>/dev/null); then
-    if (cd "$HOME" && PATH="$LANE_PATH" "$codex" sandbox linux -- true) >/dev/null 2>&1; then
+    if (cd "$HOME" && PATH="$LANE_PATH" "$codex" sandbox -- true) >/dev/null 2>&1; then
       say "Codex's sandbox runs commands."
     else
-      die "$BWRAP works, but codex sandbox linux -- true still fails. Run it to see why."
+      die "$BWRAP works, but codex sandbox -- true still fails. Run it to see why."
     fi
   else
     say "Lanes find no codex; make lane-worker installs it."

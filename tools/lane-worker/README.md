@@ -112,7 +112,7 @@ To check it, run this in a lane's worktree:
 
 ```bash
 sysctl kernel.apparmor_restrict_unprivileged_userns   # 1 means restricted
-codex sandbox linux -- ls                            # should list the worktree
+codex sandbox -- ls                                  # should list the worktree
 ```
 
 With the restriction on, the second command fails, for example with
@@ -145,7 +145,7 @@ AppArmor profile for that program, and leaves
 It stops without changing the file if `/etc/apparmor.d/bwrap-userns-restrict`
 is already there with other content. On a box without the restriction, or on
 macOS, it says there is nothing to do. At the end it runs
-`codex sandbox linux -- true` and says whether that works.
+`codex sandbox -- true` and says whether that works.
 
 To undo it:
 

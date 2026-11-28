@@ -83,7 +83,7 @@ setup() {
   grep -q '^apt-get install .* bubblewrap$' "$STATE/sudo"
   [[ "$output" == *"Loaded $PROFILE."* ]]
   [[ "$output" == *"Codex's sandbox runs commands."* ]]
-  [ "$(cat "$STATE/codex")" = "codex sandbox linux -- true" ]
+  [ "$(cat "$STATE/codex")" = "codex sandbox -- true" ]
   # The restriction itself stays on.
   [ "$(cat "$CODEX_SANDBOX_USERNS_KNOB")" = 1 ]
   ! grep -q sysctl "$STATE/sudo"
