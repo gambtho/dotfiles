@@ -109,6 +109,13 @@ listing_source() {
   { grep -lsE "^[[:space:]]*[^#[:space:]].*${host//./[.]}" "$@" || true; } | head -n 1
 }
 
+# Microsoft publishes the Azure CLI only for some releases (not Debian trixie,
+# for one). Adding a source for another release would stop every apt update.
+azure_cli_suite_served() {
+  curl --fail --silent --head --location --connect-timeout 10 --max-time 30 --output /dev/null \
+    "https://packages.microsoft.com/repos/azure-cli/dists/$(os_codename)/InRelease"
+}
+
 # One line per repository: label, its source file, the host another source
 # file would name if it already lists the repository, its setup function, and
 # its packages.
@@ -131,17 +138,20 @@ converge_apt() {
       say "$label is installed."
       continue
     fi
-    missing+=("${wanted[@]}")
     if [[ -n "$(listing_source "$host" "$APT_ETC/sources.list.d/$file")" ]]; then
       listed="its repository is listed"
     elif listed=$(listing_source "$host") && [[ -n "$listed" ]]; then
       # Another file already lists it. A second source with another key would
       # make apt refuse every source, so use that one.
       listed="its repository is already listed in $listed"
+    elif [[ "$setup" == setup_azure_cli_repository ]] && ! azure_cli_suite_served; then
+      say "Microsoft publishes no Azure CLI packages for $(os_codename); skipping the Azure CLI."
+      continue
     else
       listed="adding its repository"
       repositories+=("$setup")
     fi
+    missing+=("${wanted[@]}")
     if [[ "$MODE" == check ]]; then
       say "[dry-run] Would install $label (${wanted[*]}); $listed."
     else
@@ -219,42 +229,76 @@ with open(sys.argv[3], "w") as out:
 PY
 }
 
+# Set while daemon.json has a runsc that Docker may not have loaded yet, so a
+# run after a failed reload reloads again.
+RELOAD_PENDING="${XDG_STATE_HOME:-$HOME/.local/state}/dotfiles/cluster-tools-docker-reload"
+
+# Docker rereads runtimes on reload, so running containers keep running.
+reload_docker() {
+  if systemctl is-active --quiet docker 2>/dev/null; then
+    sudo systemctl reload docker ||
+      die "runsc is in $DAEMON_JSON, but Docker did not reload. Rerun this, or run: sudo systemctl reload docker"
+    say "Reloaded Docker."
+  else
+    say "Docker is not running; it reads the runtime when it starts."
+  fi
+  rm -f -- "$RELOAD_PENDING"
+}
+
 converge_runsc_runtime() {
-  local state temporary
-  state=$(daemon_json check "$DAEMON_JSON")
+  local state source="$DAEMON_JSON" temporary mode=0644 owner=0 group=0
+  temporary=$(mktemp)
+  # A daemon.json only root can read is read with sudo, and only by --apply.
+  if [[ -e "$DAEMON_JSON" && ! -r "$DAEMON_JSON" ]]; then
+    if [[ "$MODE" == check ]]; then
+      rm -f -- "$temporary"
+      say "[dry-run] Only root can read $DAEMON_JSON; --apply reads it with sudo and adds runsc if it is missing."
+      return 0
+    fi
+    source="$temporary.current"
+    # shellcheck disable=SC2024  # the copy is meant to be the user's own temporary file
+    sudo cat -- "$DAEMON_JSON" >"$source"
+  fi
+  state=$(daemon_json check "$source")
   case "$state" in
     present)
+      rm -f -- "$temporary" "$temporary.current"
       say "runsc is a Docker runtime in $DAEMON_JSON."
+      if [[ -e "$RELOAD_PENDING" ]]; then
+        if [[ "$MODE" == check ]]; then
+          say "[dry-run] Would reload Docker, which a previous run did not finish."
+        else
+          reload_docker
+        fi
+      fi
       return 0
       ;;
     invalid)
+      rm -f -- "$temporary" "$temporary.current"
       [[ "$MODE" == check ]] || die "$DAEMON_JSON is not a JSON object with a runtimes object, so runsc was not added. Fix it, then rerun."
       say "[dry-run] $DAEMON_JSON is not a JSON object with a runtimes object; --apply would stop here."
       return 0
       ;;
   esac
   if [[ "$MODE" == check ]]; then
+    rm -f -- "$temporary"
     say "[dry-run] Would add runsc ($RUNSC_PATH) to the runtimes in $DAEMON_JSON, keeping its other settings."
     return 0
   fi
-  temporary=$(mktemp)
-  daemon_json merge "$DAEMON_JSON" "$temporary" || {
-    rm -f -- "$temporary"
+  daemon_json merge "$source" "$temporary" || {
+    rm -f -- "$temporary" "$temporary.current"
     die "could not merge runsc into $DAEMON_JSON."
   }
-  sudo install -D -m 0644 "$temporary" "$DAEMON_JSON"
-  rm -f -- "$temporary"
-  say "Added runsc to the runtimes in $DAEMON_JSON."
-  # Docker rereads runtimes on reload, so running containers keep running.
-  if systemctl is-active --quiet docker 2>/dev/null; then
-    # A later run finds runsc in the file and does not reload again, so say
-    # what is left to do.
-    sudo systemctl reload docker ||
-      die "runsc is in $DAEMON_JSON, but Docker did not reload. Run: sudo systemctl reload docker"
-    say "Reloaded Docker."
-  else
-    say "Docker is not running; it reads the runtime when it starts."
+  # Keep the owner and mode of an existing file; it may hold proxy credentials.
+  if [[ -e "$DAEMON_JSON" ]]; then
+    read -r mode owner group < <(stat -c '%a %u %g' "$DAEMON_JSON")
   fi
+  mkdir -p "$(dirname "$RELOAD_PENDING")"
+  touch "$RELOAD_PENDING"
+  sudo install -D -m "$mode" -o "$owner" -g "$group" "$temporary" "$DAEMON_JSON"
+  rm -f -- "$temporary" "$temporary.current"
+  say "Added runsc to the runtimes in $DAEMON_JSON."
+  reload_docker
 }
 
 # ── pinned binaries ──────────────────────────────────────────────────────────
@@ -328,7 +372,6 @@ converge_binary() {
     return 0
   fi
   mkdir -p "$SHARE_DIR" "$BIN_DIR"
-  rm -rf -- "$SHARE_DIR"/.cluster-staging-*
   STAGE=$(mktemp -d "$SHARE_DIR/.cluster-staging-XXXXXX")
   if [[ ! -x "$dir/${1#*=}" ]]; then
     mkdir "$STAGE/$tool"

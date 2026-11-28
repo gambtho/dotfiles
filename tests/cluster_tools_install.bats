@@ -56,13 +56,32 @@ setup() {
       esac
       shift
     done
+    case "$url" in
+      */dists/trixie/InRelease) exit 22 ;;
+      */InRelease) exit 0 ;;
+    esac
     echo "$url" >>"$STATE/downloads"
     case "$url" in
       */kubectl) cp "$PAYLOADS/$(basename "$(dirname "$url")")/kubectl" "$out" ;;
       *) cp "$PAYLOADS/${url##*/}" "$out" ;;
     esac
   '
-  stub_command sudo 'echo "$*" >>"$STATE/sudo"; exec "$@"'
+  # Unprivileged here, so install cannot set an owner; the call is logged.
+  stub_command sudo '
+    echo "$*" >>"$STATE/sudo"
+    if [[ "$1" == install ]]; then
+      args=()
+      while (($#)); do
+        case "$1" in
+          -o | -g) shift ;;
+          *) args+=("$1") ;;
+        esac
+        shift
+      done
+      set -- "${args[@]}"
+    fi
+    exec "$@"
+  '
   stub_command gpg '
     out="" src=""
     while (($#)); do
@@ -322,20 +341,55 @@ assert data == {
   grep -q '^deb \[arch=amd64 signed-by=' "$APT_ETC/sources.list.d/docker.list"
 }
 
-@test "a failed Docker reload says what is left to do" {
-  printf '%s\n' docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin runsc azure-cli >"$STATE/installed"
-  touch "$STATE/docker-active"
-  stub_command systemctl '
-    case "$*" in
-      "is-active --quiet docker") exit 0 ;;
-      *) exit 1 ;;
-    esac
-  '
+@test "a release Microsoft does not serve skips the Azure CLI and writes no source for it" {
+  printf 'ID=debian\nVERSION_CODENAME=trixie\n' >"$OS_RELEASE_FILE"
 
   run bash "$INSTALLER" --apply
 
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Microsoft publishes no Azure CLI packages for trixie; skipping the Azure CLI."* ]]
+  [ ! -e "$APT_ETC/sources.list.d/azure-cli.sources" ]
+  ! grep -q azure-cli "$STATE/installed"
+  grep -qx docker-ce "$STATE/installed"
+}
+
+@test "a failed Docker reload is retried by the next run" {
+  touch "$STATE/docker-active"
+  stub_command systemctl '
+    echo "systemctl $*" >>"$STATE/systemctl"
+    case "$*" in
+      "is-active --quiet docker") exit 0 ;;
+      reload*) [[ -f "$STATE/reload-works" ]] ;;
+    esac
+  '
+  run bash "$INSTALLER" --apply
   [ "$status" -eq 1 ]
-  [[ "$output" == *"runsc is in $CLUSTER_TOOLS_DAEMON_JSON, but Docker did not reload. Run: sudo systemctl reload docker"* ]]
+  [[ "$output" == *"Docker did not reload. Rerun this, or run: sudo systemctl reload docker"* ]]
+
+  touch "$STATE/reload-works"
+  run bash "$INSTALLER" --check
+  [[ "$output" == *"[dry-run] Would reload Docker, which a previous run did not finish."* ]]
+  run bash "$INSTALLER" --apply
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Reloaded Docker."* ]]
+
+  rm -f "$STATE/systemctl"
+  run bash "$INSTALLER" --apply
+  [ "$status" -eq 0 ]
+  ! grep -q reload "$STATE/systemctl"
+}
+
+@test "daemon.json keeps its owner and mode when runsc is added" {
+  printf '%s\n' docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin runsc azure-cli >"$STATE/installed"
+  mkdir -p "$(dirname "$CLUSTER_TOOLS_DAEMON_JSON")"
+  printf '{"proxies": {"http-proxy": "http://user:secret@proxy:3128"}}\n' >"$CLUSTER_TOOLS_DAEMON_JSON"
+  chmod 0640 "$CLUSTER_TOOLS_DAEMON_JSON"
+
+  run bash "$INSTALLER" --apply
+
+  [ "$status" -eq 0 ]
+  [ "$(stat -c %a "$CLUSTER_TOOLS_DAEMON_JSON")" = 640 ]
+  grep -q "^install -D -m 640 -o $(stat -c %u "$CLUSTER_TOOLS_DAEMON_JSON") -g $(stat -c %g "$CLUSTER_TOOLS_DAEMON_JSON") " "$STATE/sudo"
 }
 
 @test "debian gets Docker's debian repository" {

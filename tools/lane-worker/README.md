@@ -164,7 +164,9 @@ do; `dot-install` and `make lane-worker` never do.
 
 The apt repositories are the ones the work profile adds, with the same files:
 each key goes to `/etc/apt/keyrings` and its source names it with `signed-by`.
-If another source file already lists one of them, that one is used instead.
+If another source file already lists one of them, that one is used instead. Microsoft
+does not publish the Azure CLI for every release (Debian 13 "trixie", for one);
+there the script says so and skips it rather than add a source apt cannot use.
 The apt packages follow their repositories, and the normal `apt upgrade` moves
 them. `kind`, `kubectl` and Go are pinned and digest-checked in
 `config/versions.env` and unpack under `~/.local/share/lane-worker`, like the
@@ -177,8 +179,9 @@ make -C ~/.dotfiles cluster-tools         # installs; a second run changes nothi
 
 It adds `runsc` to the `runtimes` in `/etc/docker/daemon.json` and keeps every
 other setting there, then reloads Docker, which leaves running containers alone.
-A `runsc` entry that is already there is left as it is. If the file is not valid
-JSON, it stops and changes nothing there.
+A `runsc` entry that is already there is left as it is, and the file keeps its
+owner and mode. If the file is not valid JSON, it stops and changes nothing
+there. If the reload fails, the next run tries it again.
 
 ### The docker group needs a new login
 
@@ -200,18 +203,22 @@ only on a worker whose lanes you trust with that.
 
 ### Undo
 
-On a work-profile machine, keep `docker.list`, `azure-cli.sources` and their
-keys `docker.gpg` and `microsoft.gpg`, which that profile uses. Otherwise:
-
 ```bash
 sudo apt-get purge docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin runsc azure-cli
-sudo rm /etc/apt/sources.list.d/{docker.list,gvisor.list,azure-cli.sources} \
-  /etc/apt/keyrings/{docker.gpg,gvisor-archive-keyring.gpg,microsoft.gpg}
+sudo rm /etc/apt/sources.list.d/gvisor.list /etc/apt/keyrings/gvisor-archive-keyring.gpg
 sudo gpasswd -d "$USER" docker
 for tool in kind kubectl go gofmt; do   # only the links this script made
   [[ "$(readlink ~/.local/bin/$tool)" == ~/.local/share/lane-worker/* ]] && rm ~/.local/bin/$tool
 done
 rm -rf ~/.local/share/lane-worker/{kind,kubectl,go}-*
+```
+
+Except on a work-profile machine, which uses them, also remove the Docker and
+Azure CLI sources with their keys:
+
+```bash
+sudo rm /etc/apt/sources.list.d/docker.list /etc/apt/keyrings/docker.gpg \
+  /etc/apt/sources.list.d/azure-cli.sources /etc/apt/keyrings/microsoft.gpg
 ```
 
 Purging Docker keeps images and volumes in `/var/lib/docker` and
