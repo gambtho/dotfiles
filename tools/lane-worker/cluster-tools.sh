@@ -3,9 +3,9 @@
 # clusters. Nothing else runs this; `make cluster-tools` does. It installs:
 #   Docker Engine   Docker's apt repository; the user joins the docker group
 #   runsc           gVisor's apt repository, registered as Docker runtime runsc
-#   kind, kubectl   pinned, digest-checked binaries linked from ~/.local/bin
+#   kind            pinned, digest-checked binary linked from ~/.local/bin
 #   Go              pinned, digest-checked release, the same minor as mise's pin
-#   Azure CLI       Microsoft's apt repository
+# kubectl and the Azure CLI come with every worker, from install.sh.
 # The apt repositories are the ones the work profile uses (libexec/lib/
 # apt-repositories.sh), with their keys in /etc/apt/keyrings and signed-by.
 # The binaries unpack under ~/.local/share/lane-worker like the review CLIs.
@@ -78,12 +78,10 @@ ARCH=$(dpkg --print-architecture)
 case "$ARCH" in
   amd64)
     KIND_SHA256=$KIND_LINUX_AMD64_SHA256
-    KUBECTL_SHA256=$KUBECTL_LINUX_AMD64_SHA256
     GO_SHA256=$GO_LINUX_AMD64_SHA256
     ;;
   arm64)
     KIND_SHA256=$KIND_LINUX_ARM64_SHA256
-    KUBECTL_SHA256=$KUBECTL_LINUX_ARM64_SHA256
     GO_SHA256=$GO_LINUX_ARM64_SHA256
     ;;
   *) die "unsupported architecture: $ARCH. Nothing was changed." ;;
@@ -114,28 +112,12 @@ listing_source() {
   { grep -lsE "^[[:space:]]*[^#[:space:]].*${host//./[.]}" "$@" || true; } | head -n 1
 }
 
-# Microsoft publishes the Azure CLI only for some releases (not Debian trixie,
-# for one). Adding a source for another release would stop every apt update.
-# Only a 404 means the suite is not served; any other failure stops the run.
-azure_cli_suite_served() {
-  local url code
-  url="https://packages.microsoft.com/repos/azure-cli/dists/$(os_codename)/InRelease"
-  code=$(curl --silent --head --location --connect-timeout 10 --max-time 30 --retry 3 \
-    --output /dev/null --write-out '%{http_code}' "$url") || code=failed
-  case "$code" in
-    2??) return 0 ;;
-    404) return 1 ;;
-    *) die "could not check $url (HTTP $code). Try again later." ;;
-  esac
-}
-
 # One line per repository: label, its source file, the host another source
 # file would name if it already lists the repository, its setup function, and
 # its packages.
 APT_COMPONENTS=(
   "Docker Engine|docker.list|download.docker.com|setup_docker_repository $DISTRO|docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin"
   "gVisor runsc|gvisor.list|storage.googleapis.com/gvisor|setup_gvisor_repository|runsc"
-  "Azure CLI|azure-cli.sources|packages.microsoft.com/repos/azure-cli|setup_azure_cli_repository|azure-cli"
 )
 
 converge_apt() {
@@ -157,9 +139,6 @@ converge_apt() {
       # Another file already lists it. A second source with another key would
       # make apt refuse every source, so use that one.
       listed="its repository is already listed in $listed"
-    elif [[ "$setup" == setup_azure_cli_repository ]] && ! azure_cli_suite_served; then
-      say "Microsoft publishes no Azure CLI packages for $(os_codename); skipping the Azure CLI."
-      continue
     else
       listed="adding its repository"
       repositories+=("$setup")
@@ -337,10 +316,6 @@ unpack_kind() {
   download_verified_artifact "$KIND_RELEASE_BASE/kind-linux-$ARCH" "$KIND_SHA256" "$1/kind" 0755
 }
 
-unpack_kubectl() {
-  download_verified_artifact "$KUBECTL_RELEASE_BASE/$ARCH/kubectl" "$KUBECTL_SHA256" "$1/kubectl" 0755
-}
-
 unpack_go() {
   download_verified_artifact "$GO_RELEASE_BASE/go$GO_VERSION.linux-$ARCH.tar.gz" "$GO_SHA256" "$STAGE/go.tar.gz"
   tar -xzf "$STAGE/go.tar.gz" -C "$1"
@@ -405,11 +380,12 @@ converge_apt
 converge_docker_group
 converge_runsc_runtime
 converge_binary kind "$KIND_VERSION" kind=kind
-converge_binary kubectl "$KUBECTL_VERSION" kubectl=kubectl
 converge_binary go "$GO_VERSION" go=go/bin/go gofmt=go/bin/gofmt
+PATH="$LANE_PATH" command -v kubectl >/dev/null 2>&1 ||
+  say "Note: lanes find no kubectl. It comes with make lane-worker, which kind clusters need too."
 
 if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
-  say "Note: $BIN_DIR is not on this shell's PATH. Lanes find kind, kubectl and go there; this script does not change PATH."
+  say "Note: $BIN_DIR is not on this shell's PATH. Lanes find kind and go there; this script does not change PATH."
 fi
 if [[ "$RELOGIN" == true ]]; then
   cat <<EOF
@@ -427,7 +403,6 @@ Check after a new login:
   docker run --rm hello-world
   docker run --rm --runtime=runsc hello-world
   kind create cluster && kubectl get nodes && kind delete cluster
-  az version
   go version
 EOF
 fi

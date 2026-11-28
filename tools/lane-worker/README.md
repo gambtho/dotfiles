@@ -2,7 +2,8 @@
 
 A lanes worker runs lanes with Claude Code but is not a full dotfiles machine. For a
 lane's review round it needs the `gambtho-skills` plugin and the review CLIs those
-skills call. `install.sh` installs only those, on Linux or macOS, x86_64 or arm64:
+skills call; lanes also use `kubectl` and the Azure CLI. `install.sh` installs only
+those, on Linux or macOS, x86_64 or arm64, without `sudo`:
 
 | What | Why | Where |
 |---|---|---|
@@ -11,6 +12,8 @@ skills call. `install.sh` installs only those, on Linux or macOS, x86_64 or arm6
 | `coderabbit` (pinned) | the local CodeRabbit review round in `pr-closeout` | `~/.local/bin/coderabbit` |
 | `jq` (pinned), only if lanes find none | the plugin installer and `pr_snapshot.sh` | `~/.local/bin/jq` |
 | `git-lfs` (pinned, same version as the mise pin), only if lanes find none | repositories with Git LFS hooks warn on every commit without it | `~/.local/bin/git-lfs` |
+| `kubectl` (pinned, the `KUBERNETES_CHANNEL` minor) | lanes that work with Kubernetes clusters | `~/.local/bin/kubectl` |
+| Azure CLI `az` (pinned on Linux) | lanes that work with Azure | Linux: `uv tool install azure-cli==<pin>`, in `~/.local/share/uv/tools/azure-cli`, linked as `~/.local/bin/az`. macOS: Homebrew's `azure-cli`, linked as `~/.local/bin/az` when lanes do not see Homebrew's folder |
 | `python`, only if lanes find none | lanes run `python`; Ubuntu and macOS ship only `python3` | `~/.local/bin/python`, a link to the system `python3` (what `python-is-python3` does, without sudo) |
 
 Each tool unpacks into `~/.local/share/lane-worker/<tool>-<version>/`, and
@@ -20,6 +23,15 @@ Each tool unpacks into `~/.local/share/lane-worker/<tool>-<version>/`, and
 releases. Every download is checked against its digest before anything is unpacked.
 On macOS the same pinned versions come from the releases' macOS builds. The script
 avoids Bash 4 features, so the `bash` 3.2 that macOS ships can run it.
+
+The Azure CLI is a Python application with many dependencies, so it has no single
+file to pin. On Linux the script runs `uv tool install azure-cli==<AZURE_CLI_VERSION>`,
+which pins `azure-cli` itself and resolves its dependencies from PyPI, using the
+system `python3` (3.10 or newer). It uses a `uv` lanes already find, or else
+the pinned, digest-checked `uv` release, unpacked under `~/.local/share/lane-worker`
+and not linked onto PATH. uv keeps its download cache in `~/.cache/uv`. A new pin
+replaces the installed version. On macOS it runs `brew install azure-cli` when
+Homebrew is installed and says so when it is not; Homebrew picks the version.
 
 ## First run on a box without dotfiles
 
@@ -55,6 +67,7 @@ run as:
 gh auth status              # GitHub CLI; lanes already need it
 codex login --device-auth   # Codex, for codex-review.sh (works without a browser on the box)
 coderabbit auth login       # CodeRabbit, for the local review round
+az login --use-device-code  # Azure CLI, only if the lanes need Azure
 ```
 
 Running Claude Code sessions keep the skills they loaded; a new lane started after
@@ -111,7 +124,8 @@ itself. This script makes no system change.
 
 ## What it changes, and what it leaves alone
 
-It writes the tool folders, their links in `~/.local/bin` (and the `python` link), and what `ai/claude/install.sh`
+It writes the tool folders, their links in `~/.local/bin` (and the `python` link), what
+`uv tool install` or `brew install` writes for the Azure CLI, and what `ai/claude/install.sh`
 and the `claude` CLI write. On a box where the plugin is already at the pinned tag,
 that, plus attribution already turned off, is nothing. Otherwise `ai/claude/install.sh`:
 
@@ -143,32 +157,32 @@ Old version folders stay after a pin bump, because a running lane may still use 
 Delete them once no lane does. To undo everything: remove the links in `~/.local/bin`
 that point into `~/.local/share/lane-worker`, the `~/.local/bin/python` link it
 made, that folder, then run
-`claude plugin marketplace remove gambtho-skills`.
+`claude plugin marketplace remove gambtho-skills`. Remove the Azure CLI with
+`uv tool uninstall azure-cli` (the pinned `uv` is
+`~/.local/share/lane-worker/uv-<version>/uv`) on Linux, or
+`brew uninstall azure-cli` and the `~/.local/bin/az` link on macOS.
 
 ## Cluster tools (opt-in)
 
 Some lanes build container images and run kind clusters, some of them with
-gVisor. A worker that takes those lanes needs Docker and the Kubernetes tools.
-`cluster-tools.sh` installs them, on Ubuntu or Debian (amd64 or arm64) only. It
-uses `sudo`, so it is separate from `install.sh`, and nothing runs it unless you
-do; `dot-install` and `make lane-worker` never do.
+gVisor. A worker that takes those lanes needs Docker, kind and Go besides what
+`install.sh` gives every worker (including `kubectl` and the Azure CLI); run
+`make lane-worker` first. `cluster-tools.sh` installs them, on Ubuntu or Debian
+(amd64 or arm64) only. It uses `sudo`, so it is separate from `install.sh`, and
+nothing runs it unless you do; `dot-install` and `make lane-worker` never do.
 
 | What | From | Where |
 |---|---|---|
 | Docker Engine (`docker-ce`, CLI, `containerd.io`, buildx and compose plugins) | Docker's apt repository | apt |
 | gVisor `runsc`, registered as the Docker runtime `runsc` | gVisor's apt repository | apt; `/etc/docker/daemon.json` |
-| Azure CLI (`azure-cli`) | Microsoft's apt repository | apt |
 | `kind` (pinned) | kind release | `~/.local/bin/kind` |
-| `kubectl` (pinned, the `KUBERNETES_CHANNEL` minor) | dl.k8s.io | `~/.local/bin/kubectl` |
 | Go (pinned, the minor of the `go` pin in `config/mise/config.toml`) | go.dev | `~/.local/bin/go`, `~/.local/bin/gofmt` |
 
-The apt repositories are the ones the work profile adds, with the same files:
-each key goes to `/etc/apt/keyrings` and its source names it with `signed-by`.
-If another source file already lists one of them, that one is used instead. Microsoft
-does not publish the Azure CLI for every release (Debian 13 "trixie", for one);
-there the script says so and skips it rather than add a source apt cannot use.
-The apt packages follow their repositories, and the normal `apt upgrade` moves
-them. `kind`, `kubectl` and Go are pinned and digest-checked in
+Docker's apt repository is the one the work profile adds, in the same file; gVisor's
+is set up the same way. Each key goes to `/etc/apt/keyrings` and its source names it
+with `signed-by`. If another source file already lists one of them, that one is used
+instead. The apt packages follow their repositories, and the normal `apt upgrade`
+moves them. `kind` and Go are pinned and digest-checked in
 `config/versions.env` and unpack under `~/.local/share/lane-worker`, like the
 review CLIs; lanes do not see mise's shims, so Go comes from here too.
 
@@ -205,21 +219,19 @@ only on a worker whose lanes you trust with that.
 
 ```bash
 sudo apt-get purge docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin runsc
-sudo apt-get purge azure-cli   # skip this where the script said it skipped the Azure CLI
 sudo rm /etc/apt/sources.list.d/gvisor.list /etc/apt/keyrings/gvisor-archive-keyring.gpg
 sudo gpasswd -d "$USER" docker
-for tool in kind kubectl go gofmt; do   # only the links this script made
+for tool in kind go gofmt; do   # only the links this script made
   [[ "$(readlink ~/.local/bin/$tool)" == ~/.local/share/lane-worker/* ]] && rm ~/.local/bin/$tool
 done
-rm -rf ~/.local/share/lane-worker/{kind,kubectl,go}-*
+rm -rf ~/.local/share/lane-worker/{kind,go}-*
 ```
 
-Except on a work-profile machine, which uses them, also remove the Docker and
-Azure CLI sources with their keys:
+Except on a work-profile machine, which uses it, also remove the Docker source
+with its key:
 
 ```bash
-sudo rm /etc/apt/sources.list.d/docker.list /etc/apt/keyrings/docker.gpg \
-  /etc/apt/sources.list.d/azure-cli.sources /etc/apt/keyrings/microsoft.gpg
+sudo rm /etc/apt/sources.list.d/docker.list /etc/apt/keyrings/docker.gpg
 ```
 
 Purging Docker keeps images and volumes in `/var/lib/docker` and

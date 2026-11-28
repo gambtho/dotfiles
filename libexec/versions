@@ -59,6 +59,7 @@ list_pins() {
   printf 'artifact git-lfs %s\n' "$GIT_LFS_VERSION"
   printf 'artifact kind %s\n' "$KIND_VERSION"
   printf 'artifact kubectl %s\n' "$KUBECTL_VERSION"
+  printf 'pypi azure-cli %s\n' "$AZURE_CLI_VERSION"
   printf 'artifact go %s\n' "$GO_VERSION"
   printf 'artifact nerd-fonts %s\n' "$NERD_FONTS_VERSION"
   printf 'artifact nerd-font-cascadia-mono %s %s\n' "$NERD_FONTS_VERSION" "$NERD_FONT_CASCADIA_MONO_SHA256"

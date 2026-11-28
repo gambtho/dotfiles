@@ -32,8 +32,6 @@ setup() {
   local arch
   for arch in amd64 arm64; do
     printf '#!/bin/sh\necho kind %s\n' "$arch" >"$PAYLOADS/kind-linux-$arch"
-    mkdir -p "$PAYLOADS/$arch"
-    printf '#!/bin/sh\necho kubectl %s\n' "$arch" >"$PAYLOADS/$arch/kubectl"
     mkdir -p "$TEST_ROOT/go-$arch/go/bin"
     printf '#!/bin/sh\necho go %s\n' "$arch" >"$TEST_ROOT/go-$arch/go/bin/go"
     printf '#!/bin/sh\necho gofmt %s\n' "$arch" >"$TEST_ROOT/go-$arch/go/bin/gofmt"
@@ -41,7 +39,7 @@ setup() {
     tar -czf "$PAYLOADS/go$(sed -n 's/^GO_VERSION=//p' "$REPO_ROOT/config/versions.env").linux-$arch.tar.gz" \
       -C "$TEST_ROOT/go-$arch" go
   done
-  for key in gpg microsoft.asc archive.key; do
+  for key in gpg archive.key; do
     printf -- '-----BEGIN PGP PUBLIC KEY BLOCK-----\n%s\n' "$key" >"$PAYLOADS/$key"
   done
   write_pins
@@ -56,15 +54,8 @@ setup() {
       esac
       shift
     done
-    case "$url" in
-      */dists/trixie/InRelease) printf 404; exit 0 ;;
-      */InRelease) printf "${FAKE_MS_STATUS:-200}"; exit 0 ;;
-    esac
     echo "$url" >>"$STATE/downloads"
-    case "$url" in
-      */kubectl) cp "$PAYLOADS/$(basename "$(dirname "$url")")/kubectl" "$out" ;;
-      *) cp "$PAYLOADS/${url##*/}" "$out" ;;
-    esac
+    cp "$PAYLOADS/${url##*/}" "$out"
   '
   # Unprivileged here, so install cannot set an owner; the call is logged.
   stub_command sudo '
@@ -143,9 +134,6 @@ write_pins() {
 KIND_RELEASE_BASE=https://example.test/kind
 KIND_LINUX_AMD64_SHA256=$(digest "$PAYLOADS/kind-linux-amd64")
 KIND_LINUX_ARM64_SHA256=$(digest "$PAYLOADS/kind-linux-arm64")
-KUBECTL_RELEASE_BASE=https://example.test/kubectl
-KUBECTL_LINUX_AMD64_SHA256=$(digest "$PAYLOADS/amd64/kubectl")
-KUBECTL_LINUX_ARM64_SHA256=$(digest "$PAYLOADS/arm64/kubectl")
 GO_RELEASE_BASE=https://example.test/go
 GO_LINUX_AMD64_SHA256=$(digest "$PAYLOADS/go$go_version.linux-amd64.tar.gz")
 GO_LINUX_ARM64_SHA256=$(digest "$PAYLOADS/go$go_version.linux-arm64.tar.gz")
@@ -196,11 +184,9 @@ snapshot() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"[dry-run] Would install Docker Engine (docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin); adding its repository."* ]]
   [[ "$output" == *"[dry-run] Would install gVisor runsc (runsc); adding its repository."* ]]
-  [[ "$output" == *"[dry-run] Would install Azure CLI (azure-cli); adding its repository."* ]]
   [[ "$output" == *"[dry-run] Would add tester to the docker group"* ]]
   [[ "$output" == *"[dry-run] Would add runsc (/usr/bin/runsc) to the runtimes in $CLUSTER_TOOLS_DAEMON_JSON"* ]]
   [[ "$output" == *"[dry-run] Would install kind $KIND_VERSION."* ]]
-  [[ "$output" == *"[dry-run] Would install kubectl $KUBECTL_VERSION."* ]]
   [[ "$output" == *"[dry-run] Would install go $GO_VERSION."* ]]
   [ ! -e "$STATE/sudo" ]
   [ ! -e "$STATE/downloads" ]
@@ -219,20 +205,18 @@ snapshot() {
     "deb [arch=amd64 signed-by=$APT_ETC/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu noble stable" ]
   [ "$(cat "$APT_ETC/sources.list.d/gvisor.list")" = \
     "deb [arch=amd64 signed-by=$APT_ETC/keyrings/gvisor-archive-keyring.gpg] https://storage.googleapis.com/gvisor/releases release main" ]
-  grep -qx "Signed-By: $APT_ETC/keyrings/microsoft.gpg" "$APT_ETC/sources.list.d/azure-cli.sources"
-  grep -qx "Suites: noble" "$APT_ETC/sources.list.d/azure-cli.sources"
   [ -s "$APT_ETC/keyrings/docker.gpg" ]
   [ -s "$APT_ETC/keyrings/gvisor-archive-keyring.gpg" ]
-  [ -s "$APT_ETC/keyrings/microsoft.gpg" ]
   # One update and one install, after the sources.
   [ "$(grep -c '^apt-get update' "$STATE/apt")" -eq 1 ]
-  grep -q '^apt-get install .*-y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin runsc azure-cli$' "$STATE/apt"
+  grep -q '^apt-get install .*-y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin runsc$' "$STATE/apt"
+  [ ! -e "$APT_ETC/sources.list.d/azure-cli.sources" ]
   grep -qx 'tester docker' "$STATE/groups"
   python3 -I -c 'import json, sys; assert json.load(open(sys.argv[1])) == {"runtimes": {"runsc": {"path": "/usr/bin/runsc"}}}' \
     "$CLUSTER_TOOLS_DAEMON_JSON"
   grep -qx 'systemctl reload docker' "$STATE/systemctl"
   [ "$("$HOME/.local/bin/kind")" = "kind amd64" ]
-  [ "$("$HOME/.local/bin/kubectl")" = "kubectl amd64" ]
+  [ ! -e "$HOME/.local/bin/kubectl" ]
   [ "$("$HOME/.local/bin/go")" = "go amd64" ]
   [ "$("$HOME/.local/bin/gofmt")" = "gofmt amd64" ]
   assert_symlink_target "$HOME/.local/bin/kind" "$SHARE/kind-$KIND_VERSION/kind"
@@ -265,7 +249,7 @@ snapshot() {
 }
 
 @test "runsc joins the runtimes in daemon.json and every other key stays" {
-  printf '%s\n' docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin runsc azure-cli >"$STATE/installed"
+  printf '%s\n' docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin runsc >"$STATE/installed"
   mkdir -p "$(dirname "$CLUSTER_TOOLS_DAEMON_JSON")"
   cat >"$CLUSTER_TOOLS_DAEMON_JSON" <<'EOF'
 {
@@ -303,7 +287,7 @@ assert data == {
 }
 
 @test "a daemon.json that is not a JSON object stops --apply without rewriting it" {
-  printf '%s\n' docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin runsc azure-cli >"$STATE/installed"
+  printf '%s\n' docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin runsc >"$STATE/installed"
   mkdir -p "$(dirname "$CLUSTER_TOOLS_DAEMON_JSON")"
   printf '{"log-driver": "local",\n' >"$CLUSTER_TOOLS_DAEMON_JSON"
   cp "$CLUSTER_TOOLS_DAEMON_JSON" "$TEST_ROOT/broken"
@@ -322,7 +306,7 @@ assert data == {
   printf 'deb [signed-by=/usr/share/keyrings/docker.asc] https://download.docker.com/linux/ubuntu noble stable\n' \
     >"$APT_ETC/sources.list.d/docker-manual.list"
   # A commented-out line does not count.
-  printf '# deb https://packages.microsoft.com/repos/azure-cli/ noble main\n' >"$APT_ETC/sources.list.d/old.list"
+  printf '# deb https://storage.googleapis.com/gvisor/releases release main\n' >"$APT_ETC/sources.list.d/old.list"
 
   run bash "$INSTALLER" --apply
 
@@ -330,7 +314,7 @@ assert data == {
   [[ "$output" == *"Docker Engine (docker-ce"*"its repository is already listed in $APT_ETC/sources.list.d/docker-manual.list."* ]]
   [ ! -e "$APT_ETC/sources.list.d/docker.list" ]
   [ ! -e "$APT_ETC/keyrings/docker.gpg" ]
-  [ -e "$APT_ETC/sources.list.d/azure-cli.sources" ]
+  [ -e "$APT_ETC/sources.list.d/gvisor.list" ]
 }
 
 @test "a source file of ours with only comments gets the repository again" {
@@ -341,26 +325,6 @@ assert data == {
   [ "$status" -eq 0 ]
   [[ "$output" == *"Installing Docker Engine (docker-ce"*"adding its repository."* ]]
   grep -q '^deb \[arch=amd64 signed-by=' "$APT_ETC/sources.list.d/docker.list"
-}
-
-@test "a release Microsoft does not serve skips the Azure CLI and writes no source for it" {
-  printf 'ID=debian\nVERSION_CODENAME=trixie\n' >"$OS_RELEASE_FILE"
-
-  run bash "$INSTALLER" --apply
-
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"Microsoft publishes no Azure CLI packages for trixie; skipping the Azure CLI."* ]]
-  [ ! -e "$APT_ETC/sources.list.d/azure-cli.sources" ]
-  ! grep -q azure-cli "$STATE/installed"
-  grep -qx docker-ce "$STATE/installed"
-}
-
-@test "a Microsoft outage stops the run instead of skipping the Azure CLI" {
-  FAKE_MS_STATUS=503 run bash "$INSTALLER" --apply
-
-  [ "$status" -eq 1 ]
-  [[ "$output" == *"could not check https://packages.microsoft.com/repos/azure-cli/dists/noble/InRelease (HTTP 503)."* ]]
-  [ ! -e "$STATE/apt" ]
 }
 
 @test "a key that fails to convert leaves the existing key in place" {
@@ -376,7 +340,7 @@ assert data == {
 }
 
 @test "a symlinked daemon.json is updated where it points and stays a link" {
-  printf '%s\n' docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin runsc azure-cli >"$STATE/installed"
+  printf '%s\n' docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin runsc >"$STATE/installed"
   mkdir -p "$(dirname "$CLUSTER_TOOLS_DAEMON_JSON")" "$TEST_ROOT/etc/docker-config"
   printf '{"log-driver": "local"}\n' >"$TEST_ROOT/etc/docker-config/daemon.json"
   chmod 0600 "$TEST_ROOT/etc/docker-config/daemon.json"
@@ -418,7 +382,7 @@ assert data == {
 }
 
 @test "daemon.json keeps its owner and mode when runsc is added" {
-  printf '%s\n' docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin runsc azure-cli >"$STATE/installed"
+  printf '%s\n' docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin runsc >"$STATE/installed"
   mkdir -p "$(dirname "$CLUSTER_TOOLS_DAEMON_JSON")"
   printf '{"proxies": {"http-proxy": "http://user:secret@proxy:3128"}}\n' >"$CLUSTER_TOOLS_DAEMON_JSON"
   chmod 0640 "$CLUSTER_TOOLS_DAEMON_JSON"
@@ -446,26 +410,24 @@ assert data == {
 
   [ "$status" -eq 0 ]
   [ "$("$HOME/.local/bin/kind")" = "kind arm64" ]
-  [ "$("$HOME/.local/bin/kubectl")" = "kubectl arm64" ]
   [ "$("$HOME/.local/bin/go")" = "go arm64" ]
   grep -q '^deb \[arch=arm64 ' "$APT_ETC/sources.list.d/docker.list"
 }
 
 @test "a file it did not link, or a tool lanes already find, is left alone" {
-  printf '#!/bin/sh\necho own kubectl\n' >"$HOME/.local/bin/kubectl"
-  chmod +x "$HOME/.local/bin/kubectl"
+  printf '#!/bin/sh\necho own kind\n' >"$HOME/.local/bin/kind"
+  chmod +x "$HOME/.local/bin/kind"
   printf '#!/bin/sh\necho system go\n' >"$SYSTEM_BIN/go"
   chmod +x "$SYSTEM_BIN/go"
 
   run bash "$INSTALLER" --apply
 
   [ "$status" -eq 0 ]
-  [[ "$output" == *"$HOME/.local/bin/kubectl was not installed by this script; leaving kubectl alone."* ]]
+  [[ "$output" == *"$HOME/.local/bin/kind was not installed by this script; leaving kind alone."* ]]
   [[ "$output" == *"go is already at $SYSTEM_BIN/go; leaving it."* ]]
-  [ "$("$HOME/.local/bin/kubectl")" = "own kubectl" ]
+  [ "$("$HOME/.local/bin/kind")" = "own kind" ]
   [ ! -e "$HOME/.local/bin/go" ]
   [ ! -e "$HOME/.local/bin/gofmt" ]
-  [ "$("$HOME/.local/bin/kind")" = "kind amd64" ]
 }
 
 @test "a digest mismatch fails and links nothing" {
@@ -494,10 +456,8 @@ assert data == {
   [ -x "$old/kind" ]
 }
 
-@test "kubectl follows the Kubernetes channel and Go follows the mise pin" {
+@test "Go follows the mise pin" {
   source "$REPO_ROOT/config/versions.env"
-  [[ "$KUBECTL_VERSION" == "$KUBERNETES_CHANNEL".* ]]
-  [[ "$KUBECTL_RELEASE_BASE" == */"$KUBECTL_VERSION"/bin/linux ]]
   [[ "$KIND_RELEASE_BASE" == */"$KIND_VERSION" ]]
   local mise_go
   mise_go=$(sed -n 's/^go = "\(.*\)"$/\1/p' "$REPO_ROOT/config/mise/config.toml")
@@ -510,7 +470,7 @@ assert data == {
   [ "$status" -eq 0 ]
   # Its own files, its pins and its library name it; nothing else does.
   [ "$(sed "s|^$REPO_ROOT/||" <<<"$output" | LC_ALL=C sort | tr '\n' ' ')" = \
-    "Makefile config/versions.env libexec/lib/apt-repositories.sh tests/cluster_tools_install.bats tools/lane-worker/README.md tools/lane-worker/cluster-tools.sh " ]
+    "AGENTS.md Makefile config/versions.env libexec/lib/apt-repositories.sh tests/cluster_tools_install.bats tools/lane-worker/README.md tools/lane-worker/cluster-tools.sh " ]
   run grep -n 'cluster-tools' "$REPO_ROOT/Makefile"
   [[ "$output" == *"cluster-tools: ##"* ]]
   [[ "$output" != *"install: "*"cluster-tools"* ]]

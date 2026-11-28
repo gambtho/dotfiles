@@ -36,6 +36,7 @@ setup() {
   [[ "$output" == *"artifact git-lfs $GIT_LFS_VERSION"* ]]
   [[ "$output" == *"artifact kind $KIND_VERSION"* ]]
   [[ "$output" == *"artifact kubectl $KUBECTL_VERSION"* ]]
+  [[ "$output" == *"pypi azure-cli $AZURE_CLI_VERSION"* ]]
   [[ "$output" == *"artifact go $GO_VERSION"* ]]
   [[ "$output" != *"herdr-devcontainer"* ]]
   [[ "$output" != *"paseo"* ]]

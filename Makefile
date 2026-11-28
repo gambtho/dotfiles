@@ -105,13 +105,13 @@ skills-pin: ## Pin the skills package for Pi and Claude Code: make skills-pin VE
 		&& cat ai/claude/install.sh.tmp >ai/claude/install.sh && rm ai/claude/install.sh.tmp
 	@grep -n 'gambtho-skills@\|^SKILLS_TAG=' $(SKILLS_PIN_FILES)
 
-lane-worker: ## Lanes worker box: pinned skills plugin plus review CLIs (codex, coderabbit) linked from ~/.local/bin
+lane-worker: ## Lanes worker box: pinned skills plugin, review CLIs (codex, coderabbit), kubectl and az, no sudo
 	bash tools/lane-worker/install.sh --apply
 
 lane-worker-check: ## Dry-run: show what make lane-worker would install
 	bash tools/lane-worker/install.sh --check
 
-cluster-tools: ## Opt-in, Ubuntu/Debian lanes worker: Docker with gVisor runsc, kind, kubectl, Azure CLI and Go (sudo)
+cluster-tools: ## Opt-in, Ubuntu/Debian lanes worker: Docker with gVisor runsc, kind and Go (sudo)
 	bash tools/lane-worker/cluster-tools.sh --apply
 
 cluster-tools-check: ## Dry-run: show what make cluster-tools would install or change
